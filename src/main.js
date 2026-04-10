@@ -556,6 +556,15 @@ window.addEventListener('DOMContentLoaded', function() {
     CapStatusBar.setStyle({ style: 'DARK' }); // light icons on dark background
   }
 
+  // Hide shortcut UI on native mobile — no keyboard shortcuts on touch devices
+  const isNativeMobile = window.Capacitor && window.Capacitor.isNativePlatform();
+  if (isNativeMobile) {
+    $('shortcut-normal').style.display   = 'none';
+    $('shortcut-recording').style.display = 'none';
+    $('shortcut-spacer').style.display   = 'none';
+    $('ptt-hint').textContent = 'Hold the button to transmit';
+  }
+
   $('btn-create').addEventListener('click', function() { createRoom().catch(function(err) { showError(err.message); }); });
   $('btn-join').addEventListener('click', function() {
     joinRoom($('input-code').value.trim()).catch(function(err) { showError(err.message); });
