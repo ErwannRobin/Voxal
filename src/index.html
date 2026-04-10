@@ -51,10 +51,12 @@
         <p id="ptt-status" class="ptt-status"></p>
       </div>
 
-      <!-- Controls: shortcut + free-hand -->
+      <!-- Controls: free-hand + shortcut on one line -->
       <div class="room-controls">
         <div class="ctrl-row">
-          <span class="label">Shortcut</span>
+          <span class="label">Free hand</span>
+          <button id="btn-freehand" class="toggle-btn" aria-pressed="false">OFF</button>
+          <span class="ctrl-spacer"></span>
           <div id="shortcut-normal" class="shortcut-display">
             <kbd id="shortcut-kbd"></kbd>
             <button id="btn-edit-shortcut" class="btn-icon" title="Change shortcut">✏</button>
@@ -63,10 +65,6 @@
             <span class="recording-hint">Press keys…</span>
             <button id="btn-cancel-shortcut" class="btn-icon" title="Cancel">✕</button>
           </div>
-        </div>
-        <div class="ctrl-row">
-          <span class="label">Free hand</span>
-          <button id="btn-freehand" class="toggle-btn" aria-pressed="false">OFF</button>
         </div>
       </div>
     </div>
