@@ -17,6 +17,37 @@
 
 const DEFAULT_SHORTCUT = 'Ctrl+Backquote';
 
+// --- Audio feedback ----------------------------------------------------------
+
+const _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+function playBlip(up) {
+  const ctx = _audioCtx;
+  if (ctx.state === 'suspended') ctx.resume();
+
+  const osc  = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  const now  = ctx.currentTime;
+  const dur  = 0.08;
+
+  if (up) {
+    osc.frequency.setValueAtTime(880, now);
+    osc.frequency.linearRampToValueAtTime(1200, now + dur);
+  } else {
+    osc.frequency.setValueAtTime(800, now);
+    osc.frequency.linearRampToValueAtTime(500, now + dur);
+  }
+
+  gain.gain.setValueAtTime(0.18, now);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+
+  osc.start(now);
+  osc.stop(now + dur);
+}
+
 let peer              = null;
 let stream            = null;
 let audioTrack        = null;
@@ -186,7 +217,9 @@ function broadcastTalkingState(active) {
 
 function setTalking(active) {
   if (!inRoom || !audioTrack || freeHandMode) return;
+  if (active === isTalking) return;
   isTalking = active;
+  playBlip(active);
   audioTrack.enabled = active;
   $('ptt-btn').classList.toggle('active', active);
   $('ptt-status').textContent = active ? '\u25cf Transmitting\u2026' : '';
@@ -196,6 +229,7 @@ function setTalking(active) {
 
 function setFreeHand(active) {
   freeHandMode = active;
+  playBlip(active);
   if (audioTrack) audioTrack.enabled = active;
 
   const btn = $('btn-freehand');
