@@ -63,6 +63,22 @@ function shortcutFromEvent(e) {
   return [...mods, e.code].join('+');
 }
 
+// Returns the bare key code part of a shortcut string e.g. "Ctrl+Backquote" -> "Backquote"
+function keyCodeOf(sc) { const parts = sc.split('+'); return parts[parts.length - 1]; }
+
+// Returns true if a keydown event matches the current shortcut
+function matchesShortcut(e) {
+  const parts = shortcutStr.split('+');
+  const keyCode = parts[parts.length - 1];
+  const needCtrl  = parts.includes('Ctrl');
+  const needAlt   = parts.includes('Alt');
+  const needShift = parts.includes('Shift');
+  return e.code === keyCode
+    && (e.ctrlKey || e.metaKey) === needCtrl
+    && e.altKey   === needAlt
+    && e.shiftKey === needShift;
+}
+
 function displayShortcut(raw) {
   return raw
     .replace('Backquote', '`').replace(/Key([A-Z])/g, '$1').replace(/Digit(\d)/g, '$1')
@@ -94,9 +110,12 @@ function applyNewShortcut(newShortcut) {
   stopRecordingShortcut();
   const old = shortcutStr;
   shortcutStr = newShortcut;
-  window.__TAURI__.core.invoke('update_ptt_shortcut', { shortcut: newShortcut })
-    .then(() => { localStorage.setItem('ptt-shortcut', newShortcut); updateShortcutDisplay(); })
-    .catch(err => { console.warn('Failed to update shortcut:', err); shortcutStr = old; });
+  localStorage.setItem('ptt-shortcut', newShortcut);
+  updateShortcutDisplay();
+  if (window.__TAURI__) {
+    window.__TAURI__.core.invoke('update_ptt_shortcut', { shortcut: newShortcut })
+      .catch(function(err) { console.warn('Failed to update global shortcut:', err); shortcutStr = old; updateShortcutDisplay(); });
+  }
 }
 
 // --- Peer list UI ------------------------------------------------------------
@@ -367,7 +386,7 @@ window.addEventListener('DOMContentLoaded', function() {
     if (inRoom) updatePeerList();
   });
 
-  if (shortcutStr !== DEFAULT_SHORTCUT) {
+  if (window.__TAURI__ && shortcutStr !== DEFAULT_SHORTCUT) {
     window.__TAURI__.core.invoke('update_ptt_shortcut', { shortcut: shortcutStr })
       .catch(function() { shortcutStr = DEFAULT_SHORTCUT; localStorage.removeItem('ptt-shortcut'); });
   }
@@ -392,11 +411,14 @@ window.addEventListener('DOMContentLoaded', function() {
 
   document.addEventListener('keydown', function(e) {
     if (recordingShortcut) { e.preventDefault(); const s = shortcutFromEvent(e); if (s) applyNewShortcut(s); return; }
-    if (e.code === 'Space' && !e.repeat) { setTalking(true); e.preventDefault(); }
+    if (matchesShortcut(e) && !e.repeat) { setTalking(true); e.preventDefault(); }
   });
-  document.addEventListener('keyup', function(e) { if (e.code === 'Space') setTalking(false); });
+  document.addEventListener('keyup', function(e) { if (keyCodeOf(shortcutStr) === e.code) setTalking(false); });
 
-  const listen = window.__TAURI__.event.listen;
-  listen('ptt-press',   function() { if (!recordingShortcut) setTalking(true);  });
-  listen('ptt-release', function() { if (!recordingShortcut) setTalking(false); });
+  // Tauri-only: global shortcut works even when app is in background
+  if (window.__TAURI__) {
+    const listen = window.__TAURI__.event.listen;
+    listen('ptt-press',   function() { if (!recordingShortcut) setTalking(true);  });
+    listen('ptt-release', function() { if (!recordingShortcut) setTalking(false); });
+  }
 });
