@@ -114,6 +114,14 @@ let shortcutStr = localStorage.getItem('ptt-shortcut') || DEFAULT_SHORTCUT;
 // peerId -> { data, media, pseudo, talking }
 const connections = new Map();
 
+// Haptic feedback (Capacitor native, no-op in browser/Tauri)
+function hapticLight() {
+  try {
+    const Haptics = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Haptics;
+    if (Haptics) Haptics.impact({ style: 'LIGHT' });
+  } catch (_) {}
+}
+
 // --- DOM helpers -------------------------------------------------------------
 
 const $ = id => document.getElementById(id);
@@ -270,6 +278,7 @@ function setTalking(active) {
   if (active === isTalking) return;
   isTalking = active;
   playBlip(active);
+  if (active) hapticLight();
   audioTrack.enabled = active;
   $('ptt-btn').classList.toggle('active', active);
   $('ptt-status').textContent = active ? '\u25cf Transmitting\u2026' : '';

@@ -1,4 +1,5 @@
-.PHONY: help run run-web dev build build-web install clean lint check
+.PHONY: help run run-web dev build build-web install clean lint check \
+        cap-sync cap-ios cap-android
 
 # Default target
 help:
@@ -9,6 +10,9 @@ help:
 	@echo "  dev          Start Tauri in dev mode (hot reload)"
 	@echo "  build        Build the Tauri desktop app (release binary)"
 	@echo "  build-web    Bundle the web version into dist/"
+	@echo "  cap-sync     Sync web assets to iOS & Android"
+	@echo "  cap-ios      Open Xcode (iOS)"
+	@echo "  cap-android  Open Android Studio"
 	@echo "  install      Install npm + Rust dependencies"
 	@echo "  check        Run Rust type-check (no binary)"
 	@echo "  clean        Remove build artifacts"
@@ -37,6 +41,17 @@ build-web:
 	mkdir -p dist
 	cp -r src/* dist/
 	@echo "Web app copied to dist/"
+
+# ── Mobile (Capacitor) ────────────────────────────────────────────────────────
+
+cap-sync:
+	npx cap sync
+
+cap-ios: cap-sync
+	npx cap open ios
+
+cap-android: cap-sync
+	npx cap open android
 
 # ── Misc ──────────────────────────────────────────────────────────────────────
 

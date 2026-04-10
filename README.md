@@ -106,7 +106,40 @@ make clean       Remove Cargo build artifacts and dist/
 
 ---
 
-## Deploying the web version
+## Mobile (Capacitor — iOS & Android)
+
+The `src/` web app is wrapped as a native mobile app via [Capacitor](https://capacitorjs.com). All Tauri-specific calls are already guarded so they silently no-op on mobile.
+
+### Prerequisites
+- **iOS:** Mac + Xcode + Apple Developer account (for device builds)
+- **Android:** Android Studio
+
+### Workflow
+
+```sh
+# After any change to src/, sync assets to both platforms
+make cap-sync
+
+# Open in Xcode (then build/run from there)
+make cap-ios
+
+# Open in Android Studio (then build/run from there)
+make cap-android
+```
+
+### What works on mobile
+- Full P2P room creation and joining
+- Push-to-talk via tap-and-hold on the mic button
+- Free-hand mode toggle
+- Pseudonyms and talking indicators
+- Audio cues and haptic feedback on PTT (via `@capacitor/haptics`)
+- Microphone permissions declared for both platforms
+
+### What's different vs desktop
+- No global keyboard shortcut (mobile has no background keyboard access) — PTT is touch-only
+- Space/Enter shortcuts only work if a hardware keyboard is connected
+
+
 
 The `src/` folder is a self-contained static web app — no bundler, no build step.
 
