@@ -124,17 +124,39 @@ body {
   letter-spacing: 0.8px;
 }
 
+.room-code-copy {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 7px;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: border-color 0.15s, background 0.15s;
+}
+.room-code-copy:hover  { border-color: var(--accent); }
+.room-code-copy:active { background: var(--bg); }
+
 .room-code {
   font-family: 'SF Mono', 'Fira Code', monospace;
   font-size: 12px;
   color: var(--accent);
-  background: var(--bg-raised);
-  padding: 2px 7px;
-  border-radius: 5px;
   max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+.copy-icon {
+  font-size: 16px;
+  color: var(--text-muted);
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 .peers-list {

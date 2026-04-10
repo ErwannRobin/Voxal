@@ -570,7 +570,12 @@ window.addEventListener('DOMContentLoaded', function() {
     joinRoom($('input-code').value.trim()).catch(function(err) { showError(err.message); });
   });
   $('input-code').addEventListener('keydown', function(e) { if (e.key === 'Enter') $('btn-join').click(); });
-  $('btn-copy').addEventListener('click', function() { navigator.clipboard.writeText(roomCode); });
+  $('btn-copy').addEventListener('click', function() {
+    navigator.clipboard.writeText(roomCode);
+    const icon = $('btn-copy').querySelector('.copy-icon');
+    icon.textContent = '✓';
+    setTimeout(function() { icon.textContent = '⎘'; }, 1500);
+  });
   $('btn-leave').addEventListener('click', leaveRoom);
   $('btn-back').addEventListener('click', function() { showScreen('home'); });
 
