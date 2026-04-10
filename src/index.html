@@ -43,8 +43,27 @@
         <button id="ptt-btn" class="ptt-btn">
           <span class="ptt-icon">🎙️</span>
         </button>
-        <p class="ptt-hint">Hold <kbd>Ctrl+`</kbd> or click &amp; hold</p>
+        <p id="ptt-hint" class="ptt-hint">Hold <kbd id="shortcut-hint-kbd">Ctrl+`</kbd> or click &amp; hold</p>
         <p id="ptt-status" class="ptt-status"></p>
+      </div>
+
+      <!-- Controls: shortcut + free-hand -->
+      <div class="room-controls">
+        <div class="ctrl-row">
+          <span class="label">Shortcut</span>
+          <div id="shortcut-normal" class="shortcut-display">
+            <kbd id="shortcut-kbd"></kbd>
+            <button id="btn-edit-shortcut" class="btn-icon" title="Change shortcut">✏</button>
+          </div>
+          <div id="shortcut-recording" class="shortcut-display hidden">
+            <span class="recording-hint">Press keys…</span>
+            <button id="btn-cancel-shortcut" class="btn-icon" title="Cancel">✕</button>
+          </div>
+        </div>
+        <div class="ctrl-row">
+          <span class="label">Free hand</span>
+          <button id="btn-freehand" class="toggle-btn" aria-pressed="false">OFF</button>
+        </div>
       </div>
     </div>
 

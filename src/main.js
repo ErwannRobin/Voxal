@@ -3,29 +3,85 @@
  * Topology:
  *   Signaling : star (host ↔ each peer via DataConnection)
  *   Audio     : full mesh (every peer ↔ every peer via MediaConnection / Opus)
- *
- * Join flow:
- *   1. Joiner opens DataConnection to host (room code = host peer ID)
- *   2. Host sends  { type:'peer-list', peers:[...] }
- *   3. Joiner calls every peer in list + host via MediaConnection
- *   4. Host broadcasts { type:'peer-joined', peerId } to all existing peers
- *   5. Existing peers answer incoming MediaConnection from joiner automatically
- *
- * Leave flow:
- *   Host detects DataConnection close → broadcasts { type:'peer-left', peerId }
  */
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
-let peer       = null;   // PeerJS Peer
-let stream     = null;   // local MediaStream
-let audioTrack = null;   // audio track – enabled only while PTT pressed
-let isHost     = false;
-let roomCode   = '';
-let inRoom     = false;
+const DEFAULT_SHORTCUT = 'Ctrl+Backquote';
+
+let peer           = null;
+let stream         = null;
+let audioTrack     = null;
+let isHost         = false;
+let roomCode       = '';
+let inRoom         = false;
+let isTalking      = false;
+let freeHandMode   = false;
+let recordingShortcut = false;
+
+let shortcutStr = localStorage.getItem('ptt-shortcut') || DEFAULT_SHORTCUT;
 
 // peerId → { data: DataConnection|null, media: MediaConnection|null }
 const connections = new Map();
+
+// ─── Shortcut helpers ─────────────────────────────────────────────────────────
+
+const MODIFIER_CODES = [
+  'ControlLeft','ControlRight','AltLeft','AltRight',
+  'ShiftLeft','ShiftRight','MetaLeft','MetaRight',
+];
+
+function shortcutFromEvent(e) {
+  if (MODIFIER_CODES.includes(e.code)) return null;
+  const mods = [];
+  if (e.ctrlKey || e.metaKey) mods.push('Ctrl');
+  if (e.altKey)               mods.push('Alt');
+  if (e.shiftKey)             mods.push('Shift');
+  return [...mods, e.code].join('+');   // e.g. "Ctrl+Backquote", "Alt+KeyM"
+}
+
+function displayShortcut(raw) {
+  return raw
+    .replace('Backquote', '`')
+    .replace(/Key([A-Z])/g, '$1')
+    .replace(/Digit(\d)/g, '$1')
+    .replace('Semicolon', ';').replace('Comma', ',').replace('Period', '.')
+    .replace('Slash', '/').replace('BracketLeft', '[').replace('BracketRight', ']')
+    .replace('Backslash', '\\').replace('Quote', "'").replace('Minus', '-')
+    .replace('Equal', '=');
+}
+
+function updateShortcutDisplay() {
+  $('shortcut-kbd').textContent = displayShortcut(shortcutStr);
+  $('shortcut-hint-kbd').textContent = displayShortcut(shortcutStr);
+}
+
+function startRecordingShortcut() {
+  recordingShortcut = true;
+  $('shortcut-normal').classList.add('hidden');
+  $('shortcut-recording').classList.remove('hidden');
+}
+
+function stopRecordingShortcut() {
+  recordingShortcut = false;
+  $('shortcut-normal').classList.remove('hidden');
+  $('shortcut-recording').classList.add('hidden');
+}
+
+function applyNewShortcut(newShortcut) {
+  stopRecordingShortcut();
+  const old = shortcutStr;
+  shortcutStr = newShortcut;
+  window.__TAURI__.core.invoke('update_ptt_shortcut', { shortcut: newShortcut })
+    .then(() => {
+      localStorage.setItem('ptt-shortcut', newShortcut);
+      updateShortcutDisplay();
+    })
+    .catch(err => {
+      console.warn('Failed to update shortcut:', err);
+      shortcutStr = old;
+    });
+}
 
 // ─── DOM helpers ──────────────────────────────────────────────────────────────
 
@@ -68,7 +124,7 @@ async function getMicStream() {
   return navigator.mediaDevices.getUserMedia({
     audio: {
       channelCount:     1,
-      sampleRate:       16000,   // sufficient for voice; Opus will encode efficiently
+      sampleRate:       16000,
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl:  true,
@@ -92,13 +148,33 @@ function detachAudio(peerId) {
   document.getElementById(`audio-${peerId}`)?.remove();
 }
 
-// ─── PTT ──────────────────────────────────────────────────────────────────────
+// ─── PTT & free-hand ─────────────────────────────────────────────────────────
 
 function setTalking(active) {
-  if (!inRoom || !audioTrack) return;
+  if (!inRoom || !audioTrack || freeHandMode) return;
+  isTalking = active;
   audioTrack.enabled = active;
   $('ptt-btn').classList.toggle('active', active);
   $('ptt-status').textContent = active ? '● Transmitting…' : '';
+}
+
+function setFreeHand(active) {
+  freeHandMode = active;
+  if (audioTrack) audioTrack.enabled = active;
+
+  const btn = $('btn-freehand');
+  btn.textContent = active ? 'ON' : 'OFF';
+  btn.setAttribute('aria-pressed', active);
+  btn.classList.toggle('active', active);
+  $('ptt-btn').classList.toggle('freehand', active);
+
+  if (active) {
+    $('ptt-hint').innerHTML = 'Free hand — mic always on';
+    $('ptt-status').textContent = '● Live';
+  } else {
+    $('ptt-hint').innerHTML = `Hold <kbd id="shortcut-hint-kbd">${displayShortcut(shortcutStr)}</kbd> or click &amp; hold`;
+    $('ptt-status').textContent = '';
+  }
 }
 
 // ─── Connection helpers ───────────────────────────────────────────────────────
@@ -115,6 +191,8 @@ function removePeer(peerId) {
 
 function leaveRoom() {
   inRoom = false;
+  freeHandMode = false;
+  isTalking = false;
   setTalking(false);
   [...connections.keys()].forEach(removePeer);
   stream?.getTracks().forEach(t => t.stop());
@@ -125,7 +203,6 @@ function leaveRoom() {
   showScreen('home');
 }
 
-// Answer an incoming media call from any peer
 function handleIncomingCall(call) {
   call.answer(stream);
   call.on('stream', remote => {
@@ -144,14 +221,8 @@ function handleJoinerDataConnection(dataConn) {
   const joinerId = dataConn.peer;
 
   dataConn.on('open', () => {
-    // Tell the newcomer who's already in the room
     dataConn.send({ type: 'peer-list', peers: [...connections.keys()] });
-
-    // Tell existing peers about the newcomer (they'll receive the incoming call)
-    connections.forEach(({ data }) => {
-      data?.send({ type: 'peer-joined', peerId: joinerId });
-    });
-
+    connections.forEach(({ data }) => data?.send({ type: 'peer-joined', peerId: joinerId }));
     connections.set(joinerId, { data: dataConn, media: null });
     updatePeerList();
   });
@@ -177,6 +248,7 @@ async function createRoom() {
     $('room-code-display').textContent = id;
     showScreen('room');
     updatePeerList();
+    updateShortcutDisplay();
   });
 
   peer.on('connection', dataConn => handleJoinerDataConnection(dataConn));
@@ -188,10 +260,9 @@ async function createRoom() {
 
 function handleHostMessage(msg) {
   if (msg.type === 'peer-list') {
-    // Call host + all listed peers for audio
     [...msg.peers, roomCode].forEach(peerId => {
       if (connections.has(peerId)) return;
-      connections.set(peerId, { data: null, media: null }); // show in UI immediately
+      connections.set(peerId, { data: null, media: null });
       updatePeerList();
 
       const call = peer.call(peerId, stream);
@@ -206,7 +277,6 @@ function handleHostMessage(msg) {
     });
 
   } else if (msg.type === 'peer-joined') {
-    // Newcomer will call us – just reserve a slot in the UI
     if (!connections.has(msg.peerId)) {
       connections.set(msg.peerId, { data: null, media: null });
       updatePeerList();
@@ -236,6 +306,7 @@ async function joinRoom(code) {
       $('room-code-display').textContent = code;
       showScreen('room');
       updatePeerList();
+      updateShortcutDisplay();
     });
 
     hostData.on('data',  msg => handleHostMessage(msg));
@@ -247,44 +318,64 @@ async function joinRoom(code) {
   peer.on('error', err  => showError(err.message));
 }
 
-// ─── Bootstrap ───────────────────────────────────────────────────────────────
+// ─── Bootstrap ────────────────────────────────────────────────────────────────
 
 window.addEventListener('DOMContentLoaded', () => {
 
+  // Sync saved shortcut with Rust if it differs from the compiled default
+  if (shortcutStr !== DEFAULT_SHORTCUT) {
+    window.__TAURI__.core.invoke('update_ptt_shortcut', { shortcut: shortcutStr })
+      .catch(() => {
+        shortcutStr = DEFAULT_SHORTCUT;
+        localStorage.removeItem('ptt-shortcut');
+      });
+  }
+  updateShortcutDisplay();
+
+  // ── Room actions ──
   $('btn-create').addEventListener('click', () =>
     createRoom().catch(err => showError(err.message))
   );
-
   $('btn-join').addEventListener('click', () =>
     joinRoom($('input-code').value.trim()).catch(err => showError(err.message))
   );
-
   $('input-code').addEventListener('keydown', e => {
     if (e.key === 'Enter') $('btn-join').click();
   });
-
   $('btn-copy').addEventListener('click', () =>
     navigator.clipboard.writeText(roomCode)
   );
-
   $('btn-leave').addEventListener('click', leaveRoom);
   $('btn-back').addEventListener('click', () => showScreen('home'));
 
-  // PTT – click / hold the on-screen button
+  // ── PTT button (mouse / touch) ──
   $('ptt-btn').addEventListener('mousedown',  () => setTalking(true));
   $('ptt-btn').addEventListener('mouseup',    () => setTalking(false));
   $('ptt-btn').addEventListener('mouseleave', () => setTalking(false));
 
-  // PTT – Space bar fallback when window is focused
+  // ── Free hand toggle ──
+  $('btn-freehand').addEventListener('click', () => setFreeHand(!freeHandMode));
+
+  // ── Shortcut recorder ──
+  $('btn-edit-shortcut').addEventListener('click', startRecordingShortcut);
+  $('btn-cancel-shortcut').addEventListener('click', stopRecordingShortcut);
+
+  // ── Keyboard ──
   document.addEventListener('keydown', e => {
-    if (e.code === 'Space' && !e.repeat) { setTalking(true);  e.preventDefault(); }
+    if (recordingShortcut) {
+      e.preventDefault();
+      const s = shortcutFromEvent(e);
+      if (s) applyNewShortcut(s);
+      return;
+    }
+    if (e.code === 'Space' && !e.repeat) { setTalking(true); e.preventDefault(); }
   });
   document.addEventListener('keyup', e => {
     if (e.code === 'Space') setTalking(false);
   });
 
-  // PTT – Tauri global shortcut (Ctrl+`) works even when app is in background
+  // ── Tauri global shortcut (Ctrl+` by default, works in background) ──
   const { listen } = window.__TAURI__.event;
-  listen('ptt-press',   () => setTalking(true));
-  listen('ptt-release', () => setTalking(false));
+  listen('ptt-press',   () => { if (!recordingShortcut) setTalking(true);  });
+  listen('ptt-release', () => { if (!recordingShortcut) setTalking(false); });
 });
