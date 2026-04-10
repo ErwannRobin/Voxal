@@ -44,12 +44,12 @@ body {
 /* ── Home ───────────────────────────────────────────────────────── */
 
 .brand {
-  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  padding: 32px 0 28px;
 }
 
 .brand-icon { font-size: 40px; line-height: 1; }
@@ -119,7 +119,6 @@ body {
 }
 
 .peers-list {
-  flex: 1;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -129,6 +128,7 @@ body {
   flex-direction: column;
   gap: 4px;
   min-height: 80px;
+  max-height: 180px;
   margin-bottom: 16px;
 }
 
