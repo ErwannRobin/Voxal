@@ -27,8 +27,11 @@ body {
   width: 100vw;
   height: 100vh;
   overflow: hidden;
+  overscroll-behavior: none;       /* no rubber-band bounce on iOS/Android */
   display: flex;
   align-items: stretch;
+  /* Extend background behind the Dynamic Island / status bar */
+  background-color: var(--bg);
 }
 
 /* ── Screens ────────────────────────────────────────────────────── */
@@ -38,7 +41,16 @@ body {
   flex-direction: column;
   width: 100%;
   height: 100%;
-  padding: 24px 20px;
+  /*
+   * Respect iOS safe areas (Dynamic Island, notch, home indicator).
+   * overlaysWebView:true makes env(safe-area-inset-top) return the real value
+   * (~59px Dynamic Island, ~47px notch). max() ensures a minimum in case
+   * env() resolves to 0 on a device/browser where overlay isn't active.
+   */
+  padding-top:    max(calc(env(safe-area-inset-top)    + 24px), 24px);
+  padding-right:  max(calc(env(safe-area-inset-right)  + 20px), 20px);
+  padding-bottom: max(calc(env(safe-area-inset-bottom) + 24px), 24px);
+  padding-left:   max(calc(env(safe-area-inset-left)   + 20px), 20px);
 }
 .screen.active { display: flex; }
 
@@ -285,7 +297,10 @@ kbd {
 /* ── Error ──────────────────────────────────────────────────────── */
 
 #screen-room {
-  padding: 14px 18px;
+  padding-top:    max(calc(env(safe-area-inset-top)    + 14px), 14px);
+  padding-right:  max(calc(env(safe-area-inset-right)  + 18px), 18px);
+  padding-bottom: max(calc(env(safe-area-inset-bottom) + 14px), 14px);
+  padding-left:   max(calc(env(safe-area-inset-left)   + 18px), 18px);
   overflow: hidden;
 }
 
@@ -313,6 +328,7 @@ kbd {
   transition: opacity 0.15s, background 0.15s;
   outline: none;
   white-space: nowrap;
+  touch-action: manipulation;      /* removes 300ms tap delay on mobile */
 }
 .btn:active { opacity: 0.75; }
 
@@ -342,11 +358,17 @@ input[type="text"] {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text);
-  font-size: 13px;
+  /*
+   * iOS zooms in on any input with font-size < 16px.
+   * Set to 16px then scale down visually to preserve the design.
+   */
+  font-size: 16px;
+  transform: scale(0.8125);        /* 13/16 = 0.8125 — matches original 13px */
+  transform-origin: left center;
+  width: calc(100% / 0.8125);      /* compensate for scale shrinking the box */
   padding: 9px 12px;
   outline: none;
   transition: border-color 0.15s;
-  width: 100%;
 }
 input[type="text"]::placeholder { color: var(--text-muted); }
 input[type="text"]:focus { border-color: var(--accent); }

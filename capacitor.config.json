@@ -1,5 +1,12 @@
 {
   "appId": "com.push2talk.app",
   "appName": "push2talk",
-  "webDir": "src"
+  "webDir": "src",
+  "plugins": {
+    "StatusBar": {
+      "overlaysWebView": true,
+      "style": "DARK",
+      "backgroundColor": "#16161e"
+    }
+  }
 }

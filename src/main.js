@@ -549,6 +549,13 @@ window.addEventListener('DOMContentLoaded', function() {
   }
   updateShortcutDisplay();
 
+  // Capacitor: extend WebView behind Dynamic Island with light status-bar icons
+  const CapStatusBar = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.StatusBar;
+  if (CapStatusBar) {
+    CapStatusBar.setOverlaysWebView({ overlay: true });
+    CapStatusBar.setStyle({ style: 'DARK' }); // light icons on dark background
+  }
+
   $('btn-create').addEventListener('click', function() { createRoom().catch(function(err) { showError(err.message); }); });
   $('btn-join').addEventListener('click', function() {
     joinRoom($('input-code').value.trim()).catch(function(err) { showError(err.message); });
