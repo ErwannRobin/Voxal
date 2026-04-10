@@ -69,6 +69,12 @@ body {
 
 .home-actions { display: flex; flex-direction: column; gap: 10px; }
 
+.pseudo-field input {
+  text-align: center;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
 .divider {
   display: flex;
   align-items: center;
@@ -142,6 +148,19 @@ body {
   color: var(--text-muted);
 }
 .peer-item.peer-self { color: var(--text); }
+.peer-item.talking {
+  background: rgba(74, 222, 128, 0.1);
+  color: var(--text);
+}
+.peer-item.talking .peer-dot {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+  animation: dot-pulse 0.8s ease-in-out infinite;
+}
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
 
 .peer-dot {
   width: 7px;
