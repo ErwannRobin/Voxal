@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Push2Talk</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+
+    <!-- Home screen -->
+    <div id="screen-home" class="screen active">
+      <div class="brand">
+        <span class="brand-icon">🎙️</span>
+        <h1>Push2Talk</h1>
+        <p class="brand-sub">Private • P2P • No servers</p>
+      </div>
+      <div class="home-actions">
+        <button id="btn-create" class="btn btn-primary btn-full">Create Room</button>
+        <div class="divider"><span>or join one</span></div>
+        <div class="join-row">
+          <input id="input-code" type="text" placeholder="Room code…"
+                 spellcheck="false" autocomplete="off" maxlength="36" />
+          <button id="btn-join" class="btn btn-secondary">Join</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Room screen -->
+    <div id="screen-room" class="screen">
+      <div class="room-header">
+        <div class="room-meta">
+          <span class="label">Room</span>
+          <code id="room-code-display" class="room-code"></code>
+          <button id="btn-copy" class="btn-icon" title="Copy code">⎘</button>
+        </div>
+        <button id="btn-leave" class="btn btn-ghost">Leave</button>
+      </div>
+
+      <div id="peers-list" class="peers-list"></div>
+
+      <div class="ptt-area">
+        <button id="ptt-btn" class="ptt-btn">
+          <span class="ptt-icon">🎙️</span>
+        </button>
+        <p class="ptt-hint">Hold <kbd>Ctrl+`</kbd> or click &amp; hold</p>
+        <p id="ptt-status" class="ptt-status"></p>
+      </div>
+    </div>
+
+    <!-- Error screen -->
+    <div id="screen-error" class="screen">
+      <div class="error-icon">⚠️</div>
+      <p id="error-message" class="error-message"></p>
+      <button id="btn-back" class="btn btn-secondary">Back</button>
+    </div>
+
+    <script src="assets/peerjs.min.js"></script>
+    <script src="main.js"></script>
+  </body>
+</html>
