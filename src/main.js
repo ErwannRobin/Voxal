@@ -30,8 +30,8 @@ function playBlip(up) {
   osc.connect(gain);
   gain.connect(ctx.destination);
 
-  const now  = ctx.currentTime;
-  const dur  = 0.08;
+  const now = ctx.currentTime;
+  const dur = 0.08;
 
   if (up) {
     osc.frequency.setValueAtTime(880, now);
@@ -46,6 +46,50 @@ function playBlip(up) {
 
   osc.start(now);
   osc.stop(now + dur);
+}
+
+// Carillon: ascending triad (C5 – E5 – G5)
+function playCarillon() {
+  const ctx   = _audioCtx;
+  if (ctx.state === 'suspended') ctx.resume();
+  const notes = [523.25, 659.25, 783.99];
+  notes.forEach(function(freq, i) {
+    const osc  = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    const t   = ctx.currentTime + i * 0.12;
+    const dur = 0.6;
+    osc.frequency.setValueAtTime(freq, t);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.22, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.start(t);
+    osc.stop(t + dur);
+  });
+}
+
+// Goodbye: descending fifth (G5 – C5)
+function playGoodbye() {
+  const ctx   = _audioCtx;
+  if (ctx.state === 'suspended') ctx.resume();
+  const notes = [783.99, 523.25];
+  notes.forEach(function(freq, i) {
+    const osc  = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    const t   = ctx.currentTime + i * 0.15;
+    const dur = 0.45;
+    osc.frequency.setValueAtTime(freq, t);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.18, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.start(t);
+    osc.stop(t + dur);
+  });
 }
 
 let peer              = null;
@@ -309,6 +353,7 @@ function handleJoinerDataConnection(dataConn) {
         if (id !== joinerId && c.data) c.data.send({ type: 'peer-joined', peerId: joinerId, pseudo: pseudo });
       });
 
+      playCarillon();
       updatePeerList();
 
     } else if (msg.type === 'talking') {
@@ -322,6 +367,7 @@ function handleJoinerDataConnection(dataConn) {
   dataConn.on('close', function() {
     if (!connections.has(joinerId)) return;
     connections.forEach(function(c) { if (c.data) c.data.send({ type: 'peer-left', peerId: joinerId }); });
+    playGoodbye();
     removePeer(joinerId);
   });
 
@@ -370,10 +416,12 @@ function handleHostMessage(msg) {
   } else if (msg.type === 'peer-joined') {
     if (!connections.has(msg.peerId)) {
       connections.set(msg.peerId, { data: null, media: null, pseudo: msg.pseudo || shortId(msg.peerId), talking: false });
+      playCarillon();
       updatePeerList();
     }
 
   } else if (msg.type === 'peer-left') {
+    playGoodbye();
     removePeer(msg.peerId);
 
   } else if (msg.type === 'talking') {
