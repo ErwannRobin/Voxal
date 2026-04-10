@@ -11,6 +11,12 @@
  *   peer-joined  { peerId, pseudo }               host -> all existing peers
  *   peer-left    { peerId }                       host -> all
  *   talking      { peerId, active }               non-host -> host (relayed to all)
+ *
+ * Host migration:
+ *   When the host disconnects, all remaining peers independently elect a new host
+ *   by sorting all known peer IDs and picking the smallest. The elected peer calls
+ *   becomeHost(); others call connectToNewHost(). Audio mesh is unaffected since
+ *   MediaConnections are fully peer-to-peer.
  */
 
 // --- State -------------------------------------------------------------------
@@ -317,6 +323,64 @@ function leaveRoom() {
   showScreen('home');
 }
 
+// --- Host migration ----------------------------------------------------------
+
+function initiateHostMigration() {
+  if (!inRoom) return;
+
+  const oldHostId = roomCode;
+
+  // Remove old host from the map (data conn is already dead; media closes on its own)
+  const oldConn = connections.get(oldHostId);
+  if (oldConn) {
+    if (oldConn.media) oldConn.media.close();
+    connections.delete(oldHostId);
+    detachAudio(oldHostId);
+  }
+
+  playGoodbye();
+
+  // Elect new host: smallest peer ID among all remaining peers + self
+  const allIds = [...connections.keys(), peer.id].sort();
+  if (allIds.length === 0) { leaveRoom(); return; }
+
+  const newHostId = allIds[0];
+  updatePeerList();
+
+  if (newHostId === peer.id) {
+    becomeHost();
+  } else {
+    connectToNewHost(newHostId);
+  }
+}
+
+function becomeHost() {
+  isHost = true;
+  roomCode = peer.id;
+  $('room-code-display').textContent = peer.id;
+  updatePeerList();
+  // peer.on('connection') is already wired in joinRoom() and will route here
+  // since isHost is now true
+}
+
+function connectToNewHost(newHostId) {
+  roomCode = newHostId;
+  $('room-code-display').textContent = newHostId;
+
+  const hostData = peer.connect(newHostId, { reliable: true });
+
+  hostData.on('open', function() {
+    hostData.send({ type: 'hello', pseudo: myPseudo || 'Anonymous' });
+    const prev = connections.get(newHostId) || { media: null, talking: false };
+    connections.set(newHostId, Object.assign({}, prev, { data: hostData, pseudo: prev.pseudo || shortId(newHostId) }));
+    updatePeerList();
+  });
+
+  hostData.on('data',  function(msg) { handleHostMessage(msg); });
+  hostData.on('close', function()    { if (inRoom) initiateHostMigration(); });
+  hostData.on('error', function(err) { console.warn('[host-data]', err); });
+}
+
 function handleIncomingCall(call) {
   call.answer(stream);
   call.on('stream', function(remote) {
@@ -450,9 +514,11 @@ async function joinRoom(code) {
     });
 
     hostData.on('data',  function(msg) { handleHostMessage(msg); });
-    hostData.on('close', function()    { if (inRoom) showError('Disconnected. Room closed.'); });
+    hostData.on('close', function()    { if (inRoom) initiateHostMigration(); });
     hostData.on('error', function(err) { showError(err.message); });
   });
+  // Accept incoming connections in case this peer becomes host after migration
+  peer.on('connection', function(dataConn) { if (isHost) handleJoinerDataConnection(dataConn); });
   peer.on('call',  function(call) { handleIncomingCall(call); });
   peer.on('error', function(err)  { showError(err.message); });
 }

@@ -178,7 +178,7 @@ push2talk/
 - **NAT traversal** — PeerJS uses Google's STUN servers by default. Users behind very strict NAT/firewalls may fail to connect. For maximum reliability, add a TURN server to the PeerJS config.
 - **PeerJS free tier** — `0.peerjs.com` allows ~50 simultaneous connections per IP. For larger groups or production use, [self-host the PeerJS server](https://github.com/peers/peerjs-server).
 - **Browser PTT scope** — the keyboard shortcut only fires when the tab is focused (browser security limitation). Click-and-hold the mic button always works.
-- **Room persistence** — rooms exist only while the host's app is open. If the host leaves, the room closes for everyone.
+- **Room persistence** — rooms exist only while at least one participant remains. When the host leaves, the remaining peer with the smallest peer ID is automatically elected as the new host; audio is uninterrupted since MediaConnections are fully peer-to-peer. The room code updates to reflect the new host's ID.
 
 ---
 
