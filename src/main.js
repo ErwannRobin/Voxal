@@ -559,9 +559,15 @@ window.addEventListener('DOMContentLoaded', function() {
 
   document.addEventListener('keydown', function(e) {
     if (recordingShortcut) { e.preventDefault(); const s = shortcutFromEvent(e); if (s) applyNewShortcut(s); return; }
-    if (matchesShortcut(e) && !e.repeat) { setTalking(true); e.preventDefault(); }
+    // Space always triggers PTT; Enter always toggles free-hand
+    if (e.code === 'Space' && !e.repeat) { setTalking(true);           e.preventDefault(); return; }
+    if (e.code === 'Enter' && !e.repeat) { setFreeHand(!freeHandMode); e.preventDefault(); return; }
+    if (matchesShortcut(e) && !e.repeat) { setTalking(true);           e.preventDefault(); }
   });
-  document.addEventListener('keyup', function(e) { if (keyCodeOf(shortcutStr) === e.code) setTalking(false); });
+  document.addEventListener('keyup', function(e) {
+    if (e.code === 'Space') { setTalking(false); return; }
+    if (keyCodeOf(shortcutStr) === e.code) setTalking(false);
+  });
 
   // Tauri-only: global shortcut works even when app is in background
   if (window.__TAURI__) {
