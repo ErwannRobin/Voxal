@@ -122,6 +122,22 @@ function hapticLight() {
   } catch (_) {}
 }
 
+// iOS PushToTalk framework bridge (iOS 16+, no-op elsewhere)
+const PTT = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PTTPlugin;
+
+function nativePTTJoin(roomName) {
+  if (PTT) PTT.join({ roomName }).catch(function(e) { console.warn('[PTT join]', e); });
+}
+function nativePTTLeave() {
+  if (PTT) PTT.leave().catch(function(e) { console.warn('[PTT leave]', e); });
+}
+function nativePTTStart() {
+  if (PTT) PTT.startTransmitting().catch(function(e) { console.warn('[PTT start]', e); });
+}
+function nativePTTStop() {
+  if (PTT) PTT.stopTransmitting().catch(function(e) { console.warn('[PTT stop]', e); });
+}
+
 // --- DOM helpers -------------------------------------------------------------
 
 const $ = id => document.getElementById(id);
@@ -279,6 +295,8 @@ function setTalking(active) {
   isTalking = active;
   playBlip(active);
   if (active) hapticLight();
+  // Notify the iOS PTT framework → updates Dynamic Island transmit indicator
+  if (active) nativePTTStart(); else nativePTTStop();
   audioTrack.enabled = active;
   $('ptt-btn').classList.toggle('active', active);
   $('ptt-status').textContent = active ? '\u25cf Transmitting\u2026' : '';
@@ -323,6 +341,7 @@ function removePeer(peerId) {
 
 function leaveRoom() {
   inRoom = false; freeHandMode = false; isTalking = false;
+  nativePTTLeave();
   Array.from(connections.keys()).forEach(removePeer);
   if (stream) stream.getTracks().forEach(function(t) { t.stop(); });
   if (peer) peer.destroy();
@@ -455,6 +474,7 @@ async function createRoom() {
   peer.on('open', function(id) {
     isHost = true; roomCode = id; inRoom = true;
     $('room-code-display').textContent = id;
+    nativePTTJoin(id);
     showScreen('room');
     updatePeerList();
     updateShortcutDisplay();
@@ -517,6 +537,7 @@ async function joinRoom(code) {
       isHost = false; inRoom = true;
       connections.set(code, { data: hostData, media: null, pseudo: shortId(code), talking: false });
       $('room-code-display').textContent = code;
+      nativePTTJoin(code);
       showScreen('room');
       updatePeerList();
       updateShortcutDisplay();
@@ -604,5 +625,12 @@ window.addEventListener('DOMContentLoaded', function() {
     const listen = window.__TAURI__.event.listen;
     listen('ptt-press',   function() { if (!recordingShortcut) setTalking(true);  });
     listen('ptt-release', function() { if (!recordingShortcut) setTalking(false); });
+  }
+
+  // iOS PushToTalk framework: Dynamic Island / Lock Screen button events
+  if (PTT) {
+    PTT.addListener('ptt-press',   function() { setTalking(true);  });
+    PTT.addListener('ptt-release', function() { setTalking(false); });
+    PTT.addListener('ptt-error',   function(e) { console.warn('[PTT]', e.message); });
   }
 });

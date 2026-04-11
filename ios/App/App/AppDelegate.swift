@@ -13,19 +13,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     // MARK: - Audio Session
-
+    // The PTT framework takes control of the session during transmission.
+    // This baseline config covers general playback and background audio.
     private func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
         do {
-            // .playAndRecord  — simultaneous mic input + speaker output (required for WebRTC)
-            // .voiceChat      — system-level echo cancellation & noise reduction
-            // .allowBluetooth — Bluetooth headsets work as input
-            // .defaultToSpeaker — audio routes to speaker, not earpiece
-            try session.setCategory(
-                .playAndRecord,
-                mode: .voiceChat,
-                options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker]
-            )
+            try session.setCategory(.playAndRecord,
+                                    mode: .voiceChat,
+                                    options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker])
             try session.setActive(true)
         } catch {
             print("[AVAudioSession] Configuration failed: \(error)")
@@ -33,15 +28,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func applicationDidEnterBackground(_ application: UIApplication) {
-        // Keep the audio session active so WebRTC streams survive backgrounding.
-        // UIBackgroundModes = [audio, voip] in Info.plist tells iOS not to
-        // suspend the process; this call ensures the session stays live.
         try? AVAudioSession.sharedInstance().setActive(true)
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
-        // Re-configure in case another app interrupted the session
-        // (phone call, Siri, etc.) while we were backgrounded.
         configureAudioSession()
     }
 
