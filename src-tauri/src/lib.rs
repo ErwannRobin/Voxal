@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
-use tauri::menu::{AboutMetadata, MenuBuilder, SubmenuBuilder};
+use tauri::menu::{AboutMetadata, MenuItem, MenuBuilder, SubmenuBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 const DEFAULT_SHORTCUT: &str = "Ctrl+Backquote";
@@ -48,17 +48,40 @@ pub fn run() {
                 ..Default::default()
             };
 
+            let prefs = MenuItem::with_id(app, "preferences", "Preferences…", true, Some("CmdOrCtrl+,"))?;
+
             let app_submenu = SubmenuBuilder::new(app, "Voxel")
                 .about(Some(about))
+                .separator()
+                .item(&prefs)
                 .separator()
                 .quit()
                 .build()?;
 
             let menu = MenuBuilder::new(app)
                 .item(&app_submenu)
+                .item(
+                    &SubmenuBuilder::new(app, "Edit")
+                        .undo()
+                        .redo()
+                        .separator()
+                        .cut()
+                        .copy()
+                        .paste()
+                        .separator()
+                        .select_all()
+                        .build()?
+                )
                 .build()?;
 
             app.set_menu(menu)?;
+
+            let prefs_id = prefs.id().clone();
+            app.on_menu_event(move |app, event| {
+                if event.id() == &prefs_id {
+                    app.emit("open-preferences", ()).ok();
+                }
+            });
 
             // Register the default PTT global shortcut
             app.handle().global_shortcut()

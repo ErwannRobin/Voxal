@@ -623,14 +623,20 @@ window.addEventListener('DOMContentLoaded', function() {
   });
   $('input-code').addEventListener('keydown', function(e) { if (e.key === 'Enter') $('btn-join').click(); });
 
-  // TURN settings panel
+  // TURN settings modal
+  function openSettings() {
+    $('input-metered-app').value = localStorage.getItem(METERED_APP_STORE_KEY) || '';
+    $('input-metered-key').value = localStorage.getItem(METERED_API_STORE_KEY) || '';
+    $('modal-settings').classList.remove('hidden');
+  }
+  function closeSettings() {
+    $('modal-settings').classList.add('hidden');
+  }
   function updateTurnBadge() {
     const app = localStorage.getItem(METERED_APP_STORE_KEY);
     const key = localStorage.getItem(METERED_API_STORE_KEY);
     $('turn-badge').classList.toggle('active', !!(app && key));
   }
-  $('input-metered-app').value = localStorage.getItem(METERED_APP_STORE_KEY) || '';
-  $('input-metered-key').value = localStorage.getItem(METERED_API_STORE_KEY) || '';
   updateTurnBadge();
   $('input-metered-app').addEventListener('input', function(e) {
     localStorage.setItem(METERED_APP_STORE_KEY, e.target.value.trim());
@@ -640,12 +646,14 @@ window.addEventListener('DOMContentLoaded', function() {
     localStorage.setItem(METERED_API_STORE_KEY, e.target.value.trim());
     updateTurnBadge();
   });
-  $('btn-settings-toggle').addEventListener('click', function() {
-    const panel = $('settings-panel');
-    const open  = !panel.classList.contains('hidden');
-    panel.classList.toggle('hidden', open);
-    $('btn-settings-toggle').setAttribute('aria-expanded', String(!open));
-  });
+  $('btn-open-settings').addEventListener('click', openSettings);
+  $('btn-close-settings').addEventListener('click', closeSettings);
+  $('modal-backdrop').addEventListener('click', closeSettings);
+
+  // Tauri desktop: "Voxel → Preferences…" menu item opens the same modal
+  if (window.__TAURI__) {
+    window.__TAURI__.event.listen('open-preferences', openSettings);
+  }
   $('btn-copy').addEventListener('click', function() {
     navigator.clipboard.writeText(roomCode);
     const icon = $('btn-copy').querySelector('.copy-icon');

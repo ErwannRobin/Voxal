@@ -10,6 +10,11 @@
 
     <!-- Home screen -->
     <div id="screen-home" class="screen active">
+      <div class="screen-topbar">
+        <button id="btn-open-settings" class="topbar-btn" title="Settings">
+          ⚙<span id="turn-badge" class="turn-badge" title="TURN configured">●</span>
+        </button>
+      </div>
       <div class="brand">
         <span class="brand-icon">🎙️</span>
         <h1>Voxel</h1>
@@ -27,19 +32,32 @@
                  spellcheck="false" autocomplete="off" maxlength="36" />
           <button id="btn-join" class="btn btn-secondary">Join</button>
         </div>
-        <div class="settings-section">
-          <button id="btn-settings-toggle" class="settings-toggle" aria-expanded="false">
-            ⚙ TURN Server <span id="turn-badge" class="turn-badge" title="TURN configured">●</span>
-          </button>
-          <div id="settings-panel" class="settings-panel hidden">
-            <div class="settings-fields">
-              <input id="input-metered-app" type="text" placeholder="App name" spellcheck="false" autocomplete="off" />
-              <input id="input-metered-key" type="password" placeholder="API key" autocomplete="off" />
-            </div>
-            <p class="settings-hint">
-              Credentials from <a href="https://metered.ca" target="_blank" rel="noopener">metered.ca</a>
-              — relays traffic through NAT &amp; firewalls.
-            </p>
+      </div>
+    </div>
+
+    <!-- Settings modal -->
+    <div id="modal-settings" class="modal hidden" role="dialog" aria-modal="true" aria-label="Settings">
+      <div class="modal-backdrop" id="modal-backdrop"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <span class="modal-title">Settings</span>
+          <button id="btn-close-settings" class="btn-icon" aria-label="Close">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="settings-group-title">TURN Server</p>
+          <p class="settings-desc">
+            Relay traffic through firewalls &amp; strict NAT using
+            <a href="https://metered.ca" target="_blank" rel="noopener">metered.ca</a>.
+          </p>
+          <div class="settings-field">
+            <label for="input-metered-app">App name</label>
+            <input id="input-metered-app" type="text" placeholder="yourapp"
+                   spellcheck="false" autocomplete="off" />
+          </div>
+          <div class="settings-field">
+            <label for="input-metered-key">API key</label>
+            <input id="input-metered-key" type="password" placeholder="API key"
+                   autocomplete="off" />
           </div>
         </div>
       </div>
