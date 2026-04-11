@@ -3,7 +3,7 @@
 
 # Default target
 help:
-	@echo "push2talk — available targets:"
+	@echo "voxel — available targets:"
 	@echo ""
 	@echo "  run          Start the Tauri desktop app (release)"
 	@echo "  run-web      Serve the web version locally on http://localhost:8080"
@@ -22,7 +22,7 @@ help:
 
 run:
 	npm run tauri build -- --no-bundle
-	./src-tauri/target/release/push2talk
+	./src-tauri/target/release/voxel
 
 dev:
 	npm run tauri dev

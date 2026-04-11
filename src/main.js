@@ -1,4 +1,4 @@
-/* push2talk – main.js
+/* voxel – main.js
  *
  * Topology:
  *   Signaling : star (host ↔ each peer via DataConnection)

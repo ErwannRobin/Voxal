@@ -1,6 +1,6 @@
 {
-  "appId": "com.push2talk.app",
-  "appName": "push2talk",
+  "appId": "com.erwannrobin.voxel",
+  "appName": "Voxel",
   "webDir": "src",
   "plugins": {
     "StatusBar": {

@@ -10,7 +10,7 @@ private class PTTRestorationDelegate: NSObject, PTChannelRestorationDelegate {
     func channelDescriptor(restoringActiveChannelUUID uuid: UUID) -> PTChannelDescriptor {
         // Return a generic descriptor; JS will call leave() immediately on launch
         // if there is no active room.
-        return PTChannelDescriptor(name: "Push2Talk", image: nil)
+        return PTChannelDescriptor(name: "Voxel", image: nil)
     }
 }
 

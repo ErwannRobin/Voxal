@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Push2Talk",
+  "productName": "Voxel",
   "version": "0.1.0",
-  "identifier": "com.erwannrobin.push2talk",
+  "identifier": "com.erwannrobin.voxel",
   "build": {
     "frontendDist": "../src"
   },
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Push2Talk",
+        "title": "Voxel",
         "width": 340,
         "height": 520,
         "minWidth": 280,

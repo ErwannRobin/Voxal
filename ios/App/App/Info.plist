@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>push2talk</string>
+	<string>Voxel</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -25,7 +25,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Push2Talk needs the microphone to transmit your voice in a room.</string>
+	<string>Voxel needs the microphone to transmit your voice in a room.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

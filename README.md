@@ -1,4 +1,4 @@
-# Push2Talk
+# Voxel
 
 > Serverless push-to-talk voice chat for your desktop and browser — no accounts, no central server, just a room code.
 
@@ -185,7 +185,7 @@ All sounds are synthesized via the Web Audio API — no audio files are bundled.
 ## Project structure
 
 ```
-push2talk/
+voxel/
 ├── src/                       # Frontend (desktop + web)
 │   ├── index.html             # App shell (home, room, error screens)
 │   ├── main.js                # All app logic (~450 lines, no framework)
