@@ -25,6 +25,17 @@
           <input id="input-pseudo" type="text" placeholder="Your name…" maxlength="20"
                  spellcheck="false" autocomplete="off" />
         </div>
+
+        <!-- Presence channels (shown when API token + org are configured) -->
+        <div id="presence-panel" class="presence-panel hidden">
+          <div class="presence-header">
+            <span class="label">Channels</span>
+            <button id="btn-refresh-presence" class="btn-icon" title="Refresh">↻</button>
+          </div>
+          <div id="channels-list" class="channels-list"></div>
+          <div class="divider"><span>or connect manually</span></div>
+        </div>
+
         <button id="btn-create" class="btn btn-primary btn-full">Create Room</button>
         <div class="divider"><span>or join one</span></div>
         <div class="join-row">
@@ -62,6 +73,23 @@
           <div class="settings-test-row">
             <button id="btn-test-turn" class="btn btn-ghost btn-sm">Test</button>
             <span id="turn-test-status" class="turn-test-status"></span>
+          </div>
+          <div class="settings-separator"></div>
+          <p class="settings-group-title">Presence</p>
+          <p class="settings-desc">
+            Show online channels and who's connected, via a companion server.
+          </p>
+          <div class="settings-field">
+            <label for="input-presence-token">API token</label>
+            <input id="input-presence-token" type="password" placeholder="API token"
+                   autocomplete="off" />
+          </div>
+          <div class="settings-field">
+            <label for="select-presence-org">Organisation</label>
+            <select id="select-presence-org" class="org-select" disabled>
+              <option value="">— enter API token first —</option>
+            </select>
+            <span id="org-load-status" class="org-load-status"></span>
           </div>
         </div>
       </div>

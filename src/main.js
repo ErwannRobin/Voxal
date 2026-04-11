@@ -25,6 +25,50 @@ const METERED_APP_STORE_KEY    = 'metered-app-name';
 const METERED_API_STORE_KEY    = 'metered-api-key';
 const METERED_STATUS_STORE_KEY = 'metered-status'; // 'ok' | 'error' | null
 
+// --- Presence API -----------------------------------------------------------
+
+const PRESENCE_BASE      = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
+const PRESENCE_TOKEN_KEY = 'presence-api-token';
+const PRESENCE_ORG_KEY   = 'presence-org-id';
+
+function presenceToken()      { return localStorage.getItem(PRESENCE_TOKEN_KEY) || ''; }
+function presenceOrgId()      { return localStorage.getItem(PRESENCE_ORG_KEY)   || ''; }
+function presenceConfigured() { return !!(presenceToken() && presenceOrgId()); }
+
+async function fetchPresence() {
+  const res = await fetch(
+    PRESENCE_BASE + '/org/' + presenceOrgId() + '/presence',
+    { headers: { 'x-api-token': presenceToken() } }
+  );
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return (await res.json()).presence; // [{channel:{id,name}, connected:[{user_id,peer_id,display_name}]}]
+}
+
+async function fetchOrgs() {
+  const res = await fetch(PRESENCE_BASE + '/orgs', {
+    headers: { 'x-api-token': presenceToken() },
+  });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return (await res.json()).organisations; // [{id,name,avatar_url,role}]
+}
+
+async function postSession(channelName, peerId) {
+  const res = await fetch(PRESENCE_BASE, {
+    method: 'POST',
+    headers: { 'x-api-token': presenceToken(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ org_id: presenceOrgId(), channel_name: channelName, peer_id: peerId }),
+  });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+}
+
+function deleteSession() {
+  if (!presenceConfigured()) return;
+  fetch(PRESENCE_BASE, {
+    method: 'DELETE',
+    headers: { 'x-api-token': presenceToken() },
+  }).catch(function(e) { console.warn('[Presence] deleteSession:', e.message); });
+}
+
 const FALLBACK_ICE = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
@@ -141,6 +185,11 @@ let myPseudo          = localStorage.getItem('pseudo') || '';
 
 let shortcutStr = localStorage.getItem('ptt-shortcut') || DEFAULT_SHORTCUT;
 
+// Presence state
+let presenceData     = []; // last fetched [{channel,connected}]
+let activeChannel    = null; // channel name for the current presence session
+let presenceInterval = null;
+
 // peerId -> { data, media, pseudo, talking }
 const connections = new Map();
 
@@ -175,6 +224,8 @@ const $ = id => document.getElementById(id);
 function showScreen(name) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById('screen-' + name).classList.add('active');
+  if (name === 'home') startPresencePolling();
+  else                 stopPresencePolling();
 }
 
 function showError(msg) {
@@ -372,6 +423,7 @@ function removePeer(peerId) {
 function leaveRoom() {
   inRoom = false; freeHandMode = false; isTalking = false;
   nativePTTLeave();
+  if (activeChannel) { deleteSession(); activeChannel = null; }
   Array.from(connections.keys()).forEach(removePeer);
   if (stream) stream.getTracks().forEach(function(t) { t.stop(); });
   if (peer) peer.destroy();
@@ -496,7 +548,7 @@ function handleJoinerDataConnection(dataConn) {
   dataConn.on('error', function(err) { console.warn('[data]', err); });
 }
 
-async function createRoom() {
+async function createRoom(onJoined) {
   stream = await getMicStream();
   audioTrack = stream.getAudioTracks()[0];
   audioTrack.enabled = false;
@@ -509,6 +561,7 @@ async function createRoom() {
     showScreen('room');
     updatePeerList();
     updateShortcutDisplay();
+    if (onJoined) onJoined(id);
   });
   peer.on('connection', function(dataConn) { handleJoinerDataConnection(dataConn); });
   peer.on('call',       function(call)     { handleIncomingCall(call); });
@@ -553,7 +606,7 @@ function handleHostMessage(msg) {
   }
 }
 
-async function joinRoom(code) {
+async function joinRoom(code, onJoined) {
   if (!code) return;
   stream = await getMicStream();
   audioTrack = stream.getAudioTracks()[0];
@@ -573,6 +626,7 @@ async function joinRoom(code) {
       showScreen('room');
       updatePeerList();
       updateShortcutDisplay();
+      if (onJoined) onJoined(peer.id);
     });
 
     hostData.on('data',  function(msg) { handleHostMessage(msg); });
@@ -583,6 +637,75 @@ async function joinRoom(code) {
   peer.on('connection', function(dataConn) { if (isHost) handleJoinerDataConnection(dataConn); });
   peer.on('call',  function(call) { handleIncomingCall(call); });
   peer.on('error', function(err)  { showError(err.message); });
+}
+
+// --- Presence UI ------------------------------------------------------------
+
+function renderPresenceChannels() {
+  const list = $('channels-list');
+  if (!presenceData.length) {
+    list.innerHTML = '<p class="presence-empty">No channels found.</p>';
+    return;
+  }
+  list.innerHTML = '';
+  presenceData.forEach(function(item, idx) {
+    const ch        = item.channel;
+    const connected = item.connected || [];
+    const names     = connected.map(function(c) { return c.display_name || 'Anonymous'; }).join(', ');
+    const div       = document.createElement('div');
+    div.className   = 'channel-item';
+    div.innerHTML =
+      '<div class="channel-info">' +
+        '<span class="channel-name">' + ch.name + '</span>' +
+        (names ? '<span class="channel-members">' + names + '</span>' : '') +
+      '</div>' +
+      (connected.length ? '<span class="channel-count">' + connected.length + '</span>' : '') +
+      '<button class="btn btn-secondary btn-sm">Join</button>';
+    div.querySelector('button').addEventListener('click', function() {
+      joinChannel(presenceData[idx]).catch(function(err) { showError(err.message); });
+    });
+    list.appendChild(div);
+  });
+}
+
+async function refreshPresence() {
+  if (!presenceConfigured()) return;
+  const list = $('channels-list');
+  try {
+    presenceData = await fetchPresence();
+    renderPresenceChannels();
+  } catch (e) {
+    list.innerHTML = '<p class="presence-error">' + e.message + '</p>';
+  }
+}
+
+function startPresencePolling() {
+  stopPresencePolling();
+  if (!presenceConfigured()) { $('presence-panel').classList.add('hidden'); return; }
+  $('presence-panel').classList.remove('hidden');
+  $('channels-list').innerHTML = '<p class="presence-loading">Loading…</p>';
+  refreshPresence();
+  presenceInterval = setInterval(refreshPresence, 15000);
+}
+
+function stopPresencePolling() {
+  if (presenceInterval) { clearInterval(presenceInterval); presenceInterval = null; }
+}
+
+async function joinChannel(item) {
+  const connected    = item.connected || [];
+  activeChannel      = item.channel.name;
+  const postPresence = function(peerId) {
+    postSession(activeChannel, peerId).catch(function(e) {
+      console.warn('[Presence] session registration failed:', e.message);
+    });
+  };
+  if (connected.length === 0) {
+    await createRoom(postPresence);
+  } else {
+    const hostId = connected.map(function(c) { return c.peer_id; }).sort()[0];
+    await joinRoom(hostId, postPresence);
+  }
 }
 
 // --- Bootstrap ---------------------------------------------------------------
@@ -669,14 +792,40 @@ window.addEventListener('DOMContentLoaded', function() {
   }
 
   function openSettings() {
-    $('input-metered-app').value = localStorage.getItem(METERED_APP_STORE_KEY) || '';
-    $('input-metered-key').value = localStorage.getItem(METERED_API_STORE_KEY) || '';
+    $('input-metered-app').value     = localStorage.getItem(METERED_APP_STORE_KEY) || '';
+    $('input-metered-key').value     = localStorage.getItem(METERED_API_STORE_KEY) || '';
+    $('input-presence-token').value  = presenceToken();
     $('turn-test-status').textContent = '';
     $('modal-settings').classList.remove('hidden');
+    if (presenceToken()) loadOrgs();
   }
   function closeSettings() {
     $('modal-settings').classList.add('hidden');
+    startPresencePolling(); // refresh in case org changed
   }
+
+  async function loadOrgs() {
+    const select    = $('select-presence-org');
+    const statusEl  = $('org-load-status');
+    select.disabled = true;
+    statusEl.textContent = 'Loading…';
+    statusEl.style.color = '';
+    try {
+      const orgs        = await fetchOrgs();
+      const currentOrgId = presenceOrgId();
+      select.innerHTML  = '<option value="">— select organisation —</option>' +
+        orgs.map(function(o) {
+          var label = o.name + (o.role === 'admin' ? ' ★' : '');
+          return '<option value="' + o.id + '"' + (o.id === currentOrgId ? ' selected' : '') + '>' + label + '</option>';
+        }).join('');
+      statusEl.textContent = '';
+    } catch (e) {
+      statusEl.style.color = 'var(--red)';
+      statusEl.textContent = e.message;
+    }
+    select.disabled = false;
+  }
+
   updateTurnBadge();
   $('input-metered-app').addEventListener('input', function(e) {
     localStorage.setItem(METERED_APP_STORE_KEY, e.target.value.trim());
@@ -699,6 +848,25 @@ window.addEventListener('DOMContentLoaded', function() {
   if (window.__TAURI__) {
     window.__TAURI__.event.listen('open-preferences', openSettings);
   }
+
+  // Presence credentials
+  $('input-presence-token').addEventListener('input', function(e) {
+    localStorage.setItem(PRESENCE_TOKEN_KEY, e.target.value.trim());
+    // Reset org selection when token changes
+    localStorage.removeItem(PRESENCE_ORG_KEY);
+    $('select-presence-org').innerHTML = '<option value="">— select organisation —</option>';
+    $('org-load-status').textContent = '';
+  });
+  $('input-presence-token').addEventListener('blur', function() {
+    if (presenceToken()) loadOrgs();
+  });
+  $('select-presence-org').addEventListener('change', function(e) {
+    localStorage.setItem(PRESENCE_ORG_KEY, e.target.value);
+  });
+  $('btn-refresh-presence').addEventListener('click', refreshPresence);
+
+  // Start presence polling on load (if configured)
+  startPresencePolling();
   $('btn-copy').addEventListener('click', function() {
     navigator.clipboard.writeText(roomCode);
     const icon = $('btn-copy').querySelector('.copy-icon');
@@ -721,17 +889,15 @@ window.addEventListener('DOMContentLoaded', function() {
     if (!$('modal-settings').classList.contains('hidden')) {
       if (e.key === 'Escape') { closeSettings(); e.preventDefault(); }
       if (e.key === 'Enter') {
-        if (document.activeElement === $('input-metered-app')) {
-          $('input-metered-key').focus();
-        } else {
-          closeSettings();
-        }
+        const fields = [$('input-metered-app'), $('input-metered-key'), $('input-presence-token'), $('select-presence-org')];
+        const idx = fields.indexOf(document.activeElement);
+        if (idx >= 0 && idx < fields.length - 1) { fields[idx + 1].focus(); }
+        else { closeSettings(); }
         e.preventDefault();
       }
       if (e.key === 'Tab') {
-        // Trap focus: cycle only between the two modal inputs
-        const fields = [$('input-metered-app'), $('input-metered-key')];
-        const idx = fields.indexOf(document.activeElement);
+        const fields = [$('input-metered-app'), $('input-metered-key'), $('input-presence-token'), $('select-presence-org')];
+        const idx  = fields.indexOf(document.activeElement);
         const next = e.shiftKey ? (idx - 1 + fields.length) : (idx + 1);
         fields[next % fields.length].focus();
         e.preventDefault();

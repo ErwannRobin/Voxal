@@ -477,6 +477,8 @@ input[type="password"]:focus { border-color: var(--accent); }
   display: flex;
   flex-direction: column;
   gap: 12px;
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
 }
 
 .settings-group-title {
@@ -505,6 +507,35 @@ input[type="password"]:focus { border-color: var(--accent); }
   color: var(--text-muted);
 }
 
+/* Org select — matches input styling */
+.org-select {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 13px;
+  padding: 9px 12px;
+  width: 100%;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%237a7a9d' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px;
+  transition: border-color 0.15s;
+}
+.org-select:focus   { border-color: var(--accent); }
+.org-select:disabled { opacity: 0.45; cursor: default; }
+
+.org-load-status {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  display: block;
+}
+
 .settings-test-row {
   display: flex;
   align-items: center;
@@ -521,3 +552,79 @@ input[type="password"]:focus { border-color: var(--accent); }
   color: var(--text-muted);
   flex: 1;
 }
+
+.settings-separator {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+/* ── Presence panel ──────────────────────────────────────────────── */
+
+.presence-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.presence-panel.hidden { display: none; }
+
+.presence-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.channels-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.channel-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-raised);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+.channel-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.channel-name {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.channel-members {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.channel-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--green);
+  min-width: 16px;
+  text-align: right;
+}
+
+.presence-loading,
+.presence-empty  { font-size: 12px; color: var(--text-muted); padding: 8px 0; text-align: center; }
+.presence-error  { font-size: 12px; color: var(--red);        padding: 8px 0; text-align: center; }
