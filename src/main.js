@@ -21,8 +21,9 @@
 
 // --- TURN / ICE servers (metered.ca) ----------------------------------------
 
-const METERED_APP_STORE_KEY = 'metered-app-name';
-const METERED_API_STORE_KEY = 'metered-api-key';
+const METERED_APP_STORE_KEY    = 'metered-app-name';
+const METERED_API_STORE_KEY    = 'metered-api-key';
+const METERED_STATUS_STORE_KEY = 'metered-status'; // 'ok' | 'error' | null
 
 const FALLBACK_ICE = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -624,31 +625,75 @@ window.addEventListener('DOMContentLoaded', function() {
   $('input-code').addEventListener('keydown', function(e) { if (e.key === 'Enter') $('btn-join').click(); });
 
   // TURN settings modal
+  function updateTurnBadge() {
+    const status = localStorage.getItem(METERED_STATUS_STORE_KEY);
+    const badge  = $('turn-badge');
+    badge.classList.remove('ok', 'error');
+    if (status === 'ok')    badge.classList.add('ok');
+    if (status === 'error') badge.classList.add('error');
+  }
+
+  async function testTurnCredentials() {
+    const appName = $('input-metered-app').value.trim();
+    const apiKey  = $('input-metered-key').value.trim();
+    const statusEl = $('turn-test-status');
+    const btn      = $('btn-test-turn');
+
+    if (!appName || !apiKey) {
+      statusEl.style.color = '';
+      statusEl.textContent = 'Enter app name and API key first.';
+      return;
+    }
+
+    btn.disabled = true;
+    statusEl.style.color = '';
+    statusEl.textContent = 'Testing…';
+
+    try {
+      const url = 'https://' + appName + '.metered.live/api/v1/turn/credentials?apiKey=' + apiKey;
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const servers = await res.json();
+      if (!Array.isArray(servers) || servers.length === 0) throw new Error('No servers returned');
+      localStorage.setItem(METERED_STATUS_STORE_KEY, 'ok');
+      statusEl.style.color = 'var(--green)';
+      statusEl.textContent = '✓ ' + servers.length + ' servers ready';
+    } catch (e) {
+      localStorage.setItem(METERED_STATUS_STORE_KEY, 'error');
+      statusEl.style.color = '#fb923c';
+      statusEl.textContent = '✕ ' + e.message;
+    }
+
+    btn.disabled = false;
+    updateTurnBadge();
+  }
+
   function openSettings() {
     $('input-metered-app').value = localStorage.getItem(METERED_APP_STORE_KEY) || '';
     $('input-metered-key').value = localStorage.getItem(METERED_API_STORE_KEY) || '';
+    $('turn-test-status').textContent = '';
     $('modal-settings').classList.remove('hidden');
   }
   function closeSettings() {
     $('modal-settings').classList.add('hidden');
   }
-  function updateTurnBadge() {
-    const app = localStorage.getItem(METERED_APP_STORE_KEY);
-    const key = localStorage.getItem(METERED_API_STORE_KEY);
-    $('turn-badge').classList.toggle('active', !!(app && key));
-  }
   updateTurnBadge();
   $('input-metered-app').addEventListener('input', function(e) {
     localStorage.setItem(METERED_APP_STORE_KEY, e.target.value.trim());
+    localStorage.removeItem(METERED_STATUS_STORE_KEY);
+    $('turn-test-status').textContent = '';
     updateTurnBadge();
   });
   $('input-metered-key').addEventListener('input', function(e) {
     localStorage.setItem(METERED_API_STORE_KEY, e.target.value.trim());
+    localStorage.removeItem(METERED_STATUS_STORE_KEY);
+    $('turn-test-status').textContent = '';
     updateTurnBadge();
   });
   $('btn-open-settings').addEventListener('click', openSettings);
   $('btn-close-settings').addEventListener('click', closeSettings);
   $('modal-backdrop').addEventListener('click', closeSettings);
+  $('btn-test-turn').addEventListener('click', testTurnCredentials);
 
   // Tauri desktop: "Voxel → Preferences…" menu item opens the same modal
   if (window.__TAURI__) {
@@ -672,6 +717,27 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-cancel-shortcut').addEventListener('click', stopRecordingShortcut);
 
   document.addEventListener('keydown', function(e) {
+    // Close settings modal on Enter or Escape (takes priority over everything)
+    if (!$('modal-settings').classList.contains('hidden')) {
+      if (e.key === 'Escape') { closeSettings(); e.preventDefault(); }
+      if (e.key === 'Enter') {
+        if (document.activeElement === $('input-metered-app')) {
+          $('input-metered-key').focus();
+        } else {
+          closeSettings();
+        }
+        e.preventDefault();
+      }
+      if (e.key === 'Tab') {
+        // Trap focus: cycle only between the two modal inputs
+        const fields = [$('input-metered-app'), $('input-metered-key')];
+        const idx = fields.indexOf(document.activeElement);
+        const next = e.shiftKey ? (idx - 1 + fields.length) : (idx + 1);
+        fields[next % fields.length].focus();
+        e.preventDefault();
+      }
+      return; // don't process PTT or shortcuts while modal is open
+    }
     if (recordingShortcut) { e.preventDefault(); const s = shortcutFromEvent(e); if (s) applyNewShortcut(s); return; }
     // Space always triggers PTT; Enter always toggles free-hand
     if (e.code === 'Space' && !e.repeat) { setTalking(true);           e.preventDefault(); return; }

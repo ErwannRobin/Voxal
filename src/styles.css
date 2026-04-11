@@ -425,12 +425,12 @@ input[type="password"]:focus { border-color: var(--accent); }
 .topbar-btn:hover { opacity: 1; }
 
 .turn-badge {
-  color: var(--green);
   font-size: 9px;
   opacity: 0;
-  transition: opacity 0.2s;
+  transition: opacity 0.2s, color 0.2s;
 }
-.turn-badge.active { opacity: 1; }
+.turn-badge.ok     { opacity: 1; color: var(--green); }
+.turn-badge.error  { opacity: 1; color: #fb923c; }
 
 /* ── Settings modal ──────────────────────────────────────────────── */
 
@@ -503,4 +503,21 @@ input[type="password"]:focus { border-color: var(--accent); }
 .settings-field label {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.settings-test-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn-sm {
+  font-size: 12px;
+  padding: 5px 12px;
+}
+
+.turn-test-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex: 1;
 }
