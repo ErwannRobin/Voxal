@@ -19,6 +19,35 @@
  *   MediaConnections are fully peer-to-peer.
  */
 
+// --- TURN / ICE servers (metered.ca) ----------------------------------------
+
+const METERED_APP_STORE_KEY = 'metered-app-name';
+const METERED_API_STORE_KEY = 'metered-api-key';
+
+const FALLBACK_ICE = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+];
+
+async function fetchIceServers() {
+  const appName = localStorage.getItem(METERED_APP_STORE_KEY);
+  const apiKey  = localStorage.getItem(METERED_API_STORE_KEY);
+  if (!appName || !apiKey) return FALLBACK_ICE;
+  try {
+    const url = 'https://' + appName + '.metered.live/api/v1/turn/credentials?apiKey=' + apiKey;
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const servers = await res.json();
+    if (Array.isArray(servers) && servers.length > 0) {
+      console.log('[TURN] Using', servers.length, 'ICE servers from metered.ca');
+      return servers;
+    }
+  } catch (e) {
+    console.warn('[TURN] Failed to fetch ICE servers, falling back to STUN:', e.message);
+  }
+  return FALLBACK_ICE;
+}
+
 // --- State -------------------------------------------------------------------
 
 const DEFAULT_SHORTCUT = 'Ctrl+Backquote';
@@ -470,7 +499,8 @@ async function createRoom() {
   stream = await getMicStream();
   audioTrack = stream.getAudioTracks()[0];
   audioTrack.enabled = false;
-  peer = new Peer();
+  const iceServers = await fetchIceServers();
+  peer = new Peer({ config: { iceServers } });
   peer.on('open', function(id) {
     isHost = true; roomCode = id; inRoom = true;
     $('room-code-display').textContent = id;
@@ -527,7 +557,8 @@ async function joinRoom(code) {
   stream = await getMicStream();
   audioTrack = stream.getAudioTracks()[0];
   audioTrack.enabled = false;
-  peer = new Peer();
+  const iceServers = await fetchIceServers();
+  peer = new Peer({ config: { iceServers } });
   peer.on('open', function() {
     roomCode = code;
     const hostData = peer.connect(code, { reliable: true });
@@ -591,6 +622,30 @@ window.addEventListener('DOMContentLoaded', function() {
     joinRoom($('input-code').value.trim()).catch(function(err) { showError(err.message); });
   });
   $('input-code').addEventListener('keydown', function(e) { if (e.key === 'Enter') $('btn-join').click(); });
+
+  // TURN settings panel
+  function updateTurnBadge() {
+    const app = localStorage.getItem(METERED_APP_STORE_KEY);
+    const key = localStorage.getItem(METERED_API_STORE_KEY);
+    $('turn-badge').classList.toggle('active', !!(app && key));
+  }
+  $('input-metered-app').value = localStorage.getItem(METERED_APP_STORE_KEY) || '';
+  $('input-metered-key').value = localStorage.getItem(METERED_API_STORE_KEY) || '';
+  updateTurnBadge();
+  $('input-metered-app').addEventListener('input', function(e) {
+    localStorage.setItem(METERED_APP_STORE_KEY, e.target.value.trim());
+    updateTurnBadge();
+  });
+  $('input-metered-key').addEventListener('input', function(e) {
+    localStorage.setItem(METERED_API_STORE_KEY, e.target.value.trim());
+    updateTurnBadge();
+  });
+  $('btn-settings-toggle').addEventListener('click', function() {
+    const panel = $('settings-panel');
+    const open  = !panel.classList.contains('hidden');
+    panel.classList.toggle('hidden', open);
+    $('btn-settings-toggle').setAttribute('aria-expanded', String(!open));
+  });
   $('btn-copy').addEventListener('click', function() {
     navigator.clipboard.writeText(roomCode);
     const icon = $('btn-copy').querySelector('.copy-icon');

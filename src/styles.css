@@ -375,7 +375,8 @@ kbd {
 
 /* ── Inputs ─────────────────────────────────────────────────────── */
 
-input[type="text"] {
+input[type="text"],
+input[type="password"] {
   background: var(--bg-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -392,5 +393,59 @@ input[type="text"] {
   outline: none;
   transition: border-color 0.15s;
 }
-input[type="text"]::placeholder { color: var(--text-muted); }
-input[type="text"]:focus { border-color: var(--accent); }
+input[type="text"]::placeholder,
+input[type="password"]::placeholder { color: var(--text-muted); }
+input[type="text"]:focus,
+input[type="password"]:focus { border-color: var(--accent); }
+
+/* ── TURN settings panel ─────────────────────────────────────────── */
+
+.settings-section {
+  margin-top: 10px;
+}
+
+.settings-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  opacity: 0.65;
+  transition: opacity 0.15s;
+}
+.settings-toggle:hover { opacity: 1; }
+
+.turn-badge {
+  color: #4ade80;
+  font-size: 9px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.turn-badge.active { opacity: 1; }
+
+.settings-panel {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-panel.hidden { display: none; }
+
+.settings-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.4;
+}
+.settings-hint a { color: var(--accent); text-decoration: none; }
+.settings-hint a:hover { text-decoration: underline; }
