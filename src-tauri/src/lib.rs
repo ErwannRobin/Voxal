@@ -1,5 +1,6 @@
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
+use tauri::menu::{AboutMetadata, MenuBuilder, SubmenuBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 const DEFAULT_SHORTCUT: &str = "Ctrl+Backquote";
@@ -37,6 +38,29 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(PttShortcut(Mutex::new(DEFAULT_SHORTCUT.to_string())))
         .setup(|app| {
+            // Build the app menu with a native About Voxel dialog
+            let about = AboutMetadata {
+                name: Some("Voxel".to_string()),
+                version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                comments: Some("Serverless push-to-talk voice chat".to_string()),
+                website: Some("https://github.com/erwannrobin/voxel".to_string()),
+                icon: app.default_window_icon().cloned(),
+                ..Default::default()
+            };
+
+            let app_submenu = SubmenuBuilder::new(app, "Voxel")
+                .about(Some(about))
+                .separator()
+                .quit()
+                .build()?;
+
+            let menu = MenuBuilder::new(app)
+                .item(&app_submenu)
+                .build()?;
+
+            app.set_menu(menu)?;
+
+            // Register the default PTT global shortcut
             app.handle().global_shortcut()
                 .on_shortcut(DEFAULT_SHORTCUT, |app, _, event| {
                     match event.state {
