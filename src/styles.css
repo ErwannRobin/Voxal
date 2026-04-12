@@ -273,6 +273,13 @@ body {
 }
 .shortcut-display.hidden { display: none; }
 
+/* Hide all keyboard shortcut UI on touch/mobile platforms */
+.platform-mobile .shortcut-display,
+.platform-mobile #shortcut-spacer,
+.platform-mobile #ptt-hint kbd {
+  display: none !important;
+}
+
 .recording-hint {
   font-size: 12px;
   color: var(--accent);

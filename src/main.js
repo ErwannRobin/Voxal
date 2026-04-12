@@ -110,16 +110,17 @@ function startKeepAlive() {
   if (_keepAliveSource) return;
   const ctx = _audioCtx;
   if (ctx.state === 'suspended') ctx.resume();
-  const buf    = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate); // 2s silence
-  const source = ctx.createBufferSource();
-  source.buffer = buf;
-  source.loop   = true;
-  const gain    = ctx.createGain();
-  gain.gain.value = 0.001; // −60 dB, inaudible
-  source.connect(gain);
+  // OscillatorNode produces real non-zero sine samples — iOS won't treat it as
+  // silence and will keep the WKWebView JS engine running in background.
+  const osc  = ctx.createOscillator();
+  osc.type            = 'sine';
+  osc.frequency.value = 20; // 20 Hz: subsonic, inaudible
+  const gain = ctx.createGain();
+  gain.gain.value = 0.001; // −60 dB, effectively silent
+  osc.connect(gain);
   gain.connect(ctx.destination);
-  source.start();
-  _keepAliveSource = source;
+  osc.start();
+  _keepAliveSource = osc;
 }
 
 function stopKeepAlive() {
@@ -766,14 +767,19 @@ window.addEventListener('DOMContentLoaded', function() {
   // Hide shortcut UI on native mobile — no keyboard shortcuts on touch devices
   const isNativeMobile = window.Capacitor && window.Capacitor.isNativePlatform();
   if (isNativeMobile) {
+    document.body.classList.add('platform-mobile');
     $('shortcut-normal').style.display   = 'none';
     $('shortcut-recording').style.display = 'none';
     $('shortcut-spacer').style.display   = 'none';
     $('ptt-hint').textContent = 'Hold the button to transmit';
   }
 
-  $('btn-create').addEventListener('click', function() { createRoom().catch(function(err) { showError(err.message); }); });
+  $('btn-create').addEventListener('click', function() {
+    if (_audioCtx.state === 'suspended') _audioCtx.resume(); // must happen in user gesture
+    createRoom().catch(function(err) { showError(err.message); });
+  });
   $('btn-join').addEventListener('click', function() {
+    if (_audioCtx.state === 'suspended') _audioCtx.resume(); // must happen in user gesture
     joinRoom($('input-code').value.trim()).catch(function(err) { showError(err.message); });
   });
   $('input-code').addEventListener('keydown', function(e) { if (e.key === 'Enter') $('btn-join').click(); });
