@@ -23,6 +23,7 @@
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+  touch-action: manipulation; /* disables double-tap zoom globally */
 }
 
 body {
@@ -230,6 +231,8 @@ body {
   font-size: 30px;
   transition: background 0.1s, border-color 0.1s, transform 0.08s;
   outline: none;
+  touch-action: none; /* prevent iOS scroll/zoom hijacking pointer events */
+  -webkit-touch-callout: none;
 }
 .ptt-btn:hover { border-color: var(--accent); }
 .ptt-btn.active {

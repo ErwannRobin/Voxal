@@ -913,9 +913,10 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-leave').addEventListener('click', leaveRoom);
   $('btn-back').addEventListener('click', function() { showScreen('home'); });
 
-  $('ptt-btn').addEventListener('mousedown',  function() { setTalking(true); });
-  $('ptt-btn').addEventListener('mouseup',    function() { setTalking(false); });
-  $('ptt-btn').addEventListener('mouseleave', function() { setTalking(false); });
+  const pttBtn = $('ptt-btn');
+  pttBtn.addEventListener('pointerdown',   function(e) { e.preventDefault(); pttBtn.setPointerCapture(e.pointerId); setTalking(true); });
+  pttBtn.addEventListener('pointerup',     function(e) { setTalking(false); });
+  pttBtn.addEventListener('pointercancel', function(e) { setTalking(false); });
 
   $('btn-freehand').addEventListener('click', function() { setFreeHand(!freeHandMode); });
   $('btn-edit-shortcut').addEventListener('click', startRecordingShortcut);
