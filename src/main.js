@@ -101,6 +101,34 @@ const DEFAULT_SHORTCUT = 'Ctrl+Backquote';
 
 const _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
+// Keep-alive: a near-silent looping audio source that prevents iOS from
+// suspending the WKWebView's JS engine when the app goes to background.
+// iOS only keeps a WebView alive if it has active audio output.
+let _keepAliveSource = null;
+
+function startKeepAlive() {
+  if (_keepAliveSource) return;
+  const ctx = _audioCtx;
+  if (ctx.state === 'suspended') ctx.resume();
+  const buf    = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate); // 2s silence
+  const source = ctx.createBufferSource();
+  source.buffer = buf;
+  source.loop   = true;
+  const gain    = ctx.createGain();
+  gain.gain.value = 0.001; // −60 dB, inaudible
+  source.connect(gain);
+  gain.connect(ctx.destination);
+  source.start();
+  _keepAliveSource = source;
+}
+
+function stopKeepAlive() {
+  if (_keepAliveSource) {
+    try { _keepAliveSource.stop(); } catch (_) {}
+    _keepAliveSource = null;
+  }
+}
+
 function playBlip(up) {
   const ctx = _audioCtx;
   if (ctx.state === 'suspended') ctx.resume();
@@ -423,6 +451,7 @@ function removePeer(peerId) {
 function leaveRoom() {
   inRoom = false; freeHandMode = false; isTalking = false;
   nativePTTLeave();
+  stopKeepAlive();
   if (activeChannel) { deleteSession(); activeChannel = null; }
   Array.from(connections.keys()).forEach(removePeer);
   if (stream) stream.getTracks().forEach(function(t) { t.stop(); });
@@ -558,6 +587,7 @@ async function createRoom(onJoined) {
     isHost = true; roomCode = id; inRoom = true;
     $('room-code-display').textContent = id;
     nativePTTJoin(id);
+    startKeepAlive();
     showScreen('room');
     updatePeerList();
     updateShortcutDisplay();
@@ -615,6 +645,7 @@ async function joinRoom(code, onJoined) {
   peer = new Peer({ config: { iceServers } });
   peer.on('open', function() {
     roomCode = code;
+    if (onJoined) onJoined(peer.id); // register presence as soon as we have our peer_id
     const hostData = peer.connect(code, { reliable: true });
 
     hostData.on('open', function() {
@@ -623,10 +654,10 @@ async function joinRoom(code, onJoined) {
       connections.set(code, { data: hostData, media: null, pseudo: shortId(code), talking: false });
       $('room-code-display').textContent = code;
       nativePTTJoin(code);
+      startKeepAlive();
       showScreen('room');
       updatePeerList();
       updateShortcutDisplay();
-      if (onJoined) onJoined(peer.id);
     });
 
     hostData.on('data',  function(msg) { handleHostMessage(msg); });
@@ -928,4 +959,12 @@ window.addEventListener('DOMContentLoaded', function() {
     PTT.addListener('ptt-release', function() { setTalking(false); });
     PTT.addListener('ptt-error',   function(e) { console.warn('[PTT]', e.message); });
   }
+
+  // Resume audio context and keep-alive when app returns to foreground
+  document.addEventListener('visibilitychange', function() {
+    if (document.visibilityState === 'visible') {
+      if (_audioCtx.state === 'suspended') _audioCtx.resume();
+      if (inRoom) startKeepAlive();
+    }
+  });
 });
