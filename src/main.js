@@ -60,8 +60,9 @@ function handleDeepLink(urlStr) {
     // Sync to modal input if open
     const inp = document.getElementById('input-presence-token');
     if (inp) inp.value = token;
-    if (typeof updateDisconnectVisibility === 'function') { updateDisconnectVisibility(); updateConnectVisibility(); } updateConnectVisibility();
-    if (typeof loadOrgs === 'function') loadOrgs();
+    if (typeof updateDisconnectVisibility === 'function') updateDisconnectVisibility();
+    if (typeof updateConnectVisibility === 'function') updateConnectVisibility();
+    selectOrgAndStartPolling();
   } catch (e) {
     console.error('[Auth] Deep link parse error', e);
   }
@@ -858,6 +859,33 @@ function stopPresencePolling() {
   if (presenceInterval) { clearInterval(presenceInterval); presenceInterval = null; }
 }
 
+// Called after auth completes (deep link or postMessage). Picks the best org
+// and starts presence polling — works whether or not the settings modal is open.
+async function selectOrgAndStartPolling() {
+  try {
+    const orgs      = await fetchOrgs();
+    var savedOrgId  = presenceOrgId();
+    var validSaved  = orgs.find(function(o) { return o.id === savedOrgId; });
+    var bestOrgId   = validSaved ? savedOrgId : (orgs.length > 0 ? orgs[0].id : '');
+    if (bestOrgId) localStorage.setItem(PRESENCE_ORG_KEY, bestOrgId);
+    // If modal is open, sync its select element
+    var select = document.getElementById('select-presence-org');
+    if (select && !document.getElementById('modal-settings').classList.contains('hidden')) {
+      select.innerHTML = '<option value="">— select organisation —</option>' +
+        orgs.map(function(o) {
+          var label = o.name + (o.role === 'admin' ? ' ★' : '');
+          return '<option value="' + o.id + '"' + (o.id === bestOrgId ? ' selected' : '') + '>' + label + '</option>';
+        }).join('');
+    }
+    if (presenceConfigured()) {
+      stopPresencePolling();
+      startPresencePolling();
+    }
+  } catch (e) {
+    console.error('[Auth] selectOrgAndStartPolling failed:', e.message);
+  }
+}
+
 async function joinChannel(item) {
   const connected    = item.connected || [];
   activeChannel      = item.channel.name;
@@ -889,22 +917,21 @@ window.addEventListener('DOMContentLoaded', function() {
     if (inRoom) updatePeerList();
   });
 
-  // Disconnect row: visible only when token is set
-  function updateDisconnectVisibility() {
-    var row = $('disconnect-row');
-    if (row) row.style.display = presenceToken() ? '' : 'none';
-  }
-  updateDisconnectVisibility(); updateConnectVisibility();
-
   // Connect button: visible only when NOT logged in
-  function updateConnectVisibility() {
+  window.updateConnectVisibility = function updateConnectVisibility() {
     var connected = !!presenceToken();
     var btnMain = document.getElementById('btn-connect-voxel-home');
     var btnSettings = document.getElementById('btn-connect-voxel');
     if (btnMain)     btnMain.style.display     = connected ? 'none' : '';
     if (btnSettings) btnSettings.style.display = connected ? 'none' : '';
   }
-  updateConnectVisibility();
+
+  // Disconnect row: visible only when token is set
+  window.updateDisconnectVisibility = function updateDisconnectVisibility() {
+    var row = $('disconnect-row');
+    if (row) row.style.display = presenceToken() ? '' : 'none';
+  }
+  updateDisconnectVisibility(); updateConnectVisibility();
 
   // --- Theme toggle ---
   const THEME_KEY = 'theme';
@@ -1085,19 +1112,21 @@ window.addEventListener('DOMContentLoaded', function() {
     statusEl.textContent = 'Loading…';
     statusEl.style.color = '';
     try {
-      const orgs        = await fetchOrgs();
-      var currentOrgId  = presenceOrgId();
-      // Auto-select when only one org is available
-      if (orgs.length === 1 && !currentOrgId) {
-        currentOrgId = orgs[0].id;
-        localStorage.setItem(PRESENCE_ORG_KEY, currentOrgId);
-      }
-      select.innerHTML  = '<option value="">— select organisation —</option>' +
+      const orgs       = await fetchOrgs();
+      var savedOrgId   = presenceOrgId();
+      var validSaved   = orgs.find(function(o) { return o.id === savedOrgId; });
+      var currentOrgId = validSaved ? savedOrgId : (orgs.length > 0 ? orgs[0].id : '');
+      if (currentOrgId) localStorage.setItem(PRESENCE_ORG_KEY, currentOrgId);
+      select.innerHTML = '<option value="">— select organisation —</option>' +
         orgs.map(function(o) {
           var label = o.name + (o.role === 'admin' ? ' ★' : '');
           return '<option value="' + o.id + '"' + (o.id === currentOrgId ? ' selected' : '') + '>' + label + '</option>';
         }).join('');
       statusEl.textContent = '';
+      if (presenceConfigured()) {
+        stopPresencePolling();
+        startPresencePolling();
+      }
     } catch (e) {
       statusEl.style.color = 'var(--red)';
       statusEl.textContent = e.message;
@@ -1130,8 +1159,6 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-test-turn').addEventListener('click', testTurnCredentials);
   $('btn-disconnect').addEventListener('click', disconnectAccount);
   $('btn-connect-voxel').addEventListener('click', connectWithVoxelAccount);
-  var btnHome = document.getElementById('btn-connect-voxel-home');
-  if (btnHome) btnHome.addEventListener('click', connectWithVoxelAccount);
 
   // iOS: deep link comes back via @capacitor/app appUrlOpen
   if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
