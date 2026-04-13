@@ -9,29 +9,47 @@
       body {
         padding: env(safe-area-inset-top, 0) 0 0;
         background: var(--bg);
-        min-height: 100vh;
-      }
-      .prefs-window {
-        padding: 24px 24px 20px;
+        height: 100vh;
         display: flex;
         flex-direction: column;
-        gap: 0;
-        max-width: 400px;
-        margin: 0 auto;
+        overflow: hidden;
       }
+      .prefs-window {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        max-width: 400px;
+        width: 100%;
+        margin: 0 auto;
+        padding: 0;
+      }
+      .prefs-scrollable {
+        flex: 1;
+        overflow-y: auto;
+        padding: 24px 24px 12px;
+      }
+      .prefs-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+      .prefs-gear { font-size: 36px; line-height: 1; }
       .prefs-title {
-        font-size: 15px;
+        font-size: 18px;
         font-weight: 700;
         color: var(--text);
-        margin-bottom: 18px;
-        letter-spacing: 0.3px;
+        letter-spacing: 0.2px;
+        margin: 0;
       }
       .prefs-footer {
-        margin-top: 20px;
-        padding-top: 16px;
+        flex-shrink: 0;
+        padding: 12px 24px 16px;
         border-top: 1px solid var(--border);
+        background: var(--bg);
         display: flex;
-        justify-content: flex-end;
+        align-items: center;
         gap: 8px;
       }
       /* TURN collapsible */
@@ -69,7 +87,24 @@
   </head>
   <body>
     <div class="prefs-window">
-      <p class="prefs-title">Preferences</p>
+      <div class="prefs-scrollable">
+      <div class="prefs-header">
+        <span class="prefs-gear">⚙</span>
+        <p class="prefs-title">Preferences</p>
+      </div>
+
+      <!-- Display name -->
+      <p class="settings-group-title">Display Name</p>
+      <div class="settings-field">
+        <label for="input-pseudo">Your name</label>
+        <div class="input-clearable">
+          <input id="input-pseudo" type="text" placeholder="Your name…" maxlength="20"
+                 spellcheck="false" autocomplete="off" />
+          <button class="input-clear" data-target="input-pseudo" aria-label="Clear">✕</button>
+        </div>
+      </div>
+
+      <div class="settings-separator"></div>
 
       <!-- Presence / Voxel account -->
       <p class="settings-group-title">Voxel Account</p>
@@ -78,8 +113,11 @@
       </p>
       <div class="settings-field">
         <label for="input-presence-token">API token</label>
-        <input id="input-presence-token" type="password" placeholder="API token"
-               autocomplete="off" />
+        <div class="input-clearable">
+          <input id="input-presence-token" type="password" placeholder="API token"
+                 autocomplete="off" />
+          <button class="input-clear" data-target="input-presence-token" aria-label="Clear">✕</button>
+        </div>
       </div>
       <div class="settings-field">
         <label for="select-presence-org">Organisation</label>
@@ -102,13 +140,19 @@
           </p>
           <div class="settings-field">
             <label for="input-metered-app">App name</label>
-            <input id="input-metered-app" type="text" placeholder="yourapp"
-                   spellcheck="false" autocomplete="off" />
+            <div class="input-clearable">
+              <input id="input-metered-app" type="text" placeholder="yourapp"
+                     spellcheck="false" autocomplete="off" />
+              <button class="input-clear" data-target="input-metered-app" aria-label="Clear">✕</button>
+            </div>
           </div>
           <div class="settings-field">
             <label for="input-metered-key">API key</label>
-            <input id="input-metered-key" type="password" placeholder="API key"
-                   autocomplete="off" />
+            <div class="input-clearable">
+              <input id="input-metered-key" type="password" placeholder="API key"
+                     autocomplete="off" />
+              <button class="input-clear" data-target="input-metered-key" aria-label="Clear">✕</button>
+            </div>
           </div>
           <div class="settings-test-row">
             <button id="btn-test-turn" class="btn btn-ghost btn-sm">Test</button>
@@ -116,13 +160,14 @@
           </div>
         </div>
       </details>
+      </div><!-- end .prefs-scrollable -->
 
-      <!-- Footer -->
+      <!-- Footer — always visible, sticky at bottom -->
       <div class="prefs-footer">
-        <button id="btn-disconnect" class="btn btn-ghost btn-sm" style="margin-right:auto;color:var(--red,#f87171)">
+        <button id="btn-disconnect" class="btn btn-ghost btn-sm btn-danger">
           Disconnect
         </button>
-        <button id="btn-done" class="btn btn-primary btn-sm">Done</button>
+        <button id="btn-done" class="btn btn-primary btn-sm" style="margin-left:auto">Close</button>
       </div>
     </div>
 
@@ -141,9 +186,15 @@
       function presenceOrgId() { return localStorage.getItem(PRESENCE_ORG_KEY)   || ''; }
 
       // --- Load saved values ---
+      $id('input-pseudo').value         = localStorage.getItem('pseudo') || '';
       $id('input-presence-token').value = presenceToken();
       $id('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
       $id('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
+
+      function updateDisconnectVisibility() {
+        $id('btn-disconnect').style.display = presenceToken() ? '' : 'none';
+      }
+      updateDisconnectVisibility();
 
       if (presenceToken()) loadOrgs();
 
@@ -160,7 +211,12 @@
           });
           if (!res.ok) throw new Error('HTTP ' + res.status);
           const orgs = (await res.json()).organisations;
-          const cur  = presenceOrgId();
+          var cur = presenceOrgId();
+          // Auto-select when only one org is available
+          if (orgs.length === 1 && !cur) {
+            cur = orgs[0].id;
+            localStorage.setItem(PRESENCE_ORG_KEY, cur);
+          }
           select.innerHTML = '<option value="">— select organisation —</option>' +
             orgs.map(function(o) {
               var label = o.name + (o.role === 'admin' ? ' ★' : '');
@@ -212,13 +268,23 @@
         $id('select-presence-org').innerHTML = '<option value="">— enter API token first —</option>';
         $id('select-presence-org').disabled = true;
         $id('org-load-status').textContent  = '';
+        updateDisconnectVisibility();
+        // Stay in settings — main window reacts via storage event
       }
 
       // --- Event wiring ---
+      $id('input-pseudo').addEventListener('input', function(e) {
+        localStorage.setItem('pseudo', e.target.value.trim());
+      });
       $id('input-presence-token').addEventListener('input', function(e) {
         localStorage.setItem(PRESENCE_TOKEN_KEY, e.target.value.trim());
         localStorage.removeItem(PRESENCE_ORG_KEY);
         $id('select-presence-org').innerHTML = '<option value="">— select organisation —</option>';
+        $id('select-presence-org').disabled = true;
+        updateDisconnectVisibility();
+      });
+      $id('input-presence-token').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && presenceToken()) loadOrgs();
       });
       $id('input-presence-token').addEventListener('blur', function() {
         if (presenceToken()) loadOrgs();
@@ -236,6 +302,17 @@
         localStorage.removeItem(METERED_STATUS_STORE_KEY);
         $id('turn-test-status').textContent = '';
       });
+      // Clear (×) buttons
+      document.querySelectorAll('.input-clear').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var target = $id(btn.dataset.target);
+          if (!target) return;
+          target.value = '';
+          target.dispatchEvent(new Event('input', { bubbles: true }));
+          target.focus();
+        });
+      });
+
       $id('btn-test-turn').addEventListener('click', testTurn);
       $id('btn-disconnect').addEventListener('click', disconnect);
       $id('btn-done').addEventListener('click', closeWindow);

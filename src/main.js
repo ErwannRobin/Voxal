@@ -771,11 +771,35 @@ async function joinChannel(item) {
 
 window.addEventListener('DOMContentLoaded', function() {
 
+  // Pseudo: hide the home-screen name field once the user has set a name
+  function updatePseudoHomeVisibility() {
+    $('pseudo-field-home').style.display = myPseudo ? 'none' : '';
+  }
   $('input-pseudo').value = myPseudo;
+  updatePseudoHomeVisibility();
   $('input-pseudo').addEventListener('input', function(e) {
     myPseudo = e.target.value.trim();
     localStorage.setItem('pseudo', myPseudo);
+    updatePseudoHomeVisibility();
     if (inRoom) updatePeerList();
+  });
+
+  // Disconnect row: visible only when token is set
+  function updateDisconnectVisibility() {
+    var row = $('disconnect-row');
+    if (row) row.style.display = presenceToken() ? '' : 'none';
+  }
+  updateDisconnectVisibility();
+
+  // Clear (×) buttons inside .input-clearable wrappers
+  document.querySelectorAll('.input-clear').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var target = document.getElementById(btn.dataset.target);
+      if (!target) return;
+      target.value = '';
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+      target.focus();
+    });
   });
 
   if (window.__TAURI__ && shortcutStr !== DEFAULT_SHORTCUT) {
@@ -855,30 +879,42 @@ window.addEventListener('DOMContentLoaded', function() {
     updateTurnBadge();
   }
 
+  let _prefsWin = null; // track the Tauri preferences window
+
   function openSettings() {
-    // On Tauri desktop: try to open a dedicated preferences window
+    // On Tauri desktop: try to open / focus a dedicated preferences window
     if (window.__TAURI__) {
       try {
         const { WebviewWindow } = window.__TAURI__.webviewWindow;
-        new WebviewWindow('preferences', {
+        if (_prefsWin) {
+          _prefsWin.setFocus().catch(function() {
+            _prefsWin = null;
+            openSettings(); // retry — window was closed
+          });
+          return;
+        }
+        const win = new WebviewWindow('preferences', {
           url: 'settings.html',
           title: 'Voxel — Preferences',
           width: 420,
-          height: 540,
-          resizable: false,
+          height: 560,
+          resizable: true,
           center: true,
         });
+        _prefsWin = win;
+        win.once('tauri://destroyed', function() { _prefsWin = null; });
         return;
       } catch (e) {
         console.warn('[Settings] Could not open preferences window, using modal:', e.message);
-        // fall through to modal
       }
     }
     // Web / mobile (or Tauri fallback): use the in-app modal
+    $('input-pseudo').value         = myPseudo;
     $('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
     $('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
     $('input-presence-token').value = presenceToken();
     $('turn-test-status').textContent = '';
+    updateDisconnectVisibility();
     $('modal-settings').classList.remove('hidden');
     if (presenceToken()) loadOrgs();
   }
@@ -889,7 +925,7 @@ window.addEventListener('DOMContentLoaded', function() {
 
   function disconnectAccount() {
     const token = presenceToken();
-    if (token) deleteSession(); // best-effort server cleanup
+    if (token) deleteSession();
     localStorage.removeItem(PRESENCE_TOKEN_KEY);
     localStorage.removeItem(PRESENCE_ORG_KEY);
     $('input-presence-token').value = '';
@@ -898,6 +934,10 @@ window.addEventListener('DOMContentLoaded', function() {
     $('org-load-status').textContent  = '';
     stopPresencePolling();
     renderPresenceChannels([]);
+    updateDisconnectVisibility();
+    // Stay in settings — navigate home in background
+    if (inRoom) leaveRoom();
+    showScreen('home');
   }
 
   async function loadOrgs() {
@@ -908,7 +948,12 @@ window.addEventListener('DOMContentLoaded', function() {
     statusEl.style.color = '';
     try {
       const orgs        = await fetchOrgs();
-      const currentOrgId = presenceOrgId();
+      var currentOrgId  = presenceOrgId();
+      // Auto-select when only one org is available
+      if (orgs.length === 1 && !currentOrgId) {
+        currentOrgId = orgs[0].id;
+        localStorage.setItem(PRESENCE_ORG_KEY, currentOrgId);
+      }
       select.innerHTML  = '<option value="">— select organisation —</option>' +
         orgs.map(function(o) {
           var label = o.name + (o.role === 'admin' ? ' ★' : '');
@@ -937,6 +982,7 @@ window.addEventListener('DOMContentLoaded', function() {
   });
   $('btn-open-settings').addEventListener('click', openSettings);
   $('btn-close-settings').addEventListener('click', closeSettings);
+  $('btn-close-settings-footer').addEventListener('click', closeSettings);
   $('modal-backdrop').addEventListener('click', closeSettings);
   $('btn-test-turn').addEventListener('click', testTurnCredentials);
   $('btn-disconnect').addEventListener('click', disconnectAccount);
@@ -955,18 +1001,27 @@ window.addEventListener('DOMContentLoaded', function() {
     updateTurnBadge();
     if (e.key === PRESENCE_TOKEN_KEY || e.key === PRESENCE_ORG_KEY) {
       stopPresencePolling();
-      if (presenceConfigured()) startPresencePolling();
-      else renderPresenceChannels([]);
+      if (presenceConfigured()) {
+        startPresencePolling();
+      } else {
+        renderPresenceChannels([]);
+        if (inRoom) leaveRoom();
+        showScreen('home');
+      }
     }
   });
 
   // Presence credentials
   $('input-presence-token').addEventListener('input', function(e) {
     localStorage.setItem(PRESENCE_TOKEN_KEY, e.target.value.trim());
-    // Reset org selection when token changes
     localStorage.removeItem(PRESENCE_ORG_KEY);
     $('select-presence-org').innerHTML = '<option value="">— select organisation —</option>';
+    $('select-presence-org').disabled = true;
     $('org-load-status').textContent = '';
+    updateDisconnectVisibility();
+  });
+  $('input-presence-token').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && presenceToken()) loadOrgs();
   });
   $('input-presence-token').addEventListener('blur', function() {
     if (presenceToken()) loadOrgs();

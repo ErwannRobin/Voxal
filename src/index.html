@@ -12,7 +12,7 @@
     <div id="screen-home" class="screen active">
       <div class="screen-topbar">
         <button id="btn-open-settings" class="topbar-btn" title="Settings">
-          ⚙<span id="turn-badge" class="turn-badge" title="TURN configured">●</span>
+          <span class="gear-icon">⚙</span><span id="turn-badge" class="turn-badge" title="TURN configured">●</span>
         </button>
       </div>
       <div class="brand">
@@ -21,7 +21,8 @@
         <p class="brand-sub">Private • P2P • No servers</p>
       </div>
       <div class="home-actions">
-        <div class="pseudo-field">
+        <!-- pseudo-field moved to settings; shown here only until user sets a name -->
+        <div class="pseudo-field" id="pseudo-field-home">
           <input id="input-pseudo" type="text" placeholder="Your name…" maxlength="20"
                  spellcheck="false" autocomplete="off" />
         </div>
@@ -51,18 +52,36 @@
       <div class="modal-backdrop" id="modal-backdrop"></div>
       <div class="modal-content">
         <div class="modal-header">
-          <span class="modal-title">Settings</span>
+          <span class="modal-title">⚙ Settings</span>
           <button id="btn-close-settings" class="btn-icon" aria-label="Close">✕</button>
         </div>
         <div class="modal-body">
+
+          <!-- Display name -->
+          <p class="settings-group-title">Display Name</p>
+          <div class="settings-field">
+            <label for="input-pseudo">Your name</label>
+            <div class="input-clearable">
+              <input id="input-pseudo" type="text" placeholder="Your name…" maxlength="20"
+                     spellcheck="false" autocomplete="off" />
+              <button class="input-clear" data-target="input-pseudo" aria-label="Clear">✕</button>
+            </div>
+          </div>
+
+          <div class="settings-separator"></div>
+
+          <!-- Voxel account -->
           <p class="settings-group-title">Voxel Account</p>
           <p class="settings-desc">
             Connect to a Voxel organisation to see channels and who's online.
           </p>
           <div class="settings-field">
             <label for="input-presence-token">API token</label>
-            <input id="input-presence-token" type="password" placeholder="API token"
-                   autocomplete="off" />
+            <div class="input-clearable">
+              <input id="input-presence-token" type="password" placeholder="API token"
+                     autocomplete="off" />
+              <button class="input-clear" data-target="input-presence-token" aria-label="Clear">✕</button>
+            </div>
           </div>
           <div class="settings-field">
             <label for="select-presence-org">Organisation</label>
@@ -84,13 +103,19 @@
               </p>
               <div class="settings-field">
                 <label for="input-metered-app">App name</label>
-                <input id="input-metered-app" type="text" placeholder="yourapp"
-                       spellcheck="false" autocomplete="off" />
+                <div class="input-clearable">
+                  <input id="input-metered-app" type="text" placeholder="yourapp"
+                         spellcheck="false" autocomplete="off" />
+                  <button class="input-clear" data-target="input-metered-app" aria-label="Clear">✕</button>
+                </div>
               </div>
               <div class="settings-field">
                 <label for="input-metered-key">API key</label>
-                <input id="input-metered-key" type="password" placeholder="API key"
-                       autocomplete="off" />
+                <div class="input-clearable">
+                  <input id="input-metered-key" type="password" placeholder="API key"
+                         autocomplete="off" />
+                  <button class="input-clear" data-target="input-metered-key" aria-label="Clear">✕</button>
+                </div>
               </div>
               <div class="settings-test-row">
                 <button id="btn-test-turn" class="btn btn-ghost btn-sm">Test</button>
@@ -99,10 +124,15 @@
             </div>
           </details>
 
-          <!-- Disconnect -->
-          <div class="settings-disconnect-row">
+          <!-- Disconnect — hidden when not authenticated -->
+          <div class="settings-disconnect-row" id="disconnect-row">
             <button id="btn-disconnect" class="btn btn-ghost btn-sm btn-danger">Disconnect</button>
           </div>
+        </div>
+        <!-- Footer — always visible -->
+        <div class="modal-footer">
+          <span id="disconnect-row-modal" style="flex:1"></span>
+          <button id="btn-close-settings-footer" class="btn btn-primary btn-sm">Close</button>
         </div>
       </div>
     </div>
