@@ -27,7 +27,7 @@ const METERED_STATUS_STORE_KEY = 'metered-status'; // 'ok' | 'error' | null
 
 // --- Presence API -----------------------------------------------------------
 
-const DEFAULT_PRESENCE_BASE     = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
+const DEFAULT_PRESENCE_BASE     = 'https://voxel-connect.lovable.app';
 const DEFAULT_VOXEL_CONNECT_URL = 'https://voxel-connect.lovable.app';
 const PRESENCE_TOKEN_KEY        = 'presence-api-token';
 const PRESENCE_ORG_KEY          = 'presence-org-id';
@@ -1022,7 +1022,7 @@ window.addEventListener('DOMContentLoaded', function() {
     }
     // Web / mobile (or Tauri fallback): use the in-app modal
     $('input-pseudo').value         = myPseudo;
-    $('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || '';
+    $('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || 'https://voxel-connect.lovable.app';
     $('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
     $('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
     $('input-presence-token').value = presenceToken();

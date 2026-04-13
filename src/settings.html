@@ -165,14 +165,6 @@
             <a href="https://metered.ca" target="_blank" rel="noopener">metered.ca</a>.
           </p>
           <div class="settings-field">
-            <label for="input-service-url">Service URL</label>
-            <div class="input-clearable">
-              <input id="input-service-url" type="text" placeholder="https://…"
-                     spellcheck="false" autocomplete="off" />
-              <button class="input-clear" data-target="input-service-url" aria-label="Clear">✕</button>
-            </div>
-          </div>
-          <div class="settings-field">
             <label for="input-metered-app">TURN app name</label>
             <div class="input-clearable">
               <input id="input-metered-app" type="text" placeholder="yourapp"
@@ -192,6 +184,14 @@
             <button id="btn-test-turn" class="btn btn-ghost btn-sm">Test TURN</button>
             <span id="turn-test-status" class="turn-test-status"></span>
           </div>
+          <div class="settings-field" style="margin-top:12px">
+            <label for="input-service-url">Service URL</label>
+            <div class="input-clearable">
+              <input id="input-service-url" type="text" placeholder="https://voxel-connect.lovable.app"
+                     spellcheck="false" autocomplete="off" />
+              <button class="input-clear" data-target="input-service-url" aria-label="Clear">✕</button>
+            </div>
+          </div>
         </div>
       </details>
       </div><!-- end .prefs-scrollable -->
@@ -207,7 +207,7 @@
 
     <script>
       // Constants (duplicated from main.js — settings page is standalone)
-      const DEFAULT_PRESENCE_BASE   = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
+      const DEFAULT_PRESENCE_BASE   = 'https://voxel-connect.lovable.app';
       const PRESENCE_TOKEN_KEY      = 'presence-api-token';
       const PRESENCE_ORG_KEY        = 'presence-org-id';
       const METERED_APP_STORE_KEY   = 'metered-app-name';
@@ -242,7 +242,7 @@
       // --- Load saved values ---
       $id('input-pseudo').value         = localStorage.getItem('pseudo') || '';
       $id('input-presence-token').value = presenceToken();
-      $id('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || '';
+      $id('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || 'https://voxel-connect.lovable.app';
       $id('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
       $id('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
 
