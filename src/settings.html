@@ -187,7 +187,7 @@
           <div class="settings-field" style="margin-top:12px">
             <label for="input-service-url">Service URL</label>
             <div class="input-clearable">
-              <input id="input-service-url" type="text" placeholder="https://voxel-connect.lovable.app"
+              <input id="input-service-url" type="text" placeholder="https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session"
                      spellcheck="false" autocomplete="off" />
               <button class="input-clear" data-target="input-service-url" aria-label="Clear">✕</button>
             </div>
@@ -207,7 +207,7 @@
 
     <script>
       // Constants (duplicated from main.js — settings page is standalone)
-      const DEFAULT_PRESENCE_BASE   = 'https://voxel-connect.lovable.app';
+      const DEFAULT_PRESENCE_BASE   = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
       const PRESENCE_TOKEN_KEY      = 'presence-api-token';
       const PRESENCE_ORG_KEY        = 'presence-org-id';
       const METERED_APP_STORE_KEY   = 'metered-app-name';
@@ -221,6 +221,27 @@
       function presenceToken() { return localStorage.getItem(PRESENCE_TOKEN_KEY) || ''; }
       function presenceOrgId() { return localStorage.getItem(PRESENCE_ORG_KEY)   || ''; }
       function presenceBase()  { return (localStorage.getItem(SERVICE_URL_KEY) || DEFAULT_PRESENCE_BASE).replace(/\/$/, ''); }
+      function tauriFetch(url, options) {
+        if (window.__TAURI__) {
+          var method = (options && options.method) || 'GET';
+          var token  = options && options.headers && options.headers['x-api-token'];
+          var body   = options && options.body || null;
+          return window.__TAURI__.core.invoke('presence_fetch', {
+            url: url, method: method,
+            token: token || null,
+            body: body || null,
+          }).then(function(data) {
+            return { ok: true, status: 200, json: function() { return Promise.resolve(data); } };
+          }).catch(function(e) {
+            var msg = String(e);
+            var m = msg.match(/HTTP (\d+)/);
+            var status = m ? parseInt(m[1]) : 500;
+            console.error('[tauriFetch]', msg);
+            return { ok: false, status: status, json: function() { return Promise.resolve(null); } };
+          });
+        }
+        return fetch(url, options);
+      }
 
       // --- Theme ---
       const THEME_KEY = 'theme';
@@ -242,7 +263,7 @@
       // --- Load saved values ---
       $id('input-pseudo').value         = localStorage.getItem('pseudo') || '';
       $id('input-presence-token').value = presenceToken();
-      $id('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || 'https://voxel-connect.lovable.app';
+      $id('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
       $id('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
       $id('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
 
@@ -264,7 +285,7 @@
         statusEl.textContent = 'Loading…';
         statusEl.style.color = '';
         try {
-          const res  = await fetch(presenceBase() + '/orgs', {
+          const res  = await tauriFetch(presenceBase() + '/orgs', {
             headers: { 'x-api-token': presenceToken() }
           });
           if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -315,7 +336,7 @@
       async function disconnect() {
         const token = presenceToken();
         if (token) {
-          fetch(presenceBase(), {
+          tauriFetch(presenceBase(), {
             method: 'DELETE',
             headers: { 'x-api-token': token }
           }).catch(function() {});
@@ -396,6 +417,15 @@
 
       document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') closeWindow();
+      });
+
+      // Sync connect/disconnect button state when main window changes the token
+      window.addEventListener('storage', function(e) {
+        if (e.key !== PRESENCE_TOKEN_KEY) return;
+        $id('input-presence-token').value = presenceToken();
+        updateDisconnectVisibility();
+        updateConnectVisibility();
+        if (presenceToken()) loadOrgs();
       });
 
       function handleDeepLinkSettings(urlStr) {

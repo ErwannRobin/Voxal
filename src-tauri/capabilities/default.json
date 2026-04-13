@@ -12,6 +12,7 @@
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-is-registered",
     "shell:allow-open",
-    "deep-link:default"
+    "deep-link:default",
+    "http:default"
   ]
 }

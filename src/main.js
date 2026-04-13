@@ -27,7 +27,7 @@ const METERED_STATUS_STORE_KEY = 'metered-status'; // 'ok' | 'error' | null
 
 // --- Presence API -----------------------------------------------------------
 
-const DEFAULT_PRESENCE_BASE     = 'https://voxel-connect.lovable.app';
+const DEFAULT_PRESENCE_BASE     = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
 const DEFAULT_VOXEL_CONNECT_URL = 'https://voxel-connect.lovable.app';
 const PRESENCE_TOKEN_KEY        = 'presence-api-token';
 const PRESENCE_ORG_KEY          = 'presence-org-id';
@@ -99,8 +99,33 @@ async function connectWithVoxelAccount() {
   }
 }
 
+// Route presence API calls through Rust to bypass CORS.
+// (Tauri's WebView origin tauri://localhost is not whitelisted by external APIs.)
+// Falls back to native fetch on web / Capacitor.
+function tauriFetch(url, options) {
+  if (window.__TAURI__) {
+    var method = (options && options.method) || 'GET';
+    var token  = options && options.headers && options.headers['x-api-token'];
+    var body   = options && options.body || null;
+    return window.__TAURI__.core.invoke('presence_fetch', {
+      url: url, method: method,
+      token: token || null,
+      body: body || null,
+    }).then(function(data) {
+      return { ok: true, status: 200, json: function() { return Promise.resolve(data); } };
+    }).catch(function(e) {
+      var msg = String(e);
+      var m = msg.match(/HTTP (\d+)/);
+      var status = m ? parseInt(m[1]) : 500;
+      console.error('[tauriFetch]', msg);
+      return { ok: false, status: status, json: function() { return Promise.resolve(null); } };
+    });
+  }
+  return fetch(url, options);
+}
+
 async function fetchPresence() {
-  const res = await fetch(
+  const res = await tauriFetch(
     presenceBase() + '/org/' + presenceOrgId() + '/presence',
     { headers: { 'x-api-token': presenceToken() } }
   );
@@ -109,7 +134,7 @@ async function fetchPresence() {
 }
 
 async function fetchOrgs() {
-  const res = await fetch(presenceBase() + '/orgs', {
+  const res = await tauriFetch(presenceBase() + '/orgs', {
     headers: { 'x-api-token': presenceToken() },
   });
   if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -117,7 +142,7 @@ async function fetchOrgs() {
 }
 
 async function postSession(channelName, peerId) {
-  const res = await fetch(presenceBase(), {
+  const res = await tauriFetch(presenceBase(), {
     method: 'POST',
     headers: { 'x-api-token': presenceToken(), 'Content-Type': 'application/json' },
     body: JSON.stringify({ org_id: presenceOrgId(), channel_name: channelName, peer_id: peerId }),
@@ -127,7 +152,7 @@ async function postSession(channelName, peerId) {
 
 function deleteSession() {
   if (!presenceConfigured()) return;
-  fetch(presenceBase(), {
+  tauriFetch(presenceBase(), {
     method: 'DELETE',
     headers: { 'x-api-token': presenceToken() },
   }).catch(function(e) { console.warn('[Presence] deleteSession:', e.message); });
@@ -145,7 +170,7 @@ async function fetchIceServers() {
   // --- 1. Org ICE servers from Voxel backend ---
   if (presenceConfigured()) {
     try {
-      const res = await fetch(
+      const res = await tauriFetch(
         presenceBase() + '/org/' + presenceOrgId() + '/ice-servers',
         { headers: { 'x-api-token': presenceToken() }, signal: AbortSignal.timeout(5000) }
       );
@@ -1022,7 +1047,7 @@ window.addEventListener('DOMContentLoaded', function() {
     }
     // Web / mobile (or Tauri fallback): use the in-app modal
     $('input-pseudo').value         = myPseudo;
-    $('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || 'https://voxel-connect.lovable.app';
+    $('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
     $('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
     $('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
     $('input-presence-token').value = presenceToken();
@@ -1132,6 +1157,7 @@ window.addEventListener('DOMContentLoaded', function() {
     if (relevantKeys.indexOf(e.key) === -1) return;
     updateTurnBadge();
     if (e.key === PRESENCE_TOKEN_KEY || e.key === PRESENCE_ORG_KEY) {
+      updateDisconnectVisibility(); updateConnectVisibility();
       stopPresencePolling();
       if (presenceConfigured()) {
         startPresencePolling();

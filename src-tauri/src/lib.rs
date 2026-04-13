@@ -8,6 +8,43 @@ const DEFAULT_SHORTCUT: &str = "Ctrl+Backquote";
 
 struct PttShortcut(Mutex<String>);
 
+// Proxy HTTP requests through Rust to bypass WebView CORS restrictions.
+// The Tauri WebView origin (tauri://localhost) is not whitelisted by external APIs.
+#[tauri::command]
+async fn presence_fetch(
+    url: String,
+    method: String,
+    token: Option<String>,
+    body: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    let mut req = match method.to_uppercase().as_str() {
+        "POST"   => client.post(&url),
+        "DELETE" => client.delete(&url),
+        _        => client.get(&url),
+    };
+    if let Some(t) = token {
+        req = req.header("x-api-token", t);
+    }
+    if let Some(b) = body {
+        req = req.header("content-type", "application/json").body(b);
+    }
+    let res = req.send().await.map_err(|e| e.to_string())?;
+    let status = res.status().as_u16();
+    if status >= 400 {
+        return Err(format!("HTTP {}", status));
+    }
+    let text = res.text().await.map_err(|e| e.to_string())?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok(serde_json::Value::Null);
+    }
+    serde_json::from_str(trimmed).map_err(|_| {
+        let preview = &trimmed[..trimmed.len().min(120)];
+        format!("Non-JSON response: {}", preview)
+    })
+}
+
 #[tauri::command]
 fn update_ptt_shortcut(
     app: AppHandle,
@@ -34,6 +71,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_http::init())
         .manage(PttShortcut(Mutex::new(DEFAULT_SHORTCUT.to_string())))
         .setup(|app| {
             // Register voxel:// scheme (Windows/Linux: dynamic registry/desktop entry;
@@ -95,7 +133,7 @@ pub fn run() {
                 })?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![update_ptt_shortcut])
+        .invoke_handler(tauri::generate_handler![update_ptt_shortcut, presence_fetch])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
