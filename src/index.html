@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Voxel</title>
     <link rel="stylesheet" href="styles.css" />
+    <script>
+      // Apply theme before paint to avoid flash
+      (function() {
+        var t = localStorage.getItem('theme') || 'system';
+        document.documentElement.setAttribute('data-theme', t);
+      })();
+    </script>
   </head>
   <body>
 
@@ -65,6 +72,19 @@
               <input id="input-pseudo" type="text" placeholder="Your name…" maxlength="20"
                      spellcheck="false" autocomplete="off" />
               <button class="input-clear" data-target="input-pseudo" aria-label="Clear">✕</button>
+            </div>
+          </div>
+
+          <div class="settings-separator"></div>
+
+          <!-- Appearance -->
+          <p class="settings-group-title">Appearance</p>
+          <div class="settings-field">
+            <label>Theme</label>
+            <div class="theme-toggle" id="theme-toggle">
+              <button data-theme="dark">🌙 Dark</button>
+              <button data-theme="light">☀️ Light</button>
+              <button data-theme="system">⚙ System</button>
             </div>
           </div>
 

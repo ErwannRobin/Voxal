@@ -2,6 +2,7 @@
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* ── Dark theme (default) ──────────────────────────────────────────── */
 :root {
   --bg:         #16161e;
   --bg-surface: #1f1f2e;
@@ -24,6 +25,36 @@
   -webkit-user-select: none;
   -webkit-touch-callout: none;
   touch-action: manipulation; /* disables double-tap zoom globally */
+}
+
+/* ── Light theme ───────────────────────────────────────────────────── */
+html[data-theme="light"] {
+  --bg:         #f4f4f8;
+  --bg-surface: #ffffff;
+  --bg-raised:  #e8e8f0;
+  --border:     #d0d0e0;
+  --text:       #1a1a2e;
+  --text-muted: #6b6b8a;
+  --accent:     #6b58e8;
+  --accent-dim: #a99df5;
+  --green:      #16a34a;
+  --red:        #dc2626;
+}
+
+/* System preference — only active when data-theme="system" */
+@media (prefers-color-scheme: light) {
+  html[data-theme="system"] {
+    --bg:         #f4f4f8;
+    --bg-surface: #ffffff;
+    --bg-raised:  #e8e8f0;
+    --border:     #d0d0e0;
+    --text:       #1a1a2e;
+    --text-muted: #6b6b8a;
+    --accent:     #6b58e8;
+    --accent-dim: #a99df5;
+    --green:      #16a34a;
+    --red:        #dc2626;
+  }
 }
 
 body {
@@ -604,6 +635,33 @@ input[type="password"]:focus { border-color: var(--accent); }
   height: 1px;
   background: var(--border);
   margin: 4px 0;
+}
+
+/* Theme toggle — segmented control */
+.theme-toggle {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+.theme-toggle button {
+  flex: 1;
+  padding: 6px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.theme-toggle button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.theme-toggle button:hover:not(.active) {
+  background: var(--bg-surface);
+  color: var(--text);
 }
 
 /* Collapsible TURN section */

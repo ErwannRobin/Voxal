@@ -772,15 +772,13 @@ async function joinChannel(item) {
 window.addEventListener('DOMContentLoaded', function() {
 
   // Pseudo: hide the home-screen name field once the user has set a name
-  function updatePseudoHomeVisibility() {
-    $('pseudo-field-home').style.display = myPseudo ? 'none' : '';
-  }
+  // Hide the home pseudo field only if a name was already set at load time.
+  // Once visible in a session, it stays visible regardless of edits.
+  if (myPseudo) $('pseudo-field-home').style.display = 'none';
   $('input-pseudo').value = myPseudo;
-  updatePseudoHomeVisibility();
   $('input-pseudo').addEventListener('input', function(e) {
     myPseudo = e.target.value.trim();
     localStorage.setItem('pseudo', myPseudo);
-    updatePseudoHomeVisibility();
     if (inRoom) updatePeerList();
   });
 
@@ -790,6 +788,28 @@ window.addEventListener('DOMContentLoaded', function() {
     if (row) row.style.display = presenceToken() ? '' : 'none';
   }
   updateDisconnectVisibility();
+
+  // --- Theme toggle ---
+  const THEME_KEY = 'theme';
+  function applyTheme(val) {
+    document.documentElement.setAttribute('data-theme', val || 'system');
+    var toggle = document.getElementById('theme-toggle');
+    if (!toggle) return;
+    toggle.querySelectorAll('button[data-theme]').forEach(function(btn) {
+      btn.classList.toggle('active', btn.dataset.theme === (val || 'system'));
+    });
+  }
+  applyTheme(localStorage.getItem(THEME_KEY) || 'system');
+  var themeToggle = document.getElementById('theme-toggle');
+  if (themeToggle) {
+    themeToggle.addEventListener('click', function(e) {
+      var btn = e.target.closest('button[data-theme]');
+      if (!btn) return;
+      var val = btn.dataset.theme;
+      localStorage.setItem(THEME_KEY, val);
+      applyTheme(val);
+    });
+  }
 
   // Clear (×) buttons inside .input-clearable wrappers
   document.querySelectorAll('.input-clear').forEach(function(btn) {
@@ -897,7 +917,7 @@ window.addEventListener('DOMContentLoaded', function() {
           url: 'settings.html',
           title: 'Voxel — Preferences',
           width: 420,
-          height: 560,
+          height: 720,
           resizable: true,
           center: true,
         });
@@ -995,6 +1015,10 @@ window.addEventListener('DOMContentLoaded', function() {
   // Cross-window sync: when settings.html (Tauri preferences window) writes to
   // localStorage, the main window receives a storage event and refreshes.
   window.addEventListener('storage', function(e) {
+    if (e.key === THEME_KEY) {
+      applyTheme(e.newValue || 'system');
+      return;
+    }
     var relevantKeys = [PRESENCE_TOKEN_KEY, PRESENCE_ORG_KEY, METERED_APP_STORE_KEY,
                         METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
@@ -1072,10 +1096,10 @@ window.addEventListener('DOMContentLoaded', function() {
       return; // don't process PTT or shortcuts while modal is open
     }
     if (recordingShortcut) { e.preventDefault(); const s = shortcutFromEvent(e); if (s) applyNewShortcut(s); return; }
-    // Space always triggers PTT; Enter always toggles free-hand
-    if (e.code === 'Space' && !e.repeat) { setTalking(true);           e.preventDefault(); return; }
-    if (e.code === 'Enter' && !e.repeat) { setFreeHand(!freeHandMode); e.preventDefault(); return; }
-    if (matchesShortcut(e) && !e.repeat) { setTalking(true);           e.preventDefault(); }
+    // Space always triggers PTT; Enter toggles free-hand (room only)
+    if (e.code === 'Space' && !e.repeat) { setTalking(true);                                          e.preventDefault(); return; }
+    if (e.code === 'Enter' && !e.repeat && inRoom) { setFreeHand(!freeHandMode); e.preventDefault(); return; }
+    if (matchesShortcut(e) && !e.repeat) { setTalking(true);                                          e.preventDefault(); }
   });
   document.addEventListener('keyup', function(e) {
     if (e.code === 'Space') { setTalking(false); return; }
