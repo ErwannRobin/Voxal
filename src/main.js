@@ -23,7 +23,9 @@
 
 const METERED_APP_STORE_KEY    = 'metered-app-name';
 const METERED_API_STORE_KEY    = 'metered-api-key';
-const METERED_STATUS_STORE_KEY = 'metered-status'; // 'ok' | 'error' | null
+const METERED_STATUS_STORE_KEY  = 'metered-status';  // 'ok' | 'error' | null
+const METERED_COUNT_STORE_KEY   = 'metered-count';   // number of servers when ok
+const METERED_SERVERS_STORE_KEY = 'metered-servers'; // JSON array of ICE server objects
 
 // --- Presence API -----------------------------------------------------------
 
@@ -173,19 +175,29 @@ async function fetchIceServers() {
     try {
       const res = await tauriFetch(
         presenceBase() + '/org/' + presenceOrgId() + '/ice-servers',
-        { headers: { 'x-api-token': presenceToken() }, signal: AbortSignal.timeout(5000) }
+        { headers: { 'x-api-token': presenceToken() } }
       );
       if (res.ok) {
-        const { ice_servers } = await res.json();
+        const data = await res.json();
+        const ice_servers = data && data.ice_servers;
         if (Array.isArray(ice_servers) && ice_servers.length > 0) {
           console.log('[TURN] Using', ice_servers.length, 'org ICE servers');
+          localStorage.setItem(METERED_STATUS_STORE_KEY, 'ok');
+          localStorage.setItem(METERED_COUNT_STORE_KEY, String(ice_servers.length));
+          localStorage.setItem(METERED_SERVERS_STORE_KEY, JSON.stringify(ice_servers));
+          if (typeof updateTurnBadge === 'function') updateTurnBadge();
           return ice_servers;
         }
+        console.log('[TURN] No org ICE servers, falling through');
         // ice_servers === null means TURN not configured for this org → fall through
+      } else {
+        console.warn('[TURN] Org ICE fetch returned', res.status);
       }
     } catch (e) {
       console.warn('[TURN] Org ICE fetch failed, trying local config:', e.message);
     }
+  } else {
+    console.log('[TURN] presenceConfigured=false, skipping org ICE fetch');
   }
 
   // --- 2. Locally configured metered.ca credentials ---
@@ -880,6 +892,7 @@ async function selectOrgAndStartPolling() {
     if (presenceConfigured()) {
       stopPresencePolling();
       startPresencePolling();
+      fetchIceServers().catch(function(e) { console.warn('[ICE] prefetch failed:', e.message); });
     }
   } catch (e) {
     console.error('[Auth] selectOrgAndStartPolling failed:', e.message);
@@ -1000,13 +1013,56 @@ window.addEventListener('DOMContentLoaded', function() {
   $('input-code').addEventListener('keydown', function(e) { if (e.key === 'Enter') $('btn-join').click(); });
 
   // TURN settings modal
-  function updateTurnBadge() {
+  function connStatusHTML() {
+    const turnStatus = localStorage.getItem(METERED_STATUS_STORE_KEY);
+    const turnCount  = localStorage.getItem(METERED_COUNT_STORE_KEY);
+    const turnLine = turnStatus === 'ok'
+      ? '<span class="cs-ok">✓</span> TURN — ' + (turnCount ? turnCount + ' servers' : 'configured')
+      : turnStatus === 'error'
+      ? '<span class="cs-err">✕</span> TURN error'
+      : '<span class="cs-muted">—</span> TURN not configured';
+
+    const voxelLine = presenceToken()
+      ? '<span class="cs-ok">✓</span> Voxel Connect — ' + (function() {
+          var total = 0;
+          presenceData.forEach(function(item) { total += (item.connected || []).length; });
+          return total + ' user' + (total !== 1 ? 's' : '') + ' online';
+        })()
+      : '<span class="cs-muted">—</span> Not connected to Voxel';
+
+    return '<div class="cs-row">' + voxelLine + '</div>' +
+           '<div class="cs-row"><span class="cs-ok">✓</span> STUN available</div>' +
+           '<div class="cs-row">' + turnLine + '</div>';
+  }
+
+  window.updateTurnBadge = function updateTurnBadge() {
     const status = localStorage.getItem(METERED_STATUS_STORE_KEY);
     const badge  = $('turn-badge');
     badge.classList.remove('ok', 'error');
     if (status === 'ok')    badge.classList.add('ok');
     if (status === 'error') badge.classList.add('error');
+    var content = document.getElementById('conn-status-content');
+    if (content) content.innerHTML = connStatusHTML();
   }
+
+  // Show/hide the connection status popover
+  var popoverOpen = false;
+  function showConnPopover() {
+    var content = document.getElementById('conn-status-content');
+    if (content) content.innerHTML = connStatusHTML();
+    document.getElementById('conn-status-popover').classList.remove('hidden');
+    popoverOpen = true;
+  }
+  function hideConnPopover() {
+    document.getElementById('conn-status-popover').classList.add('hidden');
+    popoverOpen = false;
+  }
+  var settingsBtn = $('btn-open-settings');
+  settingsBtn.addEventListener('mouseenter', showConnPopover);
+  settingsBtn.addEventListener('mouseleave', hideConnPopover);
+  settingsBtn.addEventListener('click', function() {
+    if (popoverOpen) hideConnPopover(); else showConnPopover();
+  });
 
   async function testTurnCredentials() {
     const appName = $('input-metered-app').value.trim();
@@ -1031,16 +1087,54 @@ window.addEventListener('DOMContentLoaded', function() {
       const servers = await res.json();
       if (!Array.isArray(servers) || servers.length === 0) throw new Error('No servers returned');
       localStorage.setItem(METERED_STATUS_STORE_KEY, 'ok');
+      localStorage.setItem(METERED_COUNT_STORE_KEY, String(servers.length));
+      localStorage.setItem(METERED_SERVERS_STORE_KEY, JSON.stringify(servers));
       statusEl.style.color = 'var(--green)';
       statusEl.textContent = '✓ ' + servers.length + ' servers ready';
     } catch (e) {
       localStorage.setItem(METERED_STATUS_STORE_KEY, 'error');
+      localStorage.removeItem(METERED_COUNT_STORE_KEY);
+      localStorage.removeItem(METERED_SERVERS_STORE_KEY);
       statusEl.style.color = '#fb923c';
       statusEl.textContent = '✕ ' + e.message;
     }
 
     btn.disabled = false;
     updateTurnBadge();
+    if (localStorage.getItem(METERED_STATUS_STORE_KEY) === 'ok') wireStatusHover(statusEl);
+  }
+
+  function wireStatusHover(el) {
+    el.style.cursor = 'help';
+    el.onmouseenter = function() {
+      var raw = localStorage.getItem(METERED_SERVERS_STORE_KEY);
+      if (!raw) return;
+      try { showTurnServersPopover(el, JSON.parse(raw)); } catch(e) {}
+    };
+    el.onmouseleave = hideTurnServersPopover;
+  }
+
+  function showTurnServersPopover(anchor, servers) {
+    var pop = document.getElementById('turn-servers-popover');
+    if (!pop) {
+      pop = document.createElement('div');
+      pop.id = 'turn-servers-popover';
+      pop.className = 'turn-servers-popover';
+      document.body.appendChild(pop);
+    }
+    pop.innerHTML = servers.map(function(s) {
+      var urls = Array.isArray(s.urls) ? s.urls : [s.urls];
+      return urls.map(function(u) { return '<div class="tsrv-row">' + u + '</div>'; }).join('');
+    }).join('');
+    var rect = anchor.getBoundingClientRect();
+    pop.style.top  = (rect.bottom + window.scrollY + 4) + 'px';
+    pop.style.left = (rect.left  + window.scrollX) + 'px';
+    pop.classList.remove('hidden');
+  }
+
+  function hideTurnServersPopover() {
+    var pop = document.getElementById('turn-servers-popover');
+    if (pop) pop.classList.add('hidden');
   }
 
   let _prefsWin = null; // track the Tauri preferences window
@@ -1078,7 +1172,22 @@ window.addEventListener('DOMContentLoaded', function() {
     $('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
     $('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
     $('input-presence-token').value = presenceToken();
-    $('turn-test-status').textContent = '';
+    // Restore saved TURN test result
+    var savedTurnStatus = localStorage.getItem(METERED_STATUS_STORE_KEY);
+    var savedTurnCount  = localStorage.getItem(METERED_COUNT_STORE_KEY);
+    var statusEl = $('turn-test-status');
+    if (savedTurnStatus === 'ok' && savedTurnCount) {
+      statusEl.style.color = 'var(--green)';
+      statusEl.textContent = '✓ ' + savedTurnCount + ' servers ready';
+      wireStatusHover(statusEl);
+    } else if (savedTurnStatus === 'error') {
+      statusEl.style.color = '#fb923c';
+      statusEl.textContent = '✕ Test failed';
+      statusEl.onmouseenter = null;
+    } else {
+      statusEl.textContent = '';
+      statusEl.onmouseenter = null;
+    }
     updateDisconnectVisibility(); updateConnectVisibility();
     $('modal-settings').classList.remove('hidden');
     if (presenceToken()) loadOrgs();
@@ -1126,6 +1235,7 @@ window.addEventListener('DOMContentLoaded', function() {
       if (presenceConfigured()) {
         stopPresencePolling();
         startPresencePolling();
+        fetchIceServers().catch(function(e) { console.warn('[ICE] prefetch failed:', e.message); });
       }
     } catch (e) {
       statusEl.style.color = 'var(--red)';
@@ -1152,7 +1262,19 @@ window.addEventListener('DOMContentLoaded', function() {
     $('turn-test-status').textContent = '';
     updateTurnBadge();
   });
-  $('btn-open-settings').addEventListener('click', openSettings);
+  $('btn-open-settings').addEventListener('click', function() {
+    // On desktop (gear hidden) the button only drives the popover — handled above.
+    // On web/mobile, open settings (popover is shown via mouseenter/tap separately).
+    if (!window.__TAURI__) openSettings();
+  });
+  // On desktop the native menu handles settings — hide the gear icon,
+  // but keep the button visible so the TURN status LED remains.
+  if (window.__TAURI__) {
+    var gearIcon = document.querySelector('#btn-open-settings .gear-icon');
+    if (gearIcon) gearIcon.style.display = 'none';
+    $('btn-open-settings').style.cursor = 'default';
+    $('btn-open-settings').title = '';
+  }
   $('btn-close-settings').addEventListener('click', closeSettings);
   $('btn-close-settings-footer').addEventListener('click', closeSettings);
   $('modal-backdrop').addEventListener('click', closeSettings);

@@ -17,6 +17,7 @@ async fn presence_fetch(
     token: Option<String>,
     body: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    eprintln!("[presence_fetch] {} {}", method.to_uppercase(), url);
     let client = reqwest::Client::new();
     let mut req = match method.to_uppercase().as_str() {
         "POST"   => client.post(&url),
@@ -31,6 +32,7 @@ async fn presence_fetch(
     }
     let res = req.send().await.map_err(|e| e.to_string())?;
     let status = res.status().as_u16();
+    eprintln!("[presence_fetch] → {}", status);
     if status >= 400 {
         return Err(format!("HTTP {}", status));
     }

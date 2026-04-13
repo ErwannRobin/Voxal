@@ -210,9 +210,11 @@
       const DEFAULT_PRESENCE_BASE   = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
       const PRESENCE_TOKEN_KEY      = 'presence-api-token';
       const PRESENCE_ORG_KEY        = 'presence-org-id';
-      const METERED_APP_STORE_KEY   = 'metered-app-name';
-      const METERED_API_STORE_KEY   = 'metered-api-key';
+      const METERED_APP_STORE_KEY    = 'metered-app-name';
+      const METERED_API_STORE_KEY    = 'metered-api-key';
       const METERED_STATUS_STORE_KEY = 'metered-status';
+      const METERED_COUNT_STORE_KEY  = 'metered-count';
+      const METERED_SERVERS_STORE_KEY = 'metered-servers';
       const SERVICE_URL_KEY         = 'service-url';
       const VOXEL_CONNECT_URL       = 'https://voxel-connect.lovable.app';
       const FALLBACK_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
@@ -290,23 +292,43 @@
           });
           if (!res.ok) throw new Error('HTTP ' + res.status);
           const orgs = (await res.json()).organisations;
-          var cur = presenceOrgId();
-          // Auto-select when only one org is available
-          if (orgs.length === 1 && !cur) {
-            cur = orgs[0].id;
-            localStorage.setItem(PRESENCE_ORG_KEY, cur);
-          }
+          var savedOrgId  = presenceOrgId();
+          var validSaved  = orgs.find(function(o) { return o.id === savedOrgId; });
+          var cur = validSaved ? savedOrgId : (orgs.length > 0 ? orgs[0].id : '');
+          if (cur) localStorage.setItem(PRESENCE_ORG_KEY, cur);
           select.innerHTML = '<option value="">— select organisation —</option>' +
             orgs.map(function(o) {
               var label = o.name + (o.role === 'admin' ? ' ★' : '');
               return '<option value="' + o.id + '"' + (o.id === cur ? ' selected' : '') + '>' + label + '</option>';
             }).join('');
           statusEl.textContent = '';
+          if (cur) fetchAndStoreIceServers();
         } catch(e) {
           statusEl.style.color = 'var(--red, #f87171)';
           statusEl.textContent = e.message;
         }
         select.disabled = false;
+      }
+
+      async function fetchAndStoreIceServers() {
+        if (!presenceToken() || !presenceOrgId()) return;
+        try {
+          const res = await tauriFetch(
+            presenceBase() + '/org/' + presenceOrgId() + '/ice-servers',
+            { headers: { 'x-api-token': presenceToken() } }
+          );
+          if (!res.ok) return;
+          const data = await res.json();
+          const ice_servers = data && data.ice_servers;
+          if (Array.isArray(ice_servers) && ice_servers.length > 0) {
+            localStorage.setItem(METERED_STATUS_STORE_KEY, 'ok');
+            localStorage.setItem(METERED_COUNT_STORE_KEY, String(ice_servers.length));
+            localStorage.setItem(METERED_SERVERS_STORE_KEY, JSON.stringify(ice_servers));
+            console.log('[TURN] Stored', ice_servers.length, 'org ICE servers');
+          }
+        } catch(e) {
+          console.warn('[TURN] ice-servers fetch failed:', e.message);
+        }
       }
 
       // --- TURN test ---
@@ -323,6 +345,8 @@
           const servers = await res.json();
           if (!Array.isArray(servers) || servers.length === 0) throw new Error('Empty response');
           localStorage.setItem(METERED_STATUS_STORE_KEY, 'ok');
+          localStorage.setItem(METERED_COUNT_STORE_KEY, String(servers.length));
+          localStorage.setItem(METERED_SERVERS_STORE_KEY, JSON.stringify(servers));
           statusEl.textContent = '✓ ' + servers.length + ' servers ready';
           statusEl.style.color = 'var(--green, #4ade80)';
         } catch(e) {

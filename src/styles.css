@@ -444,7 +444,42 @@ input[type="password"]:focus { border-color: var(--accent); }
   display: flex;
   justify-content: flex-end;
   margin-bottom: 4px;
+  position: relative;
 }
+
+.conn-status-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  white-space: nowrap;
+  z-index: 200;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.45);
+}
+.conn-status-popover.hidden { display: none; }
+
+.cs-row { padding: 2px 0; color: var(--text); }
+.cs-ok   { color: var(--green); }
+.cs-err  { color: #fb923c; }
+.cs-muted { color: var(--text-muted); }
+
+.turn-servers-popover {
+  position: absolute;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 11px;
+  z-index: 300;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.45);
+  max-width: 340px;
+}
+.turn-servers-popover.hidden { display: none; }
+.tsrv-row { padding: 2px 0; color: var(--text-muted); font-family: monospace; }
 
 .topbar-btn {
   background: none;
