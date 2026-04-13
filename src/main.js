@@ -27,17 +27,81 @@ const METERED_STATUS_STORE_KEY = 'metered-status'; // 'ok' | 'error' | null
 
 // --- Presence API -----------------------------------------------------------
 
-const PRESENCE_BASE      = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
-const PRESENCE_TOKEN_KEY = 'presence-api-token';
-const PRESENCE_ORG_KEY   = 'presence-org-id';
+const DEFAULT_PRESENCE_BASE     = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
+const DEFAULT_VOXEL_CONNECT_URL = 'https://voxel-connect.lovable.app';
+const PRESENCE_TOKEN_KEY        = 'presence-api-token';
+const PRESENCE_ORG_KEY          = 'presence-org-id';
+const SERVICE_URL_KEY           = 'service-url';
 
+function presenceBase()       { return (localStorage.getItem(SERVICE_URL_KEY) || DEFAULT_PRESENCE_BASE).replace(/\/$/, ''); }
+function voxelConnectUrl()    { return localStorage.getItem('voxel-connect-url') || DEFAULT_VOXEL_CONNECT_URL; }
 function presenceToken()      { return localStorage.getItem(PRESENCE_TOKEN_KEY) || ''; }
 function presenceOrgId()      { return localStorage.getItem(PRESENCE_ORG_KEY)   || ''; }
 function presenceConfigured() { return !!(presenceToken() && presenceOrgId()); }
 
+// --- OAuth-style deep link auth ---------------------------------------------
+
+function generateState() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+}
+
+function handleDeepLink(urlStr) {
+  try {
+    const url = new URL(urlStr);
+    if (url.protocol !== 'voxel:' || url.hostname !== 'auth') return;
+    const token    = url.searchParams.get('token');
+    const state    = url.searchParams.get('state');
+    const expected = sessionStorage.getItem('voxel-auth-state');
+    if (!token) return;
+    if (expected && state !== expected) { console.warn('[Auth] State mismatch — ignoring'); return; }
+    sessionStorage.removeItem('voxel-auth-state');
+    localStorage.setItem(PRESENCE_TOKEN_KEY, token);
+    // Sync to modal input if open
+    const inp = document.getElementById('input-presence-token');
+    if (inp) inp.value = token;
+    if (typeof updateDisconnectVisibility === 'function') { updateDisconnectVisibility(); updateConnectVisibility(); } updateConnectVisibility();
+    if (typeof loadOrgs === 'function') loadOrgs();
+  } catch (e) {
+    console.error('[Auth] Deep link parse error', e);
+  }
+}
+
+async function connectWithVoxelAccount() {
+  const state = generateState();
+  sessionStorage.setItem('voxel-auth-state', state);
+  const connectUrl = voxelConnectUrl() + '/connect?state=' + state;
+
+  if (window.__TAURI__) {
+    // Desktop: open in system browser; deep link fires 'deep-link://new-url'
+    try { await window.__TAURI__.shell.open(connectUrl); } catch(e) {
+      // fallback: shell plugin may not be available yet
+      window.open(connectUrl, '_blank');
+    }
+    window.__TAURI__.event.once('deep-link://new-url', function(e) {
+      var urls = Array.isArray(e.payload) ? e.payload : [e.payload];
+      if (urls[0]) handleDeepLink(urls[0]);
+    });
+  } else if (window.Capacitor && window.Capacitor.isNativePlatform()) {
+    // iOS: open in system browser; appUrlOpen fires when OS routes voxel:// back
+    window.open(connectUrl, '_system');
+  } else {
+    // Web: popup + postMessage
+    var popup = window.open(connectUrl, 'voxel-auth', 'width=520,height=720,left=200,top=100');
+    function onMessage(e) {
+      if (e.origin !== voxelConnectUrl()) return;
+      if (!e.data || !e.data.token) return;
+      window.removeEventListener('message', onMessage);
+      if (popup && !popup.closed) popup.close();
+      handleDeepLink('voxel://auth?token=' + encodeURIComponent(e.data.token) + '&state=' + encodeURIComponent(e.data.state || state));
+    }
+    window.addEventListener('message', onMessage);
+  }
+}
+
 async function fetchPresence() {
   const res = await fetch(
-    PRESENCE_BASE + '/org/' + presenceOrgId() + '/presence',
+    presenceBase() + '/org/' + presenceOrgId() + '/presence',
     { headers: { 'x-api-token': presenceToken() } }
   );
   if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -45,7 +109,7 @@ async function fetchPresence() {
 }
 
 async function fetchOrgs() {
-  const res = await fetch(PRESENCE_BASE + '/orgs', {
+  const res = await fetch(presenceBase() + '/orgs', {
     headers: { 'x-api-token': presenceToken() },
   });
   if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -53,7 +117,7 @@ async function fetchOrgs() {
 }
 
 async function postSession(channelName, peerId) {
-  const res = await fetch(PRESENCE_BASE, {
+  const res = await fetch(presenceBase(), {
     method: 'POST',
     headers: { 'x-api-token': presenceToken(), 'Content-Type': 'application/json' },
     body: JSON.stringify({ org_id: presenceOrgId(), channel_name: channelName, peer_id: peerId }),
@@ -63,7 +127,7 @@ async function postSession(channelName, peerId) {
 
 function deleteSession() {
   if (!presenceConfigured()) return;
-  fetch(PRESENCE_BASE, {
+  fetch(presenceBase(), {
     method: 'DELETE',
     headers: { 'x-api-token': presenceToken() },
   }).catch(function(e) { console.warn('[Presence] deleteSession:', e.message); });
@@ -82,7 +146,7 @@ async function fetchIceServers() {
   if (presenceConfigured()) {
     try {
       const res = await fetch(
-        PRESENCE_BASE + '/org/' + presenceOrgId() + '/ice-servers',
+        presenceBase() + '/org/' + presenceOrgId() + '/ice-servers',
         { headers: { 'x-api-token': presenceToken() }, signal: AbortSignal.timeout(5000) }
       );
       if (res.ok) {
@@ -246,6 +310,10 @@ let presenceData     = []; // last fetched [{channel,connected}]
 let activeChannel    = null; // channel name for the current presence session
 let presenceInterval = null;
 
+function updateRoomHeader() {
+  $('room-code-display').textContent = activeChannel || roomCode;
+}
+
 // peerId -> { data, media, pseudo, talking }
 const connections = new Map();
 
@@ -398,7 +466,21 @@ function updateSelfTalking(active) {
 // --- Audio helpers -----------------------------------------------------------
 
 async function getMicStream() {
-  return navigator.mediaDevices.getUserMedia({
+  // Normalise legacy webkit prefix (some older iOS/Android WebViews)
+  const getUserMedia = (
+    navigator.mediaDevices && navigator.mediaDevices.getUserMedia
+      ? navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices)
+      : (navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia)
+          ? function(c) {
+              return new Promise(function(res, rej) {
+                (navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia)
+                  .call(navigator, c, res, rej);
+              });
+            }
+          : null
+  );
+  if (!getUserMedia) throw new Error('Microphone access is not available in this environment.');
+  return getUserMedia({
     audio: { channelCount: 1, sampleRate: 16000,
              echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     video: false,
@@ -524,7 +606,7 @@ function initiateHostMigration() {
 function becomeHost() {
   isHost = true;
   roomCode = peer.id;
-  $('room-code-display').textContent = peer.id;
+  updateRoomHeader();
   updatePeerList();
   // peer.on('connection') is already wired in joinRoom() and will route here
   // since isHost is now true
@@ -532,7 +614,7 @@ function becomeHost() {
 
 function connectToNewHost(newHostId) {
   roomCode = newHostId;
-  $('room-code-display').textContent = newHostId;
+  updateRoomHeader();
 
   const hostData = peer.connect(newHostId, { reliable: true });
 
@@ -613,7 +695,7 @@ async function createRoom(onJoined) {
   peer = new Peer({ config: { iceServers } });
   peer.on('open', function(id) {
     isHost = true; roomCode = id; inRoom = true;
-    $('room-code-display').textContent = id;
+    updateRoomHeader();
     nativePTTJoin(id);
     startKeepAlive();
     showScreen('room');
@@ -680,7 +762,7 @@ async function joinRoom(code, onJoined) {
       hostData.send({ type: 'hello', pseudo: myPseudo || 'Anonymous' });
       isHost = false; inRoom = true;
       connections.set(code, { data: hostData, media: null, pseudo: shortId(code), talking: false });
-      $('room-code-display').textContent = code;
+      updateRoomHeader();
       nativePTTJoin(code);
       startKeepAlive();
       showScreen('room');
@@ -787,7 +869,17 @@ window.addEventListener('DOMContentLoaded', function() {
     var row = $('disconnect-row');
     if (row) row.style.display = presenceToken() ? '' : 'none';
   }
-  updateDisconnectVisibility();
+  updateDisconnectVisibility(); updateConnectVisibility();
+
+  // Connect button: visible only when NOT logged in
+  function updateConnectVisibility() {
+    var connected = !!presenceToken();
+    var btnMain = document.getElementById('btn-connect-voxel-home');
+    var btnSettings = document.getElementById('btn-connect-voxel');
+    if (btnMain)     btnMain.style.display     = connected ? 'none' : '';
+    if (btnSettings) btnSettings.style.display = connected ? 'none' : '';
+  }
+  updateConnectVisibility();
 
   // --- Theme toggle ---
   const THEME_KEY = 'theme';
@@ -930,11 +1022,12 @@ window.addEventListener('DOMContentLoaded', function() {
     }
     // Web / mobile (or Tauri fallback): use the in-app modal
     $('input-pseudo').value         = myPseudo;
+    $('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || '';
     $('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
     $('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
     $('input-presence-token').value = presenceToken();
     $('turn-test-status').textContent = '';
-    updateDisconnectVisibility();
+    updateDisconnectVisibility(); updateConnectVisibility();
     $('modal-settings').classList.remove('hidden');
     if (presenceToken()) loadOrgs();
   }
@@ -954,7 +1047,7 @@ window.addEventListener('DOMContentLoaded', function() {
     $('org-load-status').textContent  = '';
     stopPresencePolling();
     renderPresenceChannels([]);
-    updateDisconnectVisibility();
+    updateDisconnectVisibility(); updateConnectVisibility();
     // Stay in settings — navigate home in background
     if (inRoom) leaveRoom();
     showScreen('home');
@@ -988,6 +1081,11 @@ window.addEventListener('DOMContentLoaded', function() {
   }
 
   updateTurnBadge();
+  $('input-service-url').addEventListener('input', function(e) {
+    var val = e.target.value.trim();
+    if (val) localStorage.setItem(SERVICE_URL_KEY, val);
+    else localStorage.removeItem(SERVICE_URL_KEY);
+  });
   $('input-metered-app').addEventListener('input', function(e) {
     localStorage.setItem(METERED_APP_STORE_KEY, e.target.value.trim());
     localStorage.removeItem(METERED_STATUS_STORE_KEY);
@@ -1006,6 +1104,16 @@ window.addEventListener('DOMContentLoaded', function() {
   $('modal-backdrop').addEventListener('click', closeSettings);
   $('btn-test-turn').addEventListener('click', testTurnCredentials);
   $('btn-disconnect').addEventListener('click', disconnectAccount);
+  $('btn-connect-voxel').addEventListener('click', connectWithVoxelAccount);
+  var btnHome = document.getElementById('btn-connect-voxel-home');
+  if (btnHome) btnHome.addEventListener('click', connectWithVoxelAccount);
+
+  // iOS: deep link comes back via @capacitor/app appUrlOpen
+  if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+    window.Capacitor.Plugins.App.addListener('appUrlOpen', function(data) {
+      if (data && data.url) handleDeepLink(data.url);
+    });
+  }
 
   // Tauri: "Voxel → Preferences…" menu item
   if (window.__TAURI__) {
@@ -1042,7 +1150,7 @@ window.addEventListener('DOMContentLoaded', function() {
     $('select-presence-org').innerHTML = '<option value="">— select organisation —</option>';
     $('select-presence-org').disabled = true;
     $('org-load-status').textContent = '';
-    updateDisconnectVisibility();
+    updateDisconnectVisibility(); updateConnectVisibility();
   });
   $('input-presence-token').addEventListener('keydown', function(e) {
     if (e.key === 'Enter' && presenceToken()) loadOrgs();

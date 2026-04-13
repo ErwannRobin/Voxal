@@ -56,5 +56,16 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.erwannrobin.voxel</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>voxel</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

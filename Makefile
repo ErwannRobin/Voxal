@@ -1,4 +1,4 @@
-.PHONY: help run run-web dev build build-web install clean lint check \
+.PHONY: help run run-web dev build build-debug build-web install clean lint check \
         cap-sync cap-ios cap-android
 
 # Default target
@@ -9,6 +9,7 @@ help:
 	@echo "  run-web      Serve the web version locally on http://localhost:8080"
 	@echo "  dev          Start Tauri in dev mode (hot reload)"
 	@echo "  build        Build the Tauri desktop app (release binary)"
+	@echo "  build-debug  Build the Tauri desktop app (debug bundle — registers voxel:// scheme)"
 	@echo "  build-web    Bundle the web version into dist/"
 	@echo "  cap-sync     Sync web assets to iOS & Android"
 	@echo "  cap-ios      Open Xcode (iOS)"
@@ -29,6 +30,12 @@ dev:
 
 build:
 	npm run tauri build
+
+build-debug:
+	npm run tauri build -- --debug
+	@echo ""
+	@echo "Debug bundle: src-tauri/target/debug/bundle/macos/Voxel.app"
+	@echo "Open it once to register the voxel:// URL scheme with macOS."
 
 # ── Web ───────────────────────────────────────────────────────────────────────
 

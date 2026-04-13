@@ -25,6 +25,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return true
     }
 
+    // MARK: - Deep link handler
+
+    func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+        // Let Capacitor handle it first (fires appUrlOpen in JS via @capacitor/app)
+        return ApplicationDelegateProxy.shared.application(app, open: url, options: options)
+    }
+
     // MARK: - Audio Session
 
     private func configureAudioSession() {

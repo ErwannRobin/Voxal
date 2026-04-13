@@ -25,7 +25,7 @@
       <div class="brand">
         <span class="brand-icon">🎙️</span>
         <h1>Voxel</h1>
-        <p class="brand-sub">Private • P2P • No servers</p>
+        <p class="brand-sub">P2P push to talk communications</p>
       </div>
       <div class="home-actions">
         <!-- pseudo-field moved to settings; shown here only until user sets a name -->
@@ -43,6 +43,11 @@
           <div id="channels-list" class="channels-list"></div>
           <div class="divider"><span>or connect manually</span></div>
         </div>
+
+        <!-- Connect CTA (hidden once logged in) -->
+        <button id="btn-connect-voxel-home" class="btn btn-primary btn-full btn-connect-voxel">
+          🔗 Connect with Voxel
+        </button>
 
         <button id="btn-create" class="btn btn-primary btn-full">Create Room</button>
         <div class="divider"><span>or join one</span></div>
@@ -95,14 +100,20 @@
           <p class="settings-desc">
             Connect to a Voxel organisation to see channels and who's online.
           </p>
-          <div class="settings-field">
-            <label for="input-presence-token">API token</label>
-            <div class="input-clearable">
-              <input id="input-presence-token" type="password" placeholder="API token"
-                     autocomplete="off" />
-              <button class="input-clear" data-target="input-presence-token" aria-label="Clear">✕</button>
+          <button id="btn-connect-voxel" class="btn btn-primary btn-connect-voxel">
+            🔗 Connect with Voxel
+          </button>
+          <details class="manual-token-details">
+            <summary>Use an API token manually</summary>
+            <div class="settings-field" style="margin-top:8px">
+              <label for="input-presence-token">API token</label>
+              <div class="input-clearable">
+                <input id="input-presence-token" type="password" placeholder="API token"
+                       autocomplete="off" />
+                <button class="input-clear" data-target="input-presence-token" aria-label="Clear">✕</button>
+              </div>
             </div>
-          </div>
+          </details>
           <div class="settings-field">
             <label for="select-presence-org">Organisation</label>
             <select id="select-presence-org" class="org-select" disabled>
@@ -115,14 +126,22 @@
 
           <!-- TURN — collapsed by default -->
           <details class="turn-section" id="turn-details">
-            <summary>Advanced: TURN Server</summary>
+            <summary>Advanced</summary>
             <div class="turn-inner">
               <p class="settings-desc">
                 Override TURN relay settings manually. Uses
                 <a href="https://metered.ca" target="_blank" rel="noopener">metered.ca</a>.
               </p>
               <div class="settings-field">
-                <label for="input-metered-app">App name</label>
+                <label for="input-service-url">Service URL</label>
+                <div class="input-clearable">
+                  <input id="input-service-url" type="text" placeholder="https://…"
+                         spellcheck="false" autocomplete="off" />
+                  <button class="input-clear" data-target="input-service-url" aria-label="Clear">✕</button>
+                </div>
+              </div>
+              <div class="settings-field">
+                <label for="input-metered-app">TURN app name</label>
                 <div class="input-clearable">
                   <input id="input-metered-app" type="text" placeholder="yourapp"
                          spellcheck="false" autocomplete="off" />
@@ -130,7 +149,7 @@
                 </div>
               </div>
               <div class="settings-field">
-                <label for="input-metered-key">API key</label>
+                <label for="input-metered-key">TURN API key</label>
                 <div class="input-clearable">
                   <input id="input-metered-key" type="password" placeholder="API key"
                          autocomplete="off" />
@@ -138,7 +157,7 @@
                 </div>
               </div>
               <div class="settings-test-row">
-                <button id="btn-test-turn" class="btn btn-ghost btn-sm">Test</button>
+                <button id="btn-test-turn" class="btn btn-ghost btn-sm">Test TURN</button>
                 <span id="turn-test-status" class="turn-test-status"></span>
               </div>
             </div>

@@ -131,14 +131,20 @@
       <p class="settings-desc">
         Connect to a Voxel organisation to see channels and who's online.
       </p>
-      <div class="settings-field">
-        <label for="input-presence-token">API token</label>
-        <div class="input-clearable">
-          <input id="input-presence-token" type="password" placeholder="API token"
-                 autocomplete="off" />
-          <button class="input-clear" data-target="input-presence-token" aria-label="Clear">✕</button>
+      <button id="btn-connect-voxel" class="btn btn-primary btn-connect-voxel">
+        🔗 Connect with Voxel
+      </button>
+      <details class="manual-token-details">
+        <summary>Use an API token manually</summary>
+        <div class="settings-field" style="margin-top:8px">
+          <label for="input-presence-token">API token</label>
+          <div class="input-clearable">
+            <input id="input-presence-token" type="password" placeholder="API token"
+                   autocomplete="off" />
+            <button class="input-clear" data-target="input-presence-token" aria-label="Clear">✕</button>
+          </div>
         </div>
-      </div>
+      </details>
       <div class="settings-field">
         <label for="select-presence-org">Organisation</label>
         <select id="select-presence-org" class="org-select" disabled>
@@ -151,7 +157,7 @@
 
       <!-- TURN — collapsed by default -->
       <details class="turn-section" id="turn-details">
-        <summary>Advanced: TURN Server</summary>
+        <summary>Advanced</summary>
         <div class="turn-inner">
           <p class="settings-desc">
             Override TURN relay settings manually (only needed when the organisation
@@ -159,7 +165,15 @@
             <a href="https://metered.ca" target="_blank" rel="noopener">metered.ca</a>.
           </p>
           <div class="settings-field">
-            <label for="input-metered-app">App name</label>
+            <label for="input-service-url">Service URL</label>
+            <div class="input-clearable">
+              <input id="input-service-url" type="text" placeholder="https://…"
+                     spellcheck="false" autocomplete="off" />
+              <button class="input-clear" data-target="input-service-url" aria-label="Clear">✕</button>
+            </div>
+          </div>
+          <div class="settings-field">
+            <label for="input-metered-app">TURN app name</label>
             <div class="input-clearable">
               <input id="input-metered-app" type="text" placeholder="yourapp"
                      spellcheck="false" autocomplete="off" />
@@ -167,7 +181,7 @@
             </div>
           </div>
           <div class="settings-field">
-            <label for="input-metered-key">API key</label>
+            <label for="input-metered-key">TURN API key</label>
             <div class="input-clearable">
               <input id="input-metered-key" type="password" placeholder="API key"
                      autocomplete="off" />
@@ -175,7 +189,7 @@
             </div>
           </div>
           <div class="settings-test-row">
-            <button id="btn-test-turn" class="btn btn-ghost btn-sm">Test</button>
+            <button id="btn-test-turn" class="btn btn-ghost btn-sm">Test TURN</button>
             <span id="turn-test-status" class="turn-test-status"></span>
           </div>
         </div>
@@ -193,17 +207,20 @@
 
     <script>
       // Constants (duplicated from main.js — settings page is standalone)
-      const PRESENCE_BASE           = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
+      const DEFAULT_PRESENCE_BASE   = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
       const PRESENCE_TOKEN_KEY      = 'presence-api-token';
       const PRESENCE_ORG_KEY        = 'presence-org-id';
       const METERED_APP_STORE_KEY   = 'metered-app-name';
       const METERED_API_STORE_KEY   = 'metered-api-key';
       const METERED_STATUS_STORE_KEY = 'metered-status';
+      const SERVICE_URL_KEY         = 'service-url';
+      const VOXEL_CONNECT_URL       = 'https://voxel-connect.lovable.app';
       const FALLBACK_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
       function $id(id) { return document.getElementById(id); }
       function presenceToken() { return localStorage.getItem(PRESENCE_TOKEN_KEY) || ''; }
       function presenceOrgId() { return localStorage.getItem(PRESENCE_ORG_KEY)   || ''; }
+      function presenceBase()  { return (localStorage.getItem(SERVICE_URL_KEY) || DEFAULT_PRESENCE_BASE).replace(/\/$/, ''); }
 
       // --- Theme ---
       const THEME_KEY = 'theme';
@@ -225,13 +242,17 @@
       // --- Load saved values ---
       $id('input-pseudo').value         = localStorage.getItem('pseudo') || '';
       $id('input-presence-token').value = presenceToken();
+      $id('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || '';
       $id('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
       $id('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
 
       function updateDisconnectVisibility() {
         $id('btn-disconnect').style.display = presenceToken() ? '' : 'none';
       }
-      updateDisconnectVisibility();
+      function updateConnectVisibility() {
+        $id('btn-connect-voxel').style.display = presenceToken() ? 'none' : '';
+      }
+      updateDisconnectVisibility(); updateConnectVisibility();
 
       if (presenceToken()) loadOrgs();
 
@@ -243,7 +264,7 @@
         statusEl.textContent = 'Loading…';
         statusEl.style.color = '';
         try {
-          const res  = await fetch(PRESENCE_BASE + '/orgs', {
+          const res  = await fetch(presenceBase() + '/orgs', {
             headers: { 'x-api-token': presenceToken() }
           });
           if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -294,7 +315,7 @@
       async function disconnect() {
         const token = presenceToken();
         if (token) {
-          fetch(PRESENCE_BASE, {
+          fetch(presenceBase(), {
             method: 'DELETE',
             headers: { 'x-api-token': token }
           }).catch(function() {});
@@ -305,7 +326,7 @@
         $id('select-presence-org').innerHTML = '<option value="">— enter API token first —</option>';
         $id('select-presence-org').disabled = true;
         $id('org-load-status').textContent  = '';
-        updateDisconnectVisibility();
+        updateDisconnectVisibility(); updateConnectVisibility();
         // Stay in settings — main window reacts via storage event
       }
 
@@ -318,7 +339,7 @@
         localStorage.removeItem(PRESENCE_ORG_KEY);
         $id('select-presence-org').innerHTML = '<option value="">— select organisation —</option>';
         $id('select-presence-org').disabled = true;
-        updateDisconnectVisibility();
+        updateDisconnectVisibility(); updateConnectVisibility();
       });
       $id('input-presence-token').addEventListener('keydown', function(e) {
         if (e.key === 'Enter' && presenceToken()) loadOrgs();
@@ -339,6 +360,11 @@
         localStorage.removeItem(METERED_STATUS_STORE_KEY);
         $id('turn-test-status').textContent = '';
       });
+      $id('input-service-url').addEventListener('input', function(e) {
+        var val = e.target.value.trim();
+        if (val) localStorage.setItem(SERVICE_URL_KEY, val);
+        else localStorage.removeItem(SERVICE_URL_KEY);
+      });
       // Clear (×) buttons
       document.querySelectorAll('.input-clear').forEach(function(btn) {
         btn.addEventListener('click', function() {
@@ -353,10 +379,41 @@
       $id('btn-test-turn').addEventListener('click', testTurn);
       $id('btn-disconnect').addEventListener('click', disconnect);
       $id('btn-done').addEventListener('click', closeWindow);
+      $id('btn-connect-voxel').addEventListener('click', function() {
+        var state = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+        sessionStorage.setItem('voxel-auth-state', state);
+        var url = VOXEL_CONNECT_URL + '/connect?state=' + state;
+        if (window.__TAURI__) {
+          window.__TAURI__.shell.open(url).catch(function() { window.open(url, '_blank'); });
+          window.__TAURI__.event.once('deep-link://new-url', function(e) {
+            var urls = Array.isArray(e.payload) ? e.payload : [e.payload];
+            if (urls[0]) handleDeepLinkSettings(urls[0]);
+          });
+        } else {
+          window.open(url, '_system');
+        }
+      });
 
       document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') closeWindow();
       });
+
+      function handleDeepLinkSettings(urlStr) {
+        try {
+          var url = new URL(urlStr);
+          if (url.protocol !== 'voxel:' || url.hostname !== 'auth') return;
+          var token    = url.searchParams.get('token');
+          var state    = url.searchParams.get('state');
+          var expected = sessionStorage.getItem('voxel-auth-state');
+          if (!token) return;
+          if (expected && state !== expected) return;
+          sessionStorage.removeItem('voxel-auth-state');
+          localStorage.setItem(PRESENCE_TOKEN_KEY, token);
+          $id('input-presence-token').value = token;
+          updateDisconnectVisibility(); updateConnectVisibility();
+          loadOrgs();
+        } catch(e) {}
+      }
 
       function closeWindow() {
         if (window.__TAURI__) {
