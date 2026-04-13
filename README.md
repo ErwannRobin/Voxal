@@ -2,7 +2,7 @@
 
 > Serverless push-to-talk voice chat for your desktop and browser — no accounts, no central server, just a room code.
 
-![screenshot placeholder](docs/screenshot.png)
+![screenshot placeholder](docs/voxel-screenshot.png)
 
 ---
 

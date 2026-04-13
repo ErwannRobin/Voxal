@@ -79,11 +79,27 @@ pub fn run() {
             app.deep_link().register_all().ok();
 
             // Build the app menu with a native About Voxel dialog
+            let build_type = if cfg!(debug_assertions) { "Debug build" } else { "Release build" };
+            let comments = format!(
+                "P2P push-to-talk voice chat — no servers, no accounts required.\n\
+                \n\
+                Create or join a room with a code, then hold the PTT shortcut (default: Ctrl+`) \
+                to transmit. Tap the mic button on mobile. Enable Free-hand mode to keep the mic \
+                permanently open.\n\
+                \n\
+                Audio is transmitted directly peer-to-peer over WebRTC (Opus codec). \
+                Only the PeerJS signalling server is used to establish connections.\n\
+                \n\
+                {}",
+                build_type
+            );
+
             let about = AboutMetadata {
                 name: Some("Voxel".to_string()),
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
-                comments: Some("Serverless push-to-talk voice chat".to_string()),
+                comments: Some(comments),
                 website: Some("https://github.com/erwannrobin/voxel".to_string()),
+                license: Some("MIT".to_string()),
                 icon: app.default_window_icon().cloned(),
                 ..Default::default()
             };
