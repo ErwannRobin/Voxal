@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voxel — Preferences</title>
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+      body {
+        padding: env(safe-area-inset-top, 0) 0 0;
+        background: var(--bg);
+        min-height: 100vh;
+      }
+      .prefs-window {
+        padding: 24px 24px 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        max-width: 400px;
+        margin: 0 auto;
+      }
+      .prefs-title {
+        font-size: 15px;
+        font-weight: 700;
+        color: var(--text);
+        margin-bottom: 18px;
+        letter-spacing: 0.3px;
+      }
+      .prefs-footer {
+        margin-top: 20px;
+        padding-top: 16px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      /* TURN collapsible */
+      details.turn-section { margin-top: 4px; }
+      details.turn-section summary {
+        cursor: pointer;
+        list-style: none;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        padding: 6px 0;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      details.turn-section summary::-webkit-details-marker { display: none; }
+      details.turn-section summary::before {
+        content: '▶';
+        font-size: 9px;
+        transition: transform 0.15s;
+        display: inline-block;
+      }
+      details.turn-section[open] summary::before { transform: rotate(90deg); }
+      details.turn-section .turn-inner {
+        padding-top: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="prefs-window">
+      <p class="prefs-title">Preferences</p>
+
+      <!-- Presence / Voxel account -->
+      <p class="settings-group-title">Voxel Account</p>
+      <p class="settings-desc">
+        Connect to a Voxel organisation to see channels and who's online.
+      </p>
+      <div class="settings-field">
+        <label for="input-presence-token">API token</label>
+        <input id="input-presence-token" type="password" placeholder="API token"
+               autocomplete="off" />
+      </div>
+      <div class="settings-field">
+        <label for="select-presence-org">Organisation</label>
+        <select id="select-presence-org" class="org-select" disabled>
+          <option value="">— enter API token first —</option>
+        </select>
+        <span id="org-load-status" class="org-load-status"></span>
+      </div>
+
+      <div class="settings-separator"></div>
+
+      <!-- TURN — collapsed by default -->
+      <details class="turn-section" id="turn-details">
+        <summary>Advanced: TURN Server</summary>
+        <div class="turn-inner">
+          <p class="settings-desc">
+            Override TURN relay settings manually (only needed when the organisation
+            has no TURN config). Uses
+            <a href="https://metered.ca" target="_blank" rel="noopener">metered.ca</a>.
+          </p>
+          <div class="settings-field">
+            <label for="input-metered-app">App name</label>
+            <input id="input-metered-app" type="text" placeholder="yourapp"
+                   spellcheck="false" autocomplete="off" />
+          </div>
+          <div class="settings-field">
+            <label for="input-metered-key">API key</label>
+            <input id="input-metered-key" type="password" placeholder="API key"
+                   autocomplete="off" />
+          </div>
+          <div class="settings-test-row">
+            <button id="btn-test-turn" class="btn btn-ghost btn-sm">Test</button>
+            <span id="turn-test-status" class="turn-test-status"></span>
+          </div>
+        </div>
+      </details>
+
+      <!-- Footer -->
+      <div class="prefs-footer">
+        <button id="btn-disconnect" class="btn btn-ghost btn-sm" style="margin-right:auto;color:var(--red,#f87171)">
+          Disconnect
+        </button>
+        <button id="btn-done" class="btn btn-primary btn-sm">Done</button>
+      </div>
+    </div>
+
+    <script>
+      // Constants (duplicated from main.js — settings page is standalone)
+      const PRESENCE_BASE           = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
+      const PRESENCE_TOKEN_KEY      = 'presence-api-token';
+      const PRESENCE_ORG_KEY        = 'presence-org-id';
+      const METERED_APP_STORE_KEY   = 'metered-app-name';
+      const METERED_API_STORE_KEY   = 'metered-api-key';
+      const METERED_STATUS_STORE_KEY = 'metered-status';
+      const FALLBACK_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
+
+      function $id(id) { return document.getElementById(id); }
+      function presenceToken() { return localStorage.getItem(PRESENCE_TOKEN_KEY) || ''; }
+      function presenceOrgId() { return localStorage.getItem(PRESENCE_ORG_KEY)   || ''; }
+
+      // --- Load saved values ---
+      $id('input-presence-token').value = presenceToken();
+      $id('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
+      $id('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
+
+      if (presenceToken()) loadOrgs();
+
+      // --- Org loader ---
+      async function loadOrgs() {
+        const select   = $id('select-presence-org');
+        const statusEl = $id('org-load-status');
+        select.disabled = true;
+        statusEl.textContent = 'Loading…';
+        statusEl.style.color = '';
+        try {
+          const res  = await fetch(PRESENCE_BASE + '/orgs', {
+            headers: { 'x-api-token': presenceToken() }
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const orgs = (await res.json()).organisations;
+          const cur  = presenceOrgId();
+          select.innerHTML = '<option value="">— select organisation —</option>' +
+            orgs.map(function(o) {
+              var label = o.name + (o.role === 'admin' ? ' ★' : '');
+              return '<option value="' + o.id + '"' + (o.id === cur ? ' selected' : '') + '>' + label + '</option>';
+            }).join('');
+          statusEl.textContent = '';
+        } catch(e) {
+          statusEl.style.color = 'var(--red, #f87171)';
+          statusEl.textContent = e.message;
+        }
+        select.disabled = false;
+      }
+
+      // --- TURN test ---
+      async function testTurn() {
+        const appName = $id('input-metered-app').value.trim();
+        const apiKey  = $id('input-metered-key').value.trim();
+        const statusEl = $id('turn-test-status');
+        if (!appName || !apiKey) { statusEl.textContent = 'Enter app name and API key first.'; return; }
+        statusEl.textContent = 'Testing…';
+        try {
+          const url = 'https://' + appName + '.metered.live/api/v1/turn/credentials?apiKey=' + apiKey;
+          const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const servers = await res.json();
+          if (!Array.isArray(servers) || servers.length === 0) throw new Error('Empty response');
+          localStorage.setItem(METERED_STATUS_STORE_KEY, 'ok');
+          statusEl.textContent = '✓ ' + servers.length + ' servers ready';
+          statusEl.style.color = 'var(--green, #4ade80)';
+        } catch(e) {
+          localStorage.setItem(METERED_STATUS_STORE_KEY, 'error');
+          statusEl.textContent = '✕ ' + e.message;
+          statusEl.style.color = 'var(--red, #f87171)';
+        }
+      }
+
+      // --- Disconnect ---
+      async function disconnect() {
+        const token = presenceToken();
+        if (token) {
+          fetch(PRESENCE_BASE, {
+            method: 'DELETE',
+            headers: { 'x-api-token': token }
+          }).catch(function() {});
+        }
+        localStorage.removeItem(PRESENCE_TOKEN_KEY);
+        localStorage.removeItem(PRESENCE_ORG_KEY);
+        $id('input-presence-token').value = '';
+        $id('select-presence-org').innerHTML = '<option value="">— enter API token first —</option>';
+        $id('select-presence-org').disabled = true;
+        $id('org-load-status').textContent  = '';
+      }
+
+      // --- Event wiring ---
+      $id('input-presence-token').addEventListener('input', function(e) {
+        localStorage.setItem(PRESENCE_TOKEN_KEY, e.target.value.trim());
+        localStorage.removeItem(PRESENCE_ORG_KEY);
+        $id('select-presence-org').innerHTML = '<option value="">— select organisation —</option>';
+      });
+      $id('input-presence-token').addEventListener('blur', function() {
+        if (presenceToken()) loadOrgs();
+      });
+      $id('select-presence-org').addEventListener('change', function(e) {
+        localStorage.setItem(PRESENCE_ORG_KEY, e.target.value);
+      });
+      $id('input-metered-app').addEventListener('input', function(e) {
+        localStorage.setItem(METERED_APP_STORE_KEY, e.target.value.trim());
+        localStorage.removeItem(METERED_STATUS_STORE_KEY);
+        $id('turn-test-status').textContent = '';
+      });
+      $id('input-metered-key').addEventListener('input', function(e) {
+        localStorage.setItem(METERED_API_STORE_KEY, e.target.value.trim());
+        localStorage.removeItem(METERED_STATUS_STORE_KEY);
+        $id('turn-test-status').textContent = '';
+      });
+      $id('btn-test-turn').addEventListener('click', testTurn);
+      $id('btn-disconnect').addEventListener('click', disconnect);
+      $id('btn-done').addEventListener('click', closeWindow);
+
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') closeWindow();
+      });
+
+      function closeWindow() {
+        if (window.__TAURI__) {
+          // Direct Tauri v2 invoke — most reliable path
+          window.__TAURI__.core.invoke('plugin:window|close').catch(function(e) {
+            console.warn('[Settings] close failed:', e);
+          });
+        }
+      }
+    </script>
+  </body>
+</html>

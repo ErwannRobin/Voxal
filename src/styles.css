@@ -571,6 +571,45 @@ input[type="password"]:focus { border-color: var(--accent); }
   margin: 4px 0;
 }
 
+/* Collapsible TURN section */
+details.turn-section { margin-top: 4px; }
+details.turn-section summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  padding: 6px 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+details.turn-section summary::-webkit-details-marker { display: none; }
+details.turn-section summary::before {
+  content: '▶';
+  font-size: 9px;
+  transition: transform 0.15s;
+  display: inline-block;
+}
+details.turn-section[open] summary::before { transform: rotate(90deg); }
+details.turn-section .turn-inner {
+  padding-top: 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Disconnect row */
+.settings-disconnect-row {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.btn-danger { color: var(--red, #f87171) !important; }
+
 /* ── Presence panel ──────────────────────────────────────────────── */
 
 .presence-panel {

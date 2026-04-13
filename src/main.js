@@ -74,22 +74,49 @@ const FALLBACK_ICE = [
   { urls: 'stun:stun1.l.google.com:19302' },
 ];
 
+// 1. Try org TURN (backend-managed, short-lived credentials — preferred)
+// 2. Try locally configured metered.ca credentials (manual fallback)
+// 3. Fall back to public STUN
 async function fetchIceServers() {
+  // --- 1. Org ICE servers from Voxel backend ---
+  if (presenceConfigured()) {
+    try {
+      const res = await fetch(
+        PRESENCE_BASE + '/org/' + presenceOrgId() + '/ice-servers',
+        { headers: { 'x-api-token': presenceToken() }, signal: AbortSignal.timeout(5000) }
+      );
+      if (res.ok) {
+        const { ice_servers } = await res.json();
+        if (Array.isArray(ice_servers) && ice_servers.length > 0) {
+          console.log('[TURN] Using', ice_servers.length, 'org ICE servers');
+          return ice_servers;
+        }
+        // ice_servers === null means TURN not configured for this org → fall through
+      }
+    } catch (e) {
+      console.warn('[TURN] Org ICE fetch failed, trying local config:', e.message);
+    }
+  }
+
+  // --- 2. Locally configured metered.ca credentials ---
   const appName = localStorage.getItem(METERED_APP_STORE_KEY);
   const apiKey  = localStorage.getItem(METERED_API_STORE_KEY);
-  if (!appName || !apiKey) return FALLBACK_ICE;
-  try {
-    const url = 'https://' + appName + '.metered.live/api/v1/turn/credentials?apiKey=' + apiKey;
-    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const servers = await res.json();
-    if (Array.isArray(servers) && servers.length > 0) {
-      console.log('[TURN] Using', servers.length, 'ICE servers from metered.ca');
-      return servers;
+  if (appName && apiKey) {
+    try {
+      const url = 'https://' + appName + '.metered.live/api/v1/turn/credentials?apiKey=' + apiKey;
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const servers = await res.json();
+      if (Array.isArray(servers) && servers.length > 0) {
+        console.log('[TURN] Using', servers.length, 'ICE servers from local metered.ca config');
+        return servers;
+      }
+    } catch (e) {
+      console.warn('[TURN] Local metered.ca fetch failed, falling back to STUN:', e.message);
     }
-  } catch (e) {
-    console.warn('[TURN] Failed to fetch ICE servers, falling back to STUN:', e.message);
   }
+
+  // --- 3. STUN-only fallback ---
   return FALLBACK_ICE;
 }
 
@@ -829,9 +856,28 @@ window.addEventListener('DOMContentLoaded', function() {
   }
 
   function openSettings() {
-    $('input-metered-app').value     = localStorage.getItem(METERED_APP_STORE_KEY) || '';
-    $('input-metered-key').value     = localStorage.getItem(METERED_API_STORE_KEY) || '';
-    $('input-presence-token').value  = presenceToken();
+    // On Tauri desktop: try to open a dedicated preferences window
+    if (window.__TAURI__) {
+      try {
+        const { WebviewWindow } = window.__TAURI__.webviewWindow;
+        new WebviewWindow('preferences', {
+          url: 'settings.html',
+          title: 'Voxel — Preferences',
+          width: 420,
+          height: 540,
+          resizable: false,
+          center: true,
+        });
+        return;
+      } catch (e) {
+        console.warn('[Settings] Could not open preferences window, using modal:', e.message);
+        // fall through to modal
+      }
+    }
+    // Web / mobile (or Tauri fallback): use the in-app modal
+    $('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
+    $('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
+    $('input-presence-token').value = presenceToken();
     $('turn-test-status').textContent = '';
     $('modal-settings').classList.remove('hidden');
     if (presenceToken()) loadOrgs();
@@ -839,6 +885,19 @@ window.addEventListener('DOMContentLoaded', function() {
   function closeSettings() {
     $('modal-settings').classList.add('hidden');
     startPresencePolling(); // refresh in case org changed
+  }
+
+  function disconnectAccount() {
+    const token = presenceToken();
+    if (token) deleteSession(); // best-effort server cleanup
+    localStorage.removeItem(PRESENCE_TOKEN_KEY);
+    localStorage.removeItem(PRESENCE_ORG_KEY);
+    $('input-presence-token').value = '';
+    $('select-presence-org').innerHTML = '<option value="">— enter API token first —</option>';
+    $('select-presence-org').disabled = true;
+    $('org-load-status').textContent  = '';
+    stopPresencePolling();
+    renderPresenceChannels([]);
   }
 
   async function loadOrgs() {
@@ -880,11 +939,26 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-close-settings').addEventListener('click', closeSettings);
   $('modal-backdrop').addEventListener('click', closeSettings);
   $('btn-test-turn').addEventListener('click', testTurnCredentials);
+  $('btn-disconnect').addEventListener('click', disconnectAccount);
 
-  // Tauri desktop: "Voxel → Preferences…" menu item opens the same modal
+  // Tauri: "Voxel → Preferences…" menu item
   if (window.__TAURI__) {
     window.__TAURI__.event.listen('open-preferences', openSettings);
   }
+
+  // Cross-window sync: when settings.html (Tauri preferences window) writes to
+  // localStorage, the main window receives a storage event and refreshes.
+  window.addEventListener('storage', function(e) {
+    var relevantKeys = [PRESENCE_TOKEN_KEY, PRESENCE_ORG_KEY, METERED_APP_STORE_KEY,
+                        METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY];
+    if (relevantKeys.indexOf(e.key) === -1) return;
+    updateTurnBadge();
+    if (e.key === PRESENCE_TOKEN_KEY || e.key === PRESENCE_ORG_KEY) {
+      stopPresencePolling();
+      if (presenceConfigured()) startPresencePolling();
+      else renderPresenceChannels([]);
+    }
+  });
 
   // Presence credentials
   $('input-presence-token').addEventListener('input', function(e) {

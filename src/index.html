@@ -46,7 +46,7 @@
       </div>
     </div>
 
-    <!-- Settings modal -->
+    <!-- Settings modal (web / mobile only — Tauri uses a separate window) -->
     <div id="modal-settings" class="modal hidden" role="dialog" aria-modal="true" aria-label="Settings">
       <div class="modal-backdrop" id="modal-backdrop"></div>
       <div class="modal-content">
@@ -55,29 +55,9 @@
           <button id="btn-close-settings" class="btn-icon" aria-label="Close">✕</button>
         </div>
         <div class="modal-body">
-          <p class="settings-group-title">TURN Server</p>
+          <p class="settings-group-title">Voxel Account</p>
           <p class="settings-desc">
-            Relay traffic through firewalls &amp; strict NAT using
-            <a href="https://metered.ca" target="_blank" rel="noopener">metered.ca</a>.
-          </p>
-          <div class="settings-field">
-            <label for="input-metered-app">App name</label>
-            <input id="input-metered-app" type="text" placeholder="yourapp"
-                   spellcheck="false" autocomplete="off" />
-          </div>
-          <div class="settings-field">
-            <label for="input-metered-key">API key</label>
-            <input id="input-metered-key" type="password" placeholder="API key"
-                   autocomplete="off" />
-          </div>
-          <div class="settings-test-row">
-            <button id="btn-test-turn" class="btn btn-ghost btn-sm">Test</button>
-            <span id="turn-test-status" class="turn-test-status"></span>
-          </div>
-          <div class="settings-separator"></div>
-          <p class="settings-group-title">Presence</p>
-          <p class="settings-desc">
-            Show online channels and who's connected, via a companion server.
+            Connect to a Voxel organisation to see channels and who's online.
           </p>
           <div class="settings-field">
             <label for="input-presence-token">API token</label>
@@ -90,6 +70,38 @@
               <option value="">— enter API token first —</option>
             </select>
             <span id="org-load-status" class="org-load-status"></span>
+          </div>
+
+          <div class="settings-separator"></div>
+
+          <!-- TURN — collapsed by default -->
+          <details class="turn-section" id="turn-details">
+            <summary>Advanced: TURN Server</summary>
+            <div class="turn-inner">
+              <p class="settings-desc">
+                Override TURN relay settings manually. Uses
+                <a href="https://metered.ca" target="_blank" rel="noopener">metered.ca</a>.
+              </p>
+              <div class="settings-field">
+                <label for="input-metered-app">App name</label>
+                <input id="input-metered-app" type="text" placeholder="yourapp"
+                       spellcheck="false" autocomplete="off" />
+              </div>
+              <div class="settings-field">
+                <label for="input-metered-key">API key</label>
+                <input id="input-metered-key" type="password" placeholder="API key"
+                       autocomplete="off" />
+              </div>
+              <div class="settings-test-row">
+                <button id="btn-test-turn" class="btn btn-ghost btn-sm">Test</button>
+                <span id="turn-test-status" class="turn-test-status"></span>
+              </div>
+            </div>
+          </details>
+
+          <!-- Disconnect -->
+          <div class="settings-disconnect-row">
+            <button id="btn-disconnect" class="btn btn-ghost btn-sm btn-danger">Disconnect</button>
           </div>
         </div>
       </div>
