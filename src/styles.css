@@ -171,6 +171,7 @@ body {
 .room-code {
   font-family: 'SF Mono', 'Fira Code', monospace;
   font-size: 12px;
+  line-height: 1;
   color: var(--accent);
   max-width: 160px;
   overflow: hidden;
@@ -182,9 +183,7 @@ body {
 }
 
 .copy-icon {
-  font-size: 32px;
   color: var(--text-muted);
-  line-height: 1;
   flex-shrink: 0;
 }
 
