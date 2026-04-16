@@ -1,5 +1,5 @@
 [package]
-name = "voxel"
+name = "voxal"
 version = "0.1.0"
 description = "Serverless push-to-talk voice chat"
 authors = ["Erwann Robin"]

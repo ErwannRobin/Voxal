@@ -1,4 +1,4 @@
-/* voxel – styles.css */
+/* voxal – styles.css */
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -738,8 +738,8 @@ details.turn-section .turn-inner {
 }
 .btn-danger { color: var(--red, #f87171) !important; }
 
-/* Connect with Voxel button */
-.btn-connect-voxel {
+/* Connect with Voxal button */
+.btn-connect-voxal {
   width: 100%;
   font-size: 14px;
 }

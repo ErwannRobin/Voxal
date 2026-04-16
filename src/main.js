@@ -1,4 +1,4 @@
-/* voxel – main.js
+/* voxal – main.js
  *
  * Topology:
  *   Signaling : star (host ↔ each peer via DataConnection)
@@ -30,13 +30,13 @@ const METERED_SERVERS_STORE_KEY = 'metered-servers'; // JSON array of ICE server
 // --- Presence API -----------------------------------------------------------
 
 const DEFAULT_PRESENCE_BASE     = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
-const DEFAULT_VOXEL_CONNECT_URL = 'https://voxel-connect.lovable.app';
+const DEFAULT_VOXAL_CONNECT_URL = 'https://voxal.lovable.app';
 const PRESENCE_TOKEN_KEY        = 'presence-api-token';
 const PRESENCE_ORG_KEY          = 'presence-org-id';
 const SERVICE_URL_KEY           = 'service-url';
 
 function presenceBase()       { return (localStorage.getItem(SERVICE_URL_KEY) || DEFAULT_PRESENCE_BASE).replace(/\/$/, ''); }
-function voxelConnectUrl()    { return localStorage.getItem('voxel-connect-url') || DEFAULT_VOXEL_CONNECT_URL; }
+function voxalConnectUrl()    { return localStorage.getItem('voxal-connect-url') || DEFAULT_VOXAL_CONNECT_URL; }
 function presenceToken()      { return localStorage.getItem(PRESENCE_TOKEN_KEY) || ''; }
 function presenceOrgId()      { return localStorage.getItem(PRESENCE_ORG_KEY)   || ''; }
 function presenceConfigured() { return !!(presenceToken() && presenceOrgId()); }
@@ -51,13 +51,13 @@ function generateState() {
 function handleDeepLink(urlStr) {
   try {
     const url = new URL(urlStr);
-    if (url.protocol !== 'voxel:' || url.hostname !== 'auth') return;
+    if (url.protocol !== 'voxal:' || url.hostname !== 'auth') return;
     const token    = url.searchParams.get('token');
     const state    = url.searchParams.get('state');
-    const expected = sessionStorage.getItem('voxel-auth-state');
+    const expected = sessionStorage.getItem('voxal-auth-state');
     if (!token) return;
     if (expected && state !== expected) { console.warn('[Auth] State mismatch — ignoring'); return; }
-    sessionStorage.removeItem('voxel-auth-state');
+    sessionStorage.removeItem('voxal-auth-state');
     localStorage.setItem(PRESENCE_TOKEN_KEY, token);
     // Sync to modal input if open
     const inp = document.getElementById('input-presence-token');
@@ -70,10 +70,10 @@ function handleDeepLink(urlStr) {
   }
 }
 
-async function connectWithVoxelAccount() {
+async function connectWithVoxalAccount() {
   const state = generateState();
-  sessionStorage.setItem('voxel-auth-state', state);
-  const connectUrl = voxelConnectUrl() + '/connect?state=' + state;
+  sessionStorage.setItem('voxal-auth-state', state);
+  const connectUrl = voxalConnectUrl() + '/connect?state=' + state;
 
   if (window.__TAURI__) {
     // Desktop: open in system browser; deep link fires 'deep-link://new-url'
@@ -86,17 +86,17 @@ async function connectWithVoxelAccount() {
       if (urls[0]) handleDeepLink(urls[0]);
     });
   } else if (window.Capacitor && window.Capacitor.isNativePlatform()) {
-    // iOS: open in system browser; appUrlOpen fires when OS routes voxel:// back
+    // iOS: open in system browser; appUrlOpen fires when OS routes voxal:// back
     window.open(connectUrl, '_system');
   } else {
     // Web: popup + postMessage
-    var popup = window.open(connectUrl, 'voxel-auth', 'width=520,height=720,left=200,top=100');
+    var popup = window.open(connectUrl, 'voxal-auth', 'width=520,height=720,left=200,top=100');
     function onMessage(e) {
-      if (e.origin !== voxelConnectUrl()) return;
+      if (e.origin !== voxalConnectUrl()) return;
       if (!e.data || !e.data.token) return;
       window.removeEventListener('message', onMessage);
       if (popup && !popup.closed) popup.close();
-      handleDeepLink('voxel://auth?token=' + encodeURIComponent(e.data.token) + '&state=' + encodeURIComponent(e.data.state || state));
+      handleDeepLink('voxal://auth?token=' + encodeURIComponent(e.data.token) + '&state=' + encodeURIComponent(e.data.state || state));
     }
     window.addEventListener('message', onMessage);
   }
@@ -170,7 +170,7 @@ const FALLBACK_ICE = [
 // 2. Try locally configured metered.ca credentials (manual fallback)
 // 3. Fall back to public STUN
 async function fetchIceServers() {
-  // --- 1. Org ICE servers from Voxel backend ---
+  // --- 1. Org ICE servers from Voxal backend ---
   if (presenceConfigured()) {
     try {
       const res = await tauriFetch(
@@ -933,8 +933,8 @@ window.addEventListener('DOMContentLoaded', function() {
   // Connect button: visible only when NOT logged in
   window.updateConnectVisibility = function updateConnectVisibility() {
     var connected = !!presenceToken();
-    var btnMain = document.getElementById('btn-connect-voxel-home');
-    var btnSettings = document.getElementById('btn-connect-voxel');
+    var btnMain = document.getElementById('btn-connect-voxal-home');
+    var btnSettings = document.getElementById('btn-connect-voxal');
     if (btnMain)     btnMain.style.display     = connected ? 'none' : '';
     if (btnSettings) btnSettings.style.display = connected ? 'none' : '';
   }
@@ -1022,15 +1022,15 @@ window.addEventListener('DOMContentLoaded', function() {
       ? '<span class="cs-err">✕</span> TURN error'
       : '<span class="cs-muted">—</span> TURN not configured';
 
-    const voxelLine = presenceToken()
-      ? '<span class="cs-ok">✓</span> Voxel Connect — ' + (function() {
+    const voxalLine = presenceToken()
+      ? '<span class="cs-ok">✓</span> Voxal Connect — ' + (function() {
           var total = 0;
           presenceData.forEach(function(item) { total += (item.connected || []).length; });
           return total + ' user' + (total !== 1 ? 's' : '') + ' online';
         })()
-      : '<span class="cs-muted">—</span> Not connected to Voxel';
+      : '<span class="cs-muted">—</span> Not connected to Voxal';
 
-    return '<div class="cs-row">' + voxelLine + '</div>' +
+    return '<div class="cs-row">' + voxalLine + '</div>' +
            '<div class="cs-row"><span class="cs-ok">✓</span> STUN available</div>' +
            '<div class="cs-row">' + turnLine + '</div>';
   }
@@ -1153,7 +1153,7 @@ window.addEventListener('DOMContentLoaded', function() {
         }
         const win = new WebviewWindow('preferences', {
           url: 'settings.html',
-          title: 'Voxel — Preferences',
+          title: 'Voxal — Preferences',
           width: 420,
           height: 720,
           resizable: true,
@@ -1280,7 +1280,7 @@ window.addEventListener('DOMContentLoaded', function() {
   $('modal-backdrop').addEventListener('click', closeSettings);
   $('btn-test-turn').addEventListener('click', testTurnCredentials);
   $('btn-disconnect').addEventListener('click', disconnectAccount);
-  $('btn-connect-voxel').addEventListener('click', connectWithVoxelAccount);
+  $('btn-connect-voxal').addEventListener('click', connectWithVoxalAccount);
 
   // iOS: deep link comes back via @capacitor/app appUrlOpen
   if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
@@ -1289,7 +1289,7 @@ window.addEventListener('DOMContentLoaded', function() {
     });
   }
 
-  // Tauri: "Voxel → Preferences…" menu item
+  // Tauri: "Voxal → Preferences…" menu item
   if (window.__TAURI__) {
     window.__TAURI__.event.listen('open-preferences', openSettings);
   }

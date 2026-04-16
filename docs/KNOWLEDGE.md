@@ -1,12 +1,12 @@
-# Voxel — Project Knowledge Base
+# Voxal — Project Knowledge Base
 
-Complete reference for the Voxel codebase. Covers architecture, data flows, platform specifics, all global state, localStorage schema, and every non-obvious decision.
+Complete reference for the Voxal codebase. Covers architecture, data flows, platform specifics, all global state, localStorage schema, and every non-obvious decision.
 
 ---
 
 ## Table of Contents
 
-1. [What Voxel Is](#what-voxel-is)
+1. [What Voxal Is](#what-voxal-is)
 2. [Repository Layout](#repository-layout)
 3. [Build & Dev Commands](#build--dev-commands)
 4. [Architecture Overview](#architecture-overview)
@@ -23,7 +23,7 @@ Complete reference for the Voxel codebase. Covers architecture, data flows, plat
 15. [Platform Detection & Guards](#platform-detection--guards)
 16. [Settings Window Architecture](#settings-window-architecture)
 17. [Theme System](#theme-system)
-18. [Deep Link / OAuth Flow (voxel://)](#deep-link--oauth-flow-voxel)
+18. [Deep Link / OAuth Flow (voxal://)](#deep-link--oauth-flow-voxal)
 19. [Keyboard Shortcuts](#keyboard-shortcuts)
 20. [Mobile (Capacitor / iOS)](#mobile-capacitor--ios)
 21. [macOS Entitlements & Permissions](#macos-entitlements--permissions)
@@ -31,11 +31,11 @@ Complete reference for the Voxel codebase. Covers architecture, data flows, plat
 
 ---
 
-## What Voxel Is
+## What Voxal Is
 
 A serverless, push-to-talk voice chat app. Users share a room code; audio is relayed peer-to-peer over WebRTC. There is no backend required for a basic call — only PeerJS signaling (which uses a free public server) is needed.
 
-Optional: a "Voxel Connect" service (`https://voxel-connect.lovable.app`) adds named channels, organisations, managed TURN servers, and OAuth-style login. It is configured separately and the core PTT functionality works without it.
+Optional: a "Voxal Connect" service (`https://voxal.lovable.app`) adds named channels, organisations, managed TURN servers, and OAuth-style login. It is configured separately and the core PTT functionality works without it.
 
 Targets:
 - **macOS desktop** via Tauri 2
@@ -68,7 +68,7 @@ push2talk/
 ├── ios/
 │   └── App/App/
 │       ├── AppDelegate.swift   # AVAudioSession, keep-alive engine, deep link forwarding
-│       └── Info.plist          # iOS permissions + voxel:// URL scheme
+│       └── Info.plist          # iOS permissions + voxal:// URL scheme
 ├── capacitor.config.json       # Capacitor: appId, webDir=src, StatusBar config
 ├── Makefile
 └── package.json
@@ -84,7 +84,7 @@ push2talk/
 | `make dev` | Tauri hot-reload dev mode (`npx tauri dev`) |
 | `make run-web` | Serve `src/` on `http://localhost:8080` via `npx serve` |
 | `make check` | `cargo check` — Rust type-check without building |
-| `make build-debug` | Debug `.app` bundle — **required once to register `voxel://` on macOS** |
+| `make build-debug` | Debug `.app` bundle — **required once to register `voxal://` on macOS** |
 | `make build` | Full Tauri release build (installer) |
 | `make build-web` | Copy `src/` to `dist/` for static hosting |
 | `make cap-sync` | `npx cap sync` — sync web assets to iOS & Android |
@@ -200,7 +200,7 @@ If not elected: `connectToNewHost(newHostId)` — opens a new DataConnection to 
 - Managed ICE/TURN server credentials per organisation
 - User identity (display names)
 
-All calls go to `presenceBase()` which reads `localStorage['service-url']` with fallback to `https://voxel-connect.lovable.app`.
+All calls go to `presenceBase()` which reads `localStorage['service-url']` with fallback to `https://voxal.lovable.app`.
 
 ### API endpoints used
 
@@ -217,34 +217,34 @@ All requests include `x-api-token: <token>` header.
 ### OAuth-style auth flow (three environments)
 
 **Desktop (Tauri):**
-1. `connectWithVoxelAccount()` generates a random `state`, stores in `sessionStorage`
-2. Opens `https://voxel-connect.lovable.app/connect?state=<state>` in the **system browser** via `window.__TAURI__.shell.open()`
+1. `connectWithVoxalAccount()` generates a random `state`, stores in `sessionStorage`
+2. Opens `https://voxal.lovable.app/connect?state=<state>` in the **system browser** via `window.__TAURI__.shell.open()`
 3. Listens once for `deep-link://new-url` Tauri event
-4. Service redirects browser to `voxel://auth?token=<token>&state=<state>`
-5. macOS routes `voxel://` to the registered app → Tauri fires `deep-link://new-url`
+4. Service redirects browser to `voxal://auth?token=<token>&state=<state>`
+5. macOS routes `voxal://` to the registered app → Tauri fires `deep-link://new-url`
 6. `handleDeepLink()` validates state, saves token to `localStorage`
 
 **iOS (Capacitor):**
 1. Same state generation
 2. Opens URL in system browser via `window.open(connectUrl, '_system')`
-3. Service redirects to `voxel://auth?token=…`
+3. Service redirects to `voxal://auth?token=…`
 4. iOS routes to app → `AppDelegate.application(_:open:)` → `ApplicationDelegateProxy` → `@capacitor/app` fires `appUrlOpen`
 5. Listener in `main.js` calls `handleDeepLink()`
 
 **Web (browser):**
 1. Same state generation
-2. Opens popup: `window.open(connectUrl, 'voxel-auth', 'width=520,height=720')`
-3. Service cannot redirect to `voxel://` (no handler); instead sends `postMessage({ token, state })`
+2. Opens popup: `window.open(connectUrl, 'voxal-auth', 'width=520,height=720')`
+3. Service cannot redirect to `voxal://` (no handler); instead sends `postMessage({ token, state })`
 4. `window.addEventListener('message')` in `main.js` validates origin + state, closes popup, calls `handleDeepLink()`
 
-### Important: voxel:// requires a real .app bundle
+### Important: voxal:// requires a real .app bundle
 
 `make dev` (`npx tauri dev`) cannot register the URL scheme — it's registered by macOS when a proper `.app` bundle is launched. Workflow:
 1. Run `make build-debug` once
-2. Open `src-tauri/target/debug/bundle/macos/Voxel.app`
+2. Open `src-tauri/target/debug/bundle/macos/Voxal.app`
 3. Switch back to `make dev` — the scheme stays registered in macOS's Launch Services database
 
-Both debug and release builds share the same bundle ID (`com.erwannrobin.voxel`) and therefore share `localStorage`.
+Both debug and release builds share the same bundle ID (`com.erwannrobin.voxal`) and therefore share `localStorage`.
 
 ### joinChannel flow
 
@@ -321,17 +321,17 @@ All mutable state is at module scope:
 |---|---|---|---|
 | `pseudo` | — | `''` | Display name |
 | `ptt-shortcut` | — | `'Ctrl+Backquote'` | Keyboard shortcut string |
-| `presence-api-token` | `PRESENCE_TOKEN_KEY` | `''` | Auth token for Voxel Connect |
+| `presence-api-token` | `PRESENCE_TOKEN_KEY` | `''` | Auth token for Voxal Connect |
 | `presence-org-id` | `PRESENCE_ORG_KEY` | `''` | Selected organisation UUID |
-| `service-url` | `SERVICE_URL_KEY` | `'https://voxel-connect.lovable.app'` | API base URL override |
+| `service-url` | `SERVICE_URL_KEY` | `'https://voxal.lovable.app'` | API base URL override |
 | `metered-app-name` | `METERED_APP_STORE_KEY` | `''` | metered.ca app name for TURN |
 | `metered-api-key` | `METERED_API_STORE_KEY` | `''` | metered.ca API key |
 | `metered-status` | `METERED_STATUS_STORE_KEY` | `null` | `'ok'` / `'error'` — TURN test result badge |
 | `theme` | `THEME_KEY` | `'system'` | `'dark'` / `'light'` / `'system'` |
-| `voxel-connect-url` | — | `'https://voxel-connect.lovable.app'` | OAuth service URL override |
+| `voxal-connect-url` | — | `'https://voxal.lovable.app'` | OAuth service URL override |
 
 `sessionStorage` (not persisted across launches):
-- `voxel-auth-state` — CSRF state token during OAuth flow
+- `voxal-auth-state` — CSRF state token during OAuth flow
 
 ---
 
@@ -372,7 +372,7 @@ Located in `src-tauri/src/lib.rs`.
 |---|---|
 | `tauri-plugin-global-shortcut` | System-wide PTT keyboard shortcut |
 | `tauri-plugin-shell` | Open URLs in system browser (`shell.open`) |
-| `tauri-plugin-deep-link` | Handle `voxel://` URL scheme callbacks |
+| `tauri-plugin-deep-link` | Handle `voxal://` URL scheme callbacks |
 
 ### IPC command
 
@@ -387,7 +387,7 @@ Located in `src-tauri/src/lib.rs`.
 |---|---|
 | `ptt-press` | Global shortcut key pressed |
 | `ptt-release` | Global shortcut key released |
-| `open-preferences` | "Voxel → Preferences…" menu item clicked |
+| `open-preferences` | "Voxal → Preferences…" menu item clicked |
 
 ### Default shortcut
 `Ctrl+Backquote` (backtick `` ` ``). Defined as `DEFAULT_SHORTCUT` constant in both `lib.rs` and `main.js`.
@@ -449,14 +449,14 @@ Stored in `localStorage['theme']`. Applied via `data-theme` attribute on `<html>
 
 ---
 
-## Deep Link / OAuth Flow (voxel://)
+## Deep Link / OAuth Flow (voxal://)
 
 ### Registration
-- **macOS:** `CFBundleURLTypes` is generated from `tauri.conf.json` `plugins.deep-link.desktop.schemes: ["voxel"]`. Only registered by macOS when a proper `.app` bundle is launched. `make dev` alone is not sufficient.
-- **iOS:** `CFBundleURLTypes` in `ios/App/App/Info.plist` with scheme `voxel`.
+- **macOS:** `CFBundleURLTypes` is generated from `tauri.conf.json` `plugins.deep-link.desktop.schemes: ["voxal"]`. Only registered by macOS when a proper `.app` bundle is launched. `make dev` alone is not sufficient.
+- **iOS:** `CFBundleURLTypes` in `ios/App/App/Info.plist` with scheme `voxal`.
 
 ### State / CSRF protection
-`generateState()` produces a random UUID (or random string fallback). Stored in `sessionStorage['voxel-auth-state']`. On callback, `handleDeepLink()` compares incoming `state` to stored value before accepting the token. Mismatch → token ignored, warning logged.
+`generateState()` produces a random UUID (or random string fallback). Stored in `sessionStorage['voxal-auth-state']`. On callback, `handleDeepLink()` compares incoming `state` to stored value before accepting the token. Mismatch → token ignored, warning logged.
 
 ### Token lifecycle
 - Stored: `localStorage[PRESENCE_TOKEN_KEY]`
@@ -497,7 +497,7 @@ Registered in Rust via `tauri-plugin-global-shortcut`. Fires `ptt-press` / `ptt-
 - PTT via tap-and-hold on the mic button (`pointerdown` / `pointerup` / `pointercancel`)
 - Free-hand mode
 - Haptic feedback on PTT via `@capacitor/haptics`
-- `voxel://` deep links for OAuth
+- `voxal://` deep links for OAuth
 - Background audio (via `AVAudioEngine` keep-alive — see above)
 
 ### What doesn't work on mobile
@@ -507,7 +507,7 @@ Registered in Rust via `tauri-plugin-global-shortcut`. Fires `ptt-press` / `ptt-
 ### Capacitor config (`capacitor.config.json`)
 ```json
 {
-  "appId": "com.erwannrobin.voxel",
+  "appId": "com.erwannrobin.voxal",
   "webDir": "src",
   "plugins": {
     "StatusBar": { "overlaysWebView": true, "style": "DARK", "backgroundColor": "#16161e" }
@@ -535,7 +535,7 @@ After any `src/` change: `make cap-sync` (syncs web assets) → build from Xcode
 ### `Info.plist` content
 ```xml
 <key>NSMicrophoneUsageDescription</key>
-<string>Voxel needs microphone access to transmit your voice in a room.</string>
+<string>Voxal needs microphone access to transmit your voice in a room.</string>
 ```
 
 Both are required for macOS to grant mic access. The entitlement grants the capability; the usage description is shown to the user in the system permission dialog.
@@ -552,11 +552,11 @@ Both are required for macOS to grant mic access. The entitlement grants the capa
 ### NAT traversal
 Without TURN, peers behind strict NAT/firewalls may fail to connect. The presence API provides managed TURN credentials per org. Local metered.ca config is the manual fallback.
 
-### `make dev` and `voxel://` scheme
-`npx tauri dev` does not register `voxel://` with macOS Launch Services — only a proper `.app` bundle does. Run `make build-debug` once, open the resulting `.app`, then return to `make dev`. The scheme registration persists in the OS database.
+### `make dev` and `voxal://` scheme
+`npx tauri dev` does not register `voxal://` with macOS Launch Services — only a proper `.app` bundle does. Run `make build-debug` once, open the resulting `.app`, then return to `make dev`. The scheme registration persists in the OS database.
 
 ### Debug vs release build and shared localStorage
-Both debug and release builds share `localStorage` because they use the same bundle ID (`com.erwannrobin.voxel`). Tokens and settings carry over between builds.
+Both debug and release builds share `localStorage` because they use the same bundle ID (`com.erwannrobin.voxal`). Tokens and settings carry over between builds.
 
 ### Web version requires HTTPS
 `getUserMedia` requires either HTTPS or `localhost`. Plain HTTP will result in `navigator.mediaDevices` being `undefined`. The `getMicStream()` function handles both `navigator.mediaDevices.getUserMedia` and the `webkitGetUserMedia` prefixed version.
@@ -565,7 +565,7 @@ Both debug and release builds share `localStorage` because they use the same bun
 `_audioCtx` is created at module load time but starts `suspended`. It must be resumed inside a user gesture. All audio-playing functions call `ctx.resume()` before using the context.
 
 ### settings.html is not a module
-`settings.html` uses an inline `<script>` block with its own copy of all constants (`DEFAULT_PRESENCE_BASE`, `SERVICE_URL_KEY`, `PRESENCE_TOKEN_KEY`, etc.) and helper functions (`presenceBase()`, `voxelConnectUrl()`, etc.). If you update these in `main.js`, you must update `settings.html` too.
+`settings.html` uses an inline `<script>` block with its own copy of all constants (`DEFAULT_PRESENCE_BASE`, `SERVICE_URL_KEY`, `PRESENCE_TOKEN_KEY`, etc.) and helper functions (`presenceBase()`, `voxalConnectUrl()`, etc.). If you update these in `main.js`, you must update `settings.html` too.
 
 ### Host election determinism
 All peers use the same algorithm (sort peer IDs lexicographically, pick smallest). It is important that the election is **deterministic and independent** — no coordination message is needed. This means a temporary network split could theoretically elect two hosts, but in practice the DataConnection `close` event fires reliably.

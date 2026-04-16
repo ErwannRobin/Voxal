@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Voxel — Preferences</title>
+    <title>Voxal — Preferences</title>
     <link rel="stylesheet" href="styles.css" />
     <script>
       // Apply theme before paint to avoid flash
@@ -126,13 +126,13 @@
 
       <div class="settings-separator"></div>
 
-      <!-- Presence / Voxel account -->
-      <p class="settings-group-title">Voxel Account</p>
+      <!-- Presence / Voxal account -->
+      <p class="settings-group-title">Voxal Account</p>
       <p class="settings-desc">
-        Connect to a Voxel organisation to see channels and who's online.
+        Connect to a Voxal organisation to see channels and who's online.
       </p>
-      <button id="btn-connect-voxel" class="btn btn-primary btn-connect-voxel">
-        🔗 Connect with Voxel
+      <button id="btn-connect-voxal" class="btn btn-primary btn-connect-voxal">
+        🔗 Connect with Voxal
       </button>
       <details class="manual-token-details">
         <summary>Use an API token manually</summary>
@@ -216,7 +216,7 @@
       const METERED_COUNT_STORE_KEY  = 'metered-count';
       const METERED_SERVERS_STORE_KEY = 'metered-servers';
       const SERVICE_URL_KEY         = 'service-url';
-      const VOXEL_CONNECT_URL       = 'https://voxel-connect.lovable.app';
+      const VOXAL_CONNECT_URL       = 'https://voxal.lovable.app';
       const FALLBACK_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
       function $id(id) { return document.getElementById(id); }
@@ -273,7 +273,7 @@
         $id('btn-disconnect').style.display = presenceToken() ? '' : 'none';
       }
       function updateConnectVisibility() {
-        $id('btn-connect-voxel').style.display = presenceToken() ? 'none' : '';
+        $id('btn-connect-voxal').style.display = presenceToken() ? 'none' : '';
       }
       updateDisconnectVisibility(); updateConnectVisibility();
 
@@ -424,10 +424,10 @@
       $id('btn-test-turn').addEventListener('click', testTurn);
       $id('btn-disconnect').addEventListener('click', disconnect);
       $id('btn-done').addEventListener('click', closeWindow);
-      $id('btn-connect-voxel').addEventListener('click', function() {
+      $id('btn-connect-voxal').addEventListener('click', function() {
         var state = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(36).slice(2);
-        sessionStorage.setItem('voxel-auth-state', state);
-        var url = VOXEL_CONNECT_URL + '/connect?state=' + state;
+        sessionStorage.setItem('voxal-auth-state', state);
+        var url = VOXAL_CONNECT_URL + '/connect?state=' + state;
         if (window.__TAURI__) {
           window.__TAURI__.shell.open(url).catch(function() { window.open(url, '_blank'); });
           window.__TAURI__.event.once('deep-link://new-url', function(e) {
@@ -455,13 +455,13 @@
       function handleDeepLinkSettings(urlStr) {
         try {
           var url = new URL(urlStr);
-          if (url.protocol !== 'voxel:' || url.hostname !== 'auth') return;
+          if (url.protocol !== 'voxal:' || url.hostname !== 'auth') return;
           var token    = url.searchParams.get('token');
           var state    = url.searchParams.get('state');
-          var expected = sessionStorage.getItem('voxel-auth-state');
+          var expected = sessionStorage.getItem('voxal-auth-state');
           if (!token) return;
           if (expected && state !== expected) return;
-          sessionStorage.removeItem('voxel-auth-state');
+          sessionStorage.removeItem('voxal-auth-state');
           localStorage.setItem(PRESENCE_TOKEN_KEY, token);
           $id('input-presence-token').value = token;
           updateDisconnectVisibility(); updateConnectVisibility();

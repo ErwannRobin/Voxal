@@ -1,6 +1,6 @@
 {
-  "appId": "com.erwannrobin.voxel",
-  "appName": "Voxel",
+  "appId": "com.erwannrobin.voxal",
+  "appName": "Voxal",
   "webDir": "src",
   "plugins": {
     "StatusBar": {

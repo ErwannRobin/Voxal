@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Voxel",
+  "productName": "Voxal",
   "version": "0.1.0",
-  "identifier": "com.erwannrobin.voxel",
+  "identifier": "com.erwannrobin.voxal",
   "build": {
     "frontendDist": "../src"
   },
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Voxel",
+        "title": "Voxal",
         "width": 340,
         "height": 680,
         "minWidth": 280,
@@ -42,7 +42,7 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["voxel"]
+        "schemes": ["voxal"]
       }
     }
   }

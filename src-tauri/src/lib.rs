@@ -76,11 +76,11 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .manage(PttShortcut(Mutex::new(DEFAULT_SHORTCUT.to_string())))
         .setup(|app| {
-            // Register voxel:// scheme (Windows/Linux: dynamic registry/desktop entry;
+            // Register voxal:// scheme (Windows/Linux: dynamic registry/desktop entry;
             // macOS: requires a proper build — scheme is baked into the .app bundle)
             app.deep_link().register_all().ok();
 
-            // Build the app menu with a native About Voxel dialog
+            // Build the app menu with a native About Voxal dialog
             let build_type = if cfg!(debug_assertions) { "Debug build" } else { "Release build" };
             let comments = format!(
                 "P2P push-to-talk voice chat — no servers, no accounts required.\n\
@@ -97,10 +97,10 @@ pub fn run() {
             );
 
             let about = AboutMetadata {
-                name: Some("Voxel".to_string()),
+                name: Some("Voxal".to_string()),
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
                 comments: Some(comments),
-                website: Some("https://github.com/erwannrobin/voxel".to_string()),
+                website: Some("https://github.com/erwannrobin/voxal".to_string()),
                 license: Some("MIT".to_string()),
                 icon: app.default_window_icon().cloned(),
                 ..Default::default()
@@ -108,7 +108,7 @@ pub fn run() {
 
             let prefs = MenuItem::with_id(app, "preferences", "Preferences…", true, Some("CmdOrCtrl+,"))?;
 
-            let app_submenu = SubmenuBuilder::new(app, "Voxel")
+            let app_submenu = SubmenuBuilder::new(app, "Voxal")
                 .about(Some(about))
                 .separator()
                 .item(&prefs)

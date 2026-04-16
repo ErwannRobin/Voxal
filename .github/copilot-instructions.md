@@ -1,6 +1,6 @@
-# Copilot Instructions — Voxel
+# Copilot Instructions — Voxal
 
-Voxel is a serverless P2P push-to-talk voice chat app. It runs as a native desktop app (Tauri 2), a mobile app (Capacitor), and as a plain static web page — all from the same `src/` folder. There is **no bundler or build step** for the frontend.
+Voxal is a serverless P2P push-to-talk voice chat app. It runs as a native desktop app (Tauri 2), a mobile app (Capacitor), and as a plain static web page — all from the same `src/` folder. There is **no bundler or build step** for the frontend.
 
 ---
 
@@ -10,14 +10,14 @@ Voxel is a serverless P2P push-to-talk voice chat app. It runs as a native deskt
 make dev          # Tauri desktop — hot reload (primary dev workflow)
 make run-web      # Serve src/ on http://localhost:8080 (web-only testing)
 make check        # Rust type-check without building (fast feedback)
-make build-debug  # macOS debug bundle — also registers voxel:// URL scheme
+make build-debug  # macOS debug bundle — also registers voxal:// URL scheme
 make build        # Full release build
 make install      # npm install + cargo fetch (first-time setup)
 ```
 
 There are no tests. `make check` is the closest equivalent to a lint/type-check step.
 
-> **macOS URL scheme note:** `make dev` (`npx tauri dev`) cannot register the `voxel://` custom scheme — it requires a real `.app` bundle. Run `make build-debug` once, open `src-tauri/target/debug/bundle/macos/Voxel.app`, then switch back to `make dev`. The registered scheme persists.
+> **macOS URL scheme note:** `make dev` (`npx tauri dev`) cannot register the `voxal://` custom scheme — it requires a real `.app` bundle. Run `make build-debug` once, open `src-tauri/target/debug/bundle/macos/Voxal.app`, then switch back to `make dev`. The registered scheme persists.
 
 ---
 
@@ -52,8 +52,8 @@ Every Tauri/Capacitor-specific feature must be guarded this way.
 
 ### Presence / auth
 - Optional. Requires a token + org ID stored in `localStorage`.
-- All API calls go through `presenceBase()` which reads `localStorage['service-url']` with fallback to `https://voxel-connect.lovable.app`.
-- Auth flow: `connectWithVoxelAccount()` opens `https://voxel-connect.lovable.app/connect?state=…` in the system browser. The service redirects back via `voxel://auth?token=…` (desktop) or `postMessage` (web).
+- All API calls go through `presenceBase()` which reads `localStorage['service-url']` with fallback to `https://voxal.lovable.app`.
+- Auth flow: `connectWithVoxalAccount()` opens `https://voxal.lovable.app/connect?state=…` in the system browser. The service redirects back via `voxal://auth?token=…` (desktop) or `postMessage` (web).
 - Deep link handled by `handleDeepLink()` — always validate the `state` parameter against `sessionStorage`.
 
 ---

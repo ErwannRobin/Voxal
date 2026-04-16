@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Voxel needs microphone access to transmit your voice in a room.</string>
+  <string>Voxal needs microphone access to transmit your voice in a room.</string>
 </dict>
 </plist>
