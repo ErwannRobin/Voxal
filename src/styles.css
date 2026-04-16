@@ -500,11 +500,11 @@ input[type="password"]:focus { border-color: var(--accent); }
 
 .turn-badge {
   font-size: 9px;
-  opacity: 0;
-  transition: opacity 0.2s, color 0.2s;
+  color: var(--red);
+  transition: color 0.2s;
 }
-.turn-badge.ok     { opacity: 1; color: var(--green); }
-.turn-badge.error  { opacity: 1; color: #fb923c; }
+.turn-badge.partial { color: #fb923c; }
+.turn-badge.ok      { color: var(--green); }
 
 /* ── Settings modal ──────────────────────────────────────────────── */
 

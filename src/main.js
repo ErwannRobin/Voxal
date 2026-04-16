@@ -1036,11 +1036,17 @@ window.addEventListener('DOMContentLoaded', function() {
   }
 
   window.updateTurnBadge = function updateTurnBadge() {
-    const status = localStorage.getItem(METERED_STATUS_STORE_KEY);
-    const badge  = $('turn-badge');
-    badge.classList.remove('ok', 'error');
-    if (status === 'ok')    badge.classList.add('ok');
-    if (status === 'error') badge.classList.add('error');
+    const online     = navigator.onLine;
+    const turnStatus = localStorage.getItem(METERED_STATUS_STORE_KEY);
+    const badge      = $('turn-badge');
+    badge.classList.remove('ok', 'partial');
+    if (!online) {
+      // red (default) — no connection possible
+    } else if (turnStatus === 'ok') {
+      badge.classList.add('ok');      // green — STUN + TURN
+    } else {
+      badge.classList.add('partial'); // orange — STUN only
+    }
     var content = document.getElementById('conn-status-content');
     if (content) content.innerHTML = connStatusHTML();
   }
@@ -1323,6 +1329,9 @@ window.addEventListener('DOMContentLoaded', function() {
       }
     }
   });
+
+  window.addEventListener('online',  updateTurnBadge);
+  window.addEventListener('offline', updateTurnBadge);
 
   // Presence credentials
   $('input-presence-token').addEventListener('input', function(e) {
