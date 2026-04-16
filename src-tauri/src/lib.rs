@@ -4,7 +4,7 @@ use tauri::menu::{AboutMetadata, MenuItem, MenuBuilder, SubmenuBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_deep_link::DeepLinkExt;
 
-const DEFAULT_SHORTCUT: &str = "Ctrl+Backquote";
+const DEFAULT_SHORTCUT: &str = "Shift+Space";
 
 struct PttShortcut(Mutex<String>);
 
@@ -85,7 +85,7 @@ pub fn run() {
             let comments = format!(
                 "P2P push-to-talk voice chat — no servers, no accounts required.\n\
                 \n\
-                Create or join a room with a code, then hold the PTT shortcut (default: Ctrl+`) \
+                Create or join a room with a code, then hold the PTT shortcut (default: Shift+Space) \
                 to transmit. Tap the mic button on mobile. Enable Free-hand mode to keep the mic \
                 permanently open.\n\
                 \n\

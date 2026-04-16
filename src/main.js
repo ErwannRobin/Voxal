@@ -224,7 +224,7 @@ async function fetchIceServers() {
 
 // --- State -------------------------------------------------------------------
 
-const DEFAULT_SHORTCUT = 'Ctrl+Backquote';
+const DEFAULT_SHORTCUT = 'Shift+Space';
 
 // --- Audio feedback ----------------------------------------------------------
 
