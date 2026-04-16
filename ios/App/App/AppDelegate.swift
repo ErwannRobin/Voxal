@@ -39,7 +39,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         do {
             try session.setCategory(.playAndRecord,
                                     mode: .voiceChat,
-                                    options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker])
+                                    options: [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker])
             try session.setActive(true)
         } catch {
             print("[AVAudioSession] Configuration failed: \(error)")
@@ -103,7 +103,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func applicationDidEnterBackground(_ application: UIApplication) {
         try? AVAudioSession.sharedInstance().setActive(true)
         startNativeKeepAlive()
-        backgroundTask = application.beginBackgroundTask(withName: "VoxelAudio") {
+        backgroundTask = application.beginBackgroundTask(withName: "VoxalAudio") {
             application.endBackgroundTask(self.backgroundTask)
             self.backgroundTask = .invalid
         }
