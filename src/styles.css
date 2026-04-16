@@ -410,6 +410,7 @@ kbd {
   transition: color 0.15s;
 }
 .btn-icon:hover { color: var(--accent); }
+#btn-leave:hover { color: var(--red); }
 
 /* ── Inputs ─────────────────────────────────────────────────────── */
 

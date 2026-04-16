@@ -1301,6 +1301,12 @@ window.addEventListener('DOMContentLoaded', function() {
       applyTheme(e.newValue || 'system');
       return;
     }
+    if (e.key === 'pseudo') {
+      myPseudo = e.newValue || '';
+      $('input-pseudo').value = myPseudo;
+      if (inRoom) updatePeerList();
+      return;
+    }
     var relevantKeys = [PRESENCE_TOKEN_KEY, PRESENCE_ORG_KEY, METERED_APP_STORE_KEY,
                         METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
