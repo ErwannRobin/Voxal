@@ -571,6 +571,7 @@ function setFreeHand(active) {
   btn.setAttribute('aria-pressed', String(active));
   btn.classList.toggle('active', active);
   $('ptt-btn').classList.toggle('freehand', active);
+  if (!active) $('ptt-btn').classList.remove('active');
 
   if (active) {
     $('ptt-hint').textContent = 'Free hand \u2014 mic always on';
@@ -1365,9 +1366,38 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-back').addEventListener('click', function() { showScreen('home'); });
 
   const pttBtn = $('ptt-btn');
-  pttBtn.addEventListener('pointerdown',   function(e) { e.preventDefault(); pttBtn.setPointerCapture(e.pointerId); setTalking(true); });
-  pttBtn.addEventListener('pointerup',     function(e) { setTalking(false); });
-  pttBtn.addEventListener('pointercancel', function(e) { setTalking(false); });
+  var lastPttTapTime = 0;
+  var DOUBLE_TAP_MS  = 300;
+  var ignorePttUp    = false;
+
+  pttBtn.addEventListener('pointerdown', function(e) {
+    e.preventDefault();
+    pttBtn.setPointerCapture(e.pointerId);
+    var now = Date.now();
+    if (now - lastPttTapTime < DOUBLE_TAP_MS) {
+      lastPttTapTime = 0;
+      ignorePttUp = true;
+      setFreeHand(true);
+      return;
+    }
+    if (freeHandMode) {
+      pttBtn.classList.add('active'); // visual press feedback while free hand is on
+    } else {
+      setTalking(true);
+    }
+  });
+  pttBtn.addEventListener('pointerup', function(e) {
+    if (ignorePttUp) { ignorePttUp = false; return; }
+    lastPttTapTime = Date.now();
+    if (freeHandMode) setFreeHand(false);
+    else setTalking(false);
+  });
+  pttBtn.addEventListener('pointercancel', function(e) {
+    ignorePttUp = false;
+    lastPttTapTime = 0;
+    if (freeHandMode) setFreeHand(false);
+    else setTalking(false);
+  });
 
   $('btn-freehand').addEventListener('click', function() { setFreeHand(!freeHandMode); });
   $('btn-edit-shortcut').addEventListener('click', startRecordingShortcut);
