@@ -363,6 +363,17 @@ function hapticLight() {
   } catch (_) {}
 }
 
+// Clipboard fallback for iOS WKWebView where navigator.clipboard may be unavailable
+function fallbackCopy(text) {
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none;';
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  try { document.execCommand('copy'); } catch (_) {}
+  document.body.removeChild(ta);
+}
+
 // iOS PushToTalk framework bridge (iOS 16+, no-op elsewhere)
 const PTT = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PTTPlugin;
 
@@ -1357,11 +1368,18 @@ window.addEventListener('DOMContentLoaded', function() {
   // Start presence polling on load (if configured)
   startPresencePolling();
   $('btn-copy').addEventListener('click', function() {
-    navigator.clipboard.writeText(roomCode);
+    var text = roomCode;
     var toast = $('copy-toast');
-    toast.classList.remove('hidden');
-    clearTimeout($('btn-copy')._toastTimer);
-    $('btn-copy')._toastTimer = setTimeout(function() { toast.classList.add('hidden'); }, 1500);
+    function showToast() {
+      toast.classList.remove('hidden');
+      clearTimeout($('btn-copy')._toastTimer);
+      $('btn-copy')._toastTimer = setTimeout(function() { toast.classList.add('hidden'); }, 1500);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(showToast).catch(function() { fallbackCopy(text); showToast(); });
+    } else {
+      fallbackCopy(text); showToast();
+    }
   });
   $('btn-leave').addEventListener('click', leaveRoom);
   $('btn-back').addEventListener('click', function() { showScreen('home'); });

@@ -59,9 +59,8 @@ html[data-theme="light"] {
 
 body {
   width: 100vw;
-  min-height: 100vh;
-  overflow-x: hidden;
-  overflow-y: auto;
+  height: 100vh;
+  overflow: hidden;
   overscroll-behavior: none;       /* no rubber-band bounce on iOS/Android */
   display: flex;
   align-items: stretch;
@@ -75,7 +74,8 @@ body {
   display: none;
   flex-direction: column;
   width: 100%;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   padding-top:    max(calc(env(safe-area-inset-top)    + 24px), 24px);
   padding-right:  max(calc(env(safe-area-inset-right)  + 20px), 20px);
   padding-bottom: max(calc(env(safe-area-inset-bottom) + 24px), 24px);
@@ -109,7 +109,7 @@ body {
   text-transform: uppercase;
 }
 
-.home-actions { display: flex; flex-direction: column; gap: 10px; }
+.home-actions { display: flex; flex-direction: column; gap: 10px; flex: 1; overflow-y: auto; min-height: 0; }
 
 .pseudo-field input {
   text-align: center;
@@ -463,13 +463,14 @@ input[type="password"]:focus { border-color: var(--accent); }
 
 .screen-topbar {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   margin-bottom: 4px;
   position: relative;
 }
 
 @media (max-width: 600px) {
-  .screen-topbar { justify-content: flex-start; }
+  .screen-topbar { justify-content: space-between; }
   .conn-status-popover { right: auto; left: 0; }
 }
 
