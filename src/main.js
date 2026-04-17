@@ -1358,9 +1358,10 @@ window.addEventListener('DOMContentLoaded', function() {
   startPresencePolling();
   $('btn-copy').addEventListener('click', function() {
     navigator.clipboard.writeText(roomCode);
-    const icon = $('btn-copy').querySelector('.copy-icon');
-    icon.textContent = '✓';
-    setTimeout(function() { icon.textContent = '⎘'; }, 1500);
+    var toast = $('copy-toast');
+    toast.classList.remove('hidden');
+    clearTimeout($('btn-copy')._toastTimer);
+    $('btn-copy')._toastTimer = setTimeout(function() { toast.classList.add('hidden'); }, 1500);
   });
   $('btn-leave').addEventListener('click', leaveRoom);
   $('btn-back').addEventListener('click', function() { showScreen('home'); });
