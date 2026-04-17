@@ -10,7 +10,7 @@ private class PTTRestorationDelegate: NSObject, PTChannelRestorationDelegate {
     func channelDescriptor(restoringActiveChannelUUID uuid: UUID) -> PTChannelDescriptor {
         // Return a generic descriptor; JS will call leave() immediately on launch
         // if there is no active room.
-        return PTChannelDescriptor(name: "Voxel", image: nil)
+        return PTChannelDescriptor(name: "Voxal", image: nil)
     }
 }
 
@@ -24,12 +24,21 @@ private class PTTChannelDelegate: NSObject, PTChannelManagerDelegate {
     /// OR when the in-app button calls requestBeginTransmitting.
     func channelManager(_ channelManager: PTChannelManager,
                         didActivateAudioSession audioSession: AVAudioSession) {
+        do {
+            try audioSession.setCategory(.playAndRecord,
+                                         mode: .voiceChat,
+                                         options: [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker])
+            try audioSession.setActive(true)
+        } catch {
+            print("[PTT] Audio session activation failed: \(error)")
+        }
         plugin?.notifyListeners("ptt-press", data: [:])
     }
 
     /// Called when PTT is released.
     func channelManager(_ channelManager: PTChannelManager,
                         didDeactivateAudioSession audioSession: AVAudioSession) {
+        try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
         plugin?.notifyListeners("ptt-release", data: [:])
     }
 
