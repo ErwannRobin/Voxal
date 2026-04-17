@@ -24,7 +24,7 @@
         <div id="conn-status-popover" class="conn-status-popover hidden">
           <div id="conn-status-content"></div>
         </div>
-        <span id="turn-badge" class="turn-badge">●</span>
+        <span id="turn-badge" class="turn-badge" role="button" tabindex="0" title="Connection status">●</span>
       </div>
       <div class="brand">
         <span class="brand-icon">🎙️</span>
@@ -184,7 +184,6 @@
 
     <!-- Room screen -->
     <div id="screen-room" class="screen">
-      <div id="copy-toast" class="copy-toast hidden">Copied!</div>
       <div class="room-header">
         <div class="room-meta">
           <span class="label">Room</span>
@@ -243,6 +242,9 @@
       <p id="error-message" class="error-message"></p>
       <button id="btn-back" class="btn btn-secondary">Back</button>
     </div>
+
+    <!-- Global toast (fixed position, never clipped) -->
+    <div id="copy-toast" class="copy-toast">Copied!</div>
 
     <script src="assets/peerjs.min.js"></script>
     <script src="main.js"></script>

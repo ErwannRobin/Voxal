@@ -355,12 +355,40 @@ function updateRoomHeader() {
 // peerId -> { data, media, pseudo, talking }
 const connections = new Map();
 
+// Silently disable / re-enable all home-screen CTAs during a join/create action
+function lockHomeCTAs() {
+  ['btn-create','btn-join','input-code'].forEach(function(id) {
+    var el = document.getElementById(id); if (el) el.style.pointerEvents = 'none';
+  });
+  var list = document.getElementById('channels-list');
+  if (list) list.style.pointerEvents = 'none';
+}
+function unlockHomeCTAs() {
+  ['btn-create','btn-join','input-code'].forEach(function(id) {
+    var el = document.getElementById(id); if (el) el.style.pointerEvents = '';
+  });
+  var list = document.getElementById('channels-list');
+  if (list) list.style.pointerEvents = '';
+}
+
 // Haptic feedback (Capacitor native, no-op in browser/Tauri)
 function hapticLight() {
   try {
     const Haptics = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Haptics;
     if (Haptics) Haptics.impact({ style: 'LIGHT' });
   } catch (_) {}
+}
+
+// Loading state helper — disables el and shows a spinner label
+function setLoading(el, on, originalLabel) {
+  if (on) {
+    el.disabled = true;
+    el._origLabel = el.textContent;
+    el.innerHTML = '<span class="btn-spinner"></span>' + (originalLabel || el._origLabel);
+  } else {
+    el.disabled = false;
+    el.textContent = el._origLabel || el.textContent;
+  }
 }
 
 // Clipboard fallback for iOS WKWebView where navigator.clipboard may be unavailable
@@ -845,16 +873,24 @@ function renderPresenceChannels() {
     const names     = connected.map(function(c) { return c.display_name || 'Anonymous'; }).join(', ');
     const div       = document.createElement('div');
     div.className   = 'channel-item';
+    div.setAttribute('role', 'button');
+    div.tabIndex    = 0;
     div.innerHTML =
       '<div class="channel-info">' +
         '<span class="channel-name">' + ch.name + '</span>' +
         (names ? '<span class="channel-members">' + names + '</span>' : '') +
       '</div>' +
       (connected.length ? '<span class="channel-count">' + connected.length + '</span>' : '') +
-      '<button class="btn btn-secondary btn-sm">Join</button>';
-    div.querySelector('button').addEventListener('click', function() {
-      joinChannel(presenceData[idx]).catch(function(err) { showError(err.message); });
-    });
+      '<span class="channel-join-icon">›</span>';
+    function handleJoin() {
+      if (div.classList.contains('loading')) return;
+      div.classList.add('loading');
+      if (_audioCtx.state === 'suspended') _audioCtx.resume();
+      lockHomeCTAs();
+      joinChannel(presenceData[idx]).catch(function(err) { showError(err.message); }).finally(function() { div.classList.remove('loading'); unlockHomeCTAs(); });
+    }
+    div.addEventListener('click', handleJoin);
+    div.addEventListener('keydown', function(e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleJoin(); } });
     list.appendChild(div);
   });
 }
@@ -1015,12 +1051,18 @@ window.addEventListener('DOMContentLoaded', function() {
   }
 
   $('btn-create').addEventListener('click', function() {
-    if (_audioCtx.state === 'suspended') _audioCtx.resume(); // must happen in user gesture
-    createRoom().catch(function(err) { showError(err.message); });
+    if (_audioCtx.state === 'suspended') _audioCtx.resume();
+    var btn = $('btn-create');
+    setLoading(btn, true, 'Create Room');
+    lockHomeCTAs();
+    createRoom().catch(function(err) { showError(err.message); }).finally(function() { setLoading(btn, false); unlockHomeCTAs(); });
   });
   $('btn-join').addEventListener('click', function() {
-    if (_audioCtx.state === 'suspended') _audioCtx.resume(); // must happen in user gesture
-    joinRoom($('input-code').value.trim()).catch(function(err) { showError(err.message); });
+    if (_audioCtx.state === 'suspended') _audioCtx.resume();
+    var btn = $('btn-join');
+    setLoading(btn, true, 'Join');
+    lockHomeCTAs();
+    joinRoom($('input-code').value.trim()).catch(function(err) { showError(err.message); }).finally(function() { setLoading(btn, false); unlockHomeCTAs(); });
   });
   $('input-code').addEventListener('keydown', function(e) { if (e.key === 'Enter') $('btn-join').click(); });
 
@@ -1081,6 +1123,11 @@ window.addEventListener('DOMContentLoaded', function() {
   settingsBtn.addEventListener('click', function() {
     if (popoverOpen) hideConnPopover(); else showConnPopover();
   });
+  var turnBadge = $('turn-badge');
+  turnBadge.addEventListener('click', function() {
+    if (popoverOpen) hideConnPopover(); else showConnPopover();
+  });
+  turnBadge.addEventListener('keydown', function(e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (popoverOpen) hideConnPopover(); else showConnPopover(); } });
 
   async function testTurnCredentials() {
     const appName = $('input-metered-app').value.trim();
@@ -1371,9 +1418,9 @@ window.addEventListener('DOMContentLoaded', function() {
     var text = roomCode;
     var toast = $('copy-toast');
     function showToast() {
-      toast.classList.remove('hidden');
+      toast.classList.add('visible');
       clearTimeout($('btn-copy')._toastTimer);
-      $('btn-copy')._toastTimer = setTimeout(function() { toast.classList.add('hidden'); }, 1500);
+      $('btn-copy')._toastTimer = setTimeout(function() { toast.classList.remove('visible'); }, 1500);
     }
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(showToast).catch(function() { fallbackCopy(text); showToast(); });
