@@ -109,10 +109,10 @@ public class PTTPlugin: CAPPlugin, CAPBridgedPlugin {
             do {
                 try await channelManager.requestJoinChannel(channelUUID: uuid,
                                                             descriptor: descriptor)
-                call.resolve(["supported": true])
+                await MainActor.run { call.resolve(["supported": true]) }
             } catch {
                 activeChannelUUID = nil
-                call.reject(error.localizedDescription)
+                await MainActor.run { call.reject(error.localizedDescription) }
             }
         }
     }
@@ -129,7 +129,7 @@ public class PTTPlugin: CAPPlugin, CAPBridgedPlugin {
                 print("[PTT] Leave error: \(error)")
             }
             activeChannelUUID = nil
-            call.resolve()
+            await MainActor.run { call.resolve() }
         }
     }
 
