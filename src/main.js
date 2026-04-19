@@ -51,20 +51,33 @@ function generateState() {
 function handleDeepLink(urlStr) {
   try {
     const url = new URL(urlStr);
-    if (url.protocol !== 'voxal:' || url.hostname !== 'auth') return;
-    const token    = url.searchParams.get('token');
-    const state    = url.searchParams.get('state');
-    const expected = sessionStorage.getItem('voxal-auth-state');
-    if (!token) return;
-    if (expected && state !== expected) { console.warn('[Auth] State mismatch — ignoring'); return; }
-    sessionStorage.removeItem('voxal-auth-state');
-    localStorage.setItem(PRESENCE_TOKEN_KEY, token);
-    // Sync to modal input if open
-    const inp = document.getElementById('input-presence-token');
-    if (inp) inp.value = token;
-    if (typeof updateDisconnectVisibility === 'function') updateDisconnectVisibility();
-    if (typeof updateConnectVisibility === 'function') updateConnectVisibility();
-    selectOrgAndStartPolling();
+    if (url.protocol !== 'voxal:') return;
+
+    if (url.hostname === 'join') {
+      // voxal://join?room=<peerId>
+      const roomId = url.searchParams.get('room');
+      if (!roomId) return;
+      // If already in a room, ignore
+      if (inRoom) return;
+      if (_audioCtx.state === 'suspended') _audioCtx.resume();
+      joinRoom(roomId).catch(function(err) { showError(err.message); });
+      return;
+    }
+
+    if (url.hostname === 'auth') {
+      const token    = url.searchParams.get('token');
+      const state    = url.searchParams.get('state');
+      const expected = sessionStorage.getItem('voxal-auth-state');
+      if (!token) return;
+      if (expected && state !== expected) { console.warn('[Auth] State mismatch — ignoring'); return; }
+      sessionStorage.removeItem('voxal-auth-state');
+      localStorage.setItem(PRESENCE_TOKEN_KEY, token);
+      const inp = document.getElementById('input-presence-token');
+      if (inp) inp.value = token;
+      if (typeof updateDisconnectVisibility === 'function') updateDisconnectVisibility();
+      if (typeof updateConnectVisibility === 'function') updateConnectVisibility();
+      selectOrgAndStartPolling();
+    }
   } catch (e) {
     console.error('[Auth] Deep link parse error', e);
   }
@@ -616,7 +629,12 @@ function setFreeHand(active) {
     $('ptt-hint').textContent = 'Free hand \u2014 mic always on';
     $('ptt-status').textContent = '\u25cf Live';
   } else {
-    $('ptt-hint').innerHTML = 'Hold <kbd id="shortcut-hint-kbd">' + displayShortcut(shortcutStr) + '</kbd> or click &amp; hold';
+    var isMobile = window.Capacitor && window.Capacitor.isNativePlatform();
+    if (isMobile) {
+      $('ptt-hint').textContent = 'Hold to talk · double-tap for free hand';
+    } else {
+      $('ptt-hint').innerHTML = 'Hold <kbd id="shortcut-hint-kbd">' + displayShortcut(shortcutStr) + '</kbd> or click &amp; hold';
+    }
     $('ptt-status').textContent = '';
   }
 
@@ -1047,7 +1065,8 @@ window.addEventListener('DOMContentLoaded', function() {
     $('shortcut-normal').style.display   = 'none';
     $('shortcut-recording').style.display = 'none';
     $('shortcut-spacer').style.display   = 'none';
-    $('ptt-hint').textContent = 'Hold the button to transmit';
+    $('ptt-hint').textContent = 'Hold to talk · double-tap for free hand';
+    $('btn-copy').title = 'Share room code';
   }
 
   $('btn-create').addEventListener('click', function() {
@@ -1349,9 +1368,14 @@ window.addEventListener('DOMContentLoaded', function() {
 
   // iOS: deep link comes back via @capacitor/app appUrlOpen
   if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
-    window.Capacitor.Plugins.App.addListener('appUrlOpen', function(data) {
+    var CapApp = window.Capacitor.Plugins.App;
+    CapApp.addListener('appUrlOpen', function(data) {
       if (data && data.url) handleDeepLink(data.url);
     });
+    // Handle cold-launch via deep link
+    CapApp.getLaunchUrl().then(function(data) {
+      if (data && data.url) handleDeepLink(data.url);
+    }).catch(function() {});
   }
 
   // Tauri: "Voxal → Preferences…" menu item
@@ -1421,6 +1445,16 @@ window.addEventListener('DOMContentLoaded', function() {
       toast.classList.add('visible');
       clearTimeout($('btn-copy')._toastTimer);
       $('btn-copy')._toastTimer = setTimeout(function() { toast.classList.remove('visible'); }, 1500);
+    }
+    // On native mobile, open the system share sheet with a deep link
+    if (window.Capacitor && window.Capacitor.isNativePlatform()) {
+      var shareUrl = 'voxal://join?room=' + encodeURIComponent(text);
+      if (navigator.share) {
+        navigator.share({ title: 'Join my Voxal room', text: shareUrl }).catch(function(e) { console.warn('[Share]', e); });
+      } else {
+        fallbackCopy(shareUrl); showToast();
+      }
+      return;
     }
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(showToast).catch(function() { fallbackCopy(text); showToast(); });
