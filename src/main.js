@@ -1509,6 +1509,8 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-edit-shortcut').addEventListener('click', startRecordingShortcut);
   $('btn-cancel-shortcut').addEventListener('click', stopRecordingShortcut);
 
+  var lastSpaceRelease = 0;
+  var ignoreSpaceUp = false;
   document.addEventListener('keydown', function(e) {
     // Close settings modal on Enter or Escape (takes priority over everything)
     if (!$('modal-settings').classList.contains('hidden')) {
@@ -1530,21 +1532,72 @@ window.addEventListener('DOMContentLoaded', function() {
       return; // don't process PTT or shortcuts while modal is open
     }
     if (recordingShortcut) { e.preventDefault(); const s = shortcutFromEvent(e); if (s) applyNewShortcut(s); return; }
-    // Space always triggers PTT; Enter toggles free-hand (room only)
-    if (e.code === 'Space' && !e.repeat) { setTalking(true);                                          e.preventDefault(); return; }
+    if (e.code === 'Space' && !e.repeat) {
+      e.preventDefault();
+      var now = Date.now();
+      if (now - lastSpaceRelease < DOUBLE_TAP_MS) {
+        lastSpaceRelease = 0;
+        ignoreSpaceUp = true;
+        setFreeHand(!freeHandMode);
+      } else if (freeHandMode) {
+        $('ptt-btn').classList.add('active');
+      } else {
+        setTalking(true);
+      }
+      return;
+    }
     if (e.code === 'Enter' && !e.repeat && inRoom) { setFreeHand(!freeHandMode); e.preventDefault(); return; }
     if (matchesShortcut(e) && !e.repeat) { setTalking(true);                                          e.preventDefault(); }
   });
   document.addEventListener('keyup', function(e) {
-    if (e.code === 'Space') { setTalking(false); return; }
+    if (e.code === 'Space') {
+      if (ignoreSpaceUp) { ignoreSpaceUp = false; return; }
+      lastSpaceRelease = Date.now();
+      if (freeHandMode) {
+        $('ptt-btn').classList.remove('active');
+        setFreeHand(false);
+      } else {
+        setTalking(false);
+      }
+      return;
+    }
     if (keyCodeOf(shortcutStr) === e.code) setTalking(false);
   });
 
   // Tauri-only: global shortcut works even when app is in background
   if (window.__TAURI__) {
     const listen = window.__TAURI__.event.listen;
-    listen('ptt-press',   function() { if (!recordingShortcut) setTalking(true);  });
-    listen('ptt-release', function() { if (!recordingShortcut) setTalking(false); });
+    var lastTauriRelease = 0;
+    var ignoreTauriRelease = false;
+    listen('ptt-press', function() {
+      if (recordingShortcut) return;
+      var now = Date.now();
+      if (now - lastTauriRelease < DOUBLE_TAP_MS) {
+        // Double-press: toggle free hand mode (same as double-tap on mobile)
+        lastTauriRelease = 0;
+        ignoreTauriRelease = true;
+        setFreeHand(!freeHandMode);
+        return;
+      }
+      if (freeHandMode) {
+        // In free hand mode: shortcut acts as PTT override (mic already on — just show visual feedback)
+        $('ptt-btn').classList.add('active');
+      } else {
+        setTalking(true);
+      }
+    });
+    listen('ptt-release', function() {
+      if (recordingShortcut) return;
+      if (ignoreTauriRelease) { ignoreTauriRelease = false; return; }
+      lastTauriRelease = Date.now();
+      if (freeHandMode) {
+        // Release while in free hand mode: turn off free hand (mic goes silent)
+        $('ptt-btn').classList.remove('active');
+        setFreeHand(false);
+      } else {
+        setTalking(false);
+      }
+    });
   }
 
   // iOS PushToTalk framework: Dynamic Island / Lock Screen button events
