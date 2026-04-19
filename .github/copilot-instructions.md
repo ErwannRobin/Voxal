@@ -4,6 +4,23 @@ Voxal is a serverless P2P push-to-talk voice chat app. It runs as a native deskt
 
 ---
 
+## KNOWLEDGE folder
+
+The `KNOWLEDGE/` folder at the root of the repo is a persistent knowledge base. **Read it at the start of every session.**
+
+| File | Purpose |
+|---|---|
+| `KNOWLEDGE/learning.md` | Facts and gotchas discovered during development. Read on every launch. Append new learnings as they are discovered. |
+| `KNOWLEDGE/todos.md` | Long-term backlog of features and investigations. Update when items are completed or new ones are added. |
+| `KNOWLEDGE/universal-links-aasa.md` | Step-by-step guide to set up Universal Links (AASA) for clickable room share links. |
+
+**Rules:**
+- Read `KNOWLEDGE/learning.md` before starting any task — it contains non-obvious platform gotchas.
+- Append to `KNOWLEDGE/learning.md` whenever something non-obvious is discovered (iOS quirks, CSS pitfalls, Tauri limitations, etc.).
+- Update `KNOWLEDGE/todos.md` when a backlog item is completed (mark it done or remove it) or when a new one is identified.
+
+---
+
 ## Commands
 
 ```sh
