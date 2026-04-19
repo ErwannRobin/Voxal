@@ -632,14 +632,19 @@ function setFreeHand(active) {
   if (!active) $('ptt-btn').classList.remove('active');
 
   if (active) {
-    $('ptt-hint').textContent = 'Free hand \u2014 mic always on';
+    var isMobile = window.Capacitor && window.Capacitor.isNativePlatform();
+    if (isMobile) {
+      $('ptt-hint').textContent = 'Free hand · tap to stop';
+    } else {
+      $('ptt-hint').innerHTML = 'Free hand · press <kbd id="shortcut-hint-kbd">' + displayShortcut(shortcutStr) + '</kbd> to stop';
+    }
     $('ptt-status').textContent = '\u25cf Live';
   } else {
     var isMobile = window.Capacitor && window.Capacitor.isNativePlatform();
     if (isMobile) {
       $('ptt-hint').textContent = 'Hold to talk · double-tap for free hand';
     } else {
-      $('ptt-hint').innerHTML = 'Hold <kbd id="shortcut-hint-kbd">' + displayShortcut(shortcutStr) + '</kbd> or click &amp; hold';
+      $('ptt-hint').innerHTML = 'Hold <kbd id="shortcut-hint-kbd">' + displayShortcut(shortcutStr) + '</kbd> anywhere to talk · x2 for free hand';
     }
     $('ptt-status').textContent = '';
   }
