@@ -57,10 +57,16 @@ function handleDeepLink(urlStr) {
       // voxal://join?room=<peerId>
       const roomId = url.searchParams.get('room');
       if (!roomId) return;
-      // If already in a room, ignore
-      if (inRoom) return;
       if (_audioCtx.state === 'suspended') _audioCtx.resume();
-      joinRoom(roomId).catch(function(err) { showError(err.message); });
+      var doJoin = function() {
+        joinRoom(roomId).catch(function(err) { showError(err.message); });
+      };
+      if (inRoom) {
+        leaveRoom();
+        setTimeout(doJoin, 150); // give PeerJS a tick to close connections
+      } else {
+        doJoin();
+      }
       return;
     }
 
