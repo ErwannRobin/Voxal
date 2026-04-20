@@ -41,6 +41,29 @@ function presenceToken()      { return localStorage.getItem(PRESENCE_TOKEN_KEY) 
 function presenceOrgId()      { return localStorage.getItem(PRESENCE_ORG_KEY)   || ''; }
 function presenceConfigured() { return !!(presenceToken() && presenceOrgId()); }
 
+// --- iframe postMessage bridge -----------------------------------------------
+// When Voxal runs embedded inside a parent page's <iframe>, this bridge lets the
+// parent control the room (join/create/leave) and observe state changes (talking,
+// joined, left, peers).  All messages are scoped to { source: 'voxal' }.
+//
+// Parent → Voxal  (commands):
+//   { type: 'join',   roomCode: '<peerId>' }
+//   { type: 'create' }
+//   { type: 'leave' }
+//
+// Voxal → Parent  (events):
+//   { source: 'voxal', type: 'joined',  roomCode: '<peerId>', peerId: '<self>' }
+//   { source: 'voxal', type: 'left' }
+//   { source: 'voxal', type: 'talking', active: true|false }
+//   { source: 'voxal', type: 'peers',   peers: [{ id, pseudo, talking }] }
+
+var _isIframe = (function() { try { return window.self !== window.top; } catch(e) { return true; } })();
+
+function iframeEmit(msg) {
+  if (!_isIframe) return;
+  window.parent.postMessage(Object.assign({ source: 'voxal' }, msg), '*');
+}
+
 // --- OAuth-style deep link auth ---------------------------------------------
 
 function generateState() {
@@ -545,6 +568,15 @@ function updatePeerList() {
   const selfLabel = (myPseudo || 'You') + (isHost ? ' \u00b7 host' : '');
   addItem('self', selfLabel, true, isTalking || freeHandMode);
   connections.forEach((conn, id) => addItem(id, conn.pseudo || shortId(id), false, conn.talking || false));
+
+  // Notify the parent iframe of the current peer list
+  if (_isIframe && inRoom) {
+    var peers = [{ id: peer ? peer.id : 'self', pseudo: myPseudo || 'You', self: true, talking: isTalking || freeHandMode }];
+    connections.forEach(function(conn, id) {
+      peers.push({ id: id, pseudo: conn.pseudo || shortId(id), self: false, talking: conn.talking || false });
+    });
+    iframeEmit({ type: 'peers', peers: peers });
+  }
 }
 
 function updatePeerTalking(peerId, active) {
@@ -617,6 +649,7 @@ function setTalking(active) {
   $('ptt-status').textContent = active ? '\u25cf Transmitting\u2026' : '';
   updateSelfTalking(active);
   broadcastTalkingState(active);
+  iframeEmit({ type: 'talking', active: active });
 }
 
 function setFreeHand(active) {
@@ -676,6 +709,7 @@ function leaveRoom() {
   peer = null; stream = null; audioTrack = null;
   isHost = false; roomCode = '';
   document.querySelectorAll('audio[id^="audio-"]').forEach(function(el) { el.remove(); });
+  iframeEmit({ type: 'left' });
   showScreen('home');
 }
 
@@ -808,6 +842,7 @@ async function createRoom(onJoined) {
     showScreen('room');
     updatePeerList();
     updateShortcutDisplay();
+    iframeEmit({ type: 'joined', roomCode: id, peerId: id });
     if (onJoined) onJoined(id);
   });
   peer.on('connection', function(dataConn) { handleJoinerDataConnection(dataConn); });
@@ -875,6 +910,7 @@ async function joinRoom(code, onJoined) {
       showScreen('room');
       updatePeerList();
       updateShortcutDisplay();
+      iframeEmit({ type: 'joined', roomCode: code, peerId: peer.id });
     });
 
     hostData.on('data',  function(msg) { handleHostMessage(msg); });
@@ -1426,6 +1462,25 @@ window.addEventListener('DOMContentLoaded', function() {
 
   window.addEventListener('online',  updateTurnBadge);
   window.addEventListener('offline', updateTurnBadge);
+
+  // iframe postMessage: receive commands from the parent page
+  if (_isIframe) {
+    window.addEventListener('message', function(e) {
+      var msg = e.data;
+      if (!msg || typeof msg !== 'object') return;
+      if (msg.type === 'join' && msg.roomCode) {
+        if (_audioCtx.state === 'suspended') _audioCtx.resume();
+        if (inRoom) leaveRoom();
+        joinRoom(String(msg.roomCode)).catch(function(err) { iframeEmit({ type: 'error', message: err.message }); });
+      } else if (msg.type === 'create') {
+        if (_audioCtx.state === 'suspended') _audioCtx.resume();
+        if (inRoom) leaveRoom();
+        createRoom().catch(function(err) { iframeEmit({ type: 'error', message: err.message }); });
+      } else if (msg.type === 'leave') {
+        if (inRoom) leaveRoom();
+      }
+    });
+  }
 
   // Presence credentials
   $('input-presence-token').addEventListener('input', function(e) {
