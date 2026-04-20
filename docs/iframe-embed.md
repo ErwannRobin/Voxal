@@ -26,7 +26,7 @@ All Voxal-originated events carry `source: 'voxal'` so they are trivial to filte
 ```html
 <iframe
   id="voxal-frame"
-  src="https://app.voxal.io"
+  src="https://voxal-ptt.vercel.app"
   allow="microphone"
   style="width: 400px; height: 600px; border: none; border-radius: 12px;"
 ></iframe>
@@ -40,7 +40,7 @@ All Voxal-originated events carry `source: 'voxal'` so they are trivial to filte
 
 ```js
 const frame = document.getElementById('voxal-frame').contentWindow;
-const VOXAL_ORIGIN = 'https://app.voxal.io'; // tighten to the actual origin
+const VOXAL_ORIGIN = 'https://voxal-ptt.vercel.app'; // tighten to the actual origin
 
 // Join an existing room (pass the room code / host peer ID)
 frame.postMessage({ type: 'join', roomCode: 'abc123' }, VOXAL_ORIGIN);
@@ -131,14 +131,14 @@ window.addEventListener('message', (e) => {
 
   <iframe
     id="voxal-frame"
-    src="https://app.voxal.io"
+    src="https://voxal-ptt.vercel.app"
     allow="microphone"
     style="width:400px;height:600px;border:none;"
   ></iframe>
 
   <script>
     const ROOM_CODE   = 'your-room-code-here';
-    const VOXAL_ORIGIN = 'https://app.voxal.io';
+    const VOXAL_ORIGIN = 'https://voxal-ptt.vercel.app';
     const frame       = document.getElementById('voxal-frame');
     const status      = document.getElementById('status');
     const memberList  = document.getElementById('member-list');
