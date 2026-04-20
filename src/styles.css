@@ -2,6 +2,11 @@
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Remove Android WebView's default green tap highlight on all elements */
+a, button, [role="button"], input, select, textarea, label {
+  -webkit-tap-highlight-color: transparent;
+}
+
 /* ── Dark theme (default) ──────────────────────────────────────────── */
 :root {
   --bg:         #16161e;
@@ -271,6 +276,8 @@ body {
   width: 80px;
   height: 80px;
   border-radius: 50%;
+  overflow: hidden;
+  clip-path: circle(50%); /* Android WebView: enforce circular clip even during transform */
   border: 3px solid var(--accent-dim);
   background: var(--bg-raised);
   cursor: pointer;
@@ -280,8 +287,9 @@ body {
   font-size: 30px;
   transition: background 0.1s, border-color 0.1s, transform 0.08s;
   outline: none;
-  touch-action: none; /* prevent iOS scroll/zoom hijacking pointer events */
+  touch-action: none;
   -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent; /* remove Android's default green rectangle */
 }
 .ptt-btn:hover { border-color: var(--accent); }
 .ptt-btn.active {
