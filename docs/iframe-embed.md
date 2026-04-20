@@ -52,15 +52,16 @@ frame.postMessage({ type: 'create' }, VOXAL_ORIGIN);
 frame.postMessage({ type: 'leave' }, VOXAL_ORIGIN);
 ```
 
-> Send commands only **after** the iframe has finished loading (`iframe.onload`), otherwise the message may be dropped.
+> Send commands only **after** the iframe has finished loading, or better: wait for the `ready` event (see below), otherwise the message may be dropped.
 
 ### Command reference
 
-| `type`   | Extra fields              | Description                                       |
-|----------|---------------------------|---------------------------------------------------|
-| `join`   | `roomCode: string`        | Join an existing room by its code (host peer ID)  |
-| `create` | —                         | Create a new room; Voxal becomes the host         |
-| `leave`  | —                         | Leave the current room and return to the home UI  |
+| `type`   | Extra fields                          | Description                                          |
+|----------|---------------------------------------|------------------------------------------------------|
+| `auth`   | `token: string`, `orgId?: string`     | Pass the user's session token — skips the OAuth flow |
+| `join`   | `roomCode: string`                    | Join an existing room by its code (host peer ID)     |
+| `create` | —                                     | Create a new room; Voxal becomes the host            |
+| `leave`  | —                                     | Leave the current room and return to the home UI     |
 
 ---
 
@@ -97,6 +98,14 @@ window.addEventListener('message', (e) => {
     case 'error':
       console.error('Voxal error:', e.data.message);
       break;
+
+    case 'ready':
+      // Fired once on load — safe to send the auth command now
+      frame.contentWindow.postMessage(
+        { type: 'auth', token: mySessionToken, orgId: myOrgId },
+        'https://voxal-ptt.vercel.app'
+      );
+      break;
   }
 });
 ```
@@ -105,6 +114,7 @@ window.addEventListener('message', (e) => {
 
 | `type`    | Fields                                                                 | When                                          |
 |-----------|------------------------------------------------------------------------|-----------------------------------------------|
+| `ready`   | —                                                                      | iframe finished loading, ready to receive commands |
 | `joined`  | `roomCode: string`, `peerId: string`                                   | WebRTC connection established                 |
 | `left`    | —                                                                      | Room left (any reason)                        |
 | `talking` | `active: boolean`                                                      | Local user starts / stops transmitting        |

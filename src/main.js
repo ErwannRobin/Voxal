@@ -1468,7 +1468,14 @@ window.addEventListener('DOMContentLoaded', function() {
     window.addEventListener('message', function(e) {
       var msg = e.data;
       if (!msg || typeof msg !== 'object') return;
-      if (msg.type === 'join' && msg.roomCode) {
+      if (msg.type === 'auth' && msg.token) {
+        // Portal passes its session token (and optionally orgId) so the user
+        // doesn't have to go through the OAuth popup while already logged in.
+        localStorage.setItem(PRESENCE_TOKEN_KEY, msg.token);
+        if (msg.orgId) localStorage.setItem(PRESENCE_ORG_KEY, msg.orgId);
+        updateDisconnectVisibility(); updateConnectVisibility();
+        selectOrgAndStartPolling();
+      } else if (msg.type === 'join' && msg.roomCode) {
         if (_audioCtx.state === 'suspended') _audioCtx.resume();
         if (inRoom) leaveRoom();
         joinRoom(String(msg.roomCode)).catch(function(err) { iframeEmit({ type: 'error', message: err.message }); });
@@ -1480,6 +1487,8 @@ window.addEventListener('DOMContentLoaded', function() {
         if (inRoom) leaveRoom();
       }
     });
+    // Signal readiness so the parent knows it's safe to send the auth command
+    iframeEmit({ type: 'ready' });
   }
 
   // Presence credentials
