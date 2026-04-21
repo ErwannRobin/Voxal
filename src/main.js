@@ -27,6 +27,30 @@ const METERED_STATUS_STORE_KEY  = 'metered-status';  // 'ok' | 'error' | null
 const METERED_COUNT_STORE_KEY   = 'metered-count';   // number of servers when ok
 const METERED_SERVERS_STORE_KEY = 'metered-servers'; // JSON array of ICE server objects
 
+// --- Audio focus (Android) ---------------------------------------------------
+
+async function requestAudioFocus() {
+  if (window.Capacitor?.isNativePlatform?.()) {
+    try {
+      const { AudioForeground } = window.Capacitor.Plugins;
+      await AudioForeground?.start?.();
+    } catch (e) {
+      console.warn('[AudioFocus] Failed to request:', e.message);
+    }
+  }
+}
+
+async function releaseAudioFocus() {
+  if (window.Capacitor?.isNativePlatform?.()) {
+    try {
+      const { AudioForeground } = window.Capacitor.Plugins;
+      await AudioForeground?.stop?.();
+    } catch (e) {
+      console.warn('[AudioFocus] Failed to release:', e.message);
+    }
+  }
+}
+
 // --- Presence API -----------------------------------------------------------
 
 const DEFAULT_PRESENCE_BASE     = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
@@ -650,6 +674,8 @@ function setTalking(active) {
   updateSelfTalking(active);
   broadcastTalkingState(active);
   iframeEmit({ type: 'talking', active: active });
+  // Request/release audio focus on Android
+  if (active) requestAudioFocus(); else releaseAudioFocus();
 }
 
 function setFreeHand(active) {
@@ -684,6 +710,8 @@ function setFreeHand(active) {
 
   updateSelfTalking(active);
   broadcastTalkingState(active);
+  // Request/release audio focus on Android
+  if (active) requestAudioFocus(); else releaseAudioFocus();
 }
 
 // --- Connection helpers ------------------------------------------------------
@@ -700,6 +728,7 @@ function removePeer(peerId) {
 
 function leaveRoom() {
   inRoom = false; freeHandMode = false; isTalking = false;
+  releaseAudioFocus();
   nativePTTLeave();
   stopKeepAlive();
   if (activeChannel) { deleteSession(); activeChannel = null; }
