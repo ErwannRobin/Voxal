@@ -1,7 +1,7 @@
 package com.push2talk.app;
 
-import android.content.Context;
-import android.media.AudioManager;
+import android.content.Intent;
+import android.os.Build;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -10,38 +10,31 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 @CapacitorPlugin(name = "AudioForeground")
 public class AudioForegroundPlugin extends Plugin {
 
-  private AudioManager audioManager;
-
-  @Override
-  public void load() {
-    audioManager = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
-  }
-
-  @PluginMethod
   public void start(PluginCall call) {
-    if (audioManager == null) {
-      call.reject("AudioManager not available");
-      return;
-    }
-
-    int focusResult = audioManager.requestAudioFocus(
-      null,
-      AudioManager.STREAM_VOICE_CALL,
-      AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE
-    );
-
-    if (focusResult == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+    try {
+      Intent intent = new Intent(getActivity(), PushToTalkService.class);
+      intent.setAction("START_PTT");
+      
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        getActivity().startForegroundService(intent);
+      } else {
+        getActivity().startService(intent);
+      }
+      
       call.resolve(new JSObject().put("success", true));
-    } else {
-      call.reject("Failed to request audio focus");
+    } catch (Exception e) {
+      call.reject("Failed to start foreground service: " + e.getMessage());
     }
   }
 
-  @PluginMethod
   public void stop(PluginCall call) {
-    if (audioManager != null) {
-      audioManager.abandonAudioFocus(null);
+    try {
+      Intent intent = new Intent(getActivity(), PushToTalkService.class);
+      intent.setAction("STOP_PTT");
+      getActivity().startService(intent);
+      call.resolve();
+    } catch (Exception e) {
+      call.reject("Failed to stop service: " + e.getMessage());
     }
-    call.resolve();
   }
 }
