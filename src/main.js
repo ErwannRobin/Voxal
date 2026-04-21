@@ -30,24 +30,27 @@ const METERED_SERVERS_STORE_KEY = 'metered-servers'; // JSON array of ICE server
 // --- Audio focus (Android) ---------------------------------------------------
 
 async function requestAudioFocus() {
-  if (window.Capacitor?.isNativePlatform?.()) {
-    try {
-      const { AudioForeground } = window.Capacitor.Plugins;
-      await AudioForeground?.start?.();
-    } catch (e) {
-      console.warn('[AudioFocus] Failed to request:', e.message);
+  if (!window.Capacitor?.isNativePlatform?.()) return;
+  try {
+    var plugin = window.Capacitor?.Plugins?.AudioForeground;
+    if (!plugin || typeof plugin.start !== 'function') {
+      console.warn('[AudioFocus] AudioForeground.start() unavailable');
+      return;
     }
+    await plugin.start();
+  } catch (e) {
+    console.warn('[AudioFocus] Failed to request:', e.message);
   }
 }
 
 async function releaseAudioFocus() {
-  if (window.Capacitor?.isNativePlatform?.()) {
-    try {
-      const { AudioForeground } = window.Capacitor.Plugins;
-      await AudioForeground?.stop?.();
-    } catch (e) {
-      console.warn('[AudioFocus] Failed to release:', e.message);
-    }
+  if (!window.Capacitor?.isNativePlatform?.()) return;
+  try {
+    var plugin = window.Capacitor?.Plugins?.AudioForeground;
+    if (!plugin || typeof plugin.stop !== 'function') return;
+    await plugin.stop();
+  } catch (e) {
+    console.warn('[AudioFocus] Failed to release:', e.message);
   }
 }
 
@@ -731,6 +734,7 @@ function leaveRoom() {
   releaseAudioFocus();
   nativePTTLeave();
   stopKeepAlive();
+  localStorage.removeItem('active-room-code');
   if (activeChannel) { deleteSession(); activeChannel = null; }
   Array.from(connections.keys()).forEach(removePeer);
   if (stream) stream.getTracks().forEach(function(t) { t.stop(); });
@@ -865,9 +869,11 @@ async function createRoom(onJoined) {
   peer = new Peer({ config: { iceServers } });
   peer.on('open', function(id) {
     isHost = true; roomCode = id; inRoom = true;
+    localStorage.setItem('active-room-code', id);
     updateRoomHeader();
     nativePTTJoin(id);
     startKeepAlive();
+    requestAudioFocus(); // Keep foreground service running while in room
     showScreen('room');
     updatePeerList();
     updateShortcutDisplay();
@@ -932,10 +938,12 @@ async function joinRoom(code, onJoined) {
     hostData.on('open', function() {
       hostData.send({ type: 'hello', pseudo: myPseudo || 'Anonymous' });
       isHost = false; inRoom = true;
+      localStorage.setItem('active-room-code', code);
       connections.set(code, { data: hostData, media: null, pseudo: shortId(code), talking: false });
       updateRoomHeader();
       nativePTTJoin(code);
       startKeepAlive();
+      requestAudioFocus(); // Keep foreground service running while in room
       showScreen('room');
       updatePeerList();
       updateShortcutDisplay();
@@ -1452,6 +1460,17 @@ window.addEventListener('DOMContentLoaded', function() {
     CapApp.getLaunchUrl().then(function(data) {
       if (data && data.url) handleDeepLink(data.url);
     }).catch(function() {});
+
+    // On Android, PeerJS drops its WebSocket signaling connection while backgrounded.
+    // On resume, reconnect the peer without creating a new one (preserves host state).
+    CapApp.addListener('resume', function() {
+      if (_audioCtx.state === 'suspended') _audioCtx.resume();
+      if (!inRoom || !peer) return;
+      if (peer.disconnected && !peer.destroyed) {
+        console.log('[android] Peer disconnected while backgrounded, reconnecting signaling...');
+        peer.reconnect();
+      }
+    });
   }
 
   // Tauri: "Voxal → Preferences…" menu item
@@ -1709,7 +1728,20 @@ window.addEventListener('DOMContentLoaded', function() {
   document.addEventListener('visibilitychange', function() {
     if (document.visibilityState === 'visible') {
       if (_audioCtx.state === 'suspended') _audioCtx.resume();
-      if (inRoom) startKeepAlive();
+      if (inRoom) {
+        startKeepAlive();
+        if (peer && peer.disconnected && !peer.destroyed) {
+          peer.reconnect();
+        }
+        // Only non-host peers have a host DataConnection in the map.
+        if (!isHost) {
+          const hostConn = connections.get(roomCode);
+          if (!hostConn || !hostConn.data || hostConn.data.closed) {
+            console.warn('[visibility] Host connection lost, reconnecting...');
+            initiateHostMigration();
+          }
+        }
+      }
     }
   });
 });

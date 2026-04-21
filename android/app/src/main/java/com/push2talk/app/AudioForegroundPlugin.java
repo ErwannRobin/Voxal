@@ -5,11 +5,13 @@ import android.os.Build;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
+import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
 @CapacitorPlugin(name = "AudioForeground")
 public class AudioForegroundPlugin extends Plugin {
 
+  @PluginMethod
   public void start(PluginCall call) {
     try {
       Intent intent = new Intent(getActivity(), PushToTalkService.class);
@@ -27,6 +29,7 @@ public class AudioForegroundPlugin extends Plugin {
     }
   }
 
+  @PluginMethod
   public void stop(PluginCall call) {
     try {
       Intent intent = new Intent(getActivity(), PushToTalkService.class);

@@ -14,6 +14,8 @@ public class PushToTalkService extends Service {
   private static final String CHANNEL_ID = "push2talk_channel";
   private AudioManager audioManager;
 
+  public static boolean isRunning = false;
+
   @Override
   public void onCreate() {
     super.onCreate();
@@ -24,14 +26,22 @@ public class PushToTalkService extends Service {
   @Override
   public int onStartCommand(Intent intent, int flags, int startId) {
     if (intent != null && "START_PTT".equals(intent.getAction())) {
+      isRunning = true;
       startForeground(NOTIFICATION_ID, createNotification().build());
       requestAudioFocus();
     } else if (intent != null && "STOP_PTT".equals(intent.getAction())) {
+      isRunning = false;
       releaseAudioFocus();
       stopForeground(STOP_FOREGROUND_REMOVE);
       stopSelf();
     }
     return START_STICKY;
+  }
+
+  @Override
+  public void onDestroy() {
+    isRunning = false;
+    super.onDestroy();
   }
 
   @Override
