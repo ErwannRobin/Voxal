@@ -293,7 +293,10 @@ async function fetchIceServers() {
 
 // --- State -------------------------------------------------------------------
 
-const DEFAULT_SHORTCUT = 'Shift+Space';
+const IS_TAURI_DESKTOP = !!window.__TAURI__;
+const IS_NATIVE_MOBILE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+const IS_PLAIN_WEB     = !IS_TAURI_DESKTOP && !IS_NATIVE_MOBILE;
+const DEFAULT_SHORTCUT = IS_PLAIN_WEB ? 'Space' : 'Shift+Space';
 
 // --- Audio feedback ----------------------------------------------------------
 
@@ -1144,6 +1147,9 @@ window.addEventListener('DOMContentLoaded', function() {
 
   // Hide shortcut UI on native mobile — no keyboard shortcuts on touch devices
   const isNativeMobile = window.Capacitor && window.Capacitor.isNativePlatform();
+  if (!isNativeMobile && !window.__TAURI__) {
+    document.body.classList.add('platform-web');
+  }
   if (isNativeMobile) {
     document.body.classList.add('platform-mobile');
     $('shortcut-normal').style.display   = 'none';
@@ -1220,12 +1226,6 @@ window.addEventListener('DOMContentLoaded', function() {
     document.getElementById('conn-status-popover').classList.add('hidden');
     popoverOpen = false;
   }
-  var settingsBtn = $('btn-open-settings');
-  settingsBtn.addEventListener('mouseenter', showConnPopover);
-  settingsBtn.addEventListener('mouseleave', hideConnPopover);
-  settingsBtn.addEventListener('click', function() {
-    if (popoverOpen) hideConnPopover(); else showConnPopover();
-  });
   var turnBadge = $('turn-badge');
   turnBadge.addEventListener('click', function() {
     if (popoverOpen) hideConnPopover(); else showConnPopover();
@@ -1431,8 +1431,7 @@ window.addEventListener('DOMContentLoaded', function() {
     updateTurnBadge();
   });
   $('btn-open-settings').addEventListener('click', function() {
-    // On desktop (gear hidden) the button only drives the popover — handled above.
-    // On web/mobile, open settings (popover is shown via mouseenter/tap separately).
+    // On web/mobile, open settings.
     if (!window.__TAURI__) openSettings();
   });
   // On desktop the native menu handles settings — hide the gear icon,

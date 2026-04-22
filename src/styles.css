@@ -480,9 +480,7 @@ input[type="password"]:focus { border-color: var(--accent); }
   position: relative;
 }
 
-@media (max-width: 600px) {
-  .screen-topbar { justify-content: space-between; }
-}
+body.platform-web .screen-topbar { justify-content: space-between; }
 
 .conn-status-popover {
   position: absolute;
