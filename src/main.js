@@ -11,6 +11,8 @@
  *   peer-joined  { peerId, pseudo }               host -> all existing peers
  *   peer-left    { peerId }                       host -> all
  *   talking      { peerId, active }               non-host -> host (relayed to all)
+ *   pseudo       { pseudo }                        non-host -> host (relayed as peer-renamed)
+ *   peer-renamed { peerId, pseudo }               host -> all
  *
  * Host migration:
  *   When the host disconnects, all remaining peers independently elect a new host
@@ -412,8 +414,35 @@ let isTalking         = false;
 let freeHandMode      = false;
 let recordingShortcut = false;
 let myPseudo          = localStorage.getItem('pseudo') || '';
+let editingSelfPseudo = false;
 
 let shortcutStr = localStorage.getItem('ptt-shortcut') || DEFAULT_SHORTCUT;
+
+function pseudoForHost() { return myPseudo || 'Host'; }
+function pseudoForPeer() { return myPseudo || 'Anonymous'; }
+
+function announcePseudoChange() {
+  if (!inRoom || !peer) return;
+  if (isHost) {
+    connections.forEach(function(c) {
+      if (c.data) c.data.send({ type: 'peer-renamed', peerId: peer.id, pseudo: pseudoForHost() });
+    });
+    return;
+  }
+  const hostConn = connections.get(roomCode);
+  if (hostConn && hostConn.data) hostConn.data.send({ type: 'pseudo', pseudo: pseudoForPeer() });
+}
+
+function setMyPseudo(nextPseudo) {
+  myPseudo = (nextPseudo || '').trim();
+  localStorage.setItem('pseudo', myPseudo);
+  const homeInput = $('input-pseudo');
+  if (homeInput && homeInput.value !== myPseudo) homeInput.value = myPseudo;
+  if (inRoom) {
+    updatePeerList();
+    announcePseudoChange();
+  }
+}
 
 // Presence state
 let presenceData     = []; // last fetched [{channel,connected}]
@@ -587,17 +616,78 @@ function updatePeerList() {
   const list = $('peers-list');
   list.innerHTML = '';
 
-  const addItem = (id, label, self, talking) => {
+  const addItem = (id, label, self, talking, editable) => {
     const div = document.createElement('div');
     div.id = 'peer-item-' + id;
     div.className = 'peer-item' + (self ? ' peer-self' : '') + (talking ? ' talking' : '');
-    div.innerHTML = '<span class="peer-dot"></span><span>' + label + '</span>';
+    if (!editable) {
+      div.innerHTML = '<span class="peer-dot"></span><span>' + label + '</span>';
+      list.appendChild(div);
+      return;
+    }
+
+    div.innerHTML = '<span class="peer-dot"></span>';
+    const nameWrap = document.createElement('span');
+    nameWrap.className = 'peer-self-main';
+
+    if (editingSelfPseudo) {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.maxLength = 20;
+      input.className = 'peer-name-inline';
+      input.placeholder = 'Your name…';
+      input.value = myPseudo;
+      input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+          editingSelfPseudo = false;
+          setMyPseudo(input.value);
+        } else if (e.key === 'Escape') {
+          editingSelfPseudo = false;
+          updatePeerList();
+        }
+      });
+      input.addEventListener('blur', function() {
+        editingSelfPseudo = false;
+        setMyPseudo(input.value);
+      });
+      nameWrap.appendChild(input);
+      if (isHost) {
+        const role = document.createElement('span');
+        role.className = 'peer-role';
+        role.textContent = '· host';
+        nameWrap.appendChild(role);
+      }
+      div.appendChild(nameWrap);
+      list.appendChild(div);
+      setTimeout(function() { input.focus(); input.select(); }, 0);
+      return;
+    }
+
+    const name = document.createElement('span');
+    name.textContent = myPseudo || 'You';
+    nameWrap.appendChild(name);
+    if (isHost) {
+      const role = document.createElement('span');
+      role.className = 'peer-role';
+      role.textContent = '· host';
+      nameWrap.appendChild(role);
+    }
+    const editBtn = document.createElement('button');
+    editBtn.className = 'btn-icon peer-edit-btn';
+    editBtn.title = 'Edit name';
+    editBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>';
+    editBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      editingSelfPseudo = true;
+      updatePeerList();
+    });
+    nameWrap.appendChild(editBtn);
+    div.appendChild(nameWrap);
     list.appendChild(div);
   };
 
-  const selfLabel = (myPseudo || 'You') + (isHost ? ' \u00b7 host' : '');
-  addItem('self', selfLabel, true, isTalking || freeHandMode);
-  connections.forEach((conn, id) => addItem(id, conn.pseudo || shortId(id), false, conn.talking || false));
+  addItem('self', '', true, isTalking || freeHandMode, true);
+  connections.forEach((conn, id) => addItem(id, conn.pseudo || shortId(id), false, conn.talking || false, false));
 
   // Notify the parent iframe of the current peer list
   if (_isIframe && inRoom) {
@@ -796,7 +886,7 @@ function connectToNewHost(newHostId) {
   const hostData = peer.connect(newHostId, { reliable: true });
 
   hostData.on('open', function() {
-    hostData.send({ type: 'hello', pseudo: myPseudo || 'Anonymous' });
+    hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
     const prev = connections.get(newHostId) || { media: null, talking: false };
     connections.set(newHostId, Object.assign({}, prev, { data: hostData, pseudo: prev.pseudo || shortId(newHostId) }));
     updatePeerList();
@@ -837,7 +927,7 @@ function handleJoinerDataConnection(dataConn) {
       const peers = Array.from(connections.entries())
         .filter(function(entry) { return entry[0] !== joinerId; })
         .map(function(entry) { return { id: entry[0], pseudo: entry[1].pseudo || shortId(entry[0]) }; });
-      dataConn.send({ type: 'peer-list', peers: peers, hostId: peer.id, hostPseudo: myPseudo || 'Host' });
+      dataConn.send({ type: 'peer-list', peers: peers, hostId: peer.id, hostPseudo: pseudoForHost() });
 
       connections.forEach(function(c, id) {
         if (id !== joinerId && c.data) c.data.send({ type: 'peer-joined', peerId: joinerId, pseudo: pseudo });
@@ -850,6 +940,14 @@ function handleJoinerDataConnection(dataConn) {
       updatePeerTalking(joinerId, msg.active);
       connections.forEach(function(c, id) {
         if (id !== joinerId && c.data) c.data.send({ type: 'talking', peerId: joinerId, active: msg.active });
+      });
+    } else if (msg.type === 'pseudo') {
+      const pseudo = msg.pseudo || shortId(joinerId);
+      const existing = connections.get(joinerId) || { data: dataConn, media: null, talking: false };
+      connections.set(joinerId, Object.assign({}, existing, { pseudo: pseudo }));
+      updatePeerList();
+      connections.forEach(function(c, id) {
+        if (id !== joinerId && c.data) c.data.send({ type: 'peer-renamed', peerId: joinerId, pseudo: pseudo });
       });
     }
   });
@@ -923,6 +1021,10 @@ function handleHostMessage(msg) {
 
   } else if (msg.type === 'talking') {
     updatePeerTalking(msg.peerId, msg.active);
+  } else if (msg.type === 'peer-renamed') {
+    const existing = connections.get(msg.peerId) || { data: null, media: null, talking: false };
+    connections.set(msg.peerId, Object.assign({}, existing, { pseudo: msg.pseudo || shortId(msg.peerId) }));
+    updatePeerList();
   }
 }
 
@@ -939,7 +1041,7 @@ async function joinRoom(code, onJoined) {
     const hostData = peer.connect(code, { reliable: true });
 
     hostData.on('open', function() {
-      hostData.send({ type: 'hello', pseudo: myPseudo || 'Anonymous' });
+      hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
       isHost = false; inRoom = true;
       localStorage.setItem('active-room-code', code);
       connections.set(code, { data: hostData, media: null, pseudo: shortId(code), talking: false });
@@ -1076,12 +1178,11 @@ window.addEventListener('DOMContentLoaded', function() {
   // Hide the home pseudo field only if a name was already set at load time.
   // Once visible in a session, it stays visible regardless of edits.
   if (myPseudo) $('pseudo-field-home').style.display = 'none';
-  $('input-pseudo').value = myPseudo;
-  $('input-pseudo').addEventListener('input', function(e) {
-    myPseudo = e.target.value.trim();
-    localStorage.setItem('pseudo', myPseudo);
-    if (inRoom) updatePeerList();
-  });
+  const homePseudoInput = $('input-pseudo');
+  if (homePseudoInput) {
+    homePseudoInput.value = myPseudo;
+    homePseudoInput.addEventListener('input', function(e) { setMyPseudo(e.target.value); });
+  }
 
   // Connect button: visible only when NOT logged in
   window.updateConnectVisibility = function updateConnectVisibility() {
@@ -1486,8 +1587,12 @@ window.addEventListener('DOMContentLoaded', function() {
     }
     if (e.key === 'pseudo') {
       myPseudo = e.newValue || '';
-      $('input-pseudo').value = myPseudo;
-      if (inRoom) updatePeerList();
+      const homeInput = $('input-pseudo');
+      if (homeInput) homeInput.value = myPseudo;
+      if (inRoom) {
+        updatePeerList();
+        announcePseudoChange();
+      }
       return;
     }
     var relevantKeys = [PRESENCE_TOKEN_KEY, PRESENCE_ORG_KEY, METERED_APP_STORE_KEY,

@@ -240,6 +240,27 @@ body {
   color: var(--text-muted);
 }
 .peer-item.peer-self { color: var(--text); }
+.peer-self-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.peer-role {
+  color: var(--text-muted);
+}
+.peer-edit-btn {
+  font-size: 10px;
+  padding: 0 1px;
+  min-width: 14px;
+  min-height: 14px;
+}
+.peer-name-inline {
+  width: 150px;
+  max-width: 42vw;
+  transform: none;
+  font-size: 13px;
+  padding: 4px 8px;
+}
 .peer-item.talking {
   background: rgba(74, 222, 128, 0.1);
   color: var(--text);
