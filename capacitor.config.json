@@ -1,5 +1,5 @@
 {
-  "appId": "com.erwann.push2talk.app",
+	"appId": "com.erwann.voxal.app",
   "appName": "Voxal",
   "webDir": "src",
   "plugins": {

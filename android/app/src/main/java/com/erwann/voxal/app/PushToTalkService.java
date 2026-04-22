@@ -1,4 +1,4 @@
-package com.push2talk.app;
+package com.erwann.voxal.app;
 
 import android.app.Service;
 import android.app.NotificationManager;

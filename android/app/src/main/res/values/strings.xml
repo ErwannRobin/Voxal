@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">push2talk</string>
-    <string name="title_activity_main">push2talk</string>
-    <string name="package_name">com.push2talk.app</string>
-    <string name="custom_url_scheme">com.push2talk.app</string>
+    <string name="app_name">Voxal</string>
+    <string name="title_activity_main">Voxal</string>
+    <string name="package_name">com.erwann.voxal.app</string>
+    <string name="custom_url_scheme">com.erwann.voxal.app</string>
 </resources>

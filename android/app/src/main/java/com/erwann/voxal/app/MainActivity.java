@@ -1,4 +1,4 @@
-package com.push2talk.app;
+package com.erwann.voxal.app;
 
 import com.getcapacitor.BridgeActivity;
 import android.os.Bundle;
