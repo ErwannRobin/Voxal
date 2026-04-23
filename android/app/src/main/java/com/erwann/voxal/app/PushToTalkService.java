@@ -3,6 +3,7 @@ package com.erwann.voxal.app;
 import android.app.Service;
 import android.app.NotificationManager;
 import android.app.NotificationChannel;
+import android.content.Context;
 import android.content.Intent;
 import android.media.AudioManager;
 import android.os.Build;
@@ -12,6 +13,7 @@ import androidx.core.app.NotificationCompat;
 public class PushToTalkService extends Service {
   private static final int NOTIFICATION_ID = 1;
   private static final String CHANNEL_ID = "push2talk_channel";
+  private static final String ATTRIBUTION_TAG = "push_to_talk_audio";
   private AudioManager audioManager;
 
   public static boolean isRunning = false;
@@ -19,8 +21,9 @@ public class PushToTalkService extends Service {
   @Override
   public void onCreate() {
     super.onCreate();
-    createNotificationChannel();
-    audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+    Context serviceContext = getAttributedServiceContext();
+    createNotificationChannel(serviceContext);
+    audioManager = (AudioManager) serviceContext.getSystemService(AUDIO_SERVICE);
   }
 
   @Override
@@ -49,7 +52,14 @@ public class PushToTalkService extends Service {
     return null;
   }
 
-  private void createNotificationChannel() {
+  private Context getAttributedServiceContext() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      return createAttributionContext(ATTRIBUTION_TAG);
+    }
+    return this;
+  }
+
+  private void createNotificationChannel(Context context) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       NotificationChannel channel = new NotificationChannel(
         CHANNEL_ID,
@@ -57,7 +67,7 @@ public class PushToTalkService extends Service {
         NotificationManager.IMPORTANCE_LOW
       );
       channel.setSound(null, null);
-      NotificationManager manager = getSystemService(NotificationManager.class);
+      NotificationManager manager = context.getSystemService(NotificationManager.class);
       if (manager != null) {
         manager.createNotificationChannel(channel);
       }

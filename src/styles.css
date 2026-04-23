@@ -496,12 +496,10 @@ input[type="password"]:focus { border-color: var(--accent); }
 .screen-topbar {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   margin-bottom: 4px;
   position: relative;
 }
-
-body.platform-web .screen-topbar { justify-content: space-between; }
 
 .conn-status-popover {
   position: absolute;

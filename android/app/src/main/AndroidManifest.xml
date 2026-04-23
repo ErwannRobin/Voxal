@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <attribution
+        android:tag="push_to_talk_audio"
+        android:label="@string/attribution_push_to_talk_audio" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
