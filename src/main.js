@@ -458,6 +458,30 @@ function updateRoomHeader() {
 
 // peerId -> { data, media, pseudo, talking }
 const connections = new Map();
+const knownPeerIds = new Set();
+
+function rememberPeer(peerId) {
+  if (!peerId) return;
+  if (peer && peer.id === peerId) return;
+  knownPeerIds.add(peerId);
+}
+
+function forgetPeer(peerId) {
+  if (!peerId) return;
+  knownPeerIds.delete(peerId);
+}
+
+function resetKnownPeers(peerIds) {
+  knownPeerIds.clear();
+  (peerIds || []).forEach(rememberPeer);
+}
+
+function electHostId(excludedPeerId) {
+  const candidates = Array.from(knownPeerIds).filter(function(id) { return id !== excludedPeerId; });
+  if (peer && peer.id) candidates.push(peer.id);
+  candidates.sort();
+  return candidates[0] || null;
+}
 
 // Silently disable / re-enable all home-screen CTAs during a join/create action
 function lockHomeCTAs() {
@@ -840,12 +864,14 @@ function clearPeerMedia(peerId) {
 function shouldAcceptJoinerDataConnection(joinerId) {
   if (isHost) return true;
   if (!inRoom || !peer) return false;
-  return joinerId !== roomCode && peer.id < joinerId;
+  if (connectingToHostId) return false;
+  return joinerId !== roomCode && electHostId(roomCode) === peer.id;
 }
 
 function leaveRoom() {
   inRoom = false; freeHandMode = false; isTalking = false;
   connectingToHostId = null;
+  knownPeerIds.clear();
   releaseAudioFocus();
   nativePTTLeave();
   stopKeepAlive();
@@ -869,6 +895,7 @@ function initiateHostMigration(disconnectedHostId) {
   const oldHostId = disconnectedHostId || roomCode;
   if (oldHostId !== roomCode && oldHostId !== connectingToHostId) return;
   connectingToHostId = null;
+  forgetPeer(oldHostId);
 
   // Remove old host from the map (data conn is already dead; media closes on its own)
   const oldConn = connections.get(oldHostId);
@@ -880,11 +907,8 @@ function initiateHostMigration(disconnectedHostId) {
 
   playGoodbye();
 
-  // Elect new host: smallest peer ID among all remaining peers + self
-  const allIds = [...connections.keys(), peer.id].sort();
-  if (allIds.length === 0) { leaveRoom(); return; }
-
-  const newHostId = allIds[0];
+  const newHostId = electHostId(oldHostId);
+  if (!newHostId) { leaveRoom(); return; }
   updatePeerList();
 
   if (newHostId === peer.id) {
@@ -907,6 +931,7 @@ function becomeHost() {
 
 function connectToNewHost(newHostId) {
   connectingToHostId = newHostId;
+  rememberPeer(newHostId);
   roomCode = newHostId;
   iframeEmit({ type: 'host-changed', roomCode: newHostId, isSelf: false });
   updateRoomHeader();
@@ -944,19 +969,24 @@ function handleJoinerDataConnection(dataConn) {
   const joinerId = dataConn.peer;
 
   dataConn.on('open', function() {
+    rememberPeer(joinerId);
     const existing = connections.get(joinerId) || { media: null, pseudo: shortId(joinerId), talking: false };
     connections.set(joinerId, Object.assign({}, existing, { data: dataConn, pseudo: existing.pseudo || shortId(joinerId) }));
   });
 
   dataConn.on('data', function(msg) {
     if (msg.type === 'hello') {
+      rememberPeer(joinerId);
       const pseudo = msg.pseudo || shortId(joinerId);
       const existing = connections.get(joinerId) || { data: dataConn, media: null, talking: false };
       connections.set(joinerId, Object.assign({}, existing, { pseudo: pseudo }));
 
-      const peers = Array.from(connections.entries())
-        .filter(function(entry) { return entry[0] !== joinerId; })
-        .map(function(entry) { return { id: entry[0], pseudo: entry[1].pseudo || shortId(entry[0]) }; });
+      const peers = Array.from(knownPeerIds)
+        .filter(function(id) { return id !== joinerId; })
+        .map(function(id) {
+          const existingPeer = connections.get(id);
+          return { id: id, pseudo: existingPeer && existingPeer.pseudo ? existingPeer.pseudo : shortId(id) };
+        });
       dataConn.send({ type: 'peer-list', peers: peers, hostId: peer.id, hostPseudo: pseudoForHost() });
 
       connections.forEach(function(c, id) {
@@ -984,6 +1014,7 @@ function handleJoinerDataConnection(dataConn) {
 
   dataConn.on('close', function() {
     if (!connections.has(joinerId)) return;
+    forgetPeer(joinerId);
     connections.forEach(function(c) { if (c.data) c.data.send({ type: 'peer-left', peerId: joinerId }); });
     playGoodbye();
     removePeer(joinerId);
@@ -996,6 +1027,7 @@ async function createRoom(onJoined) {
   stream = await getMicStream();
   audioTrack = stream.getAudioTracks()[0];
   audioTrack.enabled = false;
+  knownPeerIds.clear();
   const iceServers = await fetchIceServers();
   peer = new Peer({ config: { iceServers } });
   peer.on('open', function(id) {
@@ -1020,6 +1052,7 @@ async function createRoom(onJoined) {
 
 function handleHostMessage(msg) {
   if (msg.type === 'peer-list') {
+    resetKnownPeers(msg.peers.map(function(p) { return p.id; }).concat([roomCode]));
     const hostConn = connections.get(roomCode);
     if (hostConn) hostConn.pseudo = msg.hostPseudo || shortId(roomCode);
 
@@ -1039,6 +1072,7 @@ function handleHostMessage(msg) {
     });
 
   } else if (msg.type === 'peer-joined') {
+    rememberPeer(msg.peerId);
     if (!connections.has(msg.peerId)) {
       connections.set(msg.peerId, { data: null, media: null, pseudo: msg.pseudo || shortId(msg.peerId), talking: false });
       playCarillon();
@@ -1046,6 +1080,7 @@ function handleHostMessage(msg) {
     }
 
   } else if (msg.type === 'peer-left') {
+    forgetPeer(msg.peerId);
     playGoodbye();
     removePeer(msg.peerId);
 
@@ -1063,6 +1098,7 @@ async function joinRoom(code, onJoined) {
   stream = await getMicStream();
   audioTrack = stream.getAudioTracks()[0];
   audioTrack.enabled = false;
+  resetKnownPeers([code]);
   const iceServers = await fetchIceServers();
   peer = new Peer({ config: { iceServers } });
   peer.on('open', function() {
@@ -1075,6 +1111,7 @@ async function joinRoom(code, onJoined) {
       isHost = false; inRoom = true;
       connectingToHostId = null;
       localStorage.setItem('active-room-code', code);
+      rememberPeer(code);
       connections.set(code, { data: hostData, media: null, pseudo: shortId(code), talking: false });
       updateRoomHeader();
       nativePTTJoin(code);
