@@ -412,6 +412,7 @@ let audioTrack        = null;
 let isHost            = false;
 let roomCode          = '';
 let inRoom            = false;
+let connectingToHostId = null;
 let isTalking         = false;
 let freeHandMode      = false;
 let recordingShortcut = false;
@@ -826,6 +827,7 @@ function removePeer(peerId) {
 
 function leaveRoom() {
   inRoom = false; freeHandMode = false; isTalking = false;
+  connectingToHostId = null;
   releaseAudioFocus();
   nativePTTLeave();
   stopKeepAlive();
@@ -843,10 +845,12 @@ function leaveRoom() {
 
 // --- Host migration ----------------------------------------------------------
 
-function initiateHostMigration() {
+function initiateHostMigration(disconnectedHostId) {
   if (!inRoom) return;
 
-  const oldHostId = roomCode;
+  const oldHostId = disconnectedHostId || roomCode;
+  if (oldHostId !== roomCode && oldHostId !== connectingToHostId) return;
+  connectingToHostId = null;
 
   // Remove old host from the map (data conn is already dead; media closes on its own)
   const oldConn = connections.get(oldHostId);
@@ -873,6 +877,7 @@ function initiateHostMigration() {
 }
 
 function becomeHost() {
+  connectingToHostId = null;
   isHost = true;
   roomCode = peer.id;
   iframeEmit({ type: 'host-changed', roomCode: peer.id, isSelf: true });
@@ -883,6 +888,7 @@ function becomeHost() {
 }
 
 function connectToNewHost(newHostId) {
+  connectingToHostId = newHostId;
   roomCode = newHostId;
   iframeEmit({ type: 'host-changed', roomCode: newHostId, isSelf: false });
   updateRoomHeader();
@@ -890,6 +896,7 @@ function connectToNewHost(newHostId) {
   const hostData = peer.connect(newHostId, { reliable: true });
 
   hostData.on('open', function() {
+    connectingToHostId = null;
     hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
     const prev = connections.get(newHostId) || { media: null, talking: false };
     connections.set(newHostId, Object.assign({}, prev, { data: hostData, pseudo: prev.pseudo || shortId(newHostId) }));
@@ -897,7 +904,7 @@ function connectToNewHost(newHostId) {
   });
 
   hostData.on('data',  function(msg) { handleHostMessage(msg); });
-  hostData.on('close', function()    { if (inRoom) initiateHostMigration(); });
+  hostData.on('close', function()    { if (inRoom) initiateHostMigration(newHostId); });
   hostData.on('error', function(err) { console.warn('[host-data]', err); });
 }
 
@@ -919,7 +926,8 @@ function handleJoinerDataConnection(dataConn) {
   const joinerId = dataConn.peer;
 
   dataConn.on('open', function() {
-    connections.set(joinerId, { data: dataConn, media: null, pseudo: shortId(joinerId), talking: false });
+    const existing = connections.get(joinerId) || { media: null, pseudo: shortId(joinerId), talking: false };
+    connections.set(joinerId, Object.assign({}, existing, { data: dataConn, pseudo: existing.pseudo || shortId(joinerId) }));
   });
 
   dataConn.on('data', function(msg) {
@@ -1047,6 +1055,7 @@ async function joinRoom(code, onJoined) {
     hostData.on('open', function() {
       hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
       isHost = false; inRoom = true;
+      connectingToHostId = null;
       localStorage.setItem('active-room-code', code);
       connections.set(code, { data: hostData, media: null, pseudo: shortId(code), talking: false });
       updateRoomHeader();
@@ -1060,7 +1069,7 @@ async function joinRoom(code, onJoined) {
     });
 
     hostData.on('data',  function(msg) { handleHostMessage(msg); });
-    hostData.on('close', function()    { if (inRoom) initiateHostMigration(); });
+    hostData.on('close', function()    { if (inRoom) initiateHostMigration(code); });
     hostData.on('error', function(err) { showError(err.message); });
   });
   // Accept incoming connections in case this peer becomes host after migration
@@ -1842,11 +1851,11 @@ window.addEventListener('DOMContentLoaded', function() {
           peer.reconnect();
         }
         // Only non-host peers have a host DataConnection in the map.
-        if (!isHost) {
+        if (!isHost && !connectingToHostId) {
           const hostConn = connections.get(roomCode);
           if (!hostConn || !hostConn.data || hostConn.data.closed) {
             console.warn('[visibility] Host connection lost, reconnecting...');
-            initiateHostMigration();
+            initiateHostMigration(roomCode);
           }
         }
       }

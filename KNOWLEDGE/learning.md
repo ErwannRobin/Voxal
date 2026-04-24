@@ -28,6 +28,7 @@ Copilot should read this file at the start of every session.
 ## Android / Capacitor
 
 - **Host connection check gotcha**: host peers do not have a `connections.get(roomCode)` DataConnection entry to themselves. Running host-connection liveness checks unconditionally (host + non-host) triggers false host-migration on resume/foreground.
+- **Host migration race**: stale `close` events from the dead host can fire after a new host is elected. Guard `initiateHostMigration(...)` with the specific disconnected host id, and preserve existing `media` links when a reconnected joiner replaces only its `data` channel.
 - **Custom Capacitor Android plugin methods** must use `@PluginMethod` from `com.getcapacitor.PluginMethod`; without it, JS calls (e.g. `window.Capacitor.Plugins.AudioForeground.start()`) are not exposed.
 - **Android 12+ `AppOps` attribution logs** (`attributionTag ... not declared in manifest`) can come from service `getSystemService(...)` calls using the default empty context. Declare a `<attribution>` tag in `AndroidManifest.xml` and use `createAttributionContext(...)` before accessing services like `AudioManager` or `NotificationManager`.
 
