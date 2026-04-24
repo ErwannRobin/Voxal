@@ -73,7 +73,8 @@ function presenceConfigured() { return !!(presenceToken() && presenceOrgId()); }
 // --- iframe postMessage bridge -----------------------------------------------
 // When Voxal runs embedded inside a parent page's <iframe>, this bridge lets the
 // parent control the room (join/create/leave) and observe state changes (talking,
-// joined, left, peers).  All messages are scoped to { source: 'voxal' }.
+// joined, left, peers, host-changed).  All messages are scoped to
+// { source: 'voxal' }.
 //
 // Parent → Voxal  (commands):
 //   { type: 'join',   roomCode: '<peerId>' }
@@ -85,6 +86,7 @@ function presenceConfigured() { return !!(presenceToken() && presenceOrgId()); }
 //   { source: 'voxal', type: 'left' }
 //   { source: 'voxal', type: 'talking', active: true|false }
 //   { source: 'voxal', type: 'peers',   peers: [{ id, pseudo, talking }] }
+//   { source: 'voxal', type: 'host-changed', roomCode: '<peerId>', isSelf: true|false }
 
 var _isIframe = (function() { try { return window.self !== window.top; } catch(e) { return true; } })();
 
@@ -873,6 +875,7 @@ function initiateHostMigration() {
 function becomeHost() {
   isHost = true;
   roomCode = peer.id;
+  iframeEmit({ type: 'host-changed', roomCode: peer.id, isSelf: true });
   updateRoomHeader();
   updatePeerList();
   // peer.on('connection') is already wired in joinRoom() and will route here
@@ -881,6 +884,7 @@ function becomeHost() {
 
 function connectToNewHost(newHostId) {
   roomCode = newHostId;
+  iframeEmit({ type: 'host-changed', roomCode: newHostId, isSelf: false });
   updateRoomHeader();
 
   const hostData = peer.connect(newHostId, { reliable: true });
