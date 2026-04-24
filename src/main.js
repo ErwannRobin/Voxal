@@ -825,6 +825,24 @@ function removePeer(peerId) {
   updatePeerList();
 }
 
+function clearPeerMedia(peerId) {
+  const conn = connections.get(peerId);
+  if (!conn) return;
+  if (conn.data) {
+    connections.set(peerId, Object.assign({}, conn, { media: null, talking: false }));
+  } else {
+    connections.delete(peerId);
+  }
+  detachAudio(peerId);
+  updatePeerList();
+}
+
+function shouldAcceptJoinerDataConnection(joinerId) {
+  if (isHost) return true;
+  if (!inRoom || !peer) return false;
+  return joinerId !== roomCode && peer.id < joinerId;
+}
+
 function leaveRoom() {
   inRoom = false; freeHandMode = false; isTalking = false;
   connectingToHostId = null;
@@ -916,7 +934,7 @@ function handleIncomingCall(call) {
     connections.set(call.peer, Object.assign({}, prev, { media: call }));
     updatePeerList();
   });
-  call.on('close', function() { removePeer(call.peer); });
+  call.on('close', function() { clearPeerMedia(call.peer); });
   call.on('error', function(err) { console.warn('[call]', err); });
 }
 
@@ -1016,7 +1034,7 @@ function handleHostMessage(msg) {
 
       const call = peer.call(peerId, stream);
       call.on('stream', function(remote) { attachAudio(peerId, remote); });
-      call.on('close',  function()       { removePeer(peerId); });
+      call.on('close',  function()       { clearPeerMedia(peerId); });
       connections.set(peerId, Object.assign({}, connections.get(peerId), { media: call }));
     });
 
@@ -1073,7 +1091,11 @@ async function joinRoom(code, onJoined) {
     hostData.on('error', function(err) { showError(err.message); });
   });
   // Accept incoming connections in case this peer becomes host after migration
-  peer.on('connection', function(dataConn) { if (isHost) handleJoinerDataConnection(dataConn); });
+  peer.on('connection', function(dataConn) {
+    if (!shouldAcceptJoinerDataConnection(dataConn.peer)) return;
+    if (!isHost) becomeHost();
+    handleJoinerDataConnection(dataConn);
+  });
   peer.on('call',  function(call) { handleIncomingCall(call); });
   peer.on('error', function(err)  { showError(err.message); });
 }
