@@ -459,6 +459,7 @@ function updateRoomHeader() {
 // peerId -> { data, media, pseudo, talking }
 const connections = new Map();
 const knownPeerIds = new Set();
+var _hostConnGeneration = 0; // incremented each connection attempt to invalidate stale events
 
 function rememberPeer(peerId) {
   if (!peerId) return;
@@ -871,6 +872,7 @@ function shouldAcceptJoinerDataConnection(joinerId) {
 function leaveRoom() {
   inRoom = false; freeHandMode = false; isTalking = false;
   connectingToHostId = null;
+  ++_hostConnGeneration; // invalidate any pending retry timers
   knownPeerIds.clear();
   releaseAudioFocus();
   nativePTTLeave();
@@ -888,6 +890,10 @@ function leaveRoom() {
 }
 
 // --- Host migration ----------------------------------------------------------
+
+var HOST_CONNECT_TIMEOUT = 8000; // per-attempt timeout
+var HOST_RETRY_DELAY     = 2000; // delay between retries
+var HOST_MAX_RETRIES     = 3;    // retries before re-electing
 
 function initiateHostMigration(disconnectedHostId) {
   if (!inRoom) return;
@@ -935,19 +941,64 @@ function connectToNewHost(newHostId) {
   roomCode = newHostId;
   iframeEmit({ type: 'host-changed', roomCode: newHostId, isSelf: false });
   updateRoomHeader();
+  _attemptHostConnection(newHostId, HOST_MAX_RETRIES);
+}
 
-  const hostData = peer.connect(newHostId, { reliable: true });
+function _attemptHostConnection(targetHostId, retriesLeft) {
+  if (!inRoom || !peer || peer.destroyed) return;
+  if (roomCode !== targetHostId) return;
+
+  var gen = ++_hostConnGeneration;
+  var hostData = peer.connect(targetHostId, { reliable: true });
+  var opened = false;
+  var handled = false;
+
+  // If connection doesn't open within timeout, force-close to trigger retry
+  var timer = setTimeout(function() {
+    if (gen !== _hostConnGeneration) return;
+    if (!opened && !handled) hostData.close();
+  }, HOST_CONNECT_TIMEOUT);
 
   hostData.on('open', function() {
+    if (gen !== _hostConnGeneration) { hostData.close(); return; }
+    opened = true;
+    clearTimeout(timer);
     connectingToHostId = null;
     hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
-    const prev = connections.get(newHostId) || { media: null, talking: false };
-    connections.set(newHostId, Object.assign({}, prev, { data: hostData, pseudo: prev.pseudo || shortId(newHostId) }));
+    var prev = connections.get(targetHostId) || { media: null, talking: false };
+    connections.set(targetHostId, Object.assign({}, prev, { data: hostData, pseudo: prev.pseudo || shortId(targetHostId) }));
     updatePeerList();
   });
 
-  hostData.on('data',  function(msg) { handleHostMessage(msg); });
-  hostData.on('close', function()    { if (inRoom) initiateHostMigration(newHostId); });
+  hostData.on('data', function(msg) {
+    if (gen !== _hostConnGeneration) return;
+    handleHostMessage(msg);
+  });
+
+  hostData.on('close', function() {
+    clearTimeout(timer);
+    if (gen !== _hostConnGeneration) return;
+    if (handled) return;
+    handled = true;
+
+    if (opened) {
+      // Connection was live then dropped — host actually died
+      if (inRoom) initiateHostMigration(targetHostId);
+      return;
+    }
+    // Never opened — transient failure, retry before re-electing
+    if (!inRoom || roomCode !== targetHostId) return;
+    if (retriesLeft > 0) {
+      console.log('[migration] Retry connection to ' + targetHostId + ' (' + retriesLeft + ' left)');
+      setTimeout(function() {
+        _attemptHostConnection(targetHostId, retriesLeft - 1);
+      }, HOST_RETRY_DELAY);
+    } else {
+      console.warn('[migration] Giving up on ' + targetHostId + ', re-electing');
+      initiateHostMigration(targetHostId);
+    }
+  });
+
   hostData.on('error', function(err) { console.warn('[host-data]', err); });
 }
 
