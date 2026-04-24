@@ -1,5 +1,5 @@
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri::menu::{AboutMetadata, MenuItem, MenuBuilder, SubmenuBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -76,6 +76,17 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .manage(PttShortcut(Mutex::new(DEFAULT_SHORTCUT.to_string())))
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            if let Some(main_window) = app.get_webview_window("main") {
+                let window = main_window.clone();
+                main_window.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = window.minimize();
+                    }
+                });
+            }
+
             // Register voxal:// scheme (Windows/Linux: dynamic registry/desktop entry;
             // macOS: requires a proper build — scheme is baked into the .app bundle)
             app.deep_link().register_all().ok();
