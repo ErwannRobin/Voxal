@@ -498,10 +498,15 @@ function resetKnownPeers(peerIds) {
   (peerIds || []).forEach(rememberPeer);
 }
 
-function electHostId(excludedPeerId) {
+function hostElectionCandidates(excludedPeerId) {
   const candidates = Array.from(knownPeerIds).filter(function(id) { return id !== excludedPeerId; });
   if (peer && peer.id && peer.id !== excludedPeerId) candidates.push(peer.id);
   candidates.sort();
+  return candidates;
+}
+
+function electHostId(excludedPeerId) {
+  const candidates = hostElectionCandidates(excludedPeerId);
   return candidates[0] || null;
 }
 
@@ -980,13 +985,34 @@ function initiateHostMigration(disconnectedHostId) {
 
   playGoodbye();
 
-  const newHostId = electHostId(oldHostId);
-  if (!newHostId) { leaveRoom(); return; }
+  const candidates = hostElectionCandidates(oldHostId);
+  const newHostId = candidates[0] || null;
+  const nextDeputyId = newHostId ? electHostId(newHostId) : null;
+  console.warn('[migration] Host disconnected:', {
+    disconnectedHostId: oldHostId,
+    selfId: peer && peer.id,
+    candidates: candidates,
+    electedHostId: newHostId,
+    deputyAfterElection: nextDeputyId || null,
+  });
+  if (!newHostId) {
+    console.warn('[migration] No host candidate remains, leaving room.');
+    leaveRoom();
+    return;
+  }
   updatePeerList();
 
   if (newHostId === peer.id) {
+    console.log('[migration] Self elected as host:', {
+      hostId: peer.id,
+      deputyAfterElection: nextDeputyId || null,
+    });
     becomeHost();
   } else {
+    console.log('[migration] Connecting to elected host:', {
+      targetHostId: newHostId,
+      deputyAfterElection: nextDeputyId || null,
+    });
     connectToNewHost(newHostId);
   }
 }
@@ -995,6 +1021,10 @@ function becomeHost() {
   connectingToHostId = null;
   isHost = true;
   roomCode = peer.id;
+  console.log('[migration] Became host:', {
+    hostId: peer.id,
+    deputyAfterElection: electHostId(peer.id) || null,
+  });
   iframeEmit({ type: 'host-changed', roomCode: peer.id, isSelf: true });
   updateRoomHeader();
   updatePeerList();
@@ -1006,6 +1036,10 @@ function connectToNewHost(newHostId) {
   connectingToHostId = newHostId;
   rememberPeer(newHostId);
   roomCode = newHostId;
+  console.log('[migration] Preparing connection to elected host:', {
+    targetHostId: newHostId,
+    deputyAfterElection: electHostId(newHostId) || null,
+  });
   iframeEmit({ type: 'host-changed', roomCode: newHostId, isSelf: false });
   updateRoomHeader();
   _attemptHostConnection(newHostId, HOST_MAX_RETRIES);
@@ -1019,10 +1053,22 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
   var hostData = peer.connect(targetHostId, { reliable: true });
   var opened = false;
   var handled = false;
+  var attemptNumber = HOST_MAX_RETRIES - retriesLeft + 1;
+  console.log('[migration] Attempting host connection:', {
+    targetHostId: targetHostId,
+    attempt: attemptNumber,
+    retriesLeft: retriesLeft,
+    deputyAfterElection: electHostId(targetHostId) || null,
+  });
 
   // If connection doesn't open within timeout, force-close to trigger retry
   var timer = setTimeout(function() {
     if (gen !== _hostConnGeneration) return;
+    console.warn('[migration] Host connection timed out before open:', {
+      targetHostId: targetHostId,
+      attempt: attemptNumber,
+      retriesLeft: retriesLeft,
+    });
     if (!opened && !handled) hostData.close();
   }, HOST_CONNECT_TIMEOUT);
 
@@ -1034,6 +1080,11 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
     hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
     var prev = connections.get(targetHostId) || { media: null, talking: false };
     connections.set(targetHostId, Object.assign({}, prev, { data: hostData, pseudo: prev.pseudo || shortId(targetHostId) }));
+    console.log('[migration] Connected to elected host:', {
+      targetHostId: targetHostId,
+      attempt: attemptNumber,
+      deputyAfterElection: electHostId(targetHostId) || null,
+    });
     updatePeerList();
   });
 
@@ -1050,23 +1101,43 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
 
     if (opened) {
       // Connection was live then dropped — host actually died
+      console.warn('[migration] Connection to elected host closed after open:', {
+        targetHostId: targetHostId,
+        attempt: attemptNumber,
+      });
       if (inRoom) initiateHostMigration(targetHostId);
       return;
     }
     // Never opened — transient failure, retry before re-electing
     if (!inRoom || roomCode !== targetHostId) return;
     if (retriesLeft > 0) {
-      console.log('[migration] Retry connection to ' + targetHostId + ' (' + retriesLeft + ' left)');
+      console.warn('[migration] Failed to connect to elected host, retrying:', {
+        targetHostId: targetHostId,
+        attempt: attemptNumber,
+        retriesLeftAfterThisAttempt: retriesLeft - 1,
+        deputyAfterElection: electHostId(targetHostId) || null,
+      });
       setTimeout(function() {
         _attemptHostConnection(targetHostId, retriesLeft - 1);
       }, HOST_RETRY_DELAY);
     } else {
-      console.warn('[migration] Giving up on ' + targetHostId + ', re-electing');
+      console.warn('[migration] Giving up on elected host, re-electing:', {
+        targetHostId: targetHostId,
+        attempt: attemptNumber,
+        deputyAfterElection: electHostId(targetHostId) || null,
+      });
       initiateHostMigration(targetHostId);
     }
   });
 
-  hostData.on('error', function(err) { console.warn('[host-data]', err); });
+  hostData.on('error', function(err) {
+    console.warn('[migration] Host connection error:', {
+      targetHostId: targetHostId,
+      attempt: attemptNumber,
+      message: err && err.message ? err.message : String(err),
+      deputyAfterElection: electHostId(targetHostId) || null,
+    });
+  });
 }
 
 function handleIncomingCall(call) {
