@@ -595,6 +595,10 @@ function matchesShortcut(e) {
     && e.shiftKey === needShift;
 }
 
+function shouldIgnorePTTShortcuts() {
+  return editingSelfPseudo;
+}
+
 function displayShortcut(raw) {
   return raw
     .replace('Backquote', '`').replace(/Key([A-Z])/g, '$1').replace(/Digit(\d)/g, '$1')
@@ -644,12 +648,23 @@ function updatePeerList() {
   const list = $('peers-list');
   list.innerHTML = '';
 
+  const appendHostRole = function(parent) {
+    const role = document.createElement('span');
+    role.className = 'peer-role';
+    role.textContent = '· host';
+    parent.appendChild(role);
+  };
+
   const addItem = (id, label, self, talking, editable) => {
     const div = document.createElement('div');
     div.id = 'peer-item-' + id;
     div.className = 'peer-item' + (self ? ' peer-self' : '') + (talking ? ' talking' : '');
     if (!editable) {
-      div.innerHTML = '<span class="peer-dot"></span><span>' + label + '</span>';
+      div.innerHTML = '<span class="peer-dot"></span>';
+      const nameWrap = document.createElement('span');
+      nameWrap.textContent = label;
+      if (id === roomCode) appendHostRole(nameWrap);
+      div.appendChild(nameWrap);
       list.appendChild(div);
       return;
     }
@@ -667,9 +682,13 @@ function updatePeerList() {
       input.value = myPseudo;
       input.addEventListener('keydown', function(e) {
         if (e.key === 'Enter') {
+          e.preventDefault();
+          e.stopPropagation();
           editingSelfPseudo = false;
           setMyPseudo(input.value);
         } else if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
           editingSelfPseudo = false;
           updatePeerList();
         }
@@ -679,12 +698,7 @@ function updatePeerList() {
         setMyPseudo(input.value);
       });
       nameWrap.appendChild(input);
-      if (isHost) {
-        const role = document.createElement('span');
-        role.className = 'peer-role';
-        role.textContent = '· host';
-        nameWrap.appendChild(role);
-      }
+      if (isHost) appendHostRole(nameWrap);
       div.appendChild(nameWrap);
       list.appendChild(div);
       setTimeout(function() { input.focus(); input.select(); }, 0);
@@ -694,12 +708,7 @@ function updatePeerList() {
     const name = document.createElement('span');
     name.textContent = myPseudo || 'You';
     nameWrap.appendChild(name);
-    if (isHost) {
-      const role = document.createElement('span');
-      role.className = 'peer-role';
-      role.textContent = '· host';
-      nameWrap.appendChild(role);
-    }
+    if (isHost) appendHostRole(nameWrap);
     const editBtn = document.createElement('button');
     editBtn.className = 'btn-icon peer-edit-btn';
     editBtn.title = 'Edit name';
@@ -1875,6 +1884,7 @@ window.addEventListener('DOMContentLoaded', function() {
       }
       return; // don't process PTT or shortcuts while modal is open
     }
+    if (shouldIgnorePTTShortcuts()) return;
     if (recordingShortcut) { e.preventDefault(); const s = shortcutFromEvent(e); if (s) applyNewShortcut(s); return; }
     if (e.code === 'Space' && !e.repeat) {
       e.preventDefault();
@@ -1894,6 +1904,7 @@ window.addEventListener('DOMContentLoaded', function() {
     if (matchesShortcut(e) && !e.repeat) { setTalking(true);                                          e.preventDefault(); }
   });
   document.addEventListener('keyup', function(e) {
+    if (shouldIgnorePTTShortcuts()) return;
     if (e.code === 'Space') {
       if (ignoreSpaceUp) { ignoreSpaceUp = false; return; }
       lastSpaceRelease = Date.now();
@@ -1914,7 +1925,7 @@ window.addEventListener('DOMContentLoaded', function() {
     var lastTauriRelease = 0;
     var ignoreTauriRelease = false;
     listen('ptt-press', function() {
-      if (recordingShortcut) return;
+      if (recordingShortcut || shouldIgnorePTTShortcuts()) return;
       var now = Date.now();
       if (now - lastTauriRelease < DOUBLE_TAP_MS) {
         // Double-press: toggle free hand mode (same as double-tap on mobile)
@@ -1931,7 +1942,7 @@ window.addEventListener('DOMContentLoaded', function() {
       }
     });
     listen('ptt-release', function() {
-      if (recordingShortcut) return;
+      if (recordingShortcut || shouldIgnorePTTShortcuts()) return;
       if (ignoreTauriRelease) { ignoreTauriRelease = false; return; }
       lastTauriRelease = Date.now();
       if (freeHandMode) {
