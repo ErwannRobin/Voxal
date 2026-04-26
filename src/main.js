@@ -506,19 +506,43 @@ function electHostId(excludedPeerId) {
 }
 
 // Silently disable / re-enable all home-screen CTAs during a join/create action
+let homeActionInFlight = false;
+
+function beginHomeAction() {
+  if (homeActionInFlight) return false;
+  homeActionInFlight = true;
+  return true;
+}
+
+function endHomeAction() {
+  homeActionInFlight = false;
+}
+
 function lockHomeCTAs() {
   ['btn-create','btn-join','input-code'].forEach(function(id) {
-    var el = document.getElementById(id); if (el) el.style.pointerEvents = 'none';
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.style.pointerEvents = 'none';
+    if ('disabled' in el) el.disabled = true;
   });
   var list = document.getElementById('channels-list');
-  if (list) list.style.pointerEvents = 'none';
+  if (list) {
+    list.style.pointerEvents = 'none';
+    list.setAttribute('aria-disabled', 'true');
+  }
 }
 function unlockHomeCTAs() {
   ['btn-create','btn-join','input-code'].forEach(function(id) {
-    var el = document.getElementById(id); if (el) el.style.pointerEvents = '';
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.style.pointerEvents = '';
+    if ('disabled' in el) el.disabled = false;
   });
   var list = document.getElementById('channels-list');
-  if (list) list.style.pointerEvents = '';
+  if (list) {
+    list.style.pointerEvents = '';
+    list.removeAttribute('aria-disabled');
+  }
 }
 
 // Haptic feedback (Capacitor native, no-op in browser/Tauri)
@@ -1124,22 +1148,36 @@ async function createRoom(onJoined) {
   knownPeerIds.clear();
   const iceServers = await fetchIceServers();
   peer = new Peer({ config: { iceServers } });
-  peer.on('open', function(id) {
-    isHost = true; roomCode = id; inRoom = true;
-    localStorage.setItem('active-room-code', id);
-    updateRoomHeader();
-    nativePTTJoin(id);
-    startKeepAlive();
-    requestAudioFocus(); // Keep foreground service running while in room
-    showScreen('room');
-    updatePeerList();
-    updateShortcutDisplay();
-    iframeEmit({ type: 'joined', roomCode: id, peerId: id });
-    if (onJoined) onJoined(id);
-  });
   peer.on('connection', function(dataConn) { handleJoinerDataConnection(dataConn); });
   peer.on('call',       function(call)     { handleIncomingCall(call); });
-  peer.on('error',      function(err)      { showError(err.message); });
+  let settled = false;
+  await new Promise(function(resolve, reject) {
+    peer.on('open', function(id) {
+      isHost = true; roomCode = id; inRoom = true;
+      localStorage.setItem('active-room-code', id);
+      updateRoomHeader();
+      nativePTTJoin(id);
+      startKeepAlive();
+      requestAudioFocus(); // Keep foreground service running while in room
+      showScreen('room');
+      updatePeerList();
+      updateShortcutDisplay();
+      iframeEmit({ type: 'joined', roomCode: id, peerId: id });
+      if (onJoined) onJoined(id);
+      if (!settled) {
+        settled = true;
+        resolve(id);
+      }
+    });
+    peer.on('error', function(err) {
+      if (!settled) {
+        settled = true;
+        reject(err);
+        return;
+      }
+      showError(err.message);
+    });
+  });
 }
 
 // --- Non-host logic ----------------------------------------------------------
@@ -1195,33 +1233,6 @@ async function joinRoom(code, onJoined) {
   resetKnownPeers([code]);
   const iceServers = await fetchIceServers();
   peer = new Peer({ config: { iceServers } });
-  peer.on('open', function() {
-    roomCode = code;
-    if (onJoined) onJoined(peer.id); // register presence as soon as we have our peer_id
-    const hostData = peer.connect(code, { reliable: true });
-
-    hostData.on('open', function() {
-      hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
-      isHost = false; inRoom = true;
-      connectingToHostId = null;
-      clearRoomCodeInput();
-      localStorage.setItem('active-room-code', code);
-      rememberPeer(code);
-      connections.set(code, { data: hostData, media: null, pseudo: shortId(code), talking: false });
-      updateRoomHeader();
-      nativePTTJoin(code);
-      startKeepAlive();
-      requestAudioFocus(); // Keep foreground service running while in room
-      showScreen('room');
-      updatePeerList();
-      updateShortcutDisplay();
-      iframeEmit({ type: 'joined', roomCode: code, peerId: peer.id });
-    });
-
-    hostData.on('data',  function(msg) { handleHostMessage(msg); });
-    hostData.on('close', function()    { if (inRoom) initiateHostMigration(code); });
-    hostData.on('error', function(err) { showError(err.message); });
-  });
   // Accept incoming connections in case this peer becomes host after migration
   peer.on('connection', function(dataConn) {
     if (!shouldAcceptJoinerDataConnection(dataConn.peer)) return;
@@ -1229,7 +1240,62 @@ async function joinRoom(code, onJoined) {
     handleJoinerDataConnection(dataConn);
   });
   peer.on('call',  function(call) { handleIncomingCall(call); });
-  peer.on('error', function(err)  { showError(err.message); });
+  let settled = false;
+  await new Promise(function(resolve, reject) {
+    peer.on('open', function() {
+      roomCode = code;
+      if (onJoined) onJoined(peer.id); // register presence as soon as we have our peer_id
+      const hostData = peer.connect(code, { reliable: true });
+
+      hostData.on('open', function() {
+        hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
+        isHost = false; inRoom = true;
+        connectingToHostId = null;
+        clearRoomCodeInput();
+        localStorage.setItem('active-room-code', code);
+        rememberPeer(code);
+        connections.set(code, { data: hostData, media: null, pseudo: shortId(code), talking: false });
+        updateRoomHeader();
+        nativePTTJoin(code);
+        startKeepAlive();
+        requestAudioFocus(); // Keep foreground service running while in room
+        showScreen('room');
+        updatePeerList();
+        updateShortcutDisplay();
+        iframeEmit({ type: 'joined', roomCode: code, peerId: peer.id });
+        if (!settled) {
+          settled = true;
+          resolve(peer.id);
+        }
+      });
+
+      hostData.on('data',  function(msg) { handleHostMessage(msg); });
+      hostData.on('close', function() {
+        if (!settled) {
+          settled = true;
+          reject(new Error('Connection to host closed before joining.'));
+          return;
+        }
+        if (inRoom) initiateHostMigration(code);
+      });
+      hostData.on('error', function(err) {
+        if (!settled) {
+          settled = true;
+          reject(err);
+          return;
+        }
+        showError(err.message);
+      });
+    });
+    peer.on('error', function(err) {
+      if (!settled) {
+        settled = true;
+        reject(err);
+        return;
+      }
+      showError(err.message);
+    });
+  });
 }
 
 // --- Presence UI ------------------------------------------------------------
@@ -1257,11 +1323,11 @@ function renderPresenceChannels() {
       (connected.length ? '<span class="channel-count">' + connected.length + '</span>' : '') +
       '<span class="channel-join-icon">›</span>';
     function handleJoin() {
-      if (div.classList.contains('loading')) return;
+      if (div.classList.contains('loading') || !beginHomeAction()) return;
       div.classList.add('loading');
       if (_audioCtx.state === 'suspended') _audioCtx.resume();
       lockHomeCTAs();
-      joinChannel(presenceData[idx]).catch(function(err) { showError(err.message); }).finally(function() { div.classList.remove('loading'); unlockHomeCTAs(); });
+      joinChannel(presenceData[idx]).catch(function(err) { showError(err.message); }).finally(function() { div.classList.remove('loading'); unlockHomeCTAs(); endHomeAction(); });
     }
     div.addEventListener('click', handleJoin);
     div.addEventListener('keydown', function(e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleJoin(); } });
@@ -1428,20 +1494,27 @@ window.addEventListener('DOMContentLoaded', function() {
   }
 
   $('btn-create').addEventListener('click', function() {
+    if (!beginHomeAction()) return;
     if (_audioCtx.state === 'suspended') _audioCtx.resume();
     var btn = $('btn-create');
     setLoading(btn, true, 'Create Room');
     lockHomeCTAs();
-    createRoom().catch(function(err) { showError(err.message); }).finally(function() { setLoading(btn, false); unlockHomeCTAs(); });
+    createRoom().catch(function(err) { showError(err.message); }).finally(function() { setLoading(btn, false); unlockHomeCTAs(); endHomeAction(); });
   });
   $('btn-join').addEventListener('click', function() {
+    if (!beginHomeAction()) return;
     if (_audioCtx.state === 'suspended') _audioCtx.resume();
     var btn = $('btn-join');
     setLoading(btn, true, 'Join');
     lockHomeCTAs();
-    joinRoom($('input-code').value.trim()).catch(function(err) { showError(err.message); }).finally(function() { setLoading(btn, false); unlockHomeCTAs(); });
+    joinRoom($('input-code').value.trim()).catch(function(err) { showError(err.message); }).finally(function() { setLoading(btn, false); unlockHomeCTAs(); endHomeAction(); });
   });
-  $('input-code').addEventListener('keydown', function(e) { if (e.key === 'Enter') $('btn-join').click(); });
+  $('input-code').addEventListener('keydown', function(e) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    var joinBtn = $('btn-join');
+    if (joinBtn && !joinBtn.disabled) joinBtn.click();
+  });
 
   // TURN settings modal
   function connStatusHTML() {
