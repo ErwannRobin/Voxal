@@ -248,6 +248,7 @@ body {
 }
 .peer-role {
   color: var(--text-muted);
+  font-style: italic;
 }
 .peer-edit-btn {
   font-size: 10px;

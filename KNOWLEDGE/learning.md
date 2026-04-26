@@ -37,6 +37,7 @@ Copilot should read this file at the start of every session.
 
 ## Web / CSS
 
+- **Pseudo storage scope**: on plain web, store the pseudo in `sessionStorage` so each browser tab can have its own name. On Tauri/Capacitor, keep using `localStorage` so the single app window persists it and the desktop settings window can sync it.
 - **`min-height: 100vh` + `overflow-y: auto`** causes the page to scroll. Use `height: 100vh; overflow: hidden` on `body` and `.screen`, with `flex: 1; overflow-y: auto; min-height: 0` only on the scrollable child.
 - **Toast positioning**: `position: fixed` at the bottom of the viewport (not `position: absolute` inside a screen) — otherwise clipped by `overflow: hidden` on `.screen`.
 - **Copy toast** uses `.visible` class (opacity 1) / no class (opacity 0), not `.hidden`. This avoids a flash of the toast on page load.

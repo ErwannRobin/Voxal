@@ -63,12 +63,32 @@ const DEFAULT_VOXAL_CONNECT_URL = 'https://voxal.lovable.app';
 const PRESENCE_TOKEN_KEY        = 'presence-api-token';
 const PRESENCE_ORG_KEY          = 'presence-org-id';
 const SERVICE_URL_KEY           = 'service-url';
+const PSEUDO_KEY                = 'pseudo';
+const PSEUDO_SESSION_KEY        = 'pseudo-session';
 
 function presenceBase()       { return (localStorage.getItem(SERVICE_URL_KEY) || DEFAULT_PRESENCE_BASE).replace(/\/$/, ''); }
 function voxalConnectUrl()    { return localStorage.getItem('voxal-connect-url') || DEFAULT_VOXAL_CONNECT_URL; }
 function presenceToken()      { return localStorage.getItem(PRESENCE_TOKEN_KEY) || ''; }
 function presenceOrgId()      { return localStorage.getItem(PRESENCE_ORG_KEY)   || ''; }
 function presenceConfigured() { return !!(presenceToken() && presenceOrgId()); }
+
+function shouldPersistPseudoGlobally() {
+  return !!window.__TAURI__ || !!window.Capacitor?.isNativePlatform?.();
+}
+
+function loadInitialPseudo() {
+  var sessionPseudo = sessionStorage.getItem(PSEUDO_SESSION_KEY);
+  if (sessionPseudo !== null) return sessionPseudo;
+
+  var savedPseudo = localStorage.getItem(PSEUDO_KEY) || '';
+  sessionStorage.setItem(PSEUDO_SESSION_KEY, savedPseudo);
+
+  if (!shouldPersistPseudoGlobally()) {
+    localStorage.removeItem(PSEUDO_KEY);
+  }
+
+  return savedPseudo;
+}
 
 // --- iframe postMessage bridge -----------------------------------------------
 // When Voxal runs embedded inside a parent page's <iframe>, this bridge lets the
@@ -416,7 +436,7 @@ let connectingToHostId = null;
 let isTalking         = false;
 let freeHandMode      = false;
 let recordingShortcut = false;
-let myPseudo          = localStorage.getItem('pseudo') || '';
+let myPseudo          = loadInitialPseudo();
 let editingSelfPseudo = false;
 
 let shortcutStr = localStorage.getItem('ptt-shortcut') || DEFAULT_SHORTCUT;
@@ -438,7 +458,8 @@ function announcePseudoChange() {
 
 function setMyPseudo(nextPseudo) {
   myPseudo = (nextPseudo || '').trim();
-  localStorage.setItem('pseudo', myPseudo);
+  sessionStorage.setItem(PSEUDO_SESSION_KEY, myPseudo);
+  if (shouldPersistPseudoGlobally()) localStorage.setItem(PSEUDO_KEY, myPseudo);
   const homeInput = $('input-pseudo');
   if (homeInput && homeInput.value !== myPseudo) homeInput.value = myPseudo;
   if (inRoom) {
@@ -1731,8 +1752,9 @@ window.addEventListener('DOMContentLoaded', function() {
       applyTheme(e.newValue || 'system');
       return;
     }
-    if (e.key === 'pseudo') {
+    if (e.key === PSEUDO_KEY && window.__TAURI__) {
       myPseudo = e.newValue || '';
+      sessionStorage.setItem(PSEUDO_SESSION_KEY, myPseudo);
       const homeInput = $('input-pseudo');
       if (homeInput) homeInput.value = myPseudo;
       if (inRoom) {
