@@ -137,6 +137,7 @@ body {
 }
 
 .join-row { display: flex; gap: 8px; }
+.join-row .input-clearable { flex: 1; min-width: 0; }
 .join-row input { flex: 1; min-width: 0; }
 
 /* ── Room ───────────────────────────────────────────────────────── */

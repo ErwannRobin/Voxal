@@ -626,6 +626,13 @@ function stopRecordingShortcut() {
   $('shortcut-recording').classList.add('hidden');
 }
 
+function clearRoomCodeInput() {
+  var input = $('input-code');
+  if (!input) return;
+  input.value = '';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 function applyNewShortcut(newShortcut) {
   stopRecordingShortcut();
   const old = shortcutStr;
@@ -1176,6 +1183,7 @@ async function joinRoom(code, onJoined) {
       hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
       isHost = false; inRoom = true;
       connectingToHostId = null;
+      clearRoomCodeInput();
       localStorage.setItem('active-room-code', code);
       rememberPeer(code);
       connections.set(code, { data: hostData, media: null, pseudo: shortId(code), talking: false });
