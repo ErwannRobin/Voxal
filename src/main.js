@@ -479,7 +479,7 @@ function resetKnownPeers(peerIds) {
 
 function electHostId(excludedPeerId) {
   const candidates = Array.from(knownPeerIds).filter(function(id) { return id !== excludedPeerId; });
-  if (peer && peer.id) candidates.push(peer.id);
+  if (peer && peer.id && peer.id !== excludedPeerId) candidates.push(peer.id);
   candidates.sort();
   return candidates[0] || null;
 }
@@ -647,12 +647,18 @@ function shortId(id) {
 function updatePeerList() {
   const list = $('peers-list');
   list.innerHTML = '';
+  const deputyPeerId = roomCode ? electHostId(roomCode) : null;
 
-  const appendHostRole = function(parent) {
+  const appendRole = function(parent, label) {
     const role = document.createElement('span');
     role.className = 'peer-role';
-    role.textContent = '· host';
+    role.textContent = '· ' + label;
     parent.appendChild(role);
+  };
+
+  const appendPeerRole = function(parent, peerId) {
+    if (peerId === roomCode) appendRole(parent, 'host');
+    else if (peerId && peerId === deputyPeerId) appendRole(parent, 'deputy');
   };
 
   const addItem = (id, label, self, talking, editable) => {
@@ -663,7 +669,7 @@ function updatePeerList() {
       div.innerHTML = '<span class="peer-dot"></span>';
       const nameWrap = document.createElement('span');
       nameWrap.textContent = label;
-      if (id === roomCode) appendHostRole(nameWrap);
+      appendPeerRole(nameWrap, id);
       div.appendChild(nameWrap);
       list.appendChild(div);
       return;
@@ -698,7 +704,7 @@ function updatePeerList() {
         setMyPseudo(input.value);
       });
       nameWrap.appendChild(input);
-      if (isHost) appendHostRole(nameWrap);
+      appendPeerRole(nameWrap, peer && peer.id);
       div.appendChild(nameWrap);
       list.appendChild(div);
       setTimeout(function() { input.focus(); input.select(); }, 0);
@@ -708,7 +714,7 @@ function updatePeerList() {
     const name = document.createElement('span');
     name.textContent = myPseudo || 'You';
     nameWrap.appendChild(name);
-    if (isHost) appendHostRole(nameWrap);
+    appendPeerRole(nameWrap, peer && peer.id);
     const editBtn = document.createElement('button');
     editBtn.className = 'btn-icon peer-edit-btn';
     editBtn.title = 'Edit name';
