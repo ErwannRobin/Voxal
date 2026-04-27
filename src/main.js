@@ -13,7 +13,7 @@
  *   talking      { peerId, active }               non-host -> host (relayed to all)
  *   pseudo       { pseudo }                        non-host -> host (relayed as peer-renamed)
  *   peer-renamed { peerId, pseudo }               host -> all
- *   heartbeat    { at }                           host -> all
+ *   heartbeat    { at }                           host <-> peers
  *
  * Host migration:
  *   When the host disconnects, all remaining peers independently elect a new host
@@ -485,6 +485,8 @@ var _hostConnGeneration = 0; // incremented each connection attempt to invalidat
 var _lastPeerRosterLogSignature = '';
 var _hostHeartbeatInterval = null;
 var _hostHeartbeatMonitorInterval = null;
+var _peerHeartbeatInterval = null;
+var _peerHeartbeatSweepInterval = null;
 var _lastHostHeartbeatAt = 0;
 
 var HOST_HEARTBEAT_INTERVAL_MS = 2000;
@@ -522,6 +524,12 @@ function noteHostHeartbeat(at) {
   _lastHostHeartbeatAt = at || Date.now();
 }
 
+function notePeerHeartbeat(peerId, at) {
+  var conn = connections.get(peerId);
+  if (!conn) return;
+  connections.set(peerId, Object.assign({}, conn, { lastHeartbeatAt: at || Date.now() }));
+}
+
 function stopHostHeartbeat() {
   if (_hostHeartbeatInterval) {
     clearInterval(_hostHeartbeatInterval);
@@ -543,10 +551,37 @@ function startHostHeartbeat() {
   _hostHeartbeatInterval = setInterval(broadcastHostHeartbeat, HOST_HEARTBEAT_INTERVAL_MS);
 }
 
+function stopPeerHeartbeat() {
+  if (_peerHeartbeatInterval) {
+    clearInterval(_peerHeartbeatInterval);
+    _peerHeartbeatInterval = null;
+  }
+}
+
+function sendPeerHeartbeat() {
+  if (!inRoom || isHost || !roomCode) return;
+  var hostConn = connections.get(roomCode);
+  if (!hostConn || !hostConn.data || hostConn.data.closed) return;
+  hostConn.data.send({ type: 'heartbeat', at: Date.now() });
+}
+
+function startPeerHeartbeat() {
+  stopPeerHeartbeat();
+  sendPeerHeartbeat();
+  _peerHeartbeatInterval = setInterval(sendPeerHeartbeat, HOST_HEARTBEAT_INTERVAL_MS);
+}
+
 function stopHostHeartbeatMonitor() {
   if (_hostHeartbeatMonitorInterval) {
     clearInterval(_hostHeartbeatMonitorInterval);
     _hostHeartbeatMonitorInterval = null;
+  }
+}
+
+function stopPeerHeartbeatSweep() {
+  if (_peerHeartbeatSweepInterval) {
+    clearInterval(_peerHeartbeatSweepInterval);
+    _peerHeartbeatSweepInterval = null;
   }
 }
 
@@ -564,6 +599,39 @@ function checkHostHeartbeat() {
 function startHostHeartbeatMonitor() {
   stopHostHeartbeatMonitor();
   _hostHeartbeatMonitorInterval = setInterval(checkHostHeartbeat, 1000);
+}
+
+function removeStalePeer(peerId, reason) {
+  var conn = connections.get(peerId);
+  if (!conn) return;
+  console.warn('[heartbeat] Removing stale peer ' + migrationPeerLabel(peerId) + ': ' + reason + '.');
+  forgetPeer(peerId);
+  connections.delete(peerId);
+  detachAudio(peerId);
+  if (conn.data) conn.data.close();
+  if (conn.media) conn.media.close();
+  connections.forEach(function(other) {
+    if (other && other.data) other.data.send({ type: 'peer-left', peerId: peerId });
+  });
+  broadcastHostPeerLists();
+  playGoodbye();
+  updatePeerList();
+}
+
+function checkPeerHeartbeats() {
+  if (!inRoom || !isHost) return;
+  var now = Date.now();
+  connections.forEach(function(conn, peerId) {
+    if (!conn || !conn.data) return;
+    if (!conn.lastHeartbeatAt) return;
+    if (now - conn.lastHeartbeatAt <= HOST_HEARTBEAT_TIMEOUT_MS) return;
+    removeStalePeer(peerId, 'missed heartbeat timeout (' + HOST_HEARTBEAT_TIMEOUT_MS + ' ms)');
+  });
+}
+
+function startPeerHeartbeatSweep() {
+  stopPeerHeartbeatSweep();
+  _peerHeartbeatSweepInterval = setInterval(checkPeerHeartbeats, 1000);
 }
 
 // Silently disable / re-enable all home-screen CTAs during a join/create action
@@ -1031,6 +1099,8 @@ function leaveRoom() {
   _lastHostHeartbeatAt = 0;
   stopHostHeartbeat();
   stopHostHeartbeatMonitor();
+  stopPeerHeartbeat();
+  stopPeerHeartbeatSweep();
   knownPeerIds.clear();
   releaseAudioFocus();
   nativePTTLeave();
@@ -1146,7 +1216,9 @@ function becomeHost() {
   isHost = true;
   roomCode = peer.id;
   _lastHostHeartbeatAt = 0;
+  stopPeerHeartbeat();
   stopHostHeartbeatMonitor();
+  startPeerHeartbeatSweep();
   startHostHeartbeat();
   console.log(
     '[migration] This peer became host: ' + migrationPeerLabel(peer.id) +
@@ -1164,6 +1236,7 @@ function connectToNewHost(newHostId) {
   rememberPeer(newHostId);
   roomCode = newHostId;
   stopHostHeartbeat();
+  stopPeerHeartbeatSweep();
   console.log(
     '[migration] Preparing connection to elected host ' + migrationPeerLabel(newHostId) +
     '. Deputy after election would be ' + migrationPeerLabel(electHostId(newHostId) || null) + '.'
@@ -1207,6 +1280,7 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
     connectingToHostId = null;
     noteHostHeartbeat();
     startHostHeartbeatMonitor();
+    startPeerHeartbeat();
     hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
     var prev = connections.get(targetHostId) || { media: null, talking: false };
     connections.set(targetHostId, Object.assign({}, prev, { data: hostData, pseudo: prev.pseudo || shortId(targetHostId) }));
@@ -1231,6 +1305,7 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
 
     if (opened) {
       // Connection was live then dropped — host actually died
+      stopPeerHeartbeat();
       console.warn(
         '[migration] Connection to elected host ' + migrationPeerLabel(targetHostId) +
         ' closed after opening on attempt #' + attemptNumber + '. Re-electing.'
@@ -1322,11 +1397,16 @@ function handleJoinerDataConnection(dataConn) {
     }
     rememberPeer(joinerId);
     const existing = previous || { media: null, pseudo: shortId(joinerId), talking: false };
-    connections.set(joinerId, Object.assign({}, existing, { data: dataConn, pseudo: existing.pseudo || shortId(joinerId) }));
+    connections.set(joinerId, Object.assign({}, existing, {
+      data: dataConn,
+      pseudo: existing.pseudo || shortId(joinerId),
+      lastHeartbeatAt: Date.now()
+    }));
   });
 
   dataConn.on('data', function(msg) {
     if (!isCurrentPeerDataConnection(joinerId, dataConn)) return;
+    notePeerHeartbeat(joinerId, msg && msg.at ? msg.at : Date.now());
     if (msg.type === 'hello') {
       rememberPeer(joinerId);
       const pseudo = msg.pseudo || shortId(joinerId);
@@ -1345,6 +1425,9 @@ function handleJoinerDataConnection(dataConn) {
       }
 
       updatePeerList();
+
+    } else if (msg.type === 'heartbeat') {
+      return;
 
     } else if (msg.type === 'talking') {
       updatePeerTalking(joinerId, msg.active);
@@ -1387,6 +1470,8 @@ async function createRoom(onJoined) {
     peer.on('open', function(id) {
       isHost = true; roomCode = id; inRoom = true;
       stopHostHeartbeatMonitor();
+      stopPeerHeartbeat();
+      startPeerHeartbeatSweep();
       startHostHeartbeat();
       localStorage.setItem('active-room-code', id);
       updateRoomHeader();
@@ -1497,6 +1582,8 @@ async function joinRoom(code, onJoined) {
         connectingToHostId = null;
         noteHostHeartbeat();
         startHostHeartbeatMonitor();
+        stopPeerHeartbeatSweep();
+        startPeerHeartbeat();
         clearRoomCodeInput();
         localStorage.setItem('active-room-code', code);
         rememberPeer(code);
@@ -1522,6 +1609,7 @@ async function joinRoom(code, onJoined) {
           reject(new Error('Connection to host closed before joining.'));
           return;
         }
+        stopPeerHeartbeat();
         if (inRoom) initiateHostMigration(code);
       });
       hostData.on('error', function(err) {
