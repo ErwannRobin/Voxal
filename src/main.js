@@ -14,6 +14,7 @@
  *   pseudo       { pseudo }                        non-host -> host (relayed as peer-renamed)
  *   peer-renamed { peerId, pseudo }               host -> all
  *   heartbeat    { at }                           host <-> peers
+ *   redirect     { hostId, hostPseudo }          non-host -> misdirected joiner
  *
  * Host migration:
  *   When the host disconnects, all remaining peers independently elect a new host
@@ -491,6 +492,7 @@ var _lastHostHeartbeatAt = 0;
 
 var HOST_HEARTBEAT_INTERVAL_MS = 2000;
 var HOST_HEARTBEAT_TIMEOUT_MS  = 7000;
+var MAX_JOIN_REDIRECTS         = 5;
 
 function rememberPeer(peerId) {
   if (!peerId) return;
@@ -1088,6 +1090,8 @@ function shouldAcceptJoinerDataConnection(joinerId) {
   if (isHost) return true;
   if (!inRoom || !peer) return false;
   if (connectingToHostId) return false;
+  var hostConn = connections.get(roomCode);
+  if (hostConn && hostConn.data && hostConn.data.open) return false;
   return joinerId !== roomCode && electHostId(roomCode) === peer.id;
 }
 
@@ -1456,6 +1460,29 @@ function handleJoinerDataConnection(dataConn) {
   dataConn.on('error', function(err) { console.warn('[data]', err); });
 }
 
+function handleJoinRedirectConnection(dataConn) {
+  const joinerId = dataConn.peer;
+
+  dataConn.on('open', function() {
+    if (!inRoom || isHost || !roomCode || joinerId === roomCode) {
+      dataConn.close();
+      return;
+    }
+    console.log(
+      '[join] Redirecting ' + migrationPeerLabel(joinerId) +
+      ' to current host ' + migrationPeerLabel(roomCode) + '.'
+    );
+    dataConn.send({
+      type: 'redirect',
+      hostId: roomCode,
+      hostPseudo: migrationPeerAlias(roomCode) || shortId(roomCode)
+    });
+    setTimeout(function() { dataConn.close(); }, 100);
+  });
+
+  dataConn.on('error', function(err) { console.warn('[data]', err); });
+}
+
 async function createRoom(onJoined) {
   stream = await getMicStream();
   audioTrack = stream.getAudioTracks()[0];
@@ -1508,8 +1535,6 @@ function handleHostMessage(msg) {
     const listedPeerIds = msg.peers.map(function(p) { return p.id; }).concat([roomCode]);
     const listedPeerSet = new Set(listedPeerIds);
     resetKnownPeers(listedPeerIds);
-    const hostConn = connections.get(roomCode);
-    if (hostConn) hostConn.pseudo = msg.hostPseudo || shortId(roomCode);
 
     Array.from(connections.keys()).forEach(function(existingPeerId) {
       if (!listedPeerSet.has(existingPeerId)) {
@@ -1522,15 +1547,15 @@ function handleHostMessage(msg) {
       const peerId = p.id;
       const pseudo = p.pseudo;
       const prev = connections.get(peerId) || { data: null, talking: false };
+      connections.set(peerId, Object.assign({}, prev, { pseudo: pseudo, media: prev.media || null }));
       if (prev.media) return;
-      connections.set(peerId, Object.assign({}, prev, { pseudo: pseudo, media: null }));
-      updatePeerList();
 
       const call = peer.call(peerId, stream);
       call.on('stream', function(remote) { attachAudio(peerId, remote); });
       call.on('close',  function()       { clearPeerMedia(peerId); });
       connections.set(peerId, Object.assign({}, connections.get(peerId), { media: call }));
     });
+    updatePeerList();
 
   } else if (msg.type === 'peer-joined') {
     rememberPeer(msg.peerId);
@@ -1564,55 +1589,104 @@ async function joinRoom(code, onJoined) {
   peer = new Peer({ config: { iceServers } });
   // Accept incoming connections in case this peer becomes host after migration
   peer.on('connection', function(dataConn) {
-    if (!shouldAcceptJoinerDataConnection(dataConn.peer)) return;
-    if (!isHost) becomeHost();
-    handleJoinerDataConnection(dataConn);
+    if (shouldAcceptJoinerDataConnection(dataConn.peer)) {
+      if (!isHost) becomeHost();
+      handleJoinerDataConnection(dataConn);
+      return;
+    }
+    if (inRoom && roomCode) handleJoinRedirectConnection(dataConn);
   });
   peer.on('call',  function(call) { handleIncomingCall(call); });
   let settled = false;
   await new Promise(function(resolve, reject) {
-    peer.on('open', function() {
-      roomCode = code;
-      if (onJoined) onJoined(peer.id); // register presence as soon as we have our peer_id
-      const hostData = peer.connect(code, { reliable: true });
+    function finishJoin(targetHostId, hostData) {
+      if (inRoom) return;
+      roomCode = targetHostId;
+      isHost = false;
+      inRoom = true;
+      connectingToHostId = null;
+      noteHostHeartbeat();
+      startHostHeartbeatMonitor();
+      stopPeerHeartbeatSweep();
+      startPeerHeartbeat();
+      clearRoomCodeInput();
+      localStorage.setItem('active-room-code', targetHostId);
+      rememberPeer(targetHostId);
+      connections.set(targetHostId, { data: hostData, media: null, pseudo: shortId(targetHostId), talking: false });
+      updateRoomHeader();
+      nativePTTJoin(targetHostId);
+      startKeepAlive();
+      requestAudioFocus(); // Keep foreground service running while in room
+      showScreen('room');
+      updatePeerList();
+      updateShortcutDisplay();
+      iframeEmit({ type: 'joined', roomCode: targetHostId, peerId: peer.id });
+    }
+
+    function connectToTargetHost(targetHostId, redirectsLeft) {
+      roomCode = targetHostId;
+      const hostData = peer.connect(targetHostId, { reliable: true });
+      var redirected = false;
 
       hostData.on('open', function() {
         hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
-        isHost = false; inRoom = true;
-        connectingToHostId = null;
-        noteHostHeartbeat();
-        startHostHeartbeatMonitor();
-        stopPeerHeartbeatSweep();
-        startPeerHeartbeat();
-        clearRoomCodeInput();
-        localStorage.setItem('active-room-code', code);
-        rememberPeer(code);
-        connections.set(code, { data: hostData, media: null, pseudo: shortId(code), talking: false });
-        updateRoomHeader();
-        nativePTTJoin(code);
-        startKeepAlive();
-        requestAudioFocus(); // Keep foreground service running while in room
-        showScreen('room');
-        updatePeerList();
-        updateShortcutDisplay();
-        iframeEmit({ type: 'joined', roomCode: code, peerId: peer.id });
+      });
+
+      hostData.on('data', function(msg) {
+        if (msg && msg.type === 'redirect') {
+          if (!msg.hostId) {
+            if (!settled) {
+              settled = true;
+              reject(new Error('Received redirect without a host id.'));
+            }
+            return;
+          }
+          if (msg.hostId === targetHostId) {
+            if (!settled) {
+              settled = true;
+              reject(new Error('Received a redirect back to the same host.'));
+            }
+            return;
+          }
+          if (redirectsLeft <= 0) {
+            if (!settled) {
+              settled = true;
+              reject(new Error('Too many host redirects while joining.'));
+            }
+            return;
+          }
+          redirected = true;
+          console.log(
+            '[join] ' + migrationPeerLabel(targetHostId) +
+            ' redirected this peer to current host ' + migrationPeerLabel(msg.hostId) + '.'
+          );
+          resetKnownPeers([msg.hostId]);
+          hostData.close();
+          connectToTargetHost(msg.hostId, redirectsLeft - 1);
+          return;
+        }
+
+        finishJoin(targetHostId, hostData);
+        handleHostMessage(msg);
         if (!settled) {
           settled = true;
           resolve(peer.id);
         }
       });
 
-      hostData.on('data',  function(msg) { handleHostMessage(msg); });
       hostData.on('close', function() {
+        if (redirected) return;
         if (!settled) {
           settled = true;
           reject(new Error('Connection to host closed before joining.'));
           return;
         }
         stopPeerHeartbeat();
-        if (inRoom) initiateHostMigration(code);
+        if (inRoom) initiateHostMigration(targetHostId);
       });
+
       hostData.on('error', function(err) {
+        if (redirected) return;
         if (!settled) {
           settled = true;
           reject(err);
@@ -1620,6 +1694,11 @@ async function joinRoom(code, onJoined) {
         }
         showError(err.message);
       });
+    }
+
+    peer.on('open', function() {
+      if (onJoined) onJoined(peer.id); // register presence as soon as we have our peer_id
+      connectToTargetHost(code, MAX_JOIN_REDIRECTS);
     });
     peer.on('error', function(err) {
       if (!settled) {
