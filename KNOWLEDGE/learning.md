@@ -57,6 +57,10 @@ Every change to `src/` MUST be mirrored to:
 
 Use Python string replacement scripts for multi-line patches to avoid manual errors.
 
+## Workflow
+
+- After each source code change, suggest a commit message in the final response.
+
 ---
 
 _Copilot: append new learnings here as they are discovered. Keep entries concise and actionable._
