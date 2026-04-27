@@ -59,7 +59,7 @@ Use Python string replacement scripts for multi-line patches to avoid manual err
 
 ## Workflow
 
-- After each source code change, suggest a commit message in the final response.
+- Suggest a commit message in the final response only when the current turn actually changed repository files.
 
 ---
 
