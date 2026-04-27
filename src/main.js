@@ -481,6 +481,7 @@ function updateRoomHeader() {
 const connections = new Map();
 const knownPeerIds = new Set();
 var _hostConnGeneration = 0; // incremented each connection attempt to invalidate stale events
+var _lastPeerRosterLogSignature = '';
 
 function rememberPeer(peerId) {
   if (!peerId) return;
@@ -701,6 +702,22 @@ function shortId(id) {
   return id.length > 14 ? id.slice(0, 6) + '\u2026' + id.slice(-4) : id;
 }
 
+function logPeerRosterIfChanged(peerIds, deputyPeerId) {
+  if (!inRoom || !peer) return;
+  var signature = peerIds.join('|') + '::' + (deputyPeerId || '');
+  if (signature === _lastPeerRosterLogSignature) return;
+  _lastPeerRosterLogSignature = signature;
+  var hostAlias = migrationPeerAlias(roomCode) || 'none';
+  var deputyAlias = migrationPeerAlias(deputyPeerId) || 'none';
+  console.log(
+    '[peers] Roster now: ' +
+    (peerIds.length ? peerIds.map(migrationPeerLabel).join(', ') : 'none') +
+    '. Host alias: ' + hostAlias +
+    '. Deputy alias: ' + deputyAlias +
+    '. Deputy UUID: ' + (deputyPeerId || 'none') + '.'
+  );
+}
+
 function updatePeerList() {
   const list = $('peers-list');
   list.innerHTML = '';
@@ -788,6 +805,7 @@ function updatePeerList() {
 
   addItem('self', '', true, isTalking || freeHandMode, true);
   connections.forEach((conn, id) => addItem(id, conn.pseudo || shortId(id), false, conn.talking || false, false));
+  logPeerRosterIfChanged([peer.id].concat(Array.from(connections.keys())), deputyPeerId);
 
   // Notify the parent iframe of the current peer list
   if (_isIframe && inRoom) {
@@ -954,6 +972,7 @@ function leaveRoom() {
   inRoom = false; freeHandMode = false; isTalking = false;
   connectingToHostId = null;
   ++_hostConnGeneration; // invalidate any pending retry timers
+  _lastPeerRosterLogSignature = '';
   knownPeerIds.clear();
   releaseAudioFocus();
   nativePTTLeave();
