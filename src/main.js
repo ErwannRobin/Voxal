@@ -972,9 +972,36 @@ var HOST_CONNECT_TIMEOUT = 8000; // per-attempt timeout
 var HOST_RETRY_DELAY     = 2000; // delay between retries
 var HOST_MAX_RETRIES     = 3;    // retries before re-electing
 
+function migrationPeerAlias(peerId) {
+  if (!peerId) return '';
+  if (peer && peer.id === peerId) return (myPseudo || '').trim();
+  const conn = connections.get(peerId);
+  return conn && conn.pseudo ? String(conn.pseudo).trim() : '';
+}
+
+function migrationAliasCounts() {
+  const counts = new Map();
+
+  function addAlias(alias) {
+    if (!alias) return;
+    counts.set(alias, (counts.get(alias) || 0) + 1);
+  }
+
+  addAlias((myPseudo || '').trim());
+  connections.forEach(function(conn) {
+    addAlias(conn && conn.pseudo ? String(conn.pseudo).trim() : '');
+  });
+
+  return counts;
+}
+
 function migrationPeerLabel(peerId) {
   if (!peerId) return 'none';
-  return shortId(peerId) + ' [' + peerId + ']';
+  const alias = migrationPeerAlias(peerId);
+  if (!alias) return shortId(peerId) + ' [' + peerId + ']';
+  const aliasCounts = migrationAliasCounts();
+  if ((aliasCounts.get(alias) || 0) > 1) return alias + ' [' + peerId + ']';
+  return alias;
 }
 
 function migrationCandidatesLabel(candidates) {
