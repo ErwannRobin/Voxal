@@ -922,10 +922,14 @@ function removePeer(peerId) {
   updatePeerList();
 }
 
+function shouldRetainPeerWithoutMedia(peerId) {
+  return knownPeerIds.has(peerId);
+}
+
 function clearPeerMedia(peerId) {
   const conn = connections.get(peerId);
   if (!conn) return;
-  if (conn.data) {
+  if (conn.data || shouldRetainPeerWithoutMedia(peerId)) {
     connections.set(peerId, Object.assign({}, conn, { media: null, talking: false }));
   } else {
     connections.delete(peerId);
