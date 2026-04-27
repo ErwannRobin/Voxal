@@ -934,6 +934,11 @@ function clearPeerMedia(peerId) {
   updatePeerList();
 }
 
+function isCurrentPeerDataConnection(peerId, dataConn) {
+  const conn = connections.get(peerId);
+  return !!conn && conn.data === dataConn;
+}
+
 function shouldAcceptJoinerDataConnection(joinerId) {
   if (isHost) return true;
   if (!inRoom || !peer) return false;
@@ -1168,12 +1173,19 @@ function handleJoinerDataConnection(dataConn) {
   const joinerId = dataConn.peer;
 
   dataConn.on('open', function() {
+    const previous = connections.get(joinerId);
+    dataConn._voxalExistingPeer = !!previous;
+    if (previous && previous.data && previous.data !== dataConn) {
+      console.warn('[host] Replacing duplicate data connection from ' + migrationPeerLabel(joinerId) + '.');
+      previous.data.close();
+    }
     rememberPeer(joinerId);
-    const existing = connections.get(joinerId) || { media: null, pseudo: shortId(joinerId), talking: false };
+    const existing = previous || { media: null, pseudo: shortId(joinerId), talking: false };
     connections.set(joinerId, Object.assign({}, existing, { data: dataConn, pseudo: existing.pseudo || shortId(joinerId) }));
   });
 
   dataConn.on('data', function(msg) {
+    if (!isCurrentPeerDataConnection(joinerId, dataConn)) return;
     if (msg.type === 'hello') {
       rememberPeer(joinerId);
       const pseudo = msg.pseudo || shortId(joinerId);
@@ -1188,11 +1200,13 @@ function handleJoinerDataConnection(dataConn) {
         });
       dataConn.send({ type: 'peer-list', peers: peers, hostId: peer.id, hostPseudo: pseudoForHost() });
 
-      connections.forEach(function(c, id) {
-        if (id !== joinerId && c.data) c.data.send({ type: 'peer-joined', peerId: joinerId, pseudo: pseudo });
-      });
+      if (!dataConn._voxalExistingPeer) {
+        connections.forEach(function(c, id) {
+          if (id !== joinerId && c.data) c.data.send({ type: 'peer-joined', peerId: joinerId, pseudo: pseudo });
+        });
+        playCarillon();
+      }
 
-      playCarillon();
       updatePeerList();
 
     } else if (msg.type === 'talking') {
@@ -1212,7 +1226,7 @@ function handleJoinerDataConnection(dataConn) {
   });
 
   dataConn.on('close', function() {
-    if (!connections.has(joinerId)) return;
+    if (!isCurrentPeerDataConnection(joinerId, dataConn)) return;
     forgetPeer(joinerId);
     connections.forEach(function(c) { if (c.data) c.data.send({ type: 'peer-left', peerId: joinerId }); });
     playGoodbye();
