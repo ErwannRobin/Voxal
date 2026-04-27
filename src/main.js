@@ -967,6 +967,16 @@ var HOST_CONNECT_TIMEOUT = 8000; // per-attempt timeout
 var HOST_RETRY_DELAY     = 2000; // delay between retries
 var HOST_MAX_RETRIES     = 3;    // retries before re-electing
 
+function migrationPeerLabel(peerId) {
+  if (!peerId) return 'none';
+  return shortId(peerId) + ' [' + peerId + ']';
+}
+
+function migrationCandidatesLabel(candidates) {
+  if (!candidates || !candidates.length) return 'none';
+  return candidates.map(migrationPeerLabel).join(', ');
+}
+
 function initiateHostMigration(disconnectedHostId) {
   if (!inRoom) return;
 
@@ -988,13 +998,13 @@ function initiateHostMigration(disconnectedHostId) {
   const candidates = hostElectionCandidates(oldHostId);
   const newHostId = candidates[0] || null;
   const nextDeputyId = newHostId ? electHostId(newHostId) : null;
-  console.warn('[migration] Host disconnected:', {
-    disconnectedHostId: oldHostId,
-    selfId: peer && peer.id,
-    candidates: candidates,
-    electedHostId: newHostId,
-    deputyAfterElection: nextDeputyId || null,
-  });
+  console.warn(
+    '[migration] Host ' + migrationPeerLabel(oldHostId) +
+    ' disconnected. Self is ' + migrationPeerLabel(peer && peer.id) +
+    '. Candidates: ' + migrationCandidatesLabel(candidates) +
+    '. Elected host: ' + migrationPeerLabel(newHostId) +
+    '. Deputy after election: ' + migrationPeerLabel(nextDeputyId) + '.'
+  );
   if (!newHostId) {
     console.warn('[migration] No host candidate remains, leaving room.');
     leaveRoom();
@@ -1003,16 +1013,17 @@ function initiateHostMigration(disconnectedHostId) {
   updatePeerList();
 
   if (newHostId === peer.id) {
-    console.log('[migration] Self elected as host:', {
-      hostId: peer.id,
-      deputyAfterElection: nextDeputyId || null,
-    });
+    console.log(
+      '[migration] I am the elected host: ' + migrationPeerLabel(peer.id) +
+      '. Deputy after election: ' + migrationPeerLabel(nextDeputyId) + '.'
+    );
     becomeHost();
   } else {
-    console.log('[migration] Connecting to elected host:', {
-      targetHostId: newHostId,
-      deputyAfterElection: nextDeputyId || null,
-    });
+    console.log(
+      '[migration] I am not the next host. Trying to connect to elected host ' +
+      migrationPeerLabel(newHostId) +
+      '. Deputy after election: ' + migrationPeerLabel(nextDeputyId) + '.'
+    );
     connectToNewHost(newHostId);
   }
 }
@@ -1021,10 +1032,10 @@ function becomeHost() {
   connectingToHostId = null;
   isHost = true;
   roomCode = peer.id;
-  console.log('[migration] Became host:', {
-    hostId: peer.id,
-    deputyAfterElection: electHostId(peer.id) || null,
-  });
+  console.log(
+    '[migration] This peer became host: ' + migrationPeerLabel(peer.id) +
+    '. Deputy is now ' + migrationPeerLabel(electHostId(peer.id) || null) + '.'
+  );
   iframeEmit({ type: 'host-changed', roomCode: peer.id, isSelf: true });
   updateRoomHeader();
   updatePeerList();
@@ -1036,10 +1047,10 @@ function connectToNewHost(newHostId) {
   connectingToHostId = newHostId;
   rememberPeer(newHostId);
   roomCode = newHostId;
-  console.log('[migration] Preparing connection to elected host:', {
-    targetHostId: newHostId,
-    deputyAfterElection: electHostId(newHostId) || null,
-  });
+  console.log(
+    '[migration] Preparing connection to elected host ' + migrationPeerLabel(newHostId) +
+    '. Deputy after election would be ' + migrationPeerLabel(electHostId(newHostId) || null) + '.'
+  );
   iframeEmit({ type: 'host-changed', roomCode: newHostId, isSelf: false });
   updateRoomHeader();
   _attemptHostConnection(newHostId, HOST_MAX_RETRIES);
@@ -1054,21 +1065,21 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
   var opened = false;
   var handled = false;
   var attemptNumber = HOST_MAX_RETRIES - retriesLeft + 1;
-  console.log('[migration] Attempting host connection:', {
-    targetHostId: targetHostId,
-    attempt: attemptNumber,
-    retriesLeft: retriesLeft,
-    deputyAfterElection: electHostId(targetHostId) || null,
-  });
+  console.log(
+    '[migration] Connection attempt #' + attemptNumber +
+    ' to elected host ' + migrationPeerLabel(targetHostId) +
+    '. Retries remaining after this one: ' + retriesLeft +
+    '. Deputy after election would be ' + migrationPeerLabel(electHostId(targetHostId) || null) + '.'
+  );
 
   // If connection doesn't open within timeout, force-close to trigger retry
   var timer = setTimeout(function() {
     if (gen !== _hostConnGeneration) return;
-    console.warn('[migration] Host connection timed out before open:', {
-      targetHostId: targetHostId,
-      attempt: attemptNumber,
-      retriesLeft: retriesLeft,
-    });
+    console.warn(
+      '[migration] Connection attempt #' + attemptNumber +
+      ' to ' + migrationPeerLabel(targetHostId) +
+      ' timed out before opening.'
+    );
     if (!opened && !handled) hostData.close();
   }, HOST_CONNECT_TIMEOUT);
 
@@ -1080,11 +1091,11 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
     hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
     var prev = connections.get(targetHostId) || { media: null, talking: false };
     connections.set(targetHostId, Object.assign({}, prev, { data: hostData, pseudo: prev.pseudo || shortId(targetHostId) }));
-    console.log('[migration] Connected to elected host:', {
-      targetHostId: targetHostId,
-      attempt: attemptNumber,
-      deputyAfterElection: electHostId(targetHostId) || null,
-    });
+    console.log(
+      '[migration] Connected to elected host ' + migrationPeerLabel(targetHostId) +
+      ' on attempt #' + attemptNumber +
+      '. Deputy after election is ' + migrationPeerLabel(electHostId(targetHostId) || null) + '.'
+    );
     updatePeerList();
   });
 
@@ -1101,42 +1112,41 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
 
     if (opened) {
       // Connection was live then dropped — host actually died
-      console.warn('[migration] Connection to elected host closed after open:', {
-        targetHostId: targetHostId,
-        attempt: attemptNumber,
-      });
+      console.warn(
+        '[migration] Connection to elected host ' + migrationPeerLabel(targetHostId) +
+        ' closed after opening on attempt #' + attemptNumber + '. Re-electing.'
+      );
       if (inRoom) initiateHostMigration(targetHostId);
       return;
     }
     // Never opened — transient failure, retry before re-electing
     if (!inRoom || roomCode !== targetHostId) return;
     if (retriesLeft > 0) {
-      console.warn('[migration] Failed to connect to elected host, retrying:', {
-        targetHostId: targetHostId,
-        attempt: attemptNumber,
-        retriesLeftAfterThisAttempt: retriesLeft - 1,
-        deputyAfterElection: electHostId(targetHostId) || null,
-      });
+      console.warn(
+        '[migration] Failed to connect to elected host ' + migrationPeerLabel(targetHostId) +
+        ' on attempt #' + attemptNumber +
+        '. Retrying. Remaining retries: ' + (retriesLeft - 1) +
+        '. Deputy after election would be ' + migrationPeerLabel(electHostId(targetHostId) || null) + '.'
+      );
       setTimeout(function() {
         _attemptHostConnection(targetHostId, retriesLeft - 1);
       }, HOST_RETRY_DELAY);
     } else {
-      console.warn('[migration] Giving up on elected host, re-electing:', {
-        targetHostId: targetHostId,
-        attempt: attemptNumber,
-        deputyAfterElection: electHostId(targetHostId) || null,
-      });
+      console.warn(
+        '[migration] Failed to connect to elected host ' + migrationPeerLabel(targetHostId) +
+        ' on attempt #' + attemptNumber +
+        '. No retries remain, so a new election will start.'
+      );
       initiateHostMigration(targetHostId);
     }
   });
 
   hostData.on('error', function(err) {
-    console.warn('[migration] Host connection error:', {
-      targetHostId: targetHostId,
-      attempt: attemptNumber,
-      message: err && err.message ? err.message : String(err),
-      deputyAfterElection: electHostId(targetHostId) || null,
-    });
+    console.warn(
+      '[migration] Host connection error while trying ' + migrationPeerLabel(targetHostId) +
+      ' on attempt #' + attemptNumber +
+      ': ' + (err && err.message ? err.message : String(err)) + '.'
+    );
   });
 }
 
