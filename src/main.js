@@ -506,6 +506,48 @@ var roomState = ROOM_STATE_IDLE;
 var _migrationCandidateId = null;
 var _migrationExcluded = new Set();
 
+function migrationTraceConnections() {
+  var summary = [];
+  connections.forEach(function(conn, peerId) {
+    summary.push({
+      id: peerId,
+      pseudo: conn && conn.pseudo ? String(conn.pseudo).trim() : '',
+      data: !!(conn && conn.data),
+      dataOpen: !!(conn && conn.data && conn.data.open && !conn.data.closed),
+      dataClosed: !!(conn && conn.data && conn.data.closed),
+      media: !!(conn && conn.media),
+      talking: !!(conn && conn.talking)
+    });
+  });
+  summary.sort(function(a, b) { return a.id.localeCompare(b.id); });
+  return summary;
+}
+
+function migrationTrace(event, details, level) {
+  if (!isDevPeerUiEnabled()) return;
+  var logger = console[level || 'log'] || console.log;
+  var snapshot = {
+    localPeerId: peer && peer.id ? peer.id : null,
+    localPeerAlias: (peer && peer.id ? migrationPeerAlias(peer.id) : '') || (myPseudo || '').trim() || null,
+    roomCode: roomCode || null,
+    roomState: roomState,
+    isHost: !!isHost,
+    inRoom: !!inRoom,
+    connectingToHostId: connectingToHostId || null,
+    knownPeerIds: Array.from(knownPeerIds).sort(),
+    connections: migrationTraceConnections(),
+    migrationCandidateId: _migrationCandidateId || null,
+    migrationExcluded: Array.from(_migrationExcluded).sort(),
+    hostConnGeneration: _hostConnGeneration
+  };
+  if (details) {
+    Object.keys(details).forEach(function(key) {
+      snapshot[key] = details[key];
+    });
+  }
+  logger.call(console, '[migration-trace] ' + event, snapshot);
+}
+
 function rememberPeer(peerId) {
   if (!peerId) return;
   if (peer && peer.id === peerId) return;
@@ -604,6 +646,11 @@ function checkHostHeartbeat() {
   if (!_lastHostHeartbeatAt) return;
   if (Date.now() - _lastHostHeartbeatAt <= HOST_HEARTBEAT_TIMEOUT_MS) return;
   if (roomState !== ROOM_STATE_CONNECTED) return;
+  migrationTrace('host-heartbeat-timeout', {
+    hostId: roomCode,
+    lastHostHeartbeatAt: _lastHostHeartbeatAt,
+    timeoutMs: HOST_HEARTBEAT_TIMEOUT_MS
+  }, 'warn');
   console.warn(
     '[heartbeat] Host ' + migrationPeerLabel(roomCode) +
     ' missed heartbeat timeout (' + HOST_HEARTBEAT_TIMEOUT_MS + ' ms). Starting migration.'
@@ -1191,12 +1238,32 @@ function isCurrentPeerDataConnection(peerId, dataConn) {
 }
 
 function shouldAcceptJoinerDataConnection(joinerId) {
-  if (isHost) return true;
-  if (!inRoom || !peer) return false;
-  if (connectingToHostId) return false;
+  if (isHost) {
+    migrationTrace('should-accept-joiner', { joinerId: joinerId, decision: 'accept', reason: 'already-host' });
+    return true;
+  }
+  if (!inRoom || !peer) {
+    migrationTrace('should-accept-joiner', { joinerId: joinerId, decision: 'reject', reason: 'not-in-room-or-no-peer' });
+    return false;
+  }
+  if (connectingToHostId) {
+    migrationTrace('should-accept-joiner', { joinerId: joinerId, decision: 'reject', reason: 'connecting-to-host', connectingToHostId: connectingToHostId });
+    return false;
+  }
   var hostConn = connections.get(roomCode);
-  if (hostConn && hostConn.data && hostConn.data.open) return false;
-  return joinerId !== roomCode && electHostId(roomCode) === peer.id;
+  if (hostConn && hostConn.data && hostConn.data.open) {
+    migrationTrace('should-accept-joiner', { joinerId: joinerId, decision: 'reject', reason: 'current-host-connection-open' });
+    return false;
+  }
+  var electedHostId = electHostId(roomCode);
+  var accepted = joinerId !== roomCode && electedHostId === peer.id;
+  migrationTrace('should-accept-joiner', {
+    joinerId: joinerId,
+    decision: accepted ? 'accept' : 'reject',
+    reason: accepted ? 'elected-next-host' : 'not-elected-next-host',
+    electedHostId: electedHostId || null
+  });
+  return accepted;
 }
 
 function leaveRoom() {
@@ -1273,11 +1340,18 @@ function migrationCandidatesLabel(candidates) {
 
 function initiateHostMigration(failedOrOldHostId) {
   if (!inRoom) return;
+  migrationTrace('initiate-host-migration', {
+    triggerPeerId: failedOrOldHostId || roomCode,
+    triggerSource: roomState === ROOM_STATE_CONNECTED ? 'connected-host-loss' : 'migration-candidate-failure'
+  }, 'warn');
 
   // Case A: starting migration from connected state
   if (roomState === ROOM_STATE_CONNECTED) {
     const oldHostId = failedOrOldHostId || roomCode;
-    if (oldHostId !== roomCode) return; // stale, not from current host
+    if (oldHostId !== roomCode) {
+      migrationTrace('ignore-migration-trigger', { triggerPeerId: oldHostId, reason: 'not-current-host' });
+      return; // stale, not from current host
+    }
     roomState = ROOM_STATE_MIGRATING;
     _migrationExcluded = new Set([oldHostId]);
     _migrationCandidateId = null;
@@ -1292,6 +1366,7 @@ function initiateHostMigration(failedOrOldHostId) {
       connections.delete(oldHostId);
       detachAudio(oldHostId);
     }
+    migrationTrace('host-cleanup-complete', { oldHostId: oldHostId, triggerSource: 'host-loss' }, 'warn');
     playGoodbye();
     proceedWithHostElection();
     return;
@@ -1302,8 +1377,14 @@ function initiateHostMigration(failedOrOldHostId) {
     if (failedOrOldHostId && failedOrOldHostId === _migrationCandidateId) {
       _migrationExcluded.add(failedOrOldHostId);
       _migrationCandidateId = null;
+      migrationTrace('candidate-failed', { failedCandidateId: failedOrOldHostId }, 'warn');
       console.warn('[migration] Candidate ' + migrationPeerLabel(failedOrOldHostId) + ' failed; re-electing.');
       proceedWithHostElection();
+    } else {
+      migrationTrace('ignore-migration-trigger', {
+        triggerPeerId: failedOrOldHostId || null,
+        reason: 'stale-trigger-during-migration'
+      });
     }
     // else: stale event, ignore
     return;
@@ -1326,9 +1407,15 @@ function proceedWithHostElection() {
     '. Elected: ' + migrationPeerLabel(newHostId) +
     '. Next deputy: ' + migrationPeerLabel(nextDeputyId) + '.'
   );
+  migrationTrace('proceed-with-host-election', {
+    candidates: candidates,
+    electedHostId: newHostId || null,
+    nextDeputyId: nextDeputyId || null
+  }, 'warn');
 
   if (!newHostId) {
     console.warn('[migration] No host candidate remains, leaving room.');
+    migrationTrace('leave-room-no-candidate', { reason: 'no-host-candidate' }, 'warn');
     leaveRoom();
     return;
   }
@@ -1343,6 +1430,7 @@ function proceedWithHostElection() {
 }
 
 function becomeHost() {
+  migrationTrace('become-host-start', { triggerSource: 'elected-self' }, 'warn');
   connectingToHostId = null;
   roomState = ROOM_STATE_CONNECTED;
   _migrationExcluded.clear();
@@ -1373,6 +1461,10 @@ function becomeHost() {
       });
     }
   });
+  migrationTrace('become-host-complete', {
+    newHostId: peer.id,
+    deputyId: electHostId(peer.id) || null
+  }, 'warn');
   // peer.on('connection') is already wired in joinRoom() and will route here
   // since isHost is now true
 }
@@ -1411,6 +1503,13 @@ function connectToHost(hostId, opts) {
     (mode === 'initial' ? ('. Redirects left: ' + redirectsLeft) : '') +
     (mode === 'migration' ? ('. Retries left: ' + retriesLeft) : '') + '.'
   );
+  migrationTrace('connect-to-host-start', {
+    mode: mode,
+    hostId: hostId,
+    redirectsLeft: redirectsLeft,
+    retriesLeft: retriesLeft,
+    generation: gen
+  });
 
   // Timeout if connection doesn't open
   var timer = setTimeout(function() {
@@ -1423,6 +1522,7 @@ function connectToHost(hostId, opts) {
     if (gen !== _hostConnGeneration) { hostData.close(); return; }
     opened = true;
     clearTimeout(timer);
+    migrationTrace('connect-to-host-open', { mode: mode, hostId: hostId, generation: gen });
     hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
   });
 
@@ -1454,6 +1554,12 @@ function connectToHost(hostId, opts) {
       }
       redirected = true;
       console.log('[initial] ' + migrationPeerLabel(hostId) + ' redirected to ' + migrationPeerLabel(msg.hostId) + '.');
+      migrationTrace('connect-to-host-redirect', {
+        mode: mode,
+        fromHostId: hostId,
+        redirectedHostId: msg.hostId,
+        redirectsLeft: redirectsLeft
+      }, 'warn');
       resetKnownPeers([msg.hostId]);
       hostData.close();
       connectToHost(msg.hostId, { mode: 'initial', redirectsLeft: redirectsLeft - 1, retriesLeft: 0, onInitialJoinResolve: onInitialJoinResolve, onInitialJoinReject: onInitialJoinReject });
@@ -1463,6 +1569,12 @@ function connectToHost(hostId, opts) {
     // Handle peer-list (success for both modes)
     if (msg && msg.type === 'peer-list') {
       receivedPeerList = true;
+      migrationTrace('connect-to-host-peer-list', {
+        mode: mode,
+        hostId: hostId,
+        peerListHostId: msg.hostId || null,
+        authoritativePeers: msg.peers.map(function(p) { return p.id; })
+      }, 'warn');
 
       if (mode === 'initial') {
         finishJoin(hostId, hostData);
@@ -1500,6 +1612,14 @@ function connectToHost(hostId, opts) {
     clearTimeout(timer);
     if (gen !== _hostConnGeneration) return;
     if (handled) return;
+    migrationTrace('connect-to-host-close', {
+      mode: mode,
+      hostId: hostId,
+      generation: gen,
+      receivedPeerList: receivedPeerList,
+      redirected: redirected,
+      retriesLeft: retriesLeft
+    }, receivedPeerList ? 'warn' : 'log');
 
     if (receivedPeerList) {
       // Connection was live (we got peer-list) then dropped — host actually died
@@ -1532,6 +1652,13 @@ function connectToHost(hostId, opts) {
   });
 
   hostData.on('error', function(err) {
+    migrationTrace('connect-to-host-error', {
+      mode: mode,
+      hostId: hostId,
+      generation: gen,
+      errorType: err && err.type ? err.type : null,
+      errorMessage: err && err.message ? err.message : String(err)
+    }, 'warn');
     console.warn('[' + mode + '] Host connection error: ' + (err && err.message ? err.message : String(err)));
   });
 }
@@ -1581,8 +1708,13 @@ function handleJoinerDataConnection(dataConn) {
       pseudo: existing.pseudo || shortId(joinerId),
       lastHeartbeatAt: Date.now()
     }));
+    migrationTrace('joiner-data-open', {
+      joinerId: joinerId,
+      hadPreviousDataConnection: !!(previous && previous.data && previous.data !== dataConn)
+    });
     if (previous && previous.data && previous.data !== dataConn) {
       console.warn('[host] Replacing duplicate data connection from ' + migrationPeerLabel(joinerId) + '.');
+      migrationTrace('joiner-data-replace-duplicate', { joinerId: joinerId }, 'warn');
       previous.data.close();
     }
   });
@@ -1597,6 +1729,11 @@ function handleJoinerDataConnection(dataConn) {
       connections.set(joinerId, Object.assign({}, existing, { pseudo: pseudo }));
 
       sendHostPeerList(dataConn, joinerId);
+      migrationTrace('joiner-hello', {
+        joinerId: joinerId,
+        pseudo: pseudo,
+        existingPeer: !!dataConn._voxalExistingPeer
+      });
 
       if (!dataConn._voxalExistingPeer) {
         connections.forEach(function(c, id) {
@@ -1630,6 +1767,7 @@ function handleJoinerDataConnection(dataConn) {
 
   dataConn.on('close', function() {
     if (!isCurrentPeerDataConnection(joinerId, dataConn)) return;
+    migrationTrace('joiner-data-close', { joinerId: joinerId }, 'warn');
     forgetPeer(joinerId);
     connections.forEach(function(c) { if (c.data) c.data.send({ type: 'peer-left', peerId: joinerId }); });
     playGoodbye();
@@ -1644,6 +1782,10 @@ function handleJoinRedirectConnection(dataConn) {
 
   dataConn.on('open', function() {
     if (!inRoom || isHost || !roomCode || joinerId === roomCode) {
+      migrationTrace('redirect-joiner-rejected', {
+        joinerId: joinerId,
+        reason: !inRoom ? 'not-in-room' : isHost ? 'already-host' : !roomCode ? 'no-room-code' : 'joiner-is-room-code'
+      });
       dataConn.close();
       return;
     }
@@ -1656,6 +1798,10 @@ function handleJoinRedirectConnection(dataConn) {
       hostId: roomCode,
       hostPseudo: migrationPeerAlias(roomCode) || shortId(roomCode)
     });
+    migrationTrace('redirect-joiner-sent', {
+      joinerId: joinerId,
+      redirectedHostId: roomCode
+    }, 'warn');
     setTimeout(function() { dataConn.close(); }, 100);
   });
 
@@ -1714,6 +1860,11 @@ function handleHostMessage(msg) {
   if (msg.type === 'peer-list') {
     const listedPeerIds = msg.peers.map(function(p) { return p.id; }).concat([roomCode]);
     const listedPeerSet = new Set(listedPeerIds);
+    migrationTrace('handle-host-peer-list', {
+      hostId: msg.hostId || roomCode || null,
+      listedPeerIds: listedPeerIds,
+      triggerSource: 'peer-list'
+    }, 'warn');
 
     resetKnownPeers(listedPeerIds);
 
@@ -1752,6 +1903,10 @@ function handleHostMessage(msg) {
     }
 
   } else if (msg.type === 'peer-left') {
+    migrationTrace('handle-host-peer-left', {
+      peerId: msg.peerId,
+      triggerSource: 'peer-left'
+    }, 'warn');
     forgetPeer(msg.peerId);
     playGoodbye();
     removePeer(msg.peerId);
