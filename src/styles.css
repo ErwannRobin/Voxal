@@ -241,20 +241,47 @@ body {
   color: var(--text-muted);
 }
 .peer-item.peer-self { color: var(--text); }
+.peer-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
 .peer-self-main {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
+.peer-label-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
 .peer-role {
   color: var(--text-muted);
   font-style: italic;
+}
+.peer-uuid {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: text;
+  -webkit-user-select: text;
 }
 .peer-edit-btn {
   font-size: 10px;
   padding: 0 1px;
   min-width: 14px;
   min-height: 14px;
+}
+.peer-copy-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-muted);
 }
 .peer-name-inline {
   width: 150px;

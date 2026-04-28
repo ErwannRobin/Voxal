@@ -752,6 +752,31 @@ function showError(msg) {
   showScreen('error');
 }
 
+var _copyToastTimer = null;
+
+function showCopyToast(message) {
+  var toast = $('copy-toast');
+  if (!toast) return;
+  toast.textContent = message || 'Copied!';
+  toast.classList.add('visible');
+  clearTimeout(_copyToastTimer);
+  _copyToastTimer = setTimeout(function() { toast.classList.remove('visible'); }, 1500);
+}
+
+function copyTextToClipboard(text, toastMessage) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() {
+      showCopyToast(toastMessage);
+    }).catch(function() {
+      fallbackCopy(text);
+      showCopyToast(toastMessage);
+    });
+  } else {
+    fallbackCopy(text);
+    showCopyToast(toastMessage);
+  }
+}
+
 function isNonFatalPeerRuntimeError(err) {
   if (!err) return false;
   var type = err.type || '';
@@ -860,6 +885,16 @@ function shortId(id) {
   return id.length > 14 ? id.slice(0, 6) + '\u2026' + id.slice(-4) : id;
 }
 
+function isDevPeerUiEnabled() {
+  var loc = window.location || {};
+  var host = loc.hostname || '';
+  var origin = loc.origin || '';
+  return host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host === '[::1]' ||
+    origin.indexOf('tauri://localhost') === 0;
+}
+
 function logPeerRosterIfChanged(peerIds, deputyPeerId) {
   if (!inRoom || !peer) return;
   var signature = peerIds.join('|') + '::' + (deputyPeerId || '');
@@ -880,6 +915,7 @@ function updatePeerList() {
   const list = $('peers-list');
   list.innerHTML = '';
   const deputyPeerId = roomCode ? electHostId(roomCode) : null;
+  const showPeerUuids = isDevPeerUiEnabled();
 
   const appendRole = function(parent, label) {
     const role = document.createElement('span');
@@ -893,23 +929,52 @@ function updatePeerList() {
     else if (peerId && peerId === deputyPeerId) appendRole(parent, 'deputy');
   };
 
-  const addItem = (id, label, self, talking, editable) => {
+  const appendPeerUuid = function(parent, actualPeerId) {
+    if (!showPeerUuids || !actualPeerId) return;
+    const uuid = document.createElement('code');
+    uuid.className = 'peer-uuid';
+    uuid.textContent = actualPeerId;
+    parent.appendChild(uuid);
+  };
+
+  const appendCopyPeerButton = function(parent, actualPeerId, label) {
+    if (!showPeerUuids || !actualPeerId) return;
+    const btn = document.createElement('button');
+    btn.className = 'btn-icon peer-copy-btn';
+    btn.title = 'Copy PeerJS UUID';
+    btn.setAttribute('aria-label', 'Copy PeerJS UUID for ' + (label || actualPeerId));
+    btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+    btn.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      copyTextToClipboard(actualPeerId, 'Peer UUID copied!');
+    });
+    parent.appendChild(btn);
+  };
+
+  const addItem = (id, label, self, talking, editable, actualPeerId) => {
     const div = document.createElement('div');
     div.id = 'peer-item-' + id;
     div.className = 'peer-item' + (self ? ' peer-self' : '') + (talking ? ' talking' : '');
+    div.innerHTML = '<span class="peer-dot"></span>';
+    const peerMain = document.createElement('span');
+    peerMain.className = 'peer-main';
+
     if (!editable) {
-      div.innerHTML = '<span class="peer-dot"></span>';
       const nameWrap = document.createElement('span');
+      nameWrap.className = 'peer-label-row';
       nameWrap.textContent = label;
-      appendPeerRole(nameWrap, id);
-      div.appendChild(nameWrap);
+      appendPeerRole(nameWrap, actualPeerId);
+      peerMain.appendChild(nameWrap);
+      appendPeerUuid(peerMain, actualPeerId);
+      div.appendChild(peerMain);
+      appendCopyPeerButton(div, actualPeerId, label);
       list.appendChild(div);
       return;
     }
 
-    div.innerHTML = '<span class="peer-dot"></span>';
     const nameWrap = document.createElement('span');
-    nameWrap.className = 'peer-self-main';
+    nameWrap.className = 'peer-self-main peer-label-row';
 
     if (editingSelfPseudo) {
       const input = document.createElement('input');
@@ -936,8 +1001,11 @@ function updatePeerList() {
         setMyPseudo(input.value);
       });
       nameWrap.appendChild(input);
-      appendPeerRole(nameWrap, peer && peer.id);
-      div.appendChild(nameWrap);
+      appendPeerRole(nameWrap, actualPeerId);
+      peerMain.appendChild(nameWrap);
+      appendPeerUuid(peerMain, actualPeerId);
+      div.appendChild(peerMain);
+      appendCopyPeerButton(div, actualPeerId, label || 'You');
       list.appendChild(div);
       setTimeout(function() { input.focus(); input.select(); }, 0);
       return;
@@ -957,12 +1025,15 @@ function updatePeerList() {
       updatePeerList();
     });
     nameWrap.appendChild(editBtn);
-    div.appendChild(nameWrap);
+    peerMain.appendChild(nameWrap);
+    appendPeerUuid(peerMain, actualPeerId);
+    div.appendChild(peerMain);
+    appendCopyPeerButton(div, actualPeerId, label || 'You');
     list.appendChild(div);
   };
 
-  addItem('self', '', true, isTalking || freeHandMode, true);
-  connections.forEach((conn, id) => addItem(id, conn.pseudo || shortId(id), false, conn.talking || false, false));
+  addItem('self', myPseudo || 'You', true, isTalking || freeHandMode, true, peer && peer.id);
+  connections.forEach((conn, id) => addItem(id, conn.pseudo || shortId(id), false, conn.talking || false, false, id));
   logPeerRosterIfChanged([peer.id].concat(Array.from(connections.keys())), deputyPeerId);
 
   // Notify the parent iframe of the current peer list
@@ -2381,27 +2452,17 @@ window.addEventListener('DOMContentLoaded', function() {
   startPresencePolling();
   $('btn-copy').addEventListener('click', function() {
     var text = roomCode;
-    var toast = $('copy-toast');
-    function showToast() {
-      toast.classList.add('visible');
-      clearTimeout($('btn-copy')._toastTimer);
-      $('btn-copy')._toastTimer = setTimeout(function() { toast.classList.remove('visible'); }, 1500);
-    }
     // On native mobile, open the system share sheet with a deep link
     if (window.Capacitor && window.Capacitor.isNativePlatform()) {
       var shareUrl = 'voxal://join?room=' + encodeURIComponent(text);
       if (navigator.share) {
         navigator.share({ title: 'Join my Voxal room', text: shareUrl }).catch(function(e) { console.warn('[Share]', e); });
       } else {
-        fallbackCopy(shareUrl); showToast();
+        fallbackCopy(shareUrl); showCopyToast();
       }
       return;
     }
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(showToast).catch(function() { fallbackCopy(text); showToast(); });
-    } else {
-      fallbackCopy(text); showToast();
-    }
+    copyTextToClipboard(text);
   });
   $('btn-leave').addEventListener('click', leaveRoom);
   $('btn-back').addEventListener('click', function() { showScreen('home'); });
