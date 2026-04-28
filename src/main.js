@@ -752,6 +752,26 @@ function showError(msg) {
   showScreen('error');
 }
 
+function isNonFatalPeerRuntimeError(err) {
+  if (!err) return false;
+  var type = err.type || '';
+  var message = err.message || String(err);
+  return type === 'peer-unavailable' || /Could not connect to peer\b/.test(message);
+}
+
+function handlePeerRuntimeError(err, settled, reject) {
+  if (!settled) {
+    reject(err);
+    return true;
+  }
+  if (inRoom && isNonFatalPeerRuntimeError(err)) {
+    console.warn('[peer-runtime]', err);
+    return true;
+  }
+  showError(err.message);
+  return true;
+}
+
 // --- Shortcut helpers --------------------------------------------------------
 
 const MODIFIER_CODES = [
@@ -1303,7 +1323,8 @@ function connectToHost(hostId, opts) {
   var onInitialJoinResolve = opts.onInitialJoinResolve || null;
   var onInitialJoinReject = opts.onInitialJoinReject || null;
 
-  if (!inRoom || !peer || peer.destroyed) return;
+  if (!peer || peer.destroyed) return;
+  if (mode !== 'initial' && !inRoom) return;
   if (mode === 'migration' && roomCode !== hostId && hostId !== _migrationCandidateId) return;
 
   var gen = ++_hostConnGeneration;
@@ -1482,10 +1503,6 @@ function handleJoinerDataConnection(dataConn) {
   dataConn.on('open', function() {
     const previous = connections.get(joinerId);
     dataConn._voxalExistingPeer = !!previous;
-    if (previous && previous.data && previous.data !== dataConn) {
-      console.warn('[host] Replacing duplicate data connection from ' + migrationPeerLabel(joinerId) + '.');
-      previous.data.close();
-    }
     rememberPeer(joinerId);
     const existing = previous || { media: null, pseudo: shortId(joinerId), talking: false };
     connections.set(joinerId, Object.assign({}, existing, {
@@ -1493,6 +1510,10 @@ function handleJoinerDataConnection(dataConn) {
       pseudo: existing.pseudo || shortId(joinerId),
       lastHeartbeatAt: Date.now()
     }));
+    if (previous && previous.data && previous.data !== dataConn) {
+      console.warn('[host] Replacing duplicate data connection from ' + migrationPeerLabel(joinerId) + '.');
+      previous.data.close();
+    }
   });
 
   dataConn.on('data', function(msg) {
@@ -1606,10 +1627,10 @@ async function createRoom(onJoined) {
     peer.on('error', function(err) {
       if (!settled) {
         settled = true;
-        reject(err);
+        handlePeerRuntimeError(err, false, reject);
         return;
       }
-      showError(err.message);
+      handlePeerRuntimeError(err, true, reject);
     });
   });
 }
@@ -1717,10 +1738,10 @@ async function joinRoom(code, onJoined) {
     peer.on('error', function(err) {
       if (!settled) {
         settled = true;
-        reject(err);
+        handlePeerRuntimeError(err, false, reject);
         return;
       }
-      showError(err.message);
+      handlePeerRuntimeError(err, true, reject);
     });
   });
 }
