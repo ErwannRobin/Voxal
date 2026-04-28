@@ -493,6 +493,11 @@ var _lastHostHeartbeatAt = 0;
 var HOST_HEARTBEAT_INTERVAL_MS = 2000;
 var HOST_HEARTBEAT_TIMEOUT_MS  = 7000;
 var MAX_JOIN_REDIRECTS         = 5;
+var MIGRATION_SETTLE_TIMEOUT_MS = 8000;
+var _migrationSettleTimer = null;
+var _migrationSettlingUntil = 0;
+var _migrationExpectedPeers = new Map();
+var _lastAuthoritativePeerIds = null;
 
 function rememberPeer(peerId) {
   if (!peerId) return;
@@ -503,6 +508,8 @@ function rememberPeer(peerId) {
 function forgetPeer(peerId) {
   if (!peerId) return;
   knownPeerIds.delete(peerId);
+  _migrationExpectedPeers.delete(peerId);
+  if (_lastAuthoritativePeerIds) _lastAuthoritativePeerIds.delete(peerId);
 }
 
 function resetKnownPeers(peerIds) {
@@ -520,6 +527,96 @@ function hostElectionCandidates(excludedPeerId) {
 function electHostId(excludedPeerId) {
   const candidates = hostElectionCandidates(excludedPeerId);
   return candidates[0] || null;
+}
+
+function isMigrationSettling() {
+  return !!_migrationSettlingUntil && Date.now() < _migrationSettlingUntil;
+}
+
+function stopMigrationSettling() {
+  if (_migrationSettleTimer) {
+    clearTimeout(_migrationSettleTimer);
+    _migrationSettleTimer = null;
+  }
+  _migrationSettlingUntil = 0;
+  _migrationExpectedPeers.clear();
+  _lastAuthoritativePeerIds = null;
+}
+
+function pseudoForKnownPeer(peerId) {
+  if (!peerId) return '';
+  const conn = connections.get(peerId);
+  if (conn && conn.pseudo) return String(conn.pseudo).trim();
+  return _migrationExpectedPeers.get(peerId) || '';
+}
+
+function ensurePeerPlaceholder(peerId) {
+  if (!peerId) return;
+  if (peer && peer.id === peerId) return;
+  const existing = connections.get(peerId);
+  const pseudo = pseudoForKnownPeer(peerId) || shortId(peerId);
+  if (existing) {
+    if (!existing.pseudo) connections.set(peerId, Object.assign({}, existing, { pseudo: pseudo }));
+    return;
+  }
+  connections.set(peerId, { data: null, media: null, pseudo: pseudo, talking: false });
+}
+
+function beginMigrationSettling(peerIds) {
+  stopMigrationSettling();
+  _migrationSettlingUntil = Date.now() + MIGRATION_SETTLE_TIMEOUT_MS;
+  (peerIds || []).forEach(function(peerId) {
+    if (!peerId) return;
+    if (peer && peer.id === peerId) return;
+    _migrationExpectedPeers.set(peerId, migrationPeerAlias(peerId) || shortId(peerId));
+    ensurePeerPlaceholder(peerId);
+  });
+  _migrationSettleTimer = setTimeout(finalizeMigrationSettling, MIGRATION_SETTLE_TIMEOUT_MS);
+}
+
+function finalizeMigrationSettling() {
+  var expectedPeers = Array.from(_migrationExpectedPeers.keys());
+  var authoritativePeerIds = _lastAuthoritativePeerIds ? Array.from(_lastAuthoritativePeerIds) : null;
+  var authoritativePeerSet = authoritativePeerIds ? new Set(authoritativePeerIds) : null;
+  _migrationSettleTimer = null;
+  _migrationSettlingUntil = 0;
+
+  if (!inRoom) {
+    _migrationExpectedPeers.clear();
+    _lastAuthoritativePeerIds = null;
+    return;
+  }
+
+  if (isHost) {
+    expectedPeers.forEach(function(peerId) {
+      var conn = connections.get(peerId);
+      if (conn && conn.data && !conn.data.closed) return;
+      console.warn(
+        '[migration] Peer ' + migrationPeerLabel(peerId) +
+        ' did not reattach within settle window (' + MIGRATION_SETTLE_TIMEOUT_MS + ' ms). Removing from room.'
+      );
+      forgetPeer(peerId);
+      if (!conn) return;
+      connections.delete(peerId);
+      detachAudio(peerId);
+      if (conn.data) conn.data.close();
+      if (conn.media) conn.media.close();
+    });
+    broadcastHostPeerLists();
+    updatePeerList();
+  } else if (authoritativePeerIds && authoritativePeerIds.length) {
+    resetKnownPeers(authoritativePeerIds);
+    Array.from(connections.keys()).forEach(function(existingPeerId) {
+      if (existingPeerId === roomCode) return;
+      if (authoritativePeerSet && authoritativePeerSet.has(existingPeerId)) return;
+      forgetPeer(existingPeerId);
+      removePeer(existingPeerId);
+    });
+    updatePeerList();
+  }
+
+  _migrationExpectedPeers.clear();
+  _lastAuthoritativePeerIds = null;
 }
 
 function noteHostHeartbeat(at) {
@@ -1101,6 +1198,7 @@ function leaveRoom() {
   ++_hostConnGeneration; // invalidate any pending retry timers
   _lastPeerRosterLogSignature = '';
   _lastHostHeartbeatAt = 0;
+  stopMigrationSettling();
   stopHostHeartbeat();
   stopHostHeartbeatMonitor();
   stopPeerHeartbeat();
@@ -1171,6 +1269,7 @@ function initiateHostMigration(disconnectedHostId) {
   if (oldHostId !== roomCode && oldHostId !== connectingToHostId) return;
   connectingToHostId = null;
   forgetPeer(oldHostId);
+  beginMigrationSettling(Array.from(knownPeerIds));
 
   // Remove old host from the map (data conn is already dead; media closes on its own)
   const oldConn = connections.get(oldHostId);
@@ -1366,8 +1465,7 @@ function buildHostPeerList(excludedPeerId) {
   return Array.from(knownPeerIds)
     .filter(function(id) { return id !== excludedPeerId; })
     .map(function(id) {
-      const existingPeer = connections.get(id);
-      return { id: id, pseudo: existingPeer && existingPeer.pseudo ? existingPeer.pseudo : shortId(id) };
+      return { id: id, pseudo: pseudoForKnownPeer(id) || shortId(id) };
     });
 }
 
@@ -1487,6 +1585,7 @@ async function createRoom(onJoined) {
   stream = await getMicStream();
   audioTrack = stream.getAudioTracks()[0];
   audioTrack.enabled = false;
+  stopMigrationSettling();
   knownPeerIds.clear();
   const iceServers = await fetchIceServers();
   peer = new Peer({ config: { iceServers } });
@@ -1532,22 +1631,43 @@ function handleHostMessage(msg) {
   noteHostHeartbeat(msg && msg.at ? msg.at : Date.now());
   if (msg.type === 'heartbeat') return;
   if (msg.type === 'peer-list') {
+    const settling = isMigrationSettling();
     const listedPeerIds = msg.peers.map(function(p) { return p.id; }).concat([roomCode]);
     const listedPeerSet = new Set(listedPeerIds);
-    resetKnownPeers(listedPeerIds);
+    _lastAuthoritativePeerIds = new Set(listedPeerIds);
+    if (settling) {
+      listedPeerIds.forEach(rememberPeer);
+      _migrationExpectedPeers.forEach(function(_, peerId) { ensurePeerPlaceholder(peerId); });
+    } else {
+      resetKnownPeers(listedPeerIds);
+    }
 
     Array.from(connections.keys()).forEach(function(existingPeerId) {
+      if (settling && _migrationExpectedPeers.has(existingPeerId)) return;
       if (!listedPeerSet.has(existingPeerId)) {
         removePeer(existingPeerId);
       }
     });
 
-    const allPeers = msg.peers.concat([{ id: roomCode, pseudo: msg.hostPseudo || shortId(roomCode) }]);
-    allPeers.forEach(function(p) {
+    const authoritativePeers = msg.peers.concat([{ id: roomCode, pseudo: msg.hostPseudo || shortId(roomCode) }]);
+    const displayPeers = new Map();
+    authoritativePeers.forEach(function(p) { displayPeers.set(p.id, p); });
+    if (settling) {
+      _migrationExpectedPeers.forEach(function(pseudo, peerId) {
+        if (!displayPeers.has(peerId)) displayPeers.set(peerId, { id: peerId, pseudo: pseudo || shortId(peerId) });
+      });
+    }
+
+    displayPeers.forEach(function(p) {
       const peerId = p.id;
       const pseudo = p.pseudo;
       const prev = connections.get(peerId) || { data: null, talking: false };
       connections.set(peerId, Object.assign({}, prev, { pseudo: pseudo, media: prev.media || null }));
+    });
+
+    authoritativePeers.forEach(function(p) {
+      const peerId = p.id;
+      const prev = connections.get(peerId) || { data: null, talking: false };
       if (prev.media) return;
 
       const call = peer.call(peerId, stream);
