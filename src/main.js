@@ -17,10 +17,13 @@
  *   redirect     { hostId, hostPseudo }          non-host -> misdirected joiner
  *
  * Host migration:
- *   When the host disconnects, all remaining peers independently elect a new host
- *   by sorting all known peer IDs and picking the smallest. The elected peer calls
- *   becomeHost(); others call connectToNewHost(). Audio mesh is unaffected since
- *   MediaConnections are fully peer-to-peer.
+ *   When the host's DataConnection closes (or heartbeat times out), every peer runs
+ *   `initiateHostMigration` which is idempotent and state-aware (`roomState`).
+ *   Each peer elects the smallest known peer id. The elected peer calls `becomeHost()`;
+ *   others call `connectToHost(newHostId, { mode: 'migration' })`. Migration succeeds
+ *   only after the new host's authoritative `peer-list` arrives. Failed candidates are
+ *   added to `_migrationExcluded` so re-election skips them. Audio MediaConnections to
+ *   non-host peers are never touched, so audio survives the handoff.
  */
 
 // --- TURN / ICE servers (metered.ca) ----------------------------------------
@@ -493,11 +496,15 @@ var _lastHostHeartbeatAt = 0;
 var HOST_HEARTBEAT_INTERVAL_MS = 2000;
 var HOST_HEARTBEAT_TIMEOUT_MS  = 7000;
 var MAX_JOIN_REDIRECTS         = 5;
-var MIGRATION_SETTLE_TIMEOUT_MS = 8000;
-var _migrationSettleTimer = null;
-var _migrationSettlingUntil = 0;
-var _migrationExpectedPeers = new Map();
-var _lastAuthoritativePeerIds = null;
+
+// Room state machine
+var ROOM_STATE_IDLE       = 'idle';
+var ROOM_STATE_CONNECTING = 'connecting';
+var ROOM_STATE_CONNECTED  = 'connected';
+var ROOM_STATE_MIGRATING  = 'migrating';
+var roomState = ROOM_STATE_IDLE;
+var _migrationCandidateId = null;
+var _migrationExcluded = new Set();
 
 function rememberPeer(peerId) {
   if (!peerId) return;
@@ -508,8 +515,6 @@ function rememberPeer(peerId) {
 function forgetPeer(peerId) {
   if (!peerId) return;
   knownPeerIds.delete(peerId);
-  _migrationExpectedPeers.delete(peerId);
-  if (_lastAuthoritativePeerIds) _lastAuthoritativePeerIds.delete(peerId);
 }
 
 function resetKnownPeers(peerIds) {
@@ -527,96 +532,6 @@ function hostElectionCandidates(excludedPeerId) {
 function electHostId(excludedPeerId) {
   const candidates = hostElectionCandidates(excludedPeerId);
   return candidates[0] || null;
-}
-
-function isMigrationSettling() {
-  return !!_migrationSettlingUntil && Date.now() < _migrationSettlingUntil;
-}
-
-function stopMigrationSettling() {
-  if (_migrationSettleTimer) {
-    clearTimeout(_migrationSettleTimer);
-    _migrationSettleTimer = null;
-  }
-  _migrationSettlingUntil = 0;
-  _migrationExpectedPeers.clear();
-  _lastAuthoritativePeerIds = null;
-}
-
-function pseudoForKnownPeer(peerId) {
-  if (!peerId) return '';
-  const conn = connections.get(peerId);
-  if (conn && conn.pseudo) return String(conn.pseudo).trim();
-  return _migrationExpectedPeers.get(peerId) || '';
-}
-
-function ensurePeerPlaceholder(peerId) {
-  if (!peerId) return;
-  if (peer && peer.id === peerId) return;
-  const existing = connections.get(peerId);
-  const pseudo = pseudoForKnownPeer(peerId) || shortId(peerId);
-  if (existing) {
-    if (!existing.pseudo) connections.set(peerId, Object.assign({}, existing, { pseudo: pseudo }));
-    return;
-  }
-  connections.set(peerId, { data: null, media: null, pseudo: pseudo, talking: false });
-}
-
-function beginMigrationSettling(peerIds) {
-  stopMigrationSettling();
-  _migrationSettlingUntil = Date.now() + MIGRATION_SETTLE_TIMEOUT_MS;
-  (peerIds || []).forEach(function(peerId) {
-    if (!peerId) return;
-    if (peer && peer.id === peerId) return;
-    _migrationExpectedPeers.set(peerId, migrationPeerAlias(peerId) || shortId(peerId));
-    ensurePeerPlaceholder(peerId);
-  });
-  _migrationSettleTimer = setTimeout(finalizeMigrationSettling, MIGRATION_SETTLE_TIMEOUT_MS);
-}
-
-function finalizeMigrationSettling() {
-  var expectedPeers = Array.from(_migrationExpectedPeers.keys());
-  var authoritativePeerIds = _lastAuthoritativePeerIds ? Array.from(_lastAuthoritativePeerIds) : null;
-  var authoritativePeerSet = authoritativePeerIds ? new Set(authoritativePeerIds) : null;
-  _migrationSettleTimer = null;
-  _migrationSettlingUntil = 0;
-
-  if (!inRoom) {
-    _migrationExpectedPeers.clear();
-    _lastAuthoritativePeerIds = null;
-    return;
-  }
-
-  if (isHost) {
-    expectedPeers.forEach(function(peerId) {
-      var conn = connections.get(peerId);
-      if (conn && conn.data && !conn.data.closed) return;
-      console.warn(
-        '[migration] Peer ' + migrationPeerLabel(peerId) +
-        ' did not reattach within settle window (' + MIGRATION_SETTLE_TIMEOUT_MS + ' ms). Removing from room.'
-      );
-      forgetPeer(peerId);
-      if (!conn) return;
-      connections.delete(peerId);
-      detachAudio(peerId);
-      if (conn.data) conn.data.close();
-      if (conn.media) conn.media.close();
-    });
-    broadcastHostPeerLists();
-    updatePeerList();
-  } else if (authoritativePeerIds && authoritativePeerIds.length) {
-    resetKnownPeers(authoritativePeerIds);
-    Array.from(connections.keys()).forEach(function(existingPeerId) {
-      if (existingPeerId === roomCode) return;
-      if (authoritativePeerSet && authoritativePeerSet.has(existingPeerId)) return;
-      forgetPeer(existingPeerId);
-      removePeer(existingPeerId);
-    });
-    updatePeerList();
-  }
-
-  _migrationExpectedPeers.clear();
-  _lastAuthoritativePeerIds = null;
 }
 
 function noteHostHeartbeat(at) {
@@ -688,6 +603,7 @@ function checkHostHeartbeat() {
   if (!inRoom || isHost || !roomCode || connectingToHostId) return;
   if (!_lastHostHeartbeatAt) return;
   if (Date.now() - _lastHostHeartbeatAt <= HOST_HEARTBEAT_TIMEOUT_MS) return;
+  if (roomState !== ROOM_STATE_CONNECTED) return;
   console.warn(
     '[heartbeat] Host ' + migrationPeerLabel(roomCode) +
     ' missed heartbeat timeout (' + HOST_HEARTBEAT_TIMEOUT_MS + ' ms). Starting migration.'
@@ -1198,7 +1114,9 @@ function leaveRoom() {
   ++_hostConnGeneration; // invalidate any pending retry timers
   _lastPeerRosterLogSignature = '';
   _lastHostHeartbeatAt = 0;
-  stopMigrationSettling();
+  roomState = ROOM_STATE_IDLE;
+  _migrationExcluded.clear();
+  _migrationCandidateId = null;
   stopHostHeartbeat();
   stopHostHeartbeatMonitor();
   stopPeerHeartbeat();
@@ -1262,60 +1180,82 @@ function migrationCandidatesLabel(candidates) {
   return candidates.map(migrationPeerLabel).join(', ');
 }
 
-function initiateHostMigration(disconnectedHostId) {
+function initiateHostMigration(failedOrOldHostId) {
   if (!inRoom) return;
 
-  const oldHostId = disconnectedHostId || roomCode;
-  if (oldHostId !== roomCode && oldHostId !== connectingToHostId) return;
-  connectingToHostId = null;
-  forgetPeer(oldHostId);
-  beginMigrationSettling(Array.from(knownPeerIds));
+  // Case A: starting migration from connected state
+  if (roomState === ROOM_STATE_CONNECTED) {
+    const oldHostId = failedOrOldHostId || roomCode;
+    if (oldHostId !== roomCode) return; // stale, not from current host
+    roomState = ROOM_STATE_MIGRATING;
+    _migrationExcluded = new Set([oldHostId]);
+    _migrationCandidateId = null;
+    connectingToHostId = null;
 
-  // Remove old host from the map (data conn is already dead; media closes on its own)
-  const oldConn = connections.get(oldHostId);
-  if (oldConn) {
-    if (oldConn.media) oldConn.media.close();
-    connections.delete(oldHostId);
-    detachAudio(oldHostId);
+    // Cleanup OLD HOST only — keep audio mesh and other peer state
+    forgetPeer(oldHostId);
+    const oldConn = connections.get(oldHostId);
+    if (oldConn) {
+      if (oldConn.data) { try { oldConn.data.close(); } catch (_) {} }
+      if (oldConn.media) { try { oldConn.media.close(); } catch (_) {} }
+      connections.delete(oldHostId);
+      detachAudio(oldHostId);
+    }
+    playGoodbye();
+    proceedWithHostElection();
+    return;
   }
 
-  playGoodbye();
+  // Case B: candidate failed during ongoing migration
+  if (roomState === ROOM_STATE_MIGRATING) {
+    if (failedOrOldHostId && failedOrOldHostId === _migrationCandidateId) {
+      _migrationExcluded.add(failedOrOldHostId);
+      _migrationCandidateId = null;
+      console.warn('[migration] Candidate ' + migrationPeerLabel(failedOrOldHostId) + ' failed; re-electing.');
+      proceedWithHostElection();
+    }
+    // else: stale event, ignore
+    return;
+  }
+}
 
-  const candidates = hostElectionCandidates(oldHostId);
+function proceedWithHostElection() {
+  if (!inRoom || !peer) return;
+  const candidates = hostElectionCandidates().filter(function(id) {
+    return !_migrationExcluded.has(id);
+  });
   const newHostId = candidates[0] || null;
-  const nextDeputyId = newHostId ? electHostId(newHostId) : null;
+  const nextDeputyId = newHostId ? hostElectionCandidates().filter(function(id) {
+    return id !== newHostId && !_migrationExcluded.has(id);
+  })[0] || null : null;
+
   console.warn(
-    '[migration] Host ' + migrationPeerLabel(oldHostId) +
-    ' disconnected. Self is ' + migrationPeerLabel(peer && peer.id) +
+    '[migration] Self ' + migrationPeerLabel(peer.id) +
     '. Candidates: ' + migrationCandidatesLabel(candidates) +
-    '. Elected host: ' + migrationPeerLabel(newHostId) +
-    '. Deputy after election: ' + migrationPeerLabel(nextDeputyId) + '.'
+    '. Elected: ' + migrationPeerLabel(newHostId) +
+    '. Next deputy: ' + migrationPeerLabel(nextDeputyId) + '.'
   );
+
   if (!newHostId) {
     console.warn('[migration] No host candidate remains, leaving room.');
     leaveRoom();
     return;
   }
-  updatePeerList();
 
   if (newHostId === peer.id) {
-    console.log(
-      '[migration] I am the elected host: ' + migrationPeerLabel(peer.id) +
-      '. Deputy after election: ' + migrationPeerLabel(nextDeputyId) + '.'
-    );
     becomeHost();
   } else {
-    console.log(
-      '[migration] I am not the next host. Trying to connect to elected host ' +
-      migrationPeerLabel(newHostId) +
-      '. Deputy after election: ' + migrationPeerLabel(nextDeputyId) + '.'
-    );
-    connectToNewHost(newHostId);
+    _migrationCandidateId = newHostId;
+    connectToHost(newHostId, { mode: 'migration' });
   }
+  updatePeerList();
 }
 
 function becomeHost() {
   connectingToHostId = null;
+  roomState = ROOM_STATE_CONNECTED;
+  _migrationExcluded.clear();
+  _migrationCandidateId = null;
   isHost = true;
   roomCode = peer.id;
   _lastHostHeartbeatAt = 0;
@@ -1323,6 +1263,7 @@ function becomeHost() {
   stopHostHeartbeatMonitor();
   startPeerHeartbeatSweep();
   startHostHeartbeat();
+  localStorage.setItem('active-room-code', peer.id);
   console.log(
     '[migration] This peer became host: ' + migrationPeerLabel(peer.id) +
     '. Deputy is now ' + migrationPeerLabel(electHostId(peer.id) || null) + '.'
@@ -1330,49 +1271,59 @@ function becomeHost() {
   iframeEmit({ type: 'host-changed', roomCode: peer.id, isSelf: true });
   updateRoomHeader();
   updatePeerList();
+  // Broadcast peer-list to any existing data connections
+  connections.forEach(function(c) {
+    if (c.data) {
+      c.data.send({
+        type: 'peer-list',
+        peers: buildHostPeerList(peer.id),
+        hostId: peer.id,
+        hostPseudo: pseudoForHost()
+      });
+    }
+  });
   // peer.on('connection') is already wired in joinRoom() and will route here
   // since isHost is now true
 }
 
-function connectToNewHost(newHostId) {
-  connectingToHostId = newHostId;
-  rememberPeer(newHostId);
-  roomCode = newHostId;
-  stopHostHeartbeat();
-  stopPeerHeartbeatSweep();
-  console.log(
-    '[migration] Preparing connection to elected host ' + migrationPeerLabel(newHostId) +
-    '. Deputy after election would be ' + migrationPeerLabel(electHostId(newHostId) || null) + '.'
-  );
-  iframeEmit({ type: 'host-changed', roomCode: newHostId, isSelf: false });
-  updateRoomHeader();
-  _attemptHostConnection(newHostId, HOST_MAX_RETRIES);
+function buildHostPeerList(excludedPeerId) {
+  return Array.from(knownPeerIds)
+    .filter(function(id) { return id !== excludedPeerId; })
+    .map(function(id) {
+      const conn = connections.get(id);
+      const pseudo = (conn && conn.pseudo ? String(conn.pseudo).trim() : '') || shortId(id);
+      return { id: id, pseudo: pseudo };
+    });
 }
 
-function _attemptHostConnection(targetHostId, retriesLeft) {
+function connectToHost(hostId, opts) {
+  var mode = opts.mode; // 'initial' | 'migration'
+  var redirectsLeft = opts.redirectsLeft || 0;
+  var retriesLeft = opts.retriesLeft || HOST_MAX_RETRIES;
+  var onInitialJoinResolve = opts.onInitialJoinResolve || null;
+  var onInitialJoinReject = opts.onInitialJoinReject || null;
+
   if (!inRoom || !peer || peer.destroyed) return;
-  if (roomCode !== targetHostId) return;
+  if (mode === 'migration' && roomCode !== hostId && hostId !== _migrationCandidateId) return;
 
   var gen = ++_hostConnGeneration;
-  var hostData = peer.connect(targetHostId, { reliable: true });
+  var hostData = peer.connect(hostId, { reliable: true });
+  var receivedPeerList = false;
+  var redirected = false;
   var opened = false;
   var handled = false;
-  var attemptNumber = HOST_MAX_RETRIES - retriesLeft + 1;
+
   console.log(
-    '[migration] Connection attempt #' + attemptNumber +
-    ' to elected host ' + migrationPeerLabel(targetHostId) +
-    '. Retries remaining after this one: ' + retriesLeft +
-    '. Deputy after election would be ' + migrationPeerLabel(electHostId(targetHostId) || null) + '.'
+    '[' + mode + '] Connecting to host ' + migrationPeerLabel(hostId) +
+    '. Gen: ' + gen +
+    (mode === 'initial' ? ('. Redirects left: ' + redirectsLeft) : '') +
+    (mode === 'migration' ? ('. Retries left: ' + retriesLeft) : '') + '.'
   );
 
-  // If connection doesn't open within timeout, force-close to trigger retry
+  // Timeout if connection doesn't open
   var timer = setTimeout(function() {
     if (gen !== _hostConnGeneration) return;
-    console.warn(
-      '[migration] Connection attempt #' + attemptNumber +
-      ' to ' + migrationPeerLabel(targetHostId) +
-      ' timed out before opening.'
-    );
+    console.warn('[' + mode + '] Connection to ' + migrationPeerLabel(hostId) + ' timed out before opening.');
     if (!opened && !handled) hostData.close();
   }, HOST_CONNECT_TIMEOUT);
 
@@ -1380,70 +1331,116 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
     if (gen !== _hostConnGeneration) { hostData.close(); return; }
     opened = true;
     clearTimeout(timer);
-    connectingToHostId = null;
-    noteHostHeartbeat();
-    startHostHeartbeatMonitor();
-    startPeerHeartbeat();
     hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
-    var prev = connections.get(targetHostId) || { media: null, talking: false };
-    connections.set(targetHostId, Object.assign({}, prev, { data: hostData, pseudo: prev.pseudo || shortId(targetHostId) }));
-    console.log(
-      '[migration] Connected to elected host ' + migrationPeerLabel(targetHostId) +
-      ' on attempt #' + attemptNumber +
-      '. Deputy after election is ' + migrationPeerLabel(electHostId(targetHostId) || null) + '.'
-    );
-    updatePeerList();
   });
 
   hostData.on('data', function(msg) {
     if (gen !== _hostConnGeneration) return;
-    handleHostMessage(msg);
+
+    // Handle redirect (initial mode only)
+    if (msg && msg.type === 'redirect' && mode === 'initial') {
+      if (!msg.hostId) {
+        if (onInitialJoinReject && !handled) {
+          handled = true;
+          onInitialJoinReject(new Error('Received redirect without a host id.'));
+        }
+        return;
+      }
+      if (msg.hostId === hostId) {
+        if (onInitialJoinReject && !handled) {
+          handled = true;
+          onInitialJoinReject(new Error('Received a redirect back to the same host.'));
+        }
+        return;
+      }
+      if (redirectsLeft <= 0) {
+        if (onInitialJoinReject && !handled) {
+          handled = true;
+          onInitialJoinReject(new Error('Too many host redirects while joining.'));
+        }
+        return;
+      }
+      redirected = true;
+      console.log('[initial] ' + migrationPeerLabel(hostId) + ' redirected to ' + migrationPeerLabel(msg.hostId) + '.');
+      resetKnownPeers([msg.hostId]);
+      hostData.close();
+      connectToHost(msg.hostId, { mode: 'initial', redirectsLeft: redirectsLeft - 1, retriesLeft: 0, onInitialJoinResolve: onInitialJoinResolve, onInitialJoinReject: onInitialJoinReject });
+      return;
+    }
+
+    // Handle peer-list (success for both modes)
+    if (msg && msg.type === 'peer-list') {
+      receivedPeerList = true;
+
+      if (mode === 'initial') {
+        finishJoin(hostId, hostData);
+        handleHostMessage(msg);
+        if (onInitialJoinResolve) onInitialJoinResolve(peer.id);
+      } else if (mode === 'migration') {
+        _migrationCandidateId = null;
+        _migrationExcluded.clear();
+        roomState = ROOM_STATE_CONNECTED;
+        roomCode = hostId;
+        isHost = false;
+        connectingToHostId = null;
+        noteHostHeartbeat();
+        startHostHeartbeatMonitor();
+        stopPeerHeartbeatSweep();
+        startPeerHeartbeat();
+        localStorage.setItem('active-room-code', hostId);
+        iframeEmit({ type: 'host-changed', roomCode: hostId, isSelf: false });
+        updateRoomHeader();
+        var prev = connections.get(hostId) || { media: null, talking: false };
+        connections.set(hostId, Object.assign({}, prev, { data: hostData, pseudo: msg.hostPseudo || shortId(hostId) }));
+        console.log('[migration] Connected to new host ' + migrationPeerLabel(hostId) + '. Received peer-list.');
+        handleHostMessage(msg);
+      }
+      return;
+    }
+
+    // Pass other messages to host handler (after peer-list received)
+    if (receivedPeerList) {
+      handleHostMessage(msg);
+    }
   });
 
   hostData.on('close', function() {
     clearTimeout(timer);
     if (gen !== _hostConnGeneration) return;
     if (handled) return;
-    handled = true;
 
-    if (opened) {
-      // Connection was live then dropped — host actually died
+    if (receivedPeerList) {
+      // Connection was live (we got peer-list) then dropped — host actually died
       stopPeerHeartbeat();
-      console.warn(
-        '[migration] Connection to elected host ' + migrationPeerLabel(targetHostId) +
-        ' closed after opening on attempt #' + attemptNumber + '. Re-electing.'
-      );
-      if (inRoom) initiateHostMigration(targetHostId);
+      console.warn('[' + mode + '] Connection to host ' + migrationPeerLabel(hostId) + ' closed after receiving peer-list.');
+      if (inRoom) initiateHostMigration(hostId);
       return;
     }
-    // Never opened — transient failure, retry before re-electing
-    if (!inRoom || roomCode !== targetHostId) return;
-    if (retriesLeft > 0) {
-      console.warn(
-        '[migration] Failed to connect to elected host ' + migrationPeerLabel(targetHostId) +
-        ' on attempt #' + attemptNumber +
-        '. Retrying. Remaining retries: ' + (retriesLeft - 1) +
-        '. Deputy after election would be ' + migrationPeerLabel(electHostId(targetHostId) || null) + '.'
-      );
-      setTimeout(function() {
-        _attemptHostConnection(targetHostId, retriesLeft - 1);
-      }, HOST_RETRY_DELAY);
-    } else {
-      console.warn(
-        '[migration] Failed to connect to elected host ' + migrationPeerLabel(targetHostId) +
-        ' on attempt #' + attemptNumber +
-        '. No retries remain, so a new election will start.'
-      );
-      initiateHostMigration(targetHostId);
+
+    // Never received peer-list — connection failed before success
+    handled = true;
+    if (redirected) return; // already handled redirect
+
+    if (mode === 'initial') {
+      if (onInitialJoinReject) {
+        onInitialJoinReject(new Error('Connection to host closed before joining.'));
+      }
+    } else if (mode === 'migration') {
+      if (!inRoom || (hostId !== _migrationCandidateId && hostId !== roomCode)) return;
+      if (retriesLeft > 0) {
+        console.warn('[migration] Failed to connect to ' + migrationPeerLabel(hostId) + '. Retrying (' + retriesLeft + ' left).');
+        setTimeout(function() {
+          connectToHost(hostId, { mode: 'migration', retriesLeft: retriesLeft - 1 });
+        }, HOST_RETRY_DELAY);
+      } else {
+        console.warn('[migration] Failed to connect to ' + migrationPeerLabel(hostId) + '. No retries remain, re-electing.');
+        initiateHostMigration(hostId);
+      }
     }
   });
 
   hostData.on('error', function(err) {
-    console.warn(
-      '[migration] Host connection error while trying ' + migrationPeerLabel(targetHostId) +
-      ' on attempt #' + attemptNumber +
-      ': ' + (err && err.message ? err.message : String(err)) + '.'
-    );
+    console.warn('[' + mode + '] Host connection error: ' + (err && err.message ? err.message : String(err)));
   });
 }
 
@@ -1460,14 +1457,6 @@ function handleIncomingCall(call) {
 }
 
 // --- Host logic --------------------------------------------------------------
-
-function buildHostPeerList(excludedPeerId) {
-  return Array.from(knownPeerIds)
-    .filter(function(id) { return id !== excludedPeerId; })
-    .map(function(id) {
-      return { id: id, pseudo: pseudoForKnownPeer(id) || shortId(id) };
-    });
-}
 
 function sendHostPeerList(dataConn, excludedPeerId) {
   if (!dataConn) return;
@@ -1585,7 +1574,6 @@ async function createRoom(onJoined) {
   stream = await getMicStream();
   audioTrack = stream.getAudioTracks()[0];
   audioTrack.enabled = false;
-  stopMigrationSettling();
   knownPeerIds.clear();
   const iceServers = await fetchIceServers();
   peer = new Peer({ config: { iceServers } });
@@ -1595,6 +1583,7 @@ async function createRoom(onJoined) {
   await new Promise(function(resolve, reject) {
     peer.on('open', function(id) {
       isHost = true; roomCode = id; inRoom = true;
+      roomState = ROOM_STATE_CONNECTED;
       stopHostHeartbeatMonitor();
       stopPeerHeartbeat();
       startPeerHeartbeatSweep();
@@ -1631,34 +1620,19 @@ function handleHostMessage(msg) {
   noteHostHeartbeat(msg && msg.at ? msg.at : Date.now());
   if (msg.type === 'heartbeat') return;
   if (msg.type === 'peer-list') {
-    const settling = isMigrationSettling();
     const listedPeerIds = msg.peers.map(function(p) { return p.id; }).concat([roomCode]);
     const listedPeerSet = new Set(listedPeerIds);
-    _lastAuthoritativePeerIds = new Set(listedPeerIds);
-    if (settling) {
-      listedPeerIds.forEach(rememberPeer);
-      _migrationExpectedPeers.forEach(function(_, peerId) { ensurePeerPlaceholder(peerId); });
-    } else {
-      resetKnownPeers(listedPeerIds);
-    }
+
+    resetKnownPeers(listedPeerIds);
 
     Array.from(connections.keys()).forEach(function(existingPeerId) {
-      if (settling && _migrationExpectedPeers.has(existingPeerId)) return;
       if (!listedPeerSet.has(existingPeerId)) {
         removePeer(existingPeerId);
       }
     });
 
     const authoritativePeers = msg.peers.concat([{ id: roomCode, pseudo: msg.hostPseudo || shortId(roomCode) }]);
-    const displayPeers = new Map();
-    authoritativePeers.forEach(function(p) { displayPeers.set(p.id, p); });
-    if (settling) {
-      _migrationExpectedPeers.forEach(function(pseudo, peerId) {
-        if (!displayPeers.has(peerId)) displayPeers.set(peerId, { id: peerId, pseudo: pseudo || shortId(peerId) });
-      });
-    }
-
-    displayPeers.forEach(function(p) {
+    authoritativePeers.forEach(function(p) {
       const peerId = p.id;
       const pseudo = p.pseudo;
       const prev = connections.get(peerId) || { data: null, talking: false };
@@ -1719,106 +1693,26 @@ async function joinRoom(code, onJoined) {
   peer.on('call',  function(call) { handleIncomingCall(call); });
   let settled = false;
   await new Promise(function(resolve, reject) {
-    function finishJoin(targetHostId, hostData) {
-      if (inRoom) return;
-      roomCode = targetHostId;
-      isHost = false;
-      inRoom = true;
-      connectingToHostId = null;
-      noteHostHeartbeat();
-      startHostHeartbeatMonitor();
-      stopPeerHeartbeatSweep();
-      startPeerHeartbeat();
-      clearRoomCodeInput();
-      localStorage.setItem('active-room-code', targetHostId);
-      rememberPeer(targetHostId);
-      connections.set(targetHostId, { data: hostData, media: null, pseudo: shortId(targetHostId), talking: false });
-      updateRoomHeader();
-      nativePTTJoin(targetHostId);
-      startKeepAlive();
-      requestAudioFocus(); // Keep foreground service running while in room
-      showScreen('room');
-      updatePeerList();
-      updateShortcutDisplay();
-      iframeEmit({ type: 'joined', roomCode: targetHostId, peerId: peer.id });
-    }
-
-    function connectToTargetHost(targetHostId, redirectsLeft) {
-      roomCode = targetHostId;
-      const hostData = peer.connect(targetHostId, { reliable: true });
-      var redirected = false;
-
-      hostData.on('open', function() {
-        hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
-      });
-
-      hostData.on('data', function(msg) {
-        if (msg && msg.type === 'redirect') {
-          if (!msg.hostId) {
-            if (!settled) {
-              settled = true;
-              reject(new Error('Received redirect without a host id.'));
-            }
-            return;
-          }
-          if (msg.hostId === targetHostId) {
-            if (!settled) {
-              settled = true;
-              reject(new Error('Received a redirect back to the same host.'));
-            }
-            return;
-          }
-          if (redirectsLeft <= 0) {
-            if (!settled) {
-              settled = true;
-              reject(new Error('Too many host redirects while joining.'));
-            }
-            return;
-          }
-          redirected = true;
-          console.log(
-            '[join] ' + migrationPeerLabel(targetHostId) +
-            ' redirected this peer to current host ' + migrationPeerLabel(msg.hostId) + '.'
-          );
-          resetKnownPeers([msg.hostId]);
-          hostData.close();
-          connectToTargetHost(msg.hostId, redirectsLeft - 1);
-          return;
-        }
-
-        finishJoin(targetHostId, hostData);
-        handleHostMessage(msg);
-        if (!settled) {
-          settled = true;
-          resolve(peer.id);
-        }
-      });
-
-      hostData.on('close', function() {
-        if (redirected) return;
-        if (!settled) {
-          settled = true;
-          reject(new Error('Connection to host closed before joining.'));
-          return;
-        }
-        stopPeerHeartbeat();
-        if (inRoom) initiateHostMigration(targetHostId);
-      });
-
-      hostData.on('error', function(err) {
-        if (redirected) return;
-        if (!settled) {
-          settled = true;
-          reject(err);
-          return;
-        }
-        showError(err.message);
-      });
-    }
-
     peer.on('open', function() {
       if (onJoined) onJoined(peer.id); // register presence as soon as we have our peer_id
-      connectToTargetHost(code, MAX_JOIN_REDIRECTS);
+      roomState = ROOM_STATE_CONNECTING;
+      connectToHost(code, {
+        mode: 'initial',
+        redirectsLeft: MAX_JOIN_REDIRECTS,
+        retriesLeft: 0,
+        onInitialJoinResolve: function(peerId) {
+          if (!settled) {
+            settled = true;
+            resolve(peerId);
+          }
+        },
+        onInitialJoinReject: function(err) {
+          if (!settled) {
+            settled = true;
+            reject(err);
+          }
+        }
+      });
     });
     peer.on('error', function(err) {
       if (!settled) {
@@ -1829,6 +1723,31 @@ async function joinRoom(code, onJoined) {
       showError(err.message);
     });
   });
+}
+
+function finishJoin(targetHostId, hostData) {
+  if (inRoom) return;
+  roomCode = targetHostId;
+  isHost = false;
+  inRoom = true;
+  connectingToHostId = null;
+  roomState = ROOM_STATE_CONNECTED;
+  noteHostHeartbeat();
+  startHostHeartbeatMonitor();
+  stopPeerHeartbeatSweep();
+  startPeerHeartbeat();
+  clearRoomCodeInput();
+  localStorage.setItem('active-room-code', targetHostId);
+  rememberPeer(targetHostId);
+  connections.set(targetHostId, { data: hostData, media: null, pseudo: shortId(targetHostId), talking: false });
+  updateRoomHeader();
+  nativePTTJoin(targetHostId);
+  startKeepAlive();
+  requestAudioFocus(); // Keep foreground service running while in room
+  showScreen('room');
+  updatePeerList();
+  updateShortcutDisplay();
+  iframeEmit({ type: 'joined', roomCode: targetHostId, peerId: peer.id });
 }
 
 // --- Presence UI ------------------------------------------------------------

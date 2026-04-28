@@ -39,6 +39,7 @@ Copilot should read this file at the start of every session.
 - **Peer list reset during migration**: non-host peers often track other members with media-only connections. `MediaConnection.close` must keep a placeholder entry for any peer still present in `knownPeerIds`, or host migration will wipe the visible peer list until everyone reconnects.
 - **Duplicate joiner DataConnections**: the host must replace duplicate `DataConnection`s from the same peer and ignore stale callbacks. Otherwise an old connection's `close` handler can remove the new one and re-broadcast `peer-joined` / `peer-left` incorrectly.
 - **Authoritative `peer-list` on duplicate reconnect**: when the host replaces a duplicate joiner connection, it should broadcast a fresh `peer-list` to all peers, and clients should remove peers omitted from that list to clear stale room entries.
+- **Host migration is "rejoin the room with the new host"**: a single `connectToHost(hostId, { mode: 'initial' | 'migration' })` primitive handles both flows. Migration success is defined as **the new host's first authoritative `peer-list` arriving** — not the DataConnection opening. A `roomState` machine (`idle`/`connecting`/`connected`/`migrating`) makes the trigger idempotent. Failed candidates are added to `_migrationExcluded` so re-election skips them. Audio MediaConnections to non-host peers are never touched during migration; only the old host's `data` and `media` are torn down.
 - **Custom Capacitor Android plugin methods** must use `@PluginMethod` from `com.getcapacitor.PluginMethod`; without it, JS calls (e.g. `window.Capacitor.Plugins.AudioForeground.start()`) are not exposed.
 - **Android 12+ `AppOps` attribution logs** (`attributionTag ... not declared in manifest`) can come from service `getSystemService(...)` calls using the default empty context. Declare a `<attribution>` tag in `AndroidManifest.xml` and use `createAttributionContext(...)` before accessing services like `AudioManager` or `NotificationManager`.
 
@@ -65,6 +66,10 @@ Use Python string replacement scripts for multi-line patches to avoid manual err
 ## Workflow
 
 - Suggest a commit message in the final response only when the current turn actually changed repository files.
+
+## Host migration refactor
+
+- Host migration uses a state machine (`idle`/`connecting`/`connected`/`migrating`) and reuses `connectToHost(hostId, { mode })` for both initial join and migration. Migration success = first authoritative `peer-list` from the new host, not DataConnection open. Failed candidates are added to `_migrationExcluded` to allow re-election without restart. Audio MediaConnections to non-host peers are never touched during migration.
 
 ---
 
