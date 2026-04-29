@@ -505,6 +505,7 @@ var ROOM_STATE_MIGRATING  = 'migrating';
 var roomState = ROOM_STATE_IDLE;
 var _migrationCandidateId = null;
 var _migrationExcluded = new Set();
+var _lastAuthoritativePeerIds = null;
 
 function migrationTraceConnections() {
   var summary = [];
@@ -535,6 +536,7 @@ function migrationTrace(event, details, level) {
     inRoom: !!inRoom,
     connectingToHostId: connectingToHostId || null,
     knownPeerIds: Array.from(knownPeerIds).sort(),
+    lastAuthoritativePeerIds: _lastAuthoritativePeerIds ? Array.from(_lastAuthoritativePeerIds).sort() : [],
     connections: migrationTraceConnections(),
     migrationCandidateId: _migrationCandidateId || null,
     migrationExcluded: Array.from(_migrationExcluded).sort(),
@@ -564,11 +566,35 @@ function resetKnownPeers(peerIds) {
   (peerIds || []).forEach(rememberPeer);
 }
 
+function resetAuthoritativePeerIds(peerIds) {
+  _lastAuthoritativePeerIds = new Set();
+  (peerIds || []).forEach(function(peerId) {
+    if (!peerId) return;
+    if (peer && peer.id === peerId) return;
+    _lastAuthoritativePeerIds.add(peerId);
+  });
+}
+
 function hostElectionCandidates(excludedPeerId) {
   const candidates = Array.from(knownPeerIds).filter(function(id) { return id !== excludedPeerId; });
   if (peer && peer.id && peer.id !== excludedPeerId) candidates.push(peer.id);
   candidates.sort();
   return candidates;
+}
+
+function authoritativeElectionCandidates(excludedPeerId) {
+  var basePeerIds = _lastAuthoritativePeerIds && _lastAuthoritativePeerIds.size
+    ? Array.from(_lastAuthoritativePeerIds)
+    : Array.from(knownPeerIds);
+  var candidates = basePeerIds.filter(function(id) { return id !== excludedPeerId; });
+  if (peer && peer.id && peer.id !== excludedPeerId) candidates.push(peer.id);
+  candidates.sort();
+  return candidates;
+}
+
+function authoritativeElectHostId(excludedPeerId) {
+  var candidates = authoritativeElectionCandidates(excludedPeerId);
+  return candidates[0] || null;
 }
 
 function electHostId(excludedPeerId) {
@@ -1255,7 +1281,7 @@ function shouldAcceptJoinerDataConnection(joinerId) {
     migrationTrace('should-accept-joiner', { joinerId: joinerId, decision: 'reject', reason: 'current-host-connection-open' });
     return false;
   }
-  var electedHostId = electHostId(roomCode);
+  var electedHostId = authoritativeElectHostId(roomCode);
   var accepted = joinerId !== roomCode && electedHostId === peer.id;
   migrationTrace('should-accept-joiner', {
     joinerId: joinerId,
@@ -1275,6 +1301,7 @@ function leaveRoom() {
   roomState = ROOM_STATE_IDLE;
   _migrationExcluded.clear();
   _migrationCandidateId = null;
+  _lastAuthoritativePeerIds = null;
   stopHostHeartbeat();
   stopHostHeartbeatMonitor();
   stopPeerHeartbeat();
@@ -1393,11 +1420,11 @@ function initiateHostMigration(failedOrOldHostId) {
 
 function proceedWithHostElection() {
   if (!inRoom || !peer) return;
-  const candidates = hostElectionCandidates().filter(function(id) {
+  const candidates = authoritativeElectionCandidates().filter(function(id) {
     return !_migrationExcluded.has(id);
   });
   const newHostId = candidates[0] || null;
-  const nextDeputyId = newHostId ? hostElectionCandidates().filter(function(id) {
+  const nextDeputyId = newHostId ? authoritativeElectionCandidates().filter(function(id) {
     return id !== newHostId && !_migrationExcluded.has(id);
   })[0] || null : null;
 
@@ -1813,6 +1840,7 @@ async function createRoom(onJoined) {
   audioTrack = stream.getAudioTracks()[0];
   audioTrack.enabled = false;
   knownPeerIds.clear();
+  _lastAuthoritativePeerIds = null;
   const iceServers = await fetchIceServers();
   peer = new Peer({ config: { iceServers } });
   peer.on('connection', function(dataConn) { handleJoinerDataConnection(dataConn); });
@@ -1866,6 +1894,7 @@ function handleHostMessage(msg) {
       triggerSource: 'peer-list'
     }, 'warn');
 
+    resetAuthoritativePeerIds(listedPeerIds);
     resetKnownPeers(listedPeerIds);
 
     Array.from(connections.keys()).forEach(function(existingPeerId) {
@@ -1926,6 +1955,7 @@ async function joinRoom(code, onJoined) {
   audioTrack = stream.getAudioTracks()[0];
   audioTrack.enabled = false;
   resetKnownPeers([code]);
+  _lastAuthoritativePeerIds = null;
   const iceServers = await fetchIceServers();
   peer = new Peer({ config: { iceServers } });
   // Accept incoming connections in case this peer becomes host after migration
