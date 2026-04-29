@@ -1420,6 +1420,7 @@ function leaveRoom() {
   _migrationCandidateId = null;
   _lastAuthoritativePeerIds = null;
   _authoritativeSuccessorIds = [];
+  stopMigrationSettle();
   stopHostHeartbeat();
   stopHostHeartbeatMonitor();
   stopPeerHeartbeat();
@@ -1442,9 +1443,42 @@ function leaveRoom() {
 
 // --- Host migration ----------------------------------------------------------
 
-var HOST_CONNECT_TIMEOUT = 8000; // per-attempt timeout
-var HOST_RETRY_DELAY     = 2000; // delay between retries
-var HOST_MAX_RETRIES     = 3;    // retries before re-electing
+var HOST_CONNECT_TIMEOUT    = 8000; // per-attempt timeout
+var HOST_RETRY_DELAY        = 2000; // delay between retries
+var HOST_MAX_RETRIES        = 3;    // retries before re-electing
+var MIGRATION_SETTLE_MS     = 8000; // grace period for peers to reconnect to new host
+var _migrationSettleTimer   = null;
+
+function isMigrationSettling() {
+  return !!_migrationSettleTimer;
+}
+
+function stopMigrationSettle() {
+  if (_migrationSettleTimer) {
+    clearTimeout(_migrationSettleTimer);
+    _migrationSettleTimer = null;
+  }
+}
+
+function startMigrationSettle() {
+  stopMigrationSettle();
+  _migrationSettleTimer = setTimeout(function() {
+    _migrationSettleTimer = null;
+    if (!inRoom || !isHost) return;
+    // Grace period over — prune peers that never reconnected and re-broadcast clean list
+    broadcastHostPeerLists();
+  }, MIGRATION_SETTLE_MS);
+}
+
+// Ensure every peer we know about has at least a placeholder entry in connections
+// so they stay visible in the peer list while reconnecting after host migration.
+function ensurePlaceholdersForKnownPeers() {
+  knownPeerIds.forEach(function(peerId) {
+    if (!peerId || (peer && peer.id === peerId)) return;
+    if (connections.has(peerId)) return;
+    connections.set(peerId, { data: null, media: null, pseudo: shortId(peerId), talking: false });
+  });
+}
 
 function migrationPeerAlias(peerId) {
   if (!peerId) return '';
@@ -1585,7 +1619,8 @@ function becomeHost() {
   stopPeerHeartbeat();
   stopHostHeartbeatMonitor();
   startPeerHeartbeatSweep();
-  pruneHostGhostPeers('become-host');
+  ensurePlaceholdersForKnownPeers();
+  startMigrationSettle();
   startHostHeartbeat();
   localStorage.setItem('active-room-code', peer.id);
   console.log(
@@ -1615,7 +1650,10 @@ function becomeHost() {
 }
 
 function buildHostPeerList(excludedPeerId) {
-  var peerIds = isHost ? hostConnectedPeerIds() : Array.from(knownPeerIds);
+  // During the migration settle window, include all known peers so non-host peers
+  // don't see a blank roster while reconnecting. After the settle, use only peers
+  // with open data connections.
+  var peerIds = (!isHost || isMigrationSettling()) ? Array.from(knownPeerIds) : hostConnectedPeerIds();
   return peerIds
     .filter(function(id) { return id !== excludedPeerId; })
     .map(function(id) {
@@ -1930,7 +1968,8 @@ function sendHostPeerList(dataConn, excludedPeerId) {
 }
 
 function broadcastHostPeerLists() {
-  pruneHostGhostPeers('broadcast-peer-list');
+  // Don't prune ghost peers during the migration settle window — they may still reconnect.
+  if (!isMigrationSettling()) pruneHostGhostPeers('broadcast-peer-list');
   connections.forEach(function(conn, peerId) {
     if (!conn || !conn.data) return;
     sendHostPeerList(conn.data, peerId);
