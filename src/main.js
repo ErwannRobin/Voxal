@@ -73,6 +73,7 @@ const PRESENCE_ORG_KEY          = 'presence-org-id';
 const SERVICE_URL_KEY           = 'service-url';
 const PSEUDO_KEY                = 'pseudo';
 const PSEUDO_SESSION_KEY        = 'pseudo-session';
+const DEV_MODE_KEY              = 'dev-mode';
 
 function presenceBase()       { return (localStorage.getItem(SERVICE_URL_KEY) || DEFAULT_PRESENCE_BASE).replace(/\/$/, ''); }
 function voxalConnectUrl()    { return localStorage.getItem('voxal-connect-url') || DEFAULT_VOXAL_CONNECT_URL; }
@@ -988,14 +989,8 @@ function shortId(id) {
   return id.length > 14 ? id.slice(0, 6) + '\u2026' + id.slice(-4) : id;
 }
 
-function isDevPeerUiEnabled() {
-  var loc = window.location || {};
-  var host = loc.hostname || '';
-  var origin = loc.origin || '';
-  return host === 'localhost' ||
-    host === '127.0.0.1' ||
-    host === '[::1]' ||
-    origin.indexOf('tauri://localhost') === 0;
+function isDevModeEnabled() {
+  return localStorage.getItem(DEV_MODE_KEY) === 'true';
 }
 
 
@@ -1003,7 +998,7 @@ function updatePeerList() {
   const list = $('peers-list');
   list.innerHTML = '';
   const deputyPeerId = roomCode ? currentDeputyId() : null;
-  const showPeerUuids = isDevPeerUiEnabled();
+  const showPeerUuids = isDevModeEnabled();
 
   const appendRole = function(parent, label) {
     const role = document.createElement('span');
@@ -1013,6 +1008,7 @@ function updatePeerList() {
   };
 
   const appendPeerRole = function(parent, peerId) {
+    if (!showPeerUuids) return;
     if (peerId === roomCode) appendRole(parent, 'host');
     else if (peerId && peerId === deputyPeerId) appendRole(parent, 'deputy');
   };
@@ -2612,8 +2608,9 @@ window.addEventListener('DOMContentLoaded', function() {
       return;
     }
     var relevantKeys = [PRESENCE_TOKEN_KEY, PRESENCE_ORG_KEY, METERED_APP_STORE_KEY,
-                        METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY];
+                        METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
+    if (e.key === DEV_MODE_KEY) { if (inRoom) updatePeerList(); return; }
     updateTurnBadge();
     if (e.key === PRESENCE_TOKEN_KEY || e.key === PRESENCE_ORG_KEY) {
       updateDisconnectVisibility(); updateConnectVisibility();

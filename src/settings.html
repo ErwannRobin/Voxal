@@ -192,6 +192,14 @@
               <button class="input-clear" data-target="input-service-url" aria-label="Clear">✕</button>
             </div>
           </div>
+          <div class="settings-field" style="margin-top:16px">
+            <label for="toggle-dev-mode" style="flex:1">Dev mode</label>
+            <button id="toggle-dev-mode" class="toggle-btn" role="switch" aria-checked="false"
+                    title="Show peer UUIDs, copy buttons, and Host/Deputy labels">OFF</button>
+          </div>
+          <p class="settings-desc" style="margin-top:4px">
+            Shows peer UUIDs, copy buttons, and Host / Deputy labels in the room.
+          </p>
         </div>
       </details>
       </div><!-- end .prefs-scrollable -->
@@ -216,6 +224,7 @@
       const METERED_COUNT_STORE_KEY  = 'metered-count';
       const METERED_SERVERS_STORE_KEY = 'metered-servers';
       const SERVICE_URL_KEY         = 'service-url';
+      const DEV_MODE_KEY            = 'dev-mode';
       const VOXAL_CONNECT_URL       = 'https://voxal.lovable.app';
       const FALLBACK_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
@@ -268,6 +277,23 @@
       $id('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
       $id('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
       $id('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
+
+      // --- Dev mode toggle ---
+      (function() {
+        var btn = $id('toggle-dev-mode');
+        function sync() {
+          var on = localStorage.getItem(DEV_MODE_KEY) === 'true';
+          btn.setAttribute('aria-checked', String(on));
+          btn.classList.toggle('active', on);
+          btn.textContent = on ? 'ON' : 'OFF';
+        }
+        sync();
+        btn.addEventListener('click', function() {
+          var on = localStorage.getItem(DEV_MODE_KEY) === 'true';
+          localStorage.setItem(DEV_MODE_KEY, String(!on));
+          sync();
+        });
+      })();
 
       function updateDisconnectVisibility() {
         $id('btn-disconnect').style.display = presenceToken() ? '' : 'none';
