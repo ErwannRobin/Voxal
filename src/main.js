@@ -7,23 +7,26 @@
  * Data protocol:
  *   hello        { pseudo }                       joiner -> host on connect
  *   peer-list    { peers:[{id,pseudo}],            host -> joiner (reply to hello)
- *                  hostId, hostPseudo }
+ *                  hostId, hostPseudo, deputyId, successorIds }
  *   peer-joined  { peerId, pseudo }               host -> all existing peers
  *   peer-left    { peerId }                       host -> all
  *   talking      { peerId, active }               non-host -> host (relayed to all)
  *   pseudo       { pseudo }                        non-host -> host (relayed as peer-renamed)
  *   peer-renamed { peerId, pseudo }               host -> all
- *   heartbeat    { at }                           host <-> peers
+ *   heartbeat    { at, deputyId, successorIds }   host <-> peers
  *   redirect     { hostId, hostPseudo }          non-host -> misdirected joiner
  *
  * Host migration:
  *   When the host's DataConnection closes (or heartbeat times out), every peer runs
  *   `initiateHostMigration` which is idempotent and state-aware (`roomState`).
- *   Each peer elects the smallest known peer id. The elected peer calls `becomeHost()`;
- *   others call `connectToHost(newHostId, { mode: 'migration' })`. Migration succeeds
- *   only after the new host's authoritative `peer-list` arrives. Failed candidates are
- *   added to `_migrationExcluded` so re-election skips them. Audio MediaConnections to
- *   non-host peers are never touched, so audio survives the handoff.
+ *   The host publishes a sticky successor chain (`deputyId`, `successorIds`) in
+ *   `peer-list` and heartbeat messages. On host loss, peers follow that authoritative
+ *   chain instead of electing from local room state. The chosen successor calls
+ *   `becomeHost()`; others call `connectToHost(newHostId, { mode: 'migration' })`.
+ *   Migration succeeds only after the new host's authoritative `peer-list` arrives.
+ *   Failed candidates are added to `_migrationExcluded` so later successors can take
+ *   over. Audio MediaConnections to non-host peers are never touched, so audio
+ *   survives the handoff.
  */
 
 // --- TURN / ICE servers (metered.ca) ----------------------------------------
@@ -506,6 +509,7 @@ var roomState = ROOM_STATE_IDLE;
 var _migrationCandidateId = null;
 var _migrationExcluded = new Set();
 var _lastAuthoritativePeerIds = null;
+var _authoritativeSuccessorIds = [];
 
 function migrationTraceConnections() {
   var summary = [];
@@ -537,6 +541,7 @@ function migrationTrace(event, details, level) {
     connectingToHostId: connectingToHostId || null,
     knownPeerIds: Array.from(knownPeerIds).sort(),
     lastAuthoritativePeerIds: _lastAuthoritativePeerIds ? Array.from(_lastAuthoritativePeerIds).sort() : [],
+    authoritativeSuccessorIds: _authoritativeSuccessorIds.slice(),
     connections: migrationTraceConnections(),
     migrationCandidateId: _migrationCandidateId || null,
     migrationExcluded: Array.from(_migrationExcluded).sort(),
@@ -554,16 +559,19 @@ function rememberPeer(peerId) {
   if (!peerId) return;
   if (peer && peer.id === peerId) return;
   knownPeerIds.add(peerId);
+  if (isHost) reconcileHostSuccessorIds();
 }
 
 function forgetPeer(peerId) {
   if (!peerId) return;
   knownPeerIds.delete(peerId);
+  if (isHost) reconcileHostSuccessorIds();
 }
 
 function resetKnownPeers(peerIds) {
   knownPeerIds.clear();
   (peerIds || []).forEach(rememberPeer);
+  if (isHost) reconcileHostSuccessorIds();
 }
 
 function resetAuthoritativePeerIds(peerIds) {
@@ -573,6 +581,50 @@ function resetAuthoritativePeerIds(peerIds) {
     if (peer && peer.id === peerId) return;
     _lastAuthoritativePeerIds.add(peerId);
   });
+}
+
+function setAuthoritativeSuccessorIds(successorIds) {
+  var next = [];
+  (successorIds || []).forEach(function(peerId) {
+    if (!peerId) return;
+    if (next.indexOf(peerId) !== -1) return;
+    next.push(peerId);
+  });
+  _authoritativeSuccessorIds = next;
+}
+
+function reconcileHostSuccessorIds() {
+  if (!isHost) return _authoritativeSuccessorIds.slice();
+  var next = _authoritativeSuccessorIds.filter(function(peerId) {
+    return knownPeerIds.has(peerId);
+  });
+  Array.from(knownPeerIds).sort().forEach(function(peerId) {
+    if (next.indexOf(peerId) === -1) next.push(peerId);
+  });
+  _authoritativeSuccessorIds = next;
+  return next.slice();
+}
+
+function preferredSuccessorCandidates(excludedPeerId) {
+  var base = _authoritativeSuccessorIds.length
+    ? _authoritativeSuccessorIds.slice()
+    : authoritativeElectionCandidates(excludedPeerId);
+  var next = [];
+  function addCandidate(peerId) {
+    if (!peerId) return;
+    if (peerId === excludedPeerId) return;
+    if (next.indexOf(peerId) !== -1) return;
+    next.push(peerId);
+  }
+  base.forEach(addCandidate);
+  if (peer && peer.id) addCandidate(peer.id);
+  return next;
+}
+
+function currentDeputyId() {
+  if (isHost) return reconcileHostSuccessorIds()[0] || null;
+  if (_authoritativeSuccessorIds.length) return _authoritativeSuccessorIds[0] || null;
+  return electHostId(roomCode);
 }
 
 function hostElectionCandidates(excludedPeerId) {
@@ -621,7 +673,13 @@ function stopHostHeartbeat() {
 
 function broadcastHostHeartbeat() {
   if (!inRoom || !isHost || !peer) return;
-  var msg = { type: 'heartbeat', at: Date.now() };
+  var successorIds = reconcileHostSuccessorIds();
+  var msg = {
+    type: 'heartbeat',
+    at: Date.now(),
+    deputyId: successorIds[0] || null,
+    successorIds: successorIds
+  };
   connections.forEach(function(conn) {
     if (conn && conn.data) conn.data.send(msg);
   });
@@ -987,7 +1045,7 @@ function logPeerRosterIfChanged(peerIds, deputyPeerId) {
 function updatePeerList() {
   const list = $('peers-list');
   list.innerHTML = '';
-  const deputyPeerId = roomCode ? electHostId(roomCode) : null;
+  const deputyPeerId = roomCode ? currentDeputyId() : null;
   const showPeerUuids = isDevPeerUiEnabled();
 
   const appendRole = function(parent, label) {
@@ -1281,7 +1339,7 @@ function shouldAcceptJoinerDataConnection(joinerId) {
     migrationTrace('should-accept-joiner', { joinerId: joinerId, decision: 'reject', reason: 'current-host-connection-open' });
     return false;
   }
-  var electedHostId = authoritativeElectHostId(roomCode);
+  var electedHostId = preferredSuccessorCandidates(roomCode)[0] || null;
   var accepted = joinerId !== roomCode && electedHostId === peer.id;
   migrationTrace('should-accept-joiner', {
     joinerId: joinerId,
@@ -1302,6 +1360,7 @@ function leaveRoom() {
   _migrationExcluded.clear();
   _migrationCandidateId = null;
   _lastAuthoritativePeerIds = null;
+  _authoritativeSuccessorIds = [];
   stopHostHeartbeat();
   stopHostHeartbeatMonitor();
   stopPeerHeartbeat();
@@ -1420,11 +1479,11 @@ function initiateHostMigration(failedOrOldHostId) {
 
 function proceedWithHostElection() {
   if (!inRoom || !peer) return;
-  const candidates = authoritativeElectionCandidates().filter(function(id) {
+  const candidates = preferredSuccessorCandidates(roomCode).filter(function(id) {
     return !_migrationExcluded.has(id);
   });
   const newHostId = candidates[0] || null;
-  const nextDeputyId = newHostId ? authoritativeElectionCandidates().filter(function(id) {
+  const nextDeputyId = newHostId ? preferredSuccessorCandidates(roomCode).filter(function(id) {
     return id !== newHostId && !_migrationExcluded.has(id);
   })[0] || null : null;
 
@@ -1472,7 +1531,7 @@ function becomeHost() {
   localStorage.setItem('active-room-code', peer.id);
   console.log(
     '[migration] This peer became host: ' + migrationPeerLabel(peer.id) +
-    '. Deputy is now ' + migrationPeerLabel(electHostId(peer.id) || null) + '.'
+    '. Deputy is now ' + migrationPeerLabel(currentDeputyId() || null) + '.'
   );
   iframeEmit({ type: 'host-changed', roomCode: peer.id, isSelf: true });
   updateRoomHeader();
@@ -1490,7 +1549,7 @@ function becomeHost() {
   });
   migrationTrace('become-host-complete', {
     newHostId: peer.id,
-    deputyId: electHostId(peer.id) || null
+    deputyId: currentDeputyId() || null
   }, 'warn');
   // peer.on('connection') is already wired in joinRoom() and will route here
   // since isHost is now true
@@ -1600,7 +1659,9 @@ function connectToHost(hostId, opts) {
         mode: mode,
         hostId: hostId,
         peerListHostId: msg.hostId || null,
-        authoritativePeers: msg.peers.map(function(p) { return p.id; })
+        authoritativePeers: msg.peers.map(function(p) { return p.id; }),
+        deputyId: msg.deputyId || null,
+        successorIds: Array.isArray(msg.successorIds) ? msg.successorIds : []
       }, 'warn');
 
       if (mode === 'initial') {
@@ -1706,13 +1767,21 @@ function handleIncomingCall(call) {
 
 function sendHostPeerList(dataConn, excludedPeerId) {
   if (!dataConn) return;
+  var successorIds = reconcileHostSuccessorIds();
   dataConn.send({
     type: 'peer-list',
     peers: buildHostPeerList(excludedPeerId),
     hostId: peer.id,
-    hostPseudo: pseudoForHost()
+    hostPseudo: pseudoForHost(),
+    deputyId: successorIds[0] || null,
+    successorIds: successorIds
   });
-  dataConn.send({ type: 'heartbeat', at: Date.now() });
+  dataConn.send({
+    type: 'heartbeat',
+    at: Date.now(),
+    deputyId: successorIds[0] || null,
+    successorIds: successorIds
+  });
 }
 
 function broadcastHostPeerLists() {
@@ -1799,6 +1868,7 @@ function handleJoinerDataConnection(dataConn) {
     connections.forEach(function(c) { if (c.data) c.data.send({ type: 'peer-left', peerId: joinerId }); });
     playGoodbye();
     removePeer(joinerId);
+    broadcastHostPeerLists();
   });
 
   dataConn.on('error', function(err) { console.warn('[data]', err); });
@@ -1835,12 +1905,24 @@ function handleJoinRedirectConnection(dataConn) {
   dataConn.on('error', function(err) { console.warn('[data]', err); });
 }
 
+function applyHostRoutingHints(msg) {
+  if (!msg) return;
+  if (Array.isArray(msg.successorIds)) {
+    setAuthoritativeSuccessorIds(msg.successorIds);
+    return;
+  }
+  if (msg.deputyId) {
+    setAuthoritativeSuccessorIds([msg.deputyId]);
+  }
+}
+
 async function createRoom(onJoined) {
   stream = await getMicStream();
   audioTrack = stream.getAudioTracks()[0];
   audioTrack.enabled = false;
   knownPeerIds.clear();
   _lastAuthoritativePeerIds = null;
+  _authoritativeSuccessorIds = [];
   const iceServers = await fetchIceServers();
   peer = new Peer({ config: { iceServers } });
   peer.on('connection', function(dataConn) { handleJoinerDataConnection(dataConn); });
@@ -1884,6 +1966,7 @@ async function createRoom(onJoined) {
 
 function handleHostMessage(msg) {
   noteHostHeartbeat(msg && msg.at ? msg.at : Date.now());
+  applyHostRoutingHints(msg);
   if (msg.type === 'heartbeat') return;
   if (msg.type === 'peer-list') {
     const listedPeerIds = msg.peers.map(function(p) { return p.id; }).concat([roomCode]);
@@ -1891,6 +1974,8 @@ function handleHostMessage(msg) {
     migrationTrace('handle-host-peer-list', {
       hostId: msg.hostId || roomCode || null,
       listedPeerIds: listedPeerIds,
+      deputyId: msg.deputyId || null,
+      successorIds: Array.isArray(msg.successorIds) ? msg.successorIds : [],
       triggerSource: 'peer-list'
     }, 'warn');
 
@@ -1956,6 +2041,7 @@ async function joinRoom(code, onJoined) {
   audioTrack.enabled = false;
   resetKnownPeers([code]);
   _lastAuthoritativePeerIds = null;
+  _authoritativeSuccessorIds = [];
   const iceServers = await fetchIceServers();
   peer = new Peer({ config: { iceServers } });
   // Accept incoming connections in case this peer becomes host after migration
