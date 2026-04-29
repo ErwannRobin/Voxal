@@ -1372,6 +1372,10 @@ function clearPeerMedia(peerId) {
 }
 
 function isCurrentPeerDataConnection(peerId, dataConn) {
+  // Reject stale close events fired synchronously during leaveRoom() → removePeer():
+  // PeerJS emits 'close' synchronously via EventEmitter when data.close() is called,
+  // so the handler runs while inRoom is already false but connections is still populated.
+  if (!inRoom) return false;
   const conn = connections.get(peerId);
   return !!conn && conn.data === dataConn;
 }
@@ -1894,9 +1898,12 @@ function handleJoinerDataConnection(dataConn) {
           if (id !== joinerId && c.data) c.data.send({ type: 'peer-joined', peerId: joinerId, pseudo: pseudo });
         });
         playCarillon();
-      } else {
-        broadcastHostPeerLists();
       }
+      // Always broadcast updated peer-list to all existing peers so they receive
+      // the latest successorIds (deputy chain). Without this, existing peers only
+      // see peer-joined (which carries no successorIds) and keep stale election
+      // state — causing split-brain if the host dies right after the new join.
+      broadcastHostPeerLists();
 
       updatePeerList();
 
