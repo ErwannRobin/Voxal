@@ -593,12 +593,24 @@ function setAuthoritativeSuccessorIds(successorIds) {
   _authoritativeSuccessorIds = next;
 }
 
+function hasOpenDataConnection(peerId) {
+  var conn = connections.get(peerId);
+  return !!(conn && conn.data && conn.data.open && !conn.data.closed);
+}
+
+function hostConnectedPeerIds() {
+  return Array.from(connections.keys()).filter(function(peerId) {
+    return hasOpenDataConnection(peerId);
+  }).sort();
+}
+
 function reconcileHostSuccessorIds() {
   if (!isHost) return _authoritativeSuccessorIds.slice();
+  var connectedPeerIds = hostConnectedPeerIds();
   var next = _authoritativeSuccessorIds.filter(function(peerId) {
-    return knownPeerIds.has(peerId);
+    return connectedPeerIds.indexOf(peerId) !== -1;
   });
-  Array.from(knownPeerIds).sort().forEach(function(peerId) {
+  connectedPeerIds.forEach(function(peerId) {
     if (next.indexOf(peerId) === -1) next.push(peerId);
   });
   _authoritativeSuccessorIds = next;
@@ -625,6 +637,19 @@ function currentDeputyId() {
   if (isHost) return reconcileHostSuccessorIds()[0] || null;
   if (_authoritativeSuccessorIds.length) return _authoritativeSuccessorIds[0] || null;
   return electHostId(roomCode);
+}
+
+function pruneHostGhostPeers(reason) {
+  if (!isHost) return;
+  Array.from(connections.keys()).forEach(function(peerId) {
+    if (hasOpenDataConnection(peerId)) return;
+    migrationTrace('prune-host-ghost-peer', {
+      peerId: peerId,
+      reason: reason || 'missing-open-data-connection'
+    }, 'warn');
+    forgetPeer(peerId);
+    removePeer(peerId);
+  });
 }
 
 function hostElectionCandidates(excludedPeerId) {
@@ -1527,6 +1552,7 @@ function becomeHost() {
   stopPeerHeartbeat();
   stopHostHeartbeatMonitor();
   startPeerHeartbeatSweep();
+  pruneHostGhostPeers('become-host');
   startHostHeartbeat();
   localStorage.setItem('active-room-code', peer.id);
   console.log(
@@ -1556,7 +1582,8 @@ function becomeHost() {
 }
 
 function buildHostPeerList(excludedPeerId) {
-  return Array.from(knownPeerIds)
+  var peerIds = isHost ? hostConnectedPeerIds() : Array.from(knownPeerIds);
+  return peerIds
     .filter(function(id) { return id !== excludedPeerId; })
     .map(function(id) {
       const conn = connections.get(id);
@@ -1785,6 +1812,7 @@ function sendHostPeerList(dataConn, excludedPeerId) {
 }
 
 function broadcastHostPeerLists() {
+  pruneHostGhostPeers('broadcast-peer-list');
   connections.forEach(function(conn, peerId) {
     if (!conn || !conn.data) return;
     sendHostPeerList(conn.data, peerId);
