@@ -553,6 +553,25 @@ function migrationTrace(event, details, level) {
     });
   }
   logger.call(console, '[migration-trace] ' + event, snapshot);
+  // Forward only to console.re in dev mode — never on production origins.
+  var re = window.console && window.console.re;
+  if (re && typeof re.log === 'function') {
+    var selfLabel = (snapshot.localPeerAlias || '?') + ' [' + (snapshot.localPeerId ? snapshot.localPeerId.slice(0, 8) : '?') + ']';
+    var role = snapshot.isHost ? 'HOST' : (snapshot.inRoom ? 'peer' : 'idle');
+    var peerLines = snapshot.connections.map(function(c) {
+      var deputyId = _authoritativeSuccessorIds && _authoritativeSuccessorIds[0];
+      var r = c.id === roomCode ? ' (host)' : (c.id === deputyId ? ' (deputy)' : '');
+      var status = [
+        c.dataOpen ? 'data✓' : (c.data ? 'data-closed' : 'no-data'),
+        c.media ? 'media✓' : 'no-media',
+        c.talking ? '🎙' : ''
+      ].filter(Boolean).join(' ');
+      return (c.pseudo || '?') + ' [' + c.id.slice(0, 8) + ']' + r + ' — ' + status;
+    });
+    var remoteLabel = '[migration-trace] ' + event + '  |  ' + selfLabel + ' (' + role + ')';
+    var peerSummary = peerLines.length ? peerLines.join('\n') : '(no peers)';
+    re[level === 'warn' ? 'warn' : level === 'error' ? 'error' : 'log'](remoteLabel, '\nPeers:\n' + peerSummary, snapshot);
+  }
 }
 
 function rememberPeer(peerId) {
@@ -1050,6 +1069,17 @@ function isDevPeerUiEnabled() {
     host === '[::1]' ||
     origin.indexOf('tauri://localhost') === 0;
 }
+
+// Inject console.re connector only in dev mode (dynamically, to avoid loading it in production).
+// Only migrationTrace events are forwarded — not general console output.
+(function() {
+  if (!isDevPeerUiEnabled()) return;
+  var el = document.createElement('script');
+  el.src = '//console.re/connector.js';
+  el.setAttribute('data-channel', 'voxal');
+  el.id = 'consolerescript';
+  document.head.appendChild(el);
+})();
 
 function logPeerRosterIfChanged(peerIds, deputyPeerId) {
   if (!inRoom || !peer) return;
