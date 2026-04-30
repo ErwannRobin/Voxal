@@ -1051,18 +1051,21 @@ async function _collectPeerStats(peerId, conn) {
 
 function startStatsPolling() {
   stopStatsPolling();
-  if (!isDevModeEnabled()) return;
   _statsIntervalId = setInterval(function() {
     if (!inRoom) { stopStatsPolling(); return; }
     connections.forEach(function(conn, peerId) { _collectPeerStats(peerId, conn); });
-    // Re-render badges without full peer list rebuild
-    connections.forEach(function(conn, peerId) {
-      var el = document.getElementById('peer-item-' + peerId);
-      if (!el || !conn.webrtcStats) return;
-      var existing = el.querySelector('.peer-webrtc-stats');
-      if (existing) existing.remove();
-      el.appendChild(_buildStatsBadge(conn.webrtcStats));
-    });
+    // In dev mode: re-render inline badges without full peer list rebuild
+    if (isDevModeEnabled()) {
+      connections.forEach(function(conn, peerId) {
+        var el = document.getElementById('peer-item-' + peerId);
+        if (!el || !conn.webrtcStats) return;
+        var existing = el.querySelector('.peer-webrtc-stats');
+        if (existing) existing.remove();
+        el.appendChild(_buildStatsBadge(conn.webrtcStats));
+      });
+    }
+    // If a stats popover is open, refresh its contents
+    _refreshOpenStatsPopover();
   }, 5000);
 }
 
@@ -1103,8 +1106,87 @@ function _buildStatsBadge(stats) {
   return wrap;
 }
 
+// --- Stats popover -----------------------------------------------------------
+
+var _statsPopoverPeerId = null;
+
+function _refreshOpenStatsPopover() {
+  if (!_statsPopoverPeerId) return;
+  var popover = document.getElementById('stats-popover');
+  if (!popover) return;
+  var conn = connections.get(_statsPopoverPeerId);
+  var body = popover.querySelector('.stats-popover-body');
+  if (!body) return;
+  body.innerHTML = '';
+  if (!conn || !conn.webrtcStats || !Object.keys(conn.webrtcStats).filter(function(k) { return k[0] !== '_'; }).length) {
+    body.textContent = 'No stats yet…';
+    return;
+  }
+  body.appendChild(_buildStatsBadge(conn.webrtcStats));
+}
+
+function showStatsPopover(peerId, anchorEl) {
+  closeStatsPopover();
+  _statsPopoverPeerId = peerId;
+
+  var popover = document.createElement('div');
+  popover.id = 'stats-popover';
+  popover.className = 'stats-popover';
+
+  var title = document.createElement('div');
+  title.className = 'stats-popover-title';
+  var conn = connections.get(peerId);
+  title.textContent = (conn && conn.pseudo) || shortId(peerId);
+  popover.appendChild(title);
+
+  var body = document.createElement('div');
+  body.className = 'stats-popover-body';
+  body.textContent = 'Loading…';
+  popover.appendChild(body);
+
+  document.body.appendChild(popover);
+
+  // Position near the anchor dot
+  var rect = anchorEl.getBoundingClientRect();
+  var top = rect.bottom + window.scrollY + 4;
+  var left = rect.left + window.scrollX;
+  // Clamp to viewport
+  var pw = 200; // min-width from CSS
+  if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
+  popover.style.top = top + 'px';
+  popover.style.left = left + 'px';
+
+  // Collect fresh stats then render
+  _collectPeerStats(peerId, conn).then(function() { _refreshOpenStatsPopover(); });
+
+  // Dismiss on click outside
+  setTimeout(function() {
+    document.addEventListener('click', _onDocClickDismissPopover, { capture: true, once: true });
+  }, 0);
+}
+
+function _onDocClickDismissPopover(e) {
+  var popover = document.getElementById('stats-popover');
+  if (popover && popover.contains(e.target)) {
+    // Click inside popover — re-attach listener
+    setTimeout(function() {
+      document.addEventListener('click', _onDocClickDismissPopover, { capture: true, once: true });
+    }, 0);
+    return;
+  }
+  closeStatsPopover();
+}
+
+function closeStatsPopover() {
+  var existing = document.getElementById('stats-popover');
+  if (existing) existing.remove();
+  _statsPopoverPeerId = null;
+  document.removeEventListener('click', _onDocClickDismissPopover, { capture: true });
+}
+
 
 function updatePeerList() {
+  closeStatsPopover();
   const list = $('peers-list');
   list.innerHTML = '';
   const deputyPeerId = roomCode ? currentDeputyId() : null;
@@ -1157,7 +1239,18 @@ function updatePeerList() {
     const div = document.createElement('div');
     div.id = 'peer-item-' + id;
     div.className = 'peer-item' + (self ? ' peer-self' : '') + (talking ? ' talking' : '');
-    div.innerHTML = '<span class="peer-dot"></span>';
+
+    const dot = document.createElement('span');
+    dot.className = 'peer-dot' + (!self ? ' peer-dot-clickable' : '');
+    if (!self && actualPeerId) {
+      dot.title = 'Connection stats';
+      dot.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (_statsPopoverPeerId === actualPeerId) { closeStatsPopover(); return; }
+        showStatsPopover(actualPeerId, dot);
+      });
+    }
+    div.appendChild(dot);
     const peerMain = document.createElement('span');
     peerMain.className = 'peer-main';
 
@@ -1426,6 +1519,7 @@ function leaveRoom() {
   _authoritativeSuccessorIds = [];
   stopMigrationSettle();
   stopStatsPolling();
+  closeStatsPopover();
   stopHostHeartbeat();
   stopHostHeartbeatMonitor();
   stopPeerHeartbeat();
