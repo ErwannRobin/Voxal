@@ -459,6 +459,7 @@ var _statsTimerIntervalId = null;
 // --- Anonymous room publish ---
 var _publishSecret         = null;
 var _publishedRoomId       = null;
+var _publishedShareUrl     = null;
 var _publishHeartbeatId    = null;
 var PUBLISH_HEARTBEAT_MS   = 50 * 60 * 1000; // 50 min (TTL is 1h)
 
@@ -479,8 +480,9 @@ async function publishRoom() {
     throw new Error(body && body.error ? body.error : 'HTTP ' + res.status);
   }
   var data = await res.json();
-  _publishSecret = data.secret;
-  _publishedRoomId = data.room_id || null;
+  _publishSecret    = data.secret;
+  _publishedRoomId  = data.room_code || data.room_id || null;
+  _publishedShareUrl = data.share_url || null;
   updateRoomHeader();
   if (!_publishHeartbeatId) {
     _publishHeartbeatId = setInterval(function() {
@@ -496,6 +498,7 @@ function unpublishRoom() {
   var id = roomCode;
   _publishSecret = null;
   _publishedRoomId = null;
+  _publishedShareUrl = null;
   updateRoomHeader();
   if (!secret || !id) return;
   tauriFetch(ANONYMOUS_ROOMS_BASE + '/' + encodeURIComponent(id), {
@@ -542,16 +545,20 @@ function updateRoomHeader() {
   $('room-code-display').textContent = _publishedRoomId || activeChannel || roomCode;
   var publishBtn   = $('btn-publish-room');
   var unpublishBtn = $('btn-unpublish-room');
+  var shareBtn     = $('btn-share-room');
   if (!publishBtn || !unpublishBtn) return;
   if (!isHost) {
     publishBtn.classList.add('hidden');
     unpublishBtn.classList.add('hidden');
+    if (shareBtn) shareBtn.classList.add('hidden');
   } else if (_publishSecret) {
     publishBtn.classList.add('hidden');
     unpublishBtn.classList.remove('hidden');
+    if (shareBtn) shareBtn.classList.toggle('hidden', !_publishedShareUrl);
   } else {
     publishBtn.classList.remove('hidden');
     unpublishBtn.classList.add('hidden');
+    if (shareBtn) shareBtn.classList.add('hidden');
   }
 }
 
@@ -3085,6 +3092,16 @@ window.addEventListener('DOMContentLoaded', function() {
 
   $('btn-unpublish-room').addEventListener('click', function() {
     unpublishRoom();
+  });
+
+  $('btn-share-room').addEventListener('click', function() {
+    var url = _publishedShareUrl;
+    if (!url) return;
+    if (navigator.share) {
+      navigator.share({ title: 'Join my Voxal room', url: url }).catch(function(e) { console.warn('[Share]', e); });
+    } else {
+      fallbackCopy(url); showCopyToast();
+    }
   });
 
   // --- Rejoin bar ---

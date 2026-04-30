@@ -198,17 +198,21 @@ body {
 .room-code-copy:active { background: var(--bg); }
 
 .btn-publish-room,
-.btn-unpublish-room {
+.btn-unpublish-room,
+.btn-share-room {
   padding: 2px;
   font-size: 0;
   opacity: 0.5;
   transition: opacity 0.15s, color 0.15s;
 }
 .btn-publish-room:hover   { opacity: 1; color: var(--accent); }
-.btn-unpublish-room       { opacity: 1; color: var(--accent); }
+.btn-unpublish-room,
+.btn-share-room           { opacity: 1; color: var(--accent); }
 .btn-unpublish-room:hover { color: var(--red); }
+.btn-share-room:hover     { color: var(--accent); opacity: 0.75; }
 .btn-publish-room.hidden,
-.btn-unpublish-room.hidden { display: none; }
+.btn-unpublish-room.hidden,
+.btn-share-room.hidden    { display: none; }
 
 .room-code {
   font-family: 'SF Mono', 'Fira Code', monospace;
