@@ -197,6 +197,19 @@ body {
 .room-code-copy:hover  { border-color: var(--accent); }
 .room-code-copy:active { background: var(--bg); }
 
+.btn-publish-room,
+.btn-unpublish-room {
+  padding: 2px;
+  font-size: 0;
+  opacity: 0.5;
+  transition: opacity 0.15s, color 0.15s;
+}
+.btn-publish-room:hover   { opacity: 1; color: var(--accent); }
+.btn-unpublish-room       { opacity: 1; color: var(--accent); }
+.btn-unpublish-room:hover { color: var(--red); }
+.btn-publish-room.hidden,
+.btn-unpublish-room.hidden { display: none; }
+
 .room-code {
   font-family: 'SF Mono', 'Fira Code', monospace;
   font-size: 12px;

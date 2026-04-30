@@ -455,6 +455,51 @@ let editingSelfPseudo = false;
 var _statsIntervalId  = null;
 var _statsTimerIntervalId = null;
 
+// --- Anonymous room publish ---
+var _publishSecret         = null;
+var _publishHeartbeatId    = null;
+var PUBLISH_HEARTBEAT_MS   = 50 * 60 * 1000; // 50 min (TTL is 1h)
+
+async function publishRoom() {
+  if (!isHost || !peer || !roomCode) return;
+  var label = activeChannel || null;
+  var peerCount = connections.size;
+  var headers = { 'Content-Type': 'application/json' };
+  if (_publishSecret) headers['x-room-secret'] = _publishSecret;
+  var res = await tauriFetch(presenceBase() + '/anonymous-rooms', {
+    method: 'POST',
+    headers: headers,
+    body: JSON.stringify({ room_id: roomCode, label: label, peer_count: peerCount }),
+  });
+  if (!res.ok) {
+    var body = null;
+    try { body = await res.json(); } catch (_) {}
+    throw new Error(body && body.error ? body.error : 'HTTP ' + res.status);
+  }
+  var data = await res.json();
+  _publishSecret = data.secret;
+  updateRoomHeader();
+  if (!_publishHeartbeatId) {
+    _publishHeartbeatId = setInterval(function() {
+      if (isHost && _publishSecret) publishRoom().catch(function() {});
+    }, PUBLISH_HEARTBEAT_MS);
+  }
+}
+
+function unpublishRoom() {
+  clearInterval(_publishHeartbeatId);
+  _publishHeartbeatId = null;
+  if (!_publishSecret || !roomCode) { _publishSecret = null; updateRoomHeader(); return; }
+  var secret = _publishSecret;
+  var id = roomCode;
+  _publishSecret = null;
+  updateRoomHeader();
+  tauriFetch(presenceBase() + '/anonymous-rooms/' + encodeURIComponent(id), {
+    method: 'DELETE',
+    headers: { 'x-room-secret': secret },
+  }).catch(function(e) { console.warn('[publish] unpublish failed:', e.message); });
+}
+
 let shortcutStr = localStorage.getItem('ptt-shortcut') || DEFAULT_SHORTCUT;
 
 function pseudoForHost() { return myPseudo || 'Host'; }
@@ -491,6 +536,19 @@ let presenceInterval = null;
 
 function updateRoomHeader() {
   $('room-code-display').textContent = activeChannel || roomCode;
+  var publishBtn   = $('btn-publish-room');
+  var unpublishBtn = $('btn-unpublish-room');
+  if (!publishBtn || !unpublishBtn) return;
+  if (!isHost) {
+    publishBtn.classList.add('hidden');
+    unpublishBtn.classList.add('hidden');
+  } else if (_publishSecret) {
+    publishBtn.classList.add('hidden');
+    unpublishBtn.classList.remove('hidden');
+  } else {
+    publishBtn.classList.remove('hidden');
+    unpublishBtn.classList.add('hidden');
+  }
 }
 
 // peerId -> { data, media, pseudo, talking }
@@ -1571,6 +1629,7 @@ function shouldAcceptJoinerDataConnection(joinerId) {
 }
 
 function leaveRoom() {
+  unpublishRoom();
   inRoom = false; freeHandMode = false; isTalking = false;
   connectingToHostId = null;
   ++_hostConnGeneration; // invalidate any pending retry timers
@@ -1855,6 +1914,7 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
       roomCode = targetHostId;
       isHost = false;
       connectingToHostId = null;
+      unpublishRoom();
       noteHostHeartbeat();
       startHostHeartbeatMonitor();
       stopPeerHeartbeatSweep();
@@ -3010,6 +3070,18 @@ window.addEventListener('DOMContentLoaded', function() {
     copyTextToClipboard(text);
   });
   $('btn-leave').addEventListener('click', leaveRoom);
+
+  $('btn-publish-room').addEventListener('click', function() {
+    var btn = $('btn-publish-room');
+    btn.disabled = true;
+    publishRoom()
+      .catch(function(err) { showError('Could not publish room: ' + err.message); })
+      .finally(function() { btn.disabled = false; });
+  });
+
+  $('btn-unpublish-room').addEventListener('click', function() {
+    unpublishRoom();
+  });
 
   // --- Rejoin bar ---
   function _createRejoinBar() {
