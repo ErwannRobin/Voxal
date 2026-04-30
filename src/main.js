@@ -458,6 +458,7 @@ var _statsTimerIntervalId = null;
 
 // --- Anonymous room publish ---
 var _publishSecret         = null;
+var _publishedRoomId       = null;
 var _publishHeartbeatId    = null;
 var PUBLISH_HEARTBEAT_MS   = 50 * 60 * 1000; // 50 min (TTL is 1h)
 
@@ -479,6 +480,7 @@ async function publishRoom() {
   }
   var data = await res.json();
   _publishSecret = data.secret;
+  _publishedRoomId = data.room_id || null;
   updateRoomHeader();
   if (!_publishHeartbeatId) {
     _publishHeartbeatId = setInterval(function() {
@@ -490,11 +492,12 @@ async function publishRoom() {
 function unpublishRoom() {
   clearInterval(_publishHeartbeatId);
   _publishHeartbeatId = null;
-  if (!_publishSecret || !roomCode) { _publishSecret = null; updateRoomHeader(); return; }
   var secret = _publishSecret;
   var id = roomCode;
   _publishSecret = null;
+  _publishedRoomId = null;
   updateRoomHeader();
+  if (!secret || !id) return;
   tauriFetch(ANONYMOUS_ROOMS_BASE + '/' + encodeURIComponent(id), {
     method: 'DELETE',
     headers: { 'x-room-secret': secret },
@@ -536,7 +539,7 @@ let activeChannel    = null; // channel name for the current presence session
 let presenceInterval = null;
 
 function updateRoomHeader() {
-  $('room-code-display').textContent = activeChannel || roomCode;
+  $('room-code-display').textContent = _publishedRoomId || activeChannel || roomCode;
   var publishBtn   = $('btn-publish-room');
   var unpublishBtn = $('btn-unpublish-room');
   if (!publishBtn || !unpublishBtn) return;
@@ -3057,7 +3060,7 @@ window.addEventListener('DOMContentLoaded', function() {
   // Start presence polling on load (if configured)
   startPresencePolling();
   $('btn-copy').addEventListener('click', function() {
-    var text = roomCode;
+    var text = _publishedRoomId || roomCode;
     // On native mobile, open the system share sheet with a deep link
     if (window.Capacitor && window.Capacitor.isNativePlatform()) {
       var shareUrl = 'voxal://join?room=' + encodeURIComponent(text);
