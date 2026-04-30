@@ -448,6 +448,10 @@ let recordingShortcut = false;
 let myPseudo          = loadInitialPseudo();
 let editingSelfPseudo = false;
 
+// --- WebRTC stats polling ---
+var _statsIntervalId  = null;
+var _statsTimerIntervalId = null;
+
 let shortcutStr = localStorage.getItem('ptt-shortcut') || DEFAULT_SHORTCUT;
 
 function pseudoForHost() { return myPseudo || 'Host'; }
@@ -993,6 +997,112 @@ function isDevModeEnabled() {
   return localStorage.getItem(DEV_MODE_KEY) === 'true';
 }
 
+// --- WebRTC stats helpers ----------------------------------------------------
+
+async function _collectPeerStats(peerId, conn) {
+  if (!conn || !conn.media || !conn.media.peerConnection) return;
+  try {
+    var reports = await conn.media.peerConnection.getStats();
+    var selectedPairId = null;
+    var pairs = {};
+    var localCandidates = {};
+    var inboundRtp = null;
+
+    reports.forEach(function(report) {
+      if (report.type === 'candidate-pair' && report.nominated) {
+        pairs[report.id] = report;
+        if (!selectedPairId || report.state === 'succeeded') selectedPairId = report.id;
+      }
+      if (report.type === 'local-candidate') localCandidates[report.id] = report;
+      if (report.type === 'inbound-rtp' && report.kind === 'audio') inboundRtp = report;
+    });
+
+    var stats = {};
+
+    var pair = selectedPairId ? pairs[selectedPairId] : null;
+    if (pair) {
+      if (typeof pair.currentRoundTripTime === 'number') {
+        stats.rttMs = Math.round(pair.currentRoundTripTime * 1000);
+      }
+      var localCand = localCandidates[pair.localCandidateId];
+      if (localCand) {
+        stats.iceType = localCand.candidateType; // 'host', 'srflx', 'relay'
+      }
+    }
+
+    if (inboundRtp) {
+      var prev = (conn.webrtcStats && conn.webrtcStats._inboundRaw) || {};
+      var lostDelta  = (inboundRtp.packetsLost || 0) - (prev.packetsLost || 0);
+      var recvDelta  = (inboundRtp.packetsReceived || 0) - (prev.packetsReceived || 0);
+      if (recvDelta + lostDelta > 0) {
+        stats.lossPercent = Math.round((lostDelta / (recvDelta + lostDelta)) * 1000) / 10;
+      } else if (conn.webrtcStats) {
+        stats.lossPercent = conn.webrtcStats.lossPercent; // carry forward
+      }
+      if (typeof inboundRtp.jitter === 'number') {
+        stats.jitterMs = Math.round(inboundRtp.jitter * 1000);
+      }
+      stats._inboundRaw = { packetsLost: inboundRtp.packetsLost || 0, packetsReceived: inboundRtp.packetsReceived || 0 };
+    }
+
+    conn.webrtcStats = stats;
+  } catch (_) {}
+}
+
+function startStatsPolling() {
+  stopStatsPolling();
+  if (!isDevModeEnabled()) return;
+  _statsIntervalId = setInterval(function() {
+    if (!inRoom) { stopStatsPolling(); return; }
+    connections.forEach(function(conn, peerId) { _collectPeerStats(peerId, conn); });
+    // Re-render badges without full peer list rebuild
+    connections.forEach(function(conn, peerId) {
+      var el = document.getElementById('peer-item-' + peerId);
+      if (!el || !conn.webrtcStats) return;
+      var existing = el.querySelector('.peer-webrtc-stats');
+      if (existing) existing.remove();
+      el.appendChild(_buildStatsBadge(conn.webrtcStats));
+    });
+  }, 5000);
+}
+
+function stopStatsPolling() {
+  if (_statsIntervalId) { clearInterval(_statsIntervalId); _statsIntervalId = null; }
+}
+
+var ICE_LABELS = { host: 'Direct', srflx: 'STUN', relay: 'TURN' };
+var ICE_CLASSES = { host: 'ice-direct', srflx: 'ice-stun', relay: 'ice-relay' };
+
+function _buildStatsBadge(stats) {
+  var wrap = document.createElement('span');
+  wrap.className = 'peer-webrtc-stats';
+  if (stats.iceType) {
+    var ice = document.createElement('span');
+    ice.className = 'stat-badge ' + (ICE_CLASSES[stats.iceType] || 'ice-unknown');
+    ice.textContent = ICE_LABELS[stats.iceType] || stats.iceType;
+    wrap.appendChild(ice);
+  }
+  if (typeof stats.rttMs === 'number') {
+    var rtt = document.createElement('span');
+    rtt.className = 'stat-badge stat-neutral';
+    rtt.textContent = stats.rttMs + ' ms';
+    wrap.appendChild(rtt);
+  }
+  if (typeof stats.lossPercent === 'number') {
+    var loss = document.createElement('span');
+    loss.className = 'stat-badge ' + (stats.lossPercent > 5 ? 'stat-warn' : 'stat-neutral');
+    loss.textContent = stats.lossPercent.toFixed(1) + '% loss';
+    wrap.appendChild(loss);
+  }
+  if (typeof stats.jitterMs === 'number') {
+    var jitter = document.createElement('span');
+    jitter.className = 'stat-badge stat-neutral';
+    jitter.textContent = stats.jitterMs + ' ms jitter';
+    wrap.appendChild(jitter);
+  }
+  return wrap;
+}
+
 
 function updatePeerList() {
   const list = $('peers-list');
@@ -1036,6 +1146,13 @@ function updatePeerList() {
     parent.appendChild(btn);
   };
 
+  const appendWebrtcStats = function(parent, peerId) {
+    if (!showPeerUuids || !peerId) return;
+    var conn = connections.get(peerId);
+    if (!conn || !conn.webrtcStats) return;
+    parent.appendChild(_buildStatsBadge(conn.webrtcStats));
+  };
+
   const addItem = (id, label, self, talking, editable, actualPeerId) => {
     const div = document.createElement('div');
     div.id = 'peer-item-' + id;
@@ -1053,6 +1170,7 @@ function updatePeerList() {
       appendPeerUuid(peerMain, actualPeerId);
       div.appendChild(peerMain);
       appendCopyPeerButton(div, actualPeerId, label);
+      appendWebrtcStats(div, actualPeerId);
       list.appendChild(div);
       return;
     }
@@ -1307,6 +1425,7 @@ function leaveRoom() {
   _lastAuthoritativePeerIds = null;
   _authoritativeSuccessorIds = [];
   stopMigrationSettle();
+  stopStatsPolling();
   stopHostHeartbeat();
   stopHostHeartbeatMonitor();
   stopPeerHeartbeat();
@@ -1913,6 +2032,7 @@ async function createRoom(onJoined) {
       showScreen('room');
       updatePeerList();
       updateShortcutDisplay();
+      startStatsPolling();
       iframeEmit({ type: 'joined', roomCode: id, peerId: id });
       if (onJoined) onJoined(id);
       if (!settled) {
@@ -2066,6 +2186,7 @@ function finishJoin(targetHostId, hostData) {
   showScreen('room');
   updatePeerList();
   updateShortcutDisplay();
+  startStatsPolling();
   iframeEmit({ type: 'joined', roomCode: targetHostId, peerId: peer.id });
 }
 
@@ -2610,7 +2731,13 @@ window.addEventListener('DOMContentLoaded', function() {
     var relevantKeys = [PRESENCE_TOKEN_KEY, PRESENCE_ORG_KEY, METERED_APP_STORE_KEY,
                         METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
-    if (e.key === DEV_MODE_KEY) { if (inRoom) updatePeerList(); return; }
+    if (e.key === DEV_MODE_KEY) {
+      if (inRoom) {
+        if (isDevModeEnabled()) startStatsPolling(); else stopStatsPolling();
+        updatePeerList();
+      }
+      return;
+    }
     updateTurnBadge();
     if (e.key === PRESENCE_TOKEN_KEY || e.key === PRESENCE_ORG_KEY) {
       updateDisconnectVisibility(); updateConnectVisibility();
