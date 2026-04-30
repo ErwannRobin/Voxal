@@ -1054,6 +1054,12 @@ function startStatsPolling() {
   _statsIntervalId = setInterval(function() {
     if (!inRoom) { stopStatsPolling(); return; }
     connections.forEach(function(conn, peerId) { _collectPeerStats(peerId, conn); });
+    // Always: update dot color to reflect ICE type
+    connections.forEach(function(conn, peerId) {
+      if (conn.webrtcStats && conn.webrtcStats.iceType) {
+        _applyDotIceClass(document.getElementById('peer-item-' + peerId), conn.webrtcStats.iceType);
+      }
+    });
     // In dev mode: re-render inline badges without full peer list rebuild
     if (isDevModeEnabled()) {
       connections.forEach(function(conn, peerId) {
@@ -1075,6 +1081,16 @@ function stopStatsPolling() {
 
 var ICE_LABELS = { host: 'Direct', srflx: 'STUN', relay: 'TURN' };
 var ICE_CLASSES = { host: 'ice-direct', srflx: 'ice-stun', relay: 'ice-relay' };
+var ICE_DOT_CLASSES = ['peer-dot-direct', 'peer-dot-stun', 'peer-dot-relay'];
+
+function _applyDotIceClass(el, iceType) {
+  if (!el) return;
+  var dot = el.querySelector('.peer-dot');
+  if (!dot) return;
+  ICE_DOT_CLASSES.forEach(function(c) { dot.classList.remove(c); });
+  var cls = { host: 'peer-dot-direct', srflx: 'peer-dot-stun', relay: 'peer-dot-relay' }[iceType];
+  if (cls) dot.classList.add(cls);
+}
 
 function _buildStatsBadge(stats) {
   var wrap = document.createElement('span');
@@ -1264,6 +1280,11 @@ function updatePeerList() {
       div.appendChild(peerMain);
       appendCopyPeerButton(div, actualPeerId, label);
       appendWebrtcStats(div, actualPeerId);
+      // Apply cached ICE dot color immediately
+      const cachedConn = connections.get(actualPeerId);
+      if (cachedConn && cachedConn.webrtcStats && cachedConn.webrtcStats.iceType) {
+        _applyDotIceClass(div, cachedConn.webrtcStats.iceType);
+      }
       list.appendChild(div);
       return;
     }

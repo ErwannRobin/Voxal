@@ -335,11 +335,6 @@ body {
   background: rgba(74, 222, 128, 0.1);
   color: var(--text);
 }
-.peer-item.talking .peer-dot {
-  background: var(--green);
-  box-shadow: 0 0 6px var(--green);
-  animation: dot-pulse 0.8s ease-in-out infinite;
-}
 @keyframes dot-pulse {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.4; }
@@ -360,6 +355,15 @@ body {
   transform: scale(1.5);
 }
 .peer-self .peer-dot { background: var(--green); }
+.peer-dot-direct { background: var(--green); }
+.peer-dot-stun   { background: #fbbf24; }
+.peer-dot-relay  { background: #f87171; }
+/* Talking always wins over ICE color */
+.peer-item.talking .peer-dot {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+  animation: dot-pulse 0.8s ease-in-out infinite;
+}
 
 /* Stats popover */
 .stats-popover {
