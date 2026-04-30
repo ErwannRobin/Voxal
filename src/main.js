@@ -76,6 +76,7 @@ const PSEUDO_SESSION_KEY        = 'pseudo-session';
 const DEV_MODE_KEY              = 'dev-mode';
 const REJOIN_SNAPSHOT_KEY       = 'rejoin-snapshot';
 const REJOIN_TTL_MS             = 30 * 60 * 1000; // 30 minutes
+var   _rejoinDismissed          = false;
 
 function presenceBase()       { return (localStorage.getItem(SERVICE_URL_KEY) || DEFAULT_PRESENCE_BASE).replace(/\/$/, ''); }
 function voxalConnectUrl()    { return localStorage.getItem('voxal-connect-url') || DEFAULT_VOXAL_CONNECT_URL; }
@@ -1003,6 +1004,7 @@ function isDevModeEnabled() {
 
 function saveRejoinSnapshot() {
   if (!inRoom || !peer || !roomCode) return;
+  _rejoinDismissed = false;
   var peerIds = Array.from(knownPeerIds).filter(function(id) { return id !== (peer && peer.id); });
   var snapshot = {
     hostId:    roomCode,
@@ -3014,7 +3016,7 @@ window.addEventListener('DOMContentLoaded', function() {
     var bar = $('rejoin-bar');
     if (!bar) return;
     var snapshot = loadRejoinSnapshot();
-    if (!snapshot) { bar.classList.add('hidden'); return; }
+    if (!snapshot || _rejoinDismissed) { bar.classList.add('hidden'); return; }
     var peerCount = (snapshot.peerIds || []).length;
     var labelEl = $('rejoin-label');
     if (labelEl) labelEl.textContent = 'Last room · ' + peerCount + ' peer' + (peerCount !== 1 ? 's' : '');
@@ -3025,7 +3027,7 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-rejoin').addEventListener('click', function() {
     var btn = $('btn-rejoin');
     var snapshot = loadRejoinSnapshot();
-    if (!snapshot) { var b = $('rejoin-bar'); if (b) b.remove(); return; }
+    if (!snapshot) { _rejoinDismissed = true; $('rejoin-bar').classList.add('hidden'); return; }
     setLoading(btn, true, 'Rejoin');
     lockHomeCTAs();
     $('btn-dismiss-rejoin').disabled = true;
@@ -3041,8 +3043,8 @@ window.addEventListener('DOMContentLoaded', function() {
 
   $('btn-dismiss-rejoin').addEventListener('click', function() {
     clearRejoinSnapshot();
-    var bar = $('rejoin-bar');
-    if (bar) bar.remove();
+    _rejoinDismissed = true;
+    $('rejoin-bar').classList.add('hidden');
   });
   $('btn-back').addEventListener('click', function() { showScreen('home'); });
 
