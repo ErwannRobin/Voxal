@@ -3012,11 +3012,51 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-leave').addEventListener('click', leaveRoom);
 
   // --- Rejoin bar ---
+  function _createRejoinBar() {
+    var bar = document.createElement('div');
+    bar.id = 'rejoin-bar';
+    bar.className = 'rejoin-bar';
+    bar.innerHTML =
+      '<span class="rejoin-icon">↩</span>' +
+      '<span id="rejoin-label" class="rejoin-label">Last room</span>' +
+      '<button id="btn-rejoin" class="btn btn-secondary rejoin-btn">Rejoin</button>' +
+      '<button id="btn-dismiss-rejoin" class="btn-icon rejoin-dismiss" aria-label="Dismiss">✕</button>';
+    var joinRow = document.querySelector('.join-row');
+    if (joinRow && joinRow.parentNode) joinRow.parentNode.insertBefore(bar, joinRow.nextSibling);
+    _wireRejoinBar(bar);
+    return bar;
+  }
+
+  function _wireRejoinBar(bar) {
+    bar.querySelector('#btn-rejoin').addEventListener('click', function() {
+      var btn = $('btn-rejoin');
+      var snapshot = loadRejoinSnapshot();
+      if (!snapshot) { var b = $('rejoin-bar'); if (b) b.remove(); return; }
+      setLoading(btn, true, 'Rejoin');
+      lockHomeCTAs();
+      bar.querySelector('#btn-dismiss-rejoin').disabled = true;
+      attemptRejoin()
+        .catch(function(err) { showError(err.message); })
+        .finally(function() {
+          setLoading(btn, false, 'Rejoin');
+          unlockHomeCTAs();
+          var d = bar.querySelector('#btn-dismiss-rejoin');
+          if (d) d.disabled = false;
+          endHomeAction();
+        });
+    });
+    bar.querySelector('#btn-dismiss-rejoin').addEventListener('click', function() {
+      clearRejoinSnapshot();
+      _rejoinDismissed = true;
+      bar.remove();
+    });
+  }
+
   var updateRejoinBar = function() {
-    var bar = $('rejoin-bar');
-    if (!bar) return;
     var snapshot = loadRejoinSnapshot();
-    if (!snapshot || _rejoinDismissed) { bar.classList.add('hidden'); return; }
+    var bar = $('rejoin-bar');
+    if (!snapshot || _rejoinDismissed) { if (bar) bar.classList.add('hidden'); return; }
+    if (!bar) bar = _createRejoinBar();
     var peerCount = (snapshot.peerIds || []).length;
     var labelEl = $('rejoin-label');
     if (labelEl) labelEl.textContent = 'Last room · ' + peerCount + ' peer' + (peerCount !== 1 ? 's' : '');
@@ -3024,28 +3064,9 @@ window.addEventListener('DOMContentLoaded', function() {
   };
   window._updateRejoinBar = updateRejoinBar;
 
-  $('btn-rejoin').addEventListener('click', function() {
-    var btn = $('btn-rejoin');
-    var snapshot = loadRejoinSnapshot();
-    if (!snapshot) { _rejoinDismissed = true; $('rejoin-bar').classList.add('hidden'); return; }
-    setLoading(btn, true, 'Rejoin');
-    lockHomeCTAs();
-    $('btn-dismiss-rejoin').disabled = true;
-    attemptRejoin()
-      .catch(function(err) { showError(err.message); })
-      .finally(function() {
-        setLoading(btn, false, 'Rejoin');
-        unlockHomeCTAs();
-        $('btn-dismiss-rejoin').disabled = false;
-        endHomeAction();
-      });
-  });
-
-  $('btn-dismiss-rejoin').addEventListener('click', function() {
-    clearRejoinSnapshot();
-    _rejoinDismissed = true;
-    $('rejoin-bar').classList.add('hidden');
-  });
+  // Wire the initially-rendered rejoin bar (if present in DOM on first load)
+  var _initialBar = $('rejoin-bar');
+  if (_initialBar) _wireRejoinBar(_initialBar);
   $('btn-back').addEventListener('click', function() { showScreen('home'); });
 
   const pttBtn = $('ptt-btn');
