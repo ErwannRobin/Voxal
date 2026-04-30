@@ -3025,7 +3025,7 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-rejoin').addEventListener('click', function() {
     var btn = $('btn-rejoin');
     var snapshot = loadRejoinSnapshot();
-    if (!snapshot) { $('rejoin-bar').classList.add('hidden'); return; }
+    if (!snapshot) { var b = $('rejoin-bar'); if (b) b.remove(); return; }
     setLoading(btn, true, 'Rejoin');
     lockHomeCTAs();
     $('btn-dismiss-rejoin').disabled = true;
@@ -3041,7 +3041,8 @@ window.addEventListener('DOMContentLoaded', function() {
 
   $('btn-dismiss-rejoin').addEventListener('click', function() {
     clearRejoinSnapshot();
-    $('rejoin-bar').classList.add('hidden');
+    var bar = $('rejoin-bar');
+    if (bar) bar.remove();
   });
   $('btn-back').addEventListener('click', function() { showScreen('home'); });
 
