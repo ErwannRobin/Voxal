@@ -74,6 +74,8 @@ const SERVICE_URL_KEY           = 'service-url';
 const PSEUDO_KEY                = 'pseudo';
 const PSEUDO_SESSION_KEY        = 'pseudo-session';
 const DEV_MODE_KEY              = 'dev-mode';
+const REJOIN_SNAPSHOT_KEY       = 'rejoin-snapshot';
+const REJOIN_TTL_MS             = 30 * 60 * 1000; // 30 minutes
 
 function presenceBase()       { return (localStorage.getItem(SERVICE_URL_KEY) || DEFAULT_PRESENCE_BASE).replace(/\/$/, ''); }
 function voxalConnectUrl()    { return localStorage.getItem('voxal-connect-url') || DEFAULT_VOXAL_CONNECT_URL; }
@@ -771,7 +773,7 @@ function endHomeAction() {
 }
 
 function lockHomeCTAs() {
-  ['btn-create','btn-join','input-code'].forEach(function(id) {
+  ['btn-create','btn-join','input-code','btn-rejoin'].forEach(function(id) {
     var el = document.getElementById(id);
     if (!el) return;
     el.style.pointerEvents = 'none';
@@ -784,7 +786,7 @@ function lockHomeCTAs() {
   }
 }
 function unlockHomeCTAs() {
-  ['btn-create','btn-join','input-code'].forEach(function(id) {
+  ['btn-create','btn-join','input-code','btn-rejoin'].forEach(function(id) {
     var el = document.getElementById(id);
     if (!el) return;
     el.style.pointerEvents = '';
@@ -851,7 +853,7 @@ const $ = id => document.getElementById(id);
 function showScreen(name) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById('screen-' + name).classList.add('active');
-  if (name === 'home') startPresencePolling();
+  if (name === 'home') { startPresencePolling(); if (window._updateRejoinBar) window._updateRejoinBar(); }
   else                 stopPresencePolling();
 }
 
@@ -995,6 +997,44 @@ function shortId(id) {
 
 function isDevModeEnabled() {
   return localStorage.getItem(DEV_MODE_KEY) === 'true';
+}
+
+// --- Rejoin snapshot ---------------------------------------------------------
+
+function saveRejoinSnapshot() {
+  if (!inRoom || !peer || !roomCode) return;
+  var peerIds = Array.from(knownPeerIds).filter(function(id) { return id !== (peer && peer.id); });
+  var snapshot = {
+    hostId:    roomCode,
+    deputyId:  currentDeputyId() || null,
+    peerIds:   peerIds,
+    savedAt:   Date.now()
+  };
+  localStorage.setItem(REJOIN_SNAPSHOT_KEY, JSON.stringify(snapshot));
+}
+
+function loadRejoinSnapshot() {
+  try {
+    var raw = localStorage.getItem(REJOIN_SNAPSHOT_KEY);
+    if (!raw) return null;
+    var s = JSON.parse(raw);
+    if (!s || !s.hostId || !s.savedAt) return null;
+    if (Date.now() - s.savedAt > REJOIN_TTL_MS) { clearRejoinSnapshot(); return null; }
+    return s;
+  } catch (_) { return null; }
+}
+
+function clearRejoinSnapshot() {
+  localStorage.removeItem(REJOIN_SNAPSHOT_KEY);
+}
+
+function rejoinCandidates(snapshot) {
+  var seen = new Set();
+  var result = [];
+  [snapshot.hostId, snapshot.deputyId].concat(snapshot.peerIds || []).forEach(function(id) {
+    if (id && !seen.has(id)) { seen.add(id); result.push(id); }
+  });
+  return result;
 }
 
 // --- WebRTC stats helpers ----------------------------------------------------
@@ -1730,6 +1770,7 @@ function becomeHost() {
     '. Deputy is now ' + migrationPeerLabel(currentDeputyId() || null) + '.'
   );
   iframeEmit({ type: 'host-changed', roomCode: peer.id, isSelf: true });
+  saveRejoinSnapshot();
   updateRoomHeader();
   updatePeerList();
   // Broadcast peer-list to any existing data connections
@@ -2148,6 +2189,7 @@ async function createRoom(onJoined) {
       updatePeerList();
       updateShortcutDisplay();
       startStatsPolling();
+      saveRejoinSnapshot();
       iframeEmit({ type: 'joined', roomCode: id, peerId: id });
       if (onJoined) onJoined(id);
       if (!settled) {
@@ -2204,6 +2246,7 @@ function handleHostMessage(msg) {
       connections.set(peerId, Object.assign({}, connections.get(peerId), { media: call }));
     });
     updatePeerList();
+    saveRejoinSnapshot();
 
   } else if (msg.type === 'peer-joined') {
     rememberPeer(msg.peerId);
@@ -2229,9 +2272,11 @@ function handleHostMessage(msg) {
 
 async function joinRoom(code, onJoined) {
   if (!code) return;
-  stream = await getMicStream();
-  audioTrack = stream.getAudioTracks()[0];
-  audioTrack.enabled = false;
+  if (!stream) {
+    stream = await getMicStream();
+    audioTrack = stream.getAudioTracks()[0];
+    audioTrack.enabled = false;
+  }
   resetKnownPeers([code]);
   _lastAuthoritativePeerIds = null;
   _authoritativeSuccessorIds = [];
@@ -2277,6 +2322,34 @@ async function joinRoom(code, onJoined) {
       handlePeerRuntimeError(err, true, reject);
     });
   });
+}
+
+async function attemptRejoin() {
+  var snapshot = loadRejoinSnapshot();
+  if (!snapshot) throw new Error('No room to rejoin.');
+  var candidates = rejoinCandidates(snapshot);
+  if (!candidates.length) throw new Error('No peers from the previous room are available.');
+
+  for (var i = 0; i < candidates.length; i++) {
+    try {
+      await joinRoom(candidates[i]);
+      return; // success — new room state will overwrite the snapshot
+    } catch (err) {
+      // Clean up the failed Peer before retrying
+      if (peer && !peer.destroyed) { try { peer.destroy(); } catch (_) {} }
+      peer = null;
+      if (!isNonFatalPeerRuntimeError(err)) {
+        // Fatal error — release mic and bail
+        if (stream) { stream.getTracks().forEach(function(t) { t.stop(); }); stream = null; audioTrack = null; }
+        throw err;
+      }
+      // Non-fatal (peer-unavailable): try next candidate
+    }
+  }
+
+  // All candidates exhausted
+  if (stream) { stream.getTracks().forEach(function(t) { t.stop(); }); stream = null; audioTrack = null; }
+  throw new Error('Could not reconnect — no peers from the previous room are available.');
 }
 
 function finishJoin(targetHostId, hostData) {
@@ -2935,6 +3008,41 @@ window.addEventListener('DOMContentLoaded', function() {
     copyTextToClipboard(text);
   });
   $('btn-leave').addEventListener('click', leaveRoom);
+
+  // --- Rejoin bar ---
+  var updateRejoinBar = function() {
+    var bar = $('rejoin-bar');
+    if (!bar) return;
+    var snapshot = loadRejoinSnapshot();
+    if (!snapshot) { bar.classList.add('hidden'); return; }
+    var peerCount = (snapshot.peerIds || []).length;
+    var labelEl = $('rejoin-label');
+    if (labelEl) labelEl.textContent = 'Last room · ' + peerCount + ' peer' + (peerCount !== 1 ? 's' : '');
+    bar.classList.remove('hidden');
+  };
+  window._updateRejoinBar = updateRejoinBar;
+
+  $('btn-rejoin').addEventListener('click', function() {
+    var btn = $('btn-rejoin');
+    var snapshot = loadRejoinSnapshot();
+    if (!snapshot) { $('rejoin-bar').classList.add('hidden'); return; }
+    setLoading(btn, true, 'Rejoin');
+    lockHomeCTAs();
+    $('btn-dismiss-rejoin').disabled = true;
+    attemptRejoin()
+      .catch(function(err) { showError(err.message); })
+      .finally(function() {
+        setLoading(btn, false, 'Rejoin');
+        unlockHomeCTAs();
+        $('btn-dismiss-rejoin').disabled = false;
+        endHomeAction();
+      });
+  });
+
+  $('btn-dismiss-rejoin').addEventListener('click', function() {
+    clearRejoinSnapshot();
+    $('rejoin-bar').classList.add('hidden');
+  });
   $('btn-back').addEventListener('click', function() { showScreen('home'); });
 
   const pttBtn = $('ptt-btn');
