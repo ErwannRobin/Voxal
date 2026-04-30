@@ -67,6 +67,7 @@ async function releaseAudioFocus() {
 // --- Presence API -----------------------------------------------------------
 
 const DEFAULT_PRESENCE_BASE     = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
+const ANONYMOUS_ROOMS_BASE      = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/anonymous-rooms';
 const DEFAULT_VOXAL_CONNECT_URL = 'https://voxal.lovable.app';
 const PRESENCE_TOKEN_KEY        = 'presence-api-token';
 const PRESENCE_ORG_KEY          = 'presence-org-id';
@@ -466,7 +467,7 @@ async function publishRoom() {
   var peerCount = connections.size;
   var headers = { 'Content-Type': 'application/json' };
   if (_publishSecret) headers['x-room-secret'] = _publishSecret;
-  var res = await tauriFetch(presenceBase() + '/anonymous-rooms', {
+  var res = await tauriFetch(ANONYMOUS_ROOMS_BASE, {
     method: 'POST',
     headers: headers,
     body: JSON.stringify({ room_id: roomCode, label: label, peer_count: peerCount }),
@@ -494,7 +495,7 @@ function unpublishRoom() {
   var id = roomCode;
   _publishSecret = null;
   updateRoomHeader();
-  tauriFetch(presenceBase() + '/anonymous-rooms/' + encodeURIComponent(id), {
+  tauriFetch(ANONYMOUS_ROOMS_BASE + '/' + encodeURIComponent(id), {
     method: 'DELETE',
     headers: { 'x-room-secret': secret },
   }).catch(function(e) { console.warn('[publish] unpublish failed:', e.message); });
