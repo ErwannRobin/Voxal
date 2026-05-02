@@ -632,6 +632,8 @@ kbd {
   flex-shrink: 0;
 }
 
+.dev-log-actions { display: flex; gap: 6px; align-items: center; }
+
 .dev-log-title {
   font-family: ui-monospace, 'Cascadia Code', monospace;
   font-size: 10px;
@@ -651,6 +653,8 @@ kbd {
   font-family: ui-monospace, 'Cascadia Code', monospace;
   font-size: 10px;
   line-height: 1.55;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .dev-log-entry { display: flex; gap: 6px; }

@@ -2653,6 +2653,23 @@ window.addEventListener('DOMContentLoaded', function() {
     var entries = document.getElementById('dev-log-entries');
     if (entries) entries.innerHTML = '';
   });
+  var copyLogBtn = document.getElementById('btn-copy-dev-log');
+  if (copyLogBtn) copyLogBtn.addEventListener('click', function() {
+    var entries = document.getElementById('dev-log-entries');
+    if (!entries) return;
+    var lines = Array.from(entries.querySelectorAll('.dev-log-entry')).map(function(el) {
+      var time = el.querySelector('.dev-log-time');
+      var msg  = el.querySelector('.dev-log-msg');
+      return (time ? time.textContent : '') + '  ' + (msg ? msg.textContent : '');
+    });
+    var text = lines.join('\n');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function() { showCopyToast('Log copied'); }).catch(function() { fallbackCopy(text); showCopyToast('Log copied'); });
+    } else {
+      fallbackCopy(text);
+      showCopyToast('Log copied');
+    }
+  });
 
   // Pseudo: hide the home-screen name field once the user has set a name
   // Hide the home pseudo field only if a name was already set at load time.
