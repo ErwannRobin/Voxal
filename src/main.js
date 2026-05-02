@@ -2652,6 +2652,14 @@ window.addEventListener('DOMContentLoaded', function() {
 
   // Dev log panel: show/hide based on current dev mode state
   updateDevLogPanel();
+  var toggleBtn = document.getElementById('btn-toggle-dev-log');
+  if (toggleBtn) toggleBtn.addEventListener('click', function() {
+    var panel = document.getElementById('dev-log-panel');
+    if (!panel) return;
+    var collapsed = panel.classList.toggle('collapsed');
+    toggleBtn.textContent = collapsed ? '▸' : '▾';
+    toggleBtn.setAttribute('aria-label', collapsed ? 'Expand log' : 'Collapse log');
+  });
   var clearBtn = document.getElementById('btn-clear-dev-log');
   if (clearBtn) clearBtn.addEventListener('click', function() {
     var entries = document.getElementById('dev-log-entries');

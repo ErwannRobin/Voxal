@@ -623,6 +623,8 @@ kbd {
 }
 .dev-log-panel.hidden { display: none; }
 
+.dev-log-panel.collapsed .dev-log-entries { display: none; }
+
 .dev-log-header {
   display: flex;
   align-items: center;
@@ -633,6 +635,7 @@ kbd {
 }
 
 .dev-log-actions { display: flex; gap: 6px; align-items: center; }
+.dev-log-toggle { font-size: 16px; padding: 2px 4px; line-height: 1; }
 .dev-log-copy-btn { font-size: 0; padding: 2px 4px; }
 
 .dev-log-title {
