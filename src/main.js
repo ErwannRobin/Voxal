@@ -280,6 +280,7 @@ const FALLBACK_ICE = [
 async function fetchIceServers() {
   // --- 1. Org ICE servers from Voxal backend ---
   if (presenceConfigured()) {
+    devLog('[ICE] Trying org servers…');
     try {
       const res = await tauriFetch(
         presenceBase() + '/org/' + presenceOrgId() + '/ice-servers',
@@ -290,6 +291,7 @@ async function fetchIceServers() {
         const ice_servers = data && data.ice_servers;
         if (Array.isArray(ice_servers) && ice_servers.length > 0) {
           console.log('[TURN] Using', ice_servers.length, 'org ICE servers');
+          devLog('[ICE] Org: ' + ice_servers.length + ' server(s) ✓');
           localStorage.setItem(METERED_STATUS_STORE_KEY, 'ok');
           localStorage.setItem(METERED_COUNT_STORE_KEY, String(ice_servers.length));
           localStorage.setItem(METERED_SERVERS_STORE_KEY, JSON.stringify(ice_servers));
@@ -297,12 +299,15 @@ async function fetchIceServers() {
           return ice_servers;
         }
         console.log('[TURN] No org ICE servers, falling through');
+        devLog('[ICE] Org: no servers configured, trying next…', 'warn');
         // ice_servers === null means TURN not configured for this org → fall through
       } else {
         console.warn('[TURN] Org ICE fetch returned', res.status);
+        devLog('[ICE] Org fetch HTTP ' + res.status, 'warn');
       }
     } catch (e) {
       console.warn('[TURN] Org ICE fetch failed, trying local config:', e.message);
+      devLog('[ICE] Org fetch failed: ' + e.message, 'warn');
     }
   } else {
     console.log('[TURN] presenceConfigured=false, skipping org ICE fetch');
@@ -312,6 +317,7 @@ async function fetchIceServers() {
   const appName = localStorage.getItem(METERED_APP_STORE_KEY);
   const apiKey  = localStorage.getItem(METERED_API_STORE_KEY);
   if (appName && apiKey) {
+    devLog('[ICE] Trying metered.ca (' + appName + ')…');
     try {
       const url = 'https://' + appName + '.metered.live/api/v1/turn/credentials?apiKey=' + apiKey;
       const res = window.__TAURI__
@@ -321,14 +327,17 @@ async function fetchIceServers() {
       const servers = await res.json();
       if (Array.isArray(servers) && servers.length > 0) {
         console.log('[TURN] Using', servers.length, 'ICE servers from local metered.ca config');
+        devLog('[ICE] metered.ca: ' + servers.length + ' server(s) ✓');
         return servers;
       }
     } catch (e) {
       console.warn('[TURN] Local metered.ca fetch failed, falling back to STUN:', e.message);
+      devLog('[ICE] metered.ca failed: ' + e.message, 'warn');
     }
   }
 
   // --- 3. STUN-only fallback ---
+  devLog('[ICE] Using STUN-only fallback', 'warn');
   return FALLBACK_ICE;
 }
 
@@ -1088,6 +1097,32 @@ function shortId(id) {
 
 function isDevModeEnabled() {
   return localStorage.getItem(DEV_MODE_KEY) === 'true';
+}
+
+function devLog(msg, level) {
+  var lvl = level || 'info';
+  if (lvl === 'warn') console.warn('[dev]', msg);
+  else if (lvl === 'error') console.error('[dev]', msg);
+  else console.log('[dev]', msg);
+  if (!isDevModeEnabled()) return;
+  var panel = document.getElementById('dev-log-entries');
+  if (!panel) return;
+  var now = new Date();
+  var t = now.toTimeString().slice(0, 8) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+  var entry = document.createElement('div');
+  entry.className = 'dev-log-entry' + (lvl !== 'info' ? ' ' + lvl : '');
+  var safe = String(msg).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  entry.innerHTML = '<span class="dev-log-time">' + t + '</span><span class="dev-log-msg">' + safe + '</span>';
+  panel.appendChild(entry);
+  panel.scrollTop = panel.scrollHeight;
+  var entries = panel.children;
+  while (entries.length > 200) panel.removeChild(entries[0]);
+}
+
+function updateDevLogPanel() {
+  var panel = document.getElementById('dev-log-panel');
+  if (!panel) return;
+  panel.classList.toggle('hidden', !isDevModeEnabled());
 }
 
 // --- Rejoin snapshot ---------------------------------------------------------
@@ -2017,11 +2052,13 @@ function connectToHost(hostId, opts) {
     '[initial] Connecting to host ' + migrationPeerLabel(hostId) +
     '. Gen: ' + gen + '. Redirects left: ' + redirectsLeft + '.'
   );
+  devLog('→ DC to ' + shortId(hostId) + ' (gen ' + gen + ')');
 
   // Timeout if connection doesn't open
   var timer = setTimeout(function() {
     if (gen !== _hostConnGeneration) return;
     console.warn('[initial] Connection to ' + migrationPeerLabel(hostId) + ' timed out before opening.');
+    devLog('✗ DC timed out (8s)', 'warn');
     if (!opened && !handled) hostData.close();
   }, HOST_CONNECT_TIMEOUT);
 
@@ -2029,6 +2066,7 @@ function connectToHost(hostId, opts) {
     if (gen !== _hostConnGeneration) { hostData.close(); return; }
     opened = true;
     clearTimeout(timer);
+    devLog('✓ DC open → hello sent');
     hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
   });
 
@@ -2060,6 +2098,7 @@ function connectToHost(hostId, opts) {
       }
       redirected = true;
       console.log('[initial] ' + migrationPeerLabel(hostId) + ' redirected to ' + migrationPeerLabel(msg.hostId) + '.');
+      devLog('↻ Redirected to ' + shortId(msg.hostId));
       resetKnownPeers([msg.hostId]);
       hostData.close();
       connectToHost(msg.hostId, { redirectsLeft: redirectsLeft - 1, onInitialJoinResolve: onInitialJoinResolve, onInitialJoinReject: onInitialJoinReject });
@@ -2069,6 +2108,7 @@ function connectToHost(hostId, opts) {
     // Handle peer-list (join success)
     if (msg && msg.type === 'peer-list') {
       receivedPeerList = true;
+      devLog('✓ Joined! ' + (msg.peers ? msg.peers.length : 0) + ' peer(s) in room');
       finishJoin(hostId, hostData);
       handleHostMessage(msg);
       if (onInitialJoinResolve) onInitialJoinResolve(peer.id);
@@ -2094,12 +2134,15 @@ function connectToHost(hostId, opts) {
 
     // Never received peer-list — connection failed before joining
     handled = true;
+    devLog('✗ DC closed before joining', 'warn');
     if (redirected) return;
     if (onInitialJoinReject) onInitialJoinReject(new Error('Connection to host closed before joining.'));
   });
 
   hostData.on('error', function(err) {
-    console.warn('[initial] Host connection error: ' + (err && err.message ? err.message : String(err)));
+    var msg = err && err.message ? err.message : String(err);
+    console.warn('[initial] Host connection error: ' + msg);
+    devLog('✗ DC error: ' + msg, 'error');
   });
 }
 
@@ -2366,15 +2409,25 @@ function handleHostMessage(msg) {
 
 async function joinRoom(code, onJoined) {
   if (!code) return;
+  devLog('→ Joining room ' + shortId(code) + '…');
   if (!stream) {
-    stream = await getMicStream();
+    devLog('→ Acquiring mic…');
+    try {
+      stream = await getMicStream();
+    } catch (e) {
+      devLog('✗ Mic error: ' + e.message, 'error');
+      throw e;
+    }
     audioTrack = stream.getAudioTracks()[0];
     audioTrack.enabled = false;
+    devLog('✓ Mic OK');
   }
   resetKnownPeers([code]);
   _lastAuthoritativePeerIds = null;
   _authoritativeSuccessorIds = [];
   const iceServers = await fetchIceServers();
+  devLog('✓ ICE: ' + iceServers.length + ' server(s)');
+  devLog('→ Connecting to PeerJS broker…');
   peer = new Peer({ config: { iceServers } });
   // Accept incoming connections in case this peer becomes host after migration
   peer.on('connection', function(dataConn) {
@@ -2389,6 +2442,7 @@ async function joinRoom(code, onJoined) {
   let settled = false;
   await new Promise(function(resolve, reject) {
     var joinTimeout = setTimeout(function() {
+      devLog('✗ Timed out after 30s', 'error');
       peer.destroy();
       settle(reject, new Error('Could not join room — connection timed out. Please check your network and try again.'));
     }, 30000);
@@ -2403,11 +2457,13 @@ async function joinRoom(code, onJoined) {
 
     // Expose a cancel handle so the UI can abort mid-attempt
     _cancelJoin = function() {
+      devLog('→ Cancelled');
       peer.destroy();
       settle(reject, new Error('Connection cancelled.'));
     };
 
     peer.on('open', function() {
+      devLog('✓ PeerJS open (' + shortId(peer.id) + ') → connecting to host');
       if (onJoined) onJoined(peer.id); // register presence as soon as we have our peer_id
       roomState = ROOM_STATE_CONNECTING;
       connectToHost(code, {
@@ -2418,6 +2474,7 @@ async function joinRoom(code, onJoined) {
     });
     peer.on('error', function(err) {
       if (!settled) {
+        devLog('✗ PeerJS error: ' + (err.message || String(err)), 'error');
         handlePeerRuntimeError(err, false, function(e) { settle(reject, e); });
         return;
       }
@@ -2588,6 +2645,14 @@ async function joinChannel(item) {
 // --- Bootstrap ---------------------------------------------------------------
 
 window.addEventListener('DOMContentLoaded', function() {
+
+  // Dev log panel: show/hide based on current dev mode state
+  updateDevLogPanel();
+  var clearBtn = document.getElementById('btn-clear-dev-log');
+  if (clearBtn) clearBtn.addEventListener('click', function() {
+    var entries = document.getElementById('dev-log-entries');
+    if (entries) entries.innerHTML = '';
+  });
 
   // Pseudo: hide the home-screen name field once the user has set a name
   // Hide the home pseudo field only if a name was already set at load time.
@@ -3041,6 +3106,7 @@ window.addEventListener('DOMContentLoaded', function() {
                         METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
     if (e.key === DEV_MODE_KEY) {
+      updateDevLogPanel();
       if (inRoom) {
         if (isDevModeEnabled()) startStatsPolling(); else stopStatsPolling();
         updatePeerList();

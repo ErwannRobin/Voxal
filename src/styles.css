@@ -610,6 +610,55 @@ kbd {
   padding: 2px 4px;
 }
 
+/* ── Dev log panel ──────────────────────────────────────────────── */
+
+.dev-log-panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 180px;
+  margin: 4px -20px -24px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-alt, rgba(0,0,0,0.15));
+}
+
+.dev-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.dev-log-title {
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.3px;
+}
+
+.dev-log-clear {
+  font-size: 12px;
+  padding: 1px 4px;
+  color: var(--text-muted);
+}
+
+.dev-log-entries {
+  overflow-y: auto;
+  flex: 1;
+  padding: 4px 10px;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.dev-log-entry { display: flex; gap: 6px; }
+.dev-log-entry.warn .dev-log-msg { color: #e5c07b; }
+.dev-log-entry.error .dev-log-msg { color: var(--error-color, #e06c75); }
+.dev-log-time { flex-shrink: 0; color: var(--text-muted); opacity: 0.55; }
+.dev-log-msg { color: var(--text); word-break: break-all; }
+
 .btn-icon {
   background: none;
   border: none;
