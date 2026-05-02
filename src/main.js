@@ -844,7 +844,7 @@ function endHomeAction() {
 }
 
 function lockHomeCTAs() {
-  ['btn-create','btn-join','input-code','btn-rejoin'].forEach(function(id) {
+  ['btn-create','input-code','btn-rejoin'].forEach(function(id) {
     var el = document.getElementById(id);
     if (!el) return;
     el.style.pointerEvents = 'none';
@@ -855,11 +855,9 @@ function lockHomeCTAs() {
     list.style.pointerEvents = 'none';
     list.setAttribute('aria-disabled', 'true');
   }
-  var cancel = document.getElementById('btn-cancel-join');
-  if (cancel) cancel.classList.remove('hidden');
 }
 function unlockHomeCTAs() {
-  ['btn-create','btn-join','input-code','btn-rejoin'].forEach(function(id) {
+  ['btn-create','input-code','btn-rejoin'].forEach(function(id) {
     var el = document.getElementById(id);
     if (!el) return;
     el.style.pointerEvents = '';
@@ -870,8 +868,6 @@ function unlockHomeCTAs() {
     list.style.pointerEvents = '';
     list.removeAttribute('aria-disabled');
   }
-  var cancel = document.getElementById('btn-cancel-join');
-  if (cancel) cancel.classList.add('hidden');
 }
 
 // Haptic feedback (Capacitor native, no-op in browser/Tauri)
@@ -2683,22 +2679,37 @@ window.addEventListener('DOMContentLoaded', function() {
     createRoom().catch(function(err) { showError(err.message); }).finally(function() { setLoading(btn, false); unlockHomeCTAs(); endHomeAction(); });
   });
   $('btn-join').addEventListener('click', function() {
+    var btn = $('btn-join');
+    // If currently connecting, act as Cancel
+    if (_cancelJoin) {
+      _cancelJoin();
+      _cancelJoin = null;
+      return;
+    }
     if (!beginHomeAction()) return;
     if (_audioCtx.state === 'suspended') _audioCtx.resume();
-    var btn = $('btn-join');
-    setLoading(btn, true, 'Join');
+    btn.textContent = 'Cancel';
+    btn.classList.add('btn-ghost');
+    btn.classList.remove('btn-secondary');
     lockHomeCTAs();
-    joinRoom($('input-code').value.trim()).catch(function(err) { showError(err.message); }).finally(function() { setLoading(btn, false); unlockHomeCTAs(); endHomeAction(); });
+    joinRoom($('input-code').value.trim())
+      .catch(function(err) {
+        if (err.message !== 'Connection cancelled.') showError(err.message);
+        else showCopyToast('Connection cancelled');
+      })
+      .finally(function() {
+        btn.textContent = 'Join';
+        btn.classList.remove('btn-ghost');
+        btn.classList.add('btn-secondary');
+        unlockHomeCTAs();
+        endHomeAction();
+      });
   });
   $('input-code').addEventListener('keydown', function(e) {
     if (e.key !== 'Enter') return;
     e.preventDefault();
     var joinBtn = $('btn-join');
-    if (joinBtn && !joinBtn.disabled) joinBtn.click();
-  });
-
-  $('btn-cancel-join').addEventListener('click', function() {
-    if (_cancelJoin) { _cancelJoin(); _cancelJoin = null; }
+    if (joinBtn) joinBtn.click();
   });
 
   // TURN settings modal
