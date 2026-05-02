@@ -215,10 +215,12 @@ function tauriFetch(url, options) {
   if (window.__TAURI__) {
     var method = (options && options.method) || 'GET';
     var token  = options && options.headers && options.headers['x-api-token'];
+    var secret = options && options.headers && options.headers['x-room-secret'];
     var body   = options && options.body || null;
     return window.__TAURI__.core.invoke('presence_fetch', {
       url: url, method: method,
       token: token || null,
+      secret: secret || null,
       body: body || null,
     }).then(function(data) {
       return { ok: true, status: 200, json: function() { return Promise.resolve(data); } };
@@ -312,7 +314,9 @@ async function fetchIceServers() {
   if (appName && apiKey) {
     try {
       const url = 'https://' + appName + '.metered.live/api/v1/turn/credentials?apiKey=' + apiKey;
-      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      const res = window.__TAURI__
+        ? await tauriFetch(url)
+        : await fetch(url, { signal: AbortSignal.timeout(5000) });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const servers = await res.json();
       if (Array.isArray(servers) && servers.length > 0) {
@@ -2385,10 +2389,8 @@ async function joinRoom(code, onJoined) {
   let settled = false;
   await new Promise(function(resolve, reject) {
     var joinTimeout = setTimeout(function() {
-      if (settled) return;
-      settled = true;
       peer.destroy();
-      reject(new Error('Could not join room — connection timed out. Please check your network and try again.'));
+      settle(reject, new Error('Could not join room — connection timed out. Please check your network and try again.'));
     }, 30000);
 
     function settle(fn, val) {
