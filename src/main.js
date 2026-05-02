@@ -2993,6 +2993,14 @@ window.addEventListener('DOMContentLoaded', function() {
       statusEl.onmouseenter = null;
     }
     updateDisconnectVisibility(); updateConnectVisibility();
+    // Sync dev mode toggle
+    var devBtn = document.getElementById('toggle-dev-mode-modal');
+    if (devBtn) {
+      var devOn = isDevModeEnabled();
+      devBtn.setAttribute('aria-checked', String(devOn));
+      devBtn.classList.toggle('active', devOn);
+      devBtn.textContent = devOn ? 'ON' : 'OFF';
+    }
     $('modal-settings').classList.remove('hidden');
     if (presenceToken()) loadOrgs();
   }
@@ -3084,6 +3092,18 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-test-turn').addEventListener('click', testTurnCredentials);
   $('btn-disconnect').addEventListener('click', disconnectAccount);
   $('btn-connect-voxal').addEventListener('click', connectWithVoxalAccount);
+
+  var devToggleModal = document.getElementById('toggle-dev-mode-modal');
+  if (devToggleModal) {
+    devToggleModal.addEventListener('click', function() {
+      var on = !isDevModeEnabled();
+      localStorage.setItem(DEV_MODE_KEY, String(on));
+      devToggleModal.setAttribute('aria-checked', String(on));
+      devToggleModal.classList.toggle('active', on);
+      devToggleModal.textContent = on ? 'ON' : 'OFF';
+      updateDevLogPanel();
+    });
+  }
 
   // iOS: deep link comes back via @capacitor/app appUrlOpen
   if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
