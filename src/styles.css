@@ -155,8 +155,8 @@ body {
   bottom: max(calc(env(safe-area-inset-bottom) + 24px), 32px);
   left: 50%;
   transform: translateX(-50%) translateY(8px);
-  background: var(--green);
-  color: #fff;
+  background: var(--text);
+  color: var(--bg);
   font-size: 13px;
   font-weight: 600;
   padding: 6px 16px;
