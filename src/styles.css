@@ -640,10 +640,8 @@ kbd {
 }
 
 .dev-log-clear {
-  font-size: 10px;
-  padding: 2px 6px;
-  color: var(--text-muted);
-  letter-spacing: 0.3px;
+  padding: 3px 10px;
+  font-size: 13px;
 }
 
 .dev-log-entries {
