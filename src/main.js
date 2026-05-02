@@ -2059,7 +2059,11 @@ function connectToHost(hostId, opts) {
     if (gen !== _hostConnGeneration) return;
     console.warn('[initial] Connection to ' + migrationPeerLabel(hostId) + ' timed out before opening.');
     devLog('✗ DC timed out (8s)', 'warn');
-    if (!opened && !handled) hostData.close();
+    if (!opened && !handled) {
+      handled = true;
+      hostData.close();
+      if (onInitialJoinReject) onInitialJoinReject(new Error('Could not reach host — connection timed out.'));
+    }
   }, HOST_CONNECT_TIMEOUT);
 
   hostData.on('open', function() {
