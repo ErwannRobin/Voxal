@@ -633,6 +633,7 @@ kbd {
 }
 
 .dev-log-actions { display: flex; gap: 6px; align-items: center; }
+.dev-log-copy-btn { font-size: 0; padding: 2px 4px; }
 
 .dev-log-title {
   font-family: ui-monospace, 'Cascadia Code', monospace;
