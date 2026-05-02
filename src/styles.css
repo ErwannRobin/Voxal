@@ -621,6 +621,7 @@ kbd {
   border-top: 1px solid var(--border);
   background: var(--bg-alt, rgba(0,0,0,0.15));
 }
+.dev-log-panel.hidden { display: none; }
 
 .dev-log-header {
   display: flex;
@@ -639,9 +640,10 @@ kbd {
 }
 
 .dev-log-clear {
-  font-size: 12px;
-  padding: 1px 4px;
+  font-size: 10px;
+  padding: 2px 6px;
   color: var(--text-muted);
+  letter-spacing: 0.3px;
 }
 
 .dev-log-entries {
