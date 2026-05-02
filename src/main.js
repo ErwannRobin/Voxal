@@ -2052,7 +2052,7 @@ function connectToHost(hostId, opts) {
     '[initial] Connecting to host ' + migrationPeerLabel(hostId) +
     '. Gen: ' + gen + '. Redirects left: ' + redirectsLeft + '.'
   );
-  devLog('→ DC to ' + shortId(hostId) + ' (gen ' + gen + ')');
+  devLog('→ DC to ' + hostId + ' (gen ' + gen + ')');
 
   // Timeout if connection doesn't open
   var timer = setTimeout(function() {
@@ -2102,7 +2102,7 @@ function connectToHost(hostId, opts) {
       }
       redirected = true;
       console.log('[initial] ' + migrationPeerLabel(hostId) + ' redirected to ' + migrationPeerLabel(msg.hostId) + '.');
-      devLog('↻ Redirected to ' + shortId(msg.hostId));
+      devLog('↻ Redirected to ' + msg.hostId);
       resetKnownPeers([msg.hostId]);
       hostData.close();
       connectToHost(msg.hostId, { redirectsLeft: redirectsLeft - 1, onInitialJoinResolve: onInitialJoinResolve, onInitialJoinReject: onInitialJoinReject });
@@ -2413,7 +2413,7 @@ function handleHostMessage(msg) {
 
 async function joinRoom(code, onJoined) {
   if (!code) return;
-  devLog('→ Joining room ' + shortId(code) + '…');
+  devLog('→ Joining room ' + code + '…');
   if (!stream) {
     devLog('→ Acquiring mic…');
     try {
@@ -2467,7 +2467,7 @@ async function joinRoom(code, onJoined) {
     };
 
     peer.on('open', function() {
-      devLog('✓ PeerJS open (' + shortId(peer.id) + ') → connecting to host');
+      devLog('✓ PeerJS open (' + peer.id + ') → connecting to host');
       if (onJoined) onJoined(peer.id); // register presence as soon as we have our peer_id
       roomState = ROOM_STATE_CONNECTING;
       connectToHost(code, {
