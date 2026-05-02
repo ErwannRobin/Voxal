@@ -451,6 +451,7 @@ let freeHandMode      = false;
 let recordingShortcut = false;
 let myPseudo          = loadInitialPseudo();
 let editingSelfPseudo = false;
+let _cancelJoin       = null; // set during joinRoom(), called by Cancel button
 
 // --- WebRTC stats polling ---
 var _statsIntervalId  = null;
@@ -854,6 +855,8 @@ function lockHomeCTAs() {
     list.style.pointerEvents = 'none';
     list.setAttribute('aria-disabled', 'true');
   }
+  var cancel = document.getElementById('btn-cancel-join');
+  if (cancel) cancel.classList.remove('hidden');
 }
 function unlockHomeCTAs() {
   ['btn-create','btn-join','input-code','btn-rejoin'].forEach(function(id) {
@@ -867,6 +870,8 @@ function unlockHomeCTAs() {
     list.style.pointerEvents = '';
     list.removeAttribute('aria-disabled');
   }
+  var cancel = document.getElementById('btn-cancel-join');
+  if (cancel) cancel.classList.add('hidden');
 }
 
 // Haptic feedback (Capacitor native, no-op in browser/Tauri)
@@ -2385,14 +2390,21 @@ async function joinRoom(code, onJoined) {
       settled = true;
       peer.destroy();
       reject(new Error('Could not join room — connection timed out. Please check your network and try again.'));
-    }, 15000);
+    }, 30000);
 
     function settle(fn, val) {
       if (settled) return;
       settled = true;
       clearTimeout(joinTimeout);
+      _cancelJoin = null;
       fn(val);
     }
+
+    // Expose a cancel handle so the UI can abort mid-attempt
+    _cancelJoin = function() {
+      peer.destroy();
+      settle(reject, new Error('Connection cancelled.'));
+    };
 
     peer.on('open', function() {
       if (onJoined) onJoined(peer.id); // register presence as soon as we have our peer_id
@@ -2683,6 +2695,10 @@ window.addEventListener('DOMContentLoaded', function() {
     e.preventDefault();
     var joinBtn = $('btn-join');
     if (joinBtn && !joinBtn.disabled) joinBtn.click();
+  });
+
+  $('btn-cancel-join').addEventListener('click', function() {
+    if (_cancelJoin) { _cancelJoin(); _cancelJoin = null; }
   });
 
   // TURN settings modal
