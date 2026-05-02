@@ -964,8 +964,21 @@ function isNonFatalPeerRuntimeError(err) {
   return type === 'peer-unavailable' || /Could not connect to peer\b/.test(message);
 }
 
+function friendlyPeerError(err) {
+  var type = err && (err.type || '');
+  var message = err && (err.message || String(err));
+  if (type === 'network' || type === 'disconnected' || /network/i.test(message))
+    return 'Network error — please check your connection and try again.';
+  if (type === 'server-error' || type === 'unavailable-id')
+    return 'Could not reach the signalling server. Try again in a moment.';
+  if (type === 'peer-unavailable' || /Could not connect to peer\b/.test(message))
+    return 'Room not found or host is unreachable.';
+  return message || 'An unexpected error occurred.';
+}
+
 function handlePeerRuntimeError(err, settled, reject) {
   if (!settled) {
+    err.message = friendlyPeerError(err);
     reject(err);
     return true;
   }
@@ -973,7 +986,7 @@ function handlePeerRuntimeError(err, settled, reject) {
     console.warn('[peer-runtime]', err);
     return true;
   }
-  showError(err.message);
+  showError(friendlyPeerError(err));
   return true;
 }
 
@@ -2367,29 +2380,32 @@ async function joinRoom(code, onJoined) {
   peer.on('call',  function(call) { handleIncomingCall(call); });
   let settled = false;
   await new Promise(function(resolve, reject) {
+    var joinTimeout = setTimeout(function() {
+      if (settled) return;
+      settled = true;
+      peer.destroy();
+      reject(new Error('Could not join room — connection timed out. Please check your network and try again.'));
+    }, 15000);
+
+    function settle(fn, val) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(joinTimeout);
+      fn(val);
+    }
+
     peer.on('open', function() {
       if (onJoined) onJoined(peer.id); // register presence as soon as we have our peer_id
       roomState = ROOM_STATE_CONNECTING;
       connectToHost(code, {
         redirectsLeft: MAX_JOIN_REDIRECTS,
-        onInitialJoinResolve: function(peerId) {
-          if (!settled) {
-            settled = true;
-            resolve(peerId);
-          }
-        },
-        onInitialJoinReject: function(err) {
-          if (!settled) {
-            settled = true;
-            reject(err);
-          }
-        }
+        onInitialJoinResolve: function(peerId) { settle(resolve, peerId); },
+        onInitialJoinReject:  function(err)    { settle(reject, err); }
       });
     });
     peer.on('error', function(err) {
       if (!settled) {
-        settled = true;
-        handlePeerRuntimeError(err, false, reject);
+        handlePeerRuntimeError(err, false, function(e) { settle(reject, e); });
         return;
       }
       handlePeerRuntimeError(err, true, reject);
