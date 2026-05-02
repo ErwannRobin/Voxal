@@ -855,6 +855,8 @@ function lockHomeCTAs() {
     list.style.pointerEvents = 'none';
     list.setAttribute('aria-disabled', 'true');
   }
+  var bar = document.getElementById('rejoin-bar');
+  if (bar) bar.classList.add('hidden');
 }
 function unlockHomeCTAs() {
   ['btn-create','input-code','btn-rejoin'].forEach(function(id) {
@@ -868,6 +870,7 @@ function unlockHomeCTAs() {
     list.style.pointerEvents = '';
     list.removeAttribute('aria-disabled');
   }
+  if (window._updateRejoinBar) window._updateRejoinBar();
 }
 
 // Haptic feedback (Capacitor native, no-op in browser/Tauri)
@@ -2688,7 +2691,7 @@ window.addEventListener('DOMContentLoaded', function() {
     }
     if (!beginHomeAction()) return;
     if (_audioCtx.state === 'suspended') _audioCtx.resume();
-    btn.textContent = 'Cancel';
+    btn.innerHTML = '<span class="btn-spinner"></span>Cancel';
     btn.classList.add('btn-ghost');
     btn.classList.remove('btn-secondary');
     lockHomeCTAs();
