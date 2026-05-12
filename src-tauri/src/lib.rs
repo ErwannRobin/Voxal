@@ -15,6 +15,7 @@ async fn presence_fetch(
     url: String,
     method: String,
     token: Option<String>,
+    secret: Option<String>,
     body: Option<String>,
 ) -> Result<serde_json::Value, String> {
     eprintln!("[presence_fetch] {} {}", method.to_uppercase(), url);
@@ -26,6 +27,9 @@ async fn presence_fetch(
     };
     if let Some(t) = token {
         req = req.header("x-api-token", t);
+    }
+    if let Some(s) = secret {
+        req = req.header("x-room-secret", s);
     }
     if let Some(b) = body {
         req = req.header("content-type", "application/json").body(b);

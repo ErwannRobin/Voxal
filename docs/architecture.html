@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voxal — Architecture Flows</title>
+  <style>
+    :root {
+      --bg: #0f0f13;
+      --bg-surface: #1a1a22;
+      --bg-card: #22222e;
+      --bg-hover: #2a2a38;
+      --border: #333346;
+      --text: #e4e4e7;
+      --text-dim: #9ca3af;
+      --accent: #3b82f6;
+      --accent-glow: rgba(59, 130, 246, 0.3);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    header {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-surface);
+      flex-shrink: 0;
+    }
+
+    header h1 {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+
+    header h1 span { color: var(--accent); }
+
+    header p {
+      font-size: 13px;
+      color: var(--text-dim);
+      margin-top: 4px;
+    }
+
+    .layout {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
+
+    /* --- Sidebar --- */
+    .sidebar {
+      width: 280px;
+      border-right: 1px solid var(--border);
+      background: var(--bg-surface);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    .sidebar h2 {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--text-dim);
+      padding: 16px 16px 8px;
+    }
+
+    .flow-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 8px 8px;
+    }
+
+    .flow-btn {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: var(--text);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+      margin-bottom: 2px;
+    }
+
+    .flow-btn:hover { background: var(--bg-hover); }
+
+    .flow-btn.active {
+      background: var(--bg-card);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent-glow);
+    }
+
+    .flow-btn .flow-name {
+      font-weight: 600;
+      display: block;
+    }
+
+    .flow-btn .flow-desc {
+      font-size: 11px;
+      color: var(--text-dim);
+      display: block;
+      margin-top: 2px;
+      line-height: 1.4;
+    }
+
+    /* --- Main canvas --- */
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .canvas-wrapper {
+      flex: 1;
+      overflow: auto;
+      position: relative;
+    }
+
+    #canvas {
+      width: 100%;
+      min-height: 100%;
+      position: relative;
+    }
+
+    svg.flow-svg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    /* --- Component nodes --- */
+    .components-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      padding: 24px;
+      justify-content: center;
+      position: relative;
+      z-index: 2;
+    }
+
+    .component-node {
+      width: 180px;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      background: var(--bg-card);
+      text-align: center;
+      transition: all 0.3s ease;
+      position: relative;
+      cursor: default;
+    }
+
+    .component-node.highlighted {
+      border-color: var(--node-color, var(--accent));
+      box-shadow: 0 0 16px color-mix(in srgb, var(--node-color, var(--accent)) 40%, transparent);
+      transform: scale(1.04);
+    }
+
+    .component-node.dimmed {
+      opacity: 0.25;
+      filter: grayscale(0.6);
+    }
+
+    .component-icon {
+      font-size: 28px;
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .component-name {
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .component-desc {
+      font-size: 10px;
+      color: var(--text-dim);
+      line-height: 1.4;
+    }
+
+    /* --- Steps panel --- */
+    .steps-panel {
+      border-top: 1px solid var(--border);
+      background: var(--bg-surface);
+      max-height: 45vh;
+      overflow-y: auto;
+      flex-shrink: 0;
+    }
+
+    .steps-panel.empty {
+      padding: 32px;
+      text-align: center;
+      color: var(--text-dim);
+      font-size: 13px;
+    }
+
+    .steps-header {
+      padding: 16px 20px 8px;
+      font-size: 15px;
+      font-weight: 700;
+      position: sticky;
+      top: 0;
+      background: var(--bg-surface);
+      z-index: 3;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .steps-header .flow-title { color: var(--accent); }
+    .steps-header .flow-subtitle {
+      font-size: 12px;
+      font-weight: 400;
+      color: var(--text-dim);
+      margin-top: 2px;
+    }
+
+    .step-list { padding: 8px 12px 16px; }
+
+    .step-item {
+      display: flex;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.15s;
+      align-items: flex-start;
+    }
+
+    .step-item:hover { background: var(--bg-hover); }
+
+    .step-item.active-step {
+      background: var(--bg-card);
+      border: 1px solid var(--accent);
+    }
+
+    .step-num {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: white;
+      font-size: 12px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .step-body { flex: 1; min-width: 0; }
+
+    .step-route {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-bottom: 2px;
+    }
+
+    .step-route span {
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .step-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      word-break: break-word;
+    }
+
+    .step-detail {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 4px;
+      line-height: 1.5;
+    }
+
+    /* --- Arrow animations --- */
+    @keyframes dash {
+      to { stroke-dashoffset: -20; }
+    }
+
+    .flow-arrow {
+      stroke-width: 2;
+      fill: none;
+      stroke-dasharray: 8 4;
+      animation: dash 0.6s linear infinite;
+      filter: drop-shadow(0 0 3px var(--arrow-color));
+    }
+
+    .flow-arrow-head {
+      fill: var(--arrow-color, var(--accent));
+      filter: drop-shadow(0 0 3px var(--arrow-color));
+    }
+
+    /* --- Step counter badge on nodes --- */
+    .node-step-badge {
+      position: absolute;
+      top: -8px;
+      right: -8px;
+      background: var(--accent);
+      color: white;
+      border-radius: 10px;
+      min-width: 20px;
+      height: 20px;
+      font-size: 11px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 5px;
+      z-index: 5;
+    }
+
+    /* scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🎙️ <span>Voxal</span> Architecture Flows</h1>
+    <p>Select a flow to see how data moves between components. Click individual steps for details.</p>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <h2>Flows</h2>
+      <div class="flow-list" id="flow-list"></div>
+    </aside>
+
+    <section class="main">
+      <div class="canvas-wrapper">
+        <div id="canvas">
+          <div class="components-grid" id="components-grid"></div>
+          <svg class="flow-svg" id="flow-svg"></svg>
+        </div>
+      </div>
+
+      <div class="steps-panel empty" id="steps-panel">
+        Select a flow from the sidebar to see how components interact.
+      </div>
+    </section>
+  </div>
+
+  <script>
+    let flowsData = null;
+    let activeFlowId = null;
+    let activeStepIndex = -1;
+    const componentEls = {};
+
+    async function init() {
+      const res = await fetch('flows.json');
+      flowsData = await res.json();
+      renderComponents();
+      renderFlowList();
+    }
+
+    function renderComponents() {
+      const grid = document.getElementById('components-grid');
+      grid.innerHTML = '';
+      flowsData.components.forEach(function (c) {
+        const node = document.createElement('div');
+        node.className = 'component-node';
+        node.id = 'node-' + c.id;
+        node.style.setProperty('--node-color', c.color);
+        node.innerHTML =
+          '<span class="component-icon">' + c.icon + '</span>' +
+          '<div class="component-name">' + c.name + '</div>' +
+          '<div class="component-desc">' + c.description + '</div>';
+        grid.appendChild(node);
+        componentEls[c.id] = node;
+      });
+    }
+
+    function renderFlowList() {
+      const list = document.getElementById('flow-list');
+      list.innerHTML = '';
+      flowsData.flows.forEach(function (f) {
+        const btn = document.createElement('button');
+        btn.className = 'flow-btn';
+        btn.dataset.flowId = f.id;
+        btn.innerHTML =
+          '<span class="flow-name">' + f.name + '</span>' +
+          '<span class="flow-desc">' + f.description + '</span>';
+        btn.addEventListener('click', function () { selectFlow(f.id); });
+        list.appendChild(btn);
+      });
+    }
+
+    function selectFlow(flowId) {
+      activeFlowId = flowId;
+      activeStepIndex = -1;
+
+      // Update sidebar buttons
+      document.querySelectorAll('.flow-btn').forEach(function (btn) {
+        btn.classList.toggle('active', btn.dataset.flowId === flowId);
+      });
+
+      const flow = flowsData.flows.find(function (f) { return f.id === flowId; });
+      if (!flow) return;
+
+      highlightFlowComponents(flow);
+      renderSteps(flow);
+      clearArrows();
+      drawAllArrows(flow);
+    }
+
+    function highlightFlowComponents(flow) {
+      const involved = new Set();
+      flow.steps.forEach(function (s) {
+        involved.add(s.from);
+        involved.add(s.to);
+      });
+
+      // Collect step numbers per component
+      const stepNums = {};
+      flow.steps.forEach(function (s, i) {
+        if (!stepNums[s.from]) stepNums[s.from] = [];
+        if (s.from !== s.to && !stepNums[s.to]) stepNums[s.to] = [];
+        stepNums[s.from].push(i + 1);
+        if (s.from !== s.to) stepNums[s.to].push(i + 1);
+      });
+
+      Object.keys(componentEls).forEach(function (id) {
+        const el = componentEls[id];
+        // Remove old badges
+        var oldBadge = el.querySelector('.node-step-badge');
+        if (oldBadge) oldBadge.remove();
+
+        if (involved.has(id)) {
+          el.classList.add('highlighted');
+          el.classList.remove('dimmed');
+          // Add step count badge
+          if (stepNums[id]) {
+            const badge = document.createElement('span');
+            badge.className = 'node-step-badge';
+            var unique = [...new Set(stepNums[id])];
+            badge.textContent = unique.length === 1 ? unique[0] : unique.length;
+            badge.title = 'Steps: ' + unique.join(', ');
+            el.appendChild(badge);
+          }
+        } else {
+          el.classList.remove('highlighted');
+          el.classList.add('dimmed');
+        }
+      });
+    }
+
+    function renderSteps(flow) {
+      const panel = document.getElementById('steps-panel');
+      panel.classList.remove('empty');
+
+      const componentMap = {};
+      flowsData.components.forEach(function (c) { componentMap[c.id] = c; });
+
+      let html =
+        '<div class="steps-header">' +
+        '<div class="flow-title">' + flow.name + '</div>' +
+        '<div class="flow-subtitle">' + flow.description + '</div>' +
+        '</div>' +
+        '<div class="step-list">';
+
+      flow.steps.forEach(function (step, i) {
+        const from = componentMap[step.from] || { name: step.from, icon: '' };
+        const to = componentMap[step.to] || { name: step.to, icon: '' };
+        html +=
+          '<div class="step-item" data-step="' + i + '" onclick="focusStep(' + i + ')">' +
+          '<div class="step-num">' + (i + 1) + '</div>' +
+          '<div class="step-body">' +
+          '<div class="step-route">' + from.icon + ' <span>' + from.name + '</span> → ' + to.icon + ' <span>' + to.name + '</span></div>' +
+          '<div class="step-label">' + escapeHtml(step.label) + '</div>' +
+          '<div class="step-detail">' + escapeHtml(step.detail) + '</div>' +
+          '</div>' +
+          '</div>';
+      });
+
+      html += '</div>';
+      panel.innerHTML = html;
+    }
+
+    function focusStep(index) {
+      activeStepIndex = index;
+      const flow = flowsData.flows.find(function (f) { return f.id === activeFlowId; });
+      if (!flow) return;
+
+      // Highlight active step in list
+      document.querySelectorAll('.step-item').forEach(function (el, i) {
+        el.classList.toggle('active-step', i === index);
+      });
+
+      // Highlight only the involved components for this step
+      const step = flow.steps[index];
+      Object.keys(componentEls).forEach(function (id) {
+        const el = componentEls[id];
+        var oldBadge = el.querySelector('.node-step-badge');
+        if (oldBadge) oldBadge.remove();
+
+        if (id === step.from || id === step.to) {
+          el.classList.add('highlighted');
+          el.classList.remove('dimmed');
+          const badge = document.createElement('span');
+          badge.className = 'node-step-badge';
+          badge.textContent = index + 1;
+          el.appendChild(badge);
+        } else {
+          el.classList.remove('highlighted');
+          el.classList.add('dimmed');
+        }
+      });
+
+      clearArrows();
+      drawArrow(step.from, step.to, index);
+    }
+
+    function clearArrows() {
+      document.getElementById('flow-svg').innerHTML = '';
+    }
+
+    function getNodeCenter(id) {
+      const el = componentEls[id];
+      if (!el) return null;
+      const canvas = document.getElementById('canvas');
+      const canvasRect = canvas.getBoundingClientRect();
+      const rect = el.getBoundingClientRect();
+      return {
+        x: rect.left + rect.width / 2 - canvasRect.left + canvas.scrollLeft,
+        y: rect.top + rect.height / 2 - canvasRect.top + canvas.scrollTop,
+        w: rect.width,
+        h: rect.height
+      };
+    }
+
+    function edgePoint(center, target) {
+      // Find the point on the edge of the rectangle closest to the target
+      var dx = target.x - center.x;
+      var dy = target.y - center.y;
+      var hw = center.w / 2 + 4;
+      var hh = center.h / 2 + 4;
+
+      if (dx === 0 && dy === 0) return { x: center.x, y: center.y - hh };
+
+      var absDx = Math.abs(dx);
+      var absDy = Math.abs(dy);
+
+      var scale;
+      if (absDx / hw > absDy / hh) {
+        scale = hw / absDx;
+      } else {
+        scale = hh / absDy;
+      }
+
+      return { x: center.x + dx * scale, y: center.y + dy * scale };
+    }
+
+    function drawArrow(fromId, toId, stepIndex) {
+      var svg = document.getElementById('flow-svg');
+      var from = getNodeCenter(fromId);
+      var to = getNodeCenter(toId);
+      if (!from || !to) return;
+
+      var comp = flowsData.components.find(function (c) { return c.id === fromId; });
+      var color = comp ? comp.color : '#3b82f6';
+
+      if (fromId === toId) {
+        // Self-loop: draw a curved arrow around the top-right
+        var cx = from.x + from.w / 2 + 20;
+        var cy = from.y - from.h / 2 - 20;
+        var startX = from.x + from.w / 4;
+        var startY = from.y - from.h / 2 - 4;
+        var endX = from.x + from.w / 2 + 4;
+        var endY = from.y - from.h / 4;
+
+        var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', 'M' + startX + ',' + startY + ' C' + startX + ',' + (cy - 15) + ' ' + (cx + 15) + ',' + cy + ' ' + endX + ',' + endY);
+        path.setAttribute('class', 'flow-arrow');
+        path.setAttribute('stroke', color);
+        path.style.setProperty('--arrow-color', color);
+        svg.appendChild(path);
+        return;
+      }
+
+      var fromEdge = edgePoint(from, to);
+      var toEdge = edgePoint(to, from);
+
+      // Offset for parallel arrows
+      var dx = toEdge.x - fromEdge.x;
+      var dy = toEdge.y - fromEdge.y;
+      var len = Math.sqrt(dx * dx + dy * dy);
+      var perpX = -dy / len * (stepIndex % 3) * 6;
+      var perpY = dx / len * (stepIndex % 3) * 6;
+
+      var midX = (fromEdge.x + toEdge.x) / 2 + perpX;
+      var midY = (fromEdge.y + toEdge.y) / 2 + perpY;
+
+      var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M' + fromEdge.x + ',' + fromEdge.y + ' Q' + midX + ',' + midY + ' ' + toEdge.x + ',' + toEdge.y);
+      path.setAttribute('class', 'flow-arrow');
+      path.setAttribute('stroke', color);
+      path.style.setProperty('--arrow-color', color);
+      svg.appendChild(path);
+
+      // Arrowhead
+      var angle = Math.atan2(toEdge.y - midY, toEdge.x - midX);
+      var headLen = 10;
+      var head = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      var hx1 = toEdge.x - headLen * Math.cos(angle - 0.4);
+      var hy1 = toEdge.y - headLen * Math.sin(angle - 0.4);
+      var hx2 = toEdge.x - headLen * Math.cos(angle + 0.4);
+      var hy2 = toEdge.y - headLen * Math.sin(angle + 0.4);
+      head.setAttribute('points', toEdge.x + ',' + toEdge.y + ' ' + hx1 + ',' + hy1 + ' ' + hx2 + ',' + hy2);
+      head.setAttribute('class', 'flow-arrow-head');
+      head.style.setProperty('--arrow-color', color);
+      svg.appendChild(head);
+    }
+
+    function drawAllArrows(flow) {
+      // Deduplicate edges: only draw one arrow per unique from→to pair
+      var seen = {};
+      flow.steps.forEach(function (step, i) {
+        var key = step.from + '->' + step.to;
+        if (seen[key]) return;
+        seen[key] = true;
+        drawArrow(step.from, step.to, i);
+      });
+    }
+
+    function escapeHtml(str) {
+      var div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    // Re-draw arrows on resize
+    var resizeTimer;
+    window.addEventListener('resize', function () {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function () {
+        if (!activeFlowId) return;
+        var flow = flowsData.flows.find(function (f) { return f.id === activeFlowId; });
+        if (!flow) return;
+        clearArrows();
+        if (activeStepIndex >= 0) {
+          drawArrow(flow.steps[activeStepIndex].from, flow.steps[activeStepIndex].to, activeStepIndex);
+        } else {
+          drawAllArrows(flow);
+        }
+      }, 100);
+    });
+
+    // Update SVG size to match canvas
+    var observer = new ResizeObserver(function () {
+      var canvas = document.getElementById('canvas');
+      var svg = document.getElementById('flow-svg');
+      svg.setAttribute('width', canvas.scrollWidth);
+      svg.setAttribute('height', canvas.scrollHeight);
+    });
+    observer.observe(document.getElementById('canvas'));
+
+    init();
+  </script>
+</body>
+</html>

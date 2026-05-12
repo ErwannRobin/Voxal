@@ -1,5 +1,5 @@
 .PHONY: help run run-web dev debug build build-debug build-web install clean lint check \
-        cap-sync cap-ios cap-android
+        cap-sync cap-ios cap-android docs
 
 # Default target
 help:
@@ -16,6 +16,7 @@ help:
 	@echo "  cap-ios      Open Xcode (iOS)"
 	@echo "  cap-android  Open Android Studio"
 	@echo "  install      Install npm + Rust dependencies"
+	@echo "  docs         Serve architecture flow docs on http://localhost:8090"
 	@echo "  check        Run Rust type-check (no binary)"
 	@echo "  clean        Remove build artifacts"
 	@echo ""
@@ -98,3 +99,10 @@ check:
 clean:
 	cd src-tauri && cargo clean
 	rm -rf dist node_modules/.cache
+
+# ── Documentation ─────────────────────────────────────────────────────────────
+
+docs:
+	@echo "Serving architecture docs on http://localhost:8090"
+	@open http://localhost:8090/architecture.html 2>/dev/null || true
+	python3 -m http.server 8090 -d docs

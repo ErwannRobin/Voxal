@@ -15,6 +15,7 @@
  *   peer-renamed { peerId, pseudo }               host -> all
  *   heartbeat    { at, deputyId, successorIds }   host <-> peers
  *   redirect     { hostId, hostPseudo }          non-host -> misdirected joiner
+ *   room-published { roomId }                   host -> all (lobby ID changed)
  *
  * Host migration:
  *   When the host's DataConnection closes (or heartbeat times out), every peer runs
@@ -67,6 +68,7 @@ async function releaseAudioFocus() {
 // --- Presence API -----------------------------------------------------------
 
 const DEFAULT_PRESENCE_BASE     = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
+const ANONYMOUS_ROOMS_BASE      = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/anonymous-rooms';
 const DEFAULT_VOXAL_CONNECT_URL = 'https://voxal.lovable.app';
 const PRESENCE_TOKEN_KEY        = 'presence-api-token';
 const PRESENCE_ORG_KEY          = 'presence-org-id';
@@ -140,7 +142,7 @@ function handleDeepLink(urlStr) {
     if (url.protocol !== 'voxal:') return;
 
     if (url.hostname === 'join') {
-      // voxal://join?room=<peerId>
+      // voxal://join?room=<peerId or lobbyId>
       const roomId = url.searchParams.get('room');
       if (!roomId) return;
       if (_audioCtx.state === 'suspended') _audioCtx.resume();
@@ -214,10 +216,12 @@ function tauriFetch(url, options) {
   if (window.__TAURI__) {
     var method = (options && options.method) || 'GET';
     var token  = options && options.headers && options.headers['x-api-token'];
+    var secret = options && options.headers && options.headers['x-room-secret'];
     var body   = options && options.body || null;
     return window.__TAURI__.core.invoke('presence_fetch', {
       url: url, method: method,
       token: token || null,
+      secret: secret || null,
       body: body || null,
     }).then(function(data) {
       return { ok: true, status: 200, json: function() { return Promise.resolve(data); } };
@@ -277,6 +281,7 @@ const FALLBACK_ICE = [
 async function fetchIceServers() {
   // --- 1. Org ICE servers from Voxal backend ---
   if (presenceConfigured()) {
+    devLog('[ICE] Trying org servers…');
     try {
       const res = await tauriFetch(
         presenceBase() + '/org/' + presenceOrgId() + '/ice-servers',
@@ -287,6 +292,7 @@ async function fetchIceServers() {
         const ice_servers = data && data.ice_servers;
         if (Array.isArray(ice_servers) && ice_servers.length > 0) {
           console.log('[TURN] Using', ice_servers.length, 'org ICE servers');
+          devLog('[ICE] Org: ' + ice_servers.length + ' server(s) ✓');
           localStorage.setItem(METERED_STATUS_STORE_KEY, 'ok');
           localStorage.setItem(METERED_COUNT_STORE_KEY, String(ice_servers.length));
           localStorage.setItem(METERED_SERVERS_STORE_KEY, JSON.stringify(ice_servers));
@@ -294,12 +300,15 @@ async function fetchIceServers() {
           return ice_servers;
         }
         console.log('[TURN] No org ICE servers, falling through');
+        devLog('[ICE] Org: no servers configured, trying next…', 'warn');
         // ice_servers === null means TURN not configured for this org → fall through
       } else {
         console.warn('[TURN] Org ICE fetch returned', res.status);
+        devLog('[ICE] Org fetch HTTP ' + res.status, 'warn');
       }
     } catch (e) {
       console.warn('[TURN] Org ICE fetch failed, trying local config:', e.message);
+      devLog('[ICE] Org fetch failed: ' + e.message, 'warn');
     }
   } else {
     console.log('[TURN] presenceConfigured=false, skipping org ICE fetch');
@@ -309,21 +318,27 @@ async function fetchIceServers() {
   const appName = localStorage.getItem(METERED_APP_STORE_KEY);
   const apiKey  = localStorage.getItem(METERED_API_STORE_KEY);
   if (appName && apiKey) {
+    devLog('[ICE] Trying metered.ca (' + appName + ')…');
     try {
       const url = 'https://' + appName + '.metered.live/api/v1/turn/credentials?apiKey=' + apiKey;
-      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      const res = window.__TAURI__
+        ? await tauriFetch(url)
+        : await fetch(url, { signal: AbortSignal.timeout(5000) });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const servers = await res.json();
       if (Array.isArray(servers) && servers.length > 0) {
         console.log('[TURN] Using', servers.length, 'ICE servers from local metered.ca config');
+        devLog('[ICE] metered.ca: ' + servers.length + ' server(s) ✓');
         return servers;
       }
     } catch (e) {
       console.warn('[TURN] Local metered.ca fetch failed, falling back to STUN:', e.message);
+      devLog('[ICE] metered.ca failed: ' + e.message, 'warn');
     }
   }
 
   // --- 3. STUN-only fallback ---
+  devLog('[ICE] Using STUN-only fallback', 'warn');
   return FALLBACK_ICE;
 }
 
@@ -450,10 +465,137 @@ let freeHandMode      = false;
 let recordingShortcut = false;
 let myPseudo          = loadInitialPseudo();
 let editingSelfPseudo = false;
+let _cancelJoin       = null; // set during joinRoom(), called by Cancel button
 
 // --- WebRTC stats polling ---
 var _statsIntervalId  = null;
 var _statsTimerIntervalId = null;
+
+// --- Anonymous room publish ---
+var _publishSecret         = null;
+var _publishedRoomId       = null;
+var _publishedShareUrl     = null;
+var _publishHeartbeatId    = null;
+var _publishDebounceId     = null;
+var _lastPublishAt         = 0;
+var PUBLISH_HEARTBEAT_MS   = 50 * 60 * 1000; // 50 min (TTL is 1h)
+var PUBLISH_DEBOUNCE_MS    = 10000;
+var PUBLISH_MIN_INTERVAL   = 30000; // never POST more often than every 30s
+
+async function publishRoom() {
+  if (!isHost || !peer || !roomCode) return;
+  var now = Date.now();
+  var elapsed = now - _lastPublishAt;
+  if (_lastPublishAt && elapsed < PUBLISH_MIN_INTERVAL) {
+    // Too soon — schedule a retry after the cooldown
+    schedulePublishRefresh();
+    return;
+  }
+  _lastPublishAt = now;
+  var label = activeChannel || null;
+  var peerCount = connections.size;
+  var headers = { 'Content-Type': 'application/json' };
+  if (_publishSecret) headers['x-room-secret'] = _publishSecret;
+  var res = await tauriFetch(ANONYMOUS_ROOMS_BASE, {
+    method: 'POST',
+    headers: headers,
+    body: JSON.stringify({ room_id: roomCode, label: label, peer_count: peerCount }),
+  });
+  if (!res.ok) {
+    var body = null;
+    try { body = await res.json(); } catch (_) {}
+    throw new Error(body && body.error ? body.error : 'HTTP ' + res.status);
+  }
+  var data = await res.json();
+  _publishSecret    = data.secret;
+  _publishedRoomId  = data.room_code || data.room_id || null;
+  _publishedShareUrl = data.share_url || null;
+  updateRoomHeader();
+  broadcastRoomPublished();
+  if (!_publishHeartbeatId) {
+    _publishHeartbeatId = setInterval(function() {
+      if (isHost && _publishSecret) publishRoom().catch(function() {});
+    }, PUBLISH_HEARTBEAT_MS);
+  }
+}
+
+function unpublishRoom() {
+  clearInterval(_publishHeartbeatId);
+  clearTimeout(_publishDebounceId);
+  _publishHeartbeatId = null;
+  _publishDebounceId = null;
+  _lastPublishAt = 0;
+  var secret = _publishSecret;
+  var id = roomCode;
+  _publishSecret = null;
+  _publishedRoomId = null;
+  _publishedShareUrl = null;
+  updateRoomHeader();
+  broadcastRoomPublished();
+  if (!secret || !id) return;
+  tauriFetch(ANONYMOUS_ROOMS_BASE + '/' + encodeURIComponent(id), {
+    method: 'DELETE',
+    headers: { 'x-room-secret': secret },
+  }).catch(function(e) { console.warn('[publish] unpublish failed:', e.message); });
+}
+
+// Clear local publish state without deleting from API.
+// Used when leaving a published room so the new host can take over.
+function clearPublishState() {
+  clearInterval(_publishHeartbeatId);
+  clearTimeout(_publishDebounceId);
+  _publishHeartbeatId = null;
+  _publishDebounceId = null;
+  _lastPublishAt = 0;
+  _publishSecret = null;
+  _publishedRoomId = null;
+  _publishedShareUrl = null;
+  updateRoomHeader();
+}
+
+function broadcastRoomPublished() {
+  if (!isHost || !peer) return;
+  var deputyId = currentDeputyId();
+  connections.forEach(function(c, peerId) {
+    if (!c.data) return;
+    c.data.send({
+      type: 'room-published',
+      roomId: _publishedRoomId,
+      secret: (peerId === deputyId) ? (_publishSecret || null) : null,
+    });
+  });
+}
+
+// Debounced re-publish to update peer_count on the API when membership changes.
+function schedulePublishRefresh() {
+  if (!isHost || !_publishSecret) return;
+  clearTimeout(_publishDebounceId);
+  _publishDebounceId = setTimeout(function() {
+    if (isHost && _publishSecret) publishRoom().catch(function() {});
+  }, PUBLISH_DEBOUNCE_MS);
+}
+
+var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Resolve a public lobby identifier to the actual PeerJS peer ID.
+// Skips the lookup if the code is already a UUID (PeerJS peer ID).
+// Returns the peer ID if found, or null if the code is not a published room.
+async function lookupRoom(code) {
+  if (UUID_RE.test(code)) return null;
+  try {
+    devLog('→ Resolving lobby "' + code + '"…');
+    var res = await tauriFetch(ANONYMOUS_ROOMS_BASE + '/' + encodeURIComponent(code));
+    if (!res.ok) {
+      devLog('✗ Lobby "' + code + '" not found');
+      return null;
+    }
+    var data = await res.json();
+    return (data && data.room_id) || null;
+  } catch (e) {
+    devLog('✗ Lobby lookup failed: ' + e.message, 'error');
+    return null;
+  }
+}
 
 let shortcutStr = localStorage.getItem('ptt-shortcut') || DEFAULT_SHORTCUT;
 
@@ -490,7 +632,24 @@ let activeChannel    = null; // channel name for the current presence session
 let presenceInterval = null;
 
 function updateRoomHeader() {
-  $('room-code-display').textContent = activeChannel || roomCode;
+  $('room-code-display').textContent = _publishedRoomId || activeChannel || roomCode;
+  var publishBtn   = $('btn-publish-room');
+  var unpublishBtn = $('btn-unpublish-room');
+  var shareBtn     = $('btn-share-room');
+  if (!publishBtn || !unpublishBtn) return;
+  if (!isHost) {
+    publishBtn.classList.add('hidden');
+    unpublishBtn.classList.add('hidden');
+    if (shareBtn) shareBtn.classList.add('hidden');
+  } else if (_publishSecret) {
+    publishBtn.classList.add('hidden');
+    unpublishBtn.classList.remove('hidden');
+    if (shareBtn) shareBtn.classList.toggle('hidden', !_publishedShareUrl);
+  } else {
+    publishBtn.classList.remove('hidden');
+    unpublishBtn.classList.add('hidden');
+    if (shareBtn) shareBtn.classList.add('hidden');
+  }
 }
 
 // peerId -> { data, media, pseudo, talking }
@@ -774,7 +933,7 @@ function endHomeAction() {
 }
 
 function lockHomeCTAs() {
-  ['btn-create','btn-join','input-code','btn-rejoin'].forEach(function(id) {
+  ['btn-create','input-code','btn-rejoin'].forEach(function(id) {
     var el = document.getElementById(id);
     if (!el) return;
     el.style.pointerEvents = 'none';
@@ -785,9 +944,11 @@ function lockHomeCTAs() {
     list.style.pointerEvents = 'none';
     list.setAttribute('aria-disabled', 'true');
   }
+  var bar = document.getElementById('rejoin-bar');
+  if (bar) bar.classList.add('hidden');
 }
 function unlockHomeCTAs() {
-  ['btn-create','btn-join','input-code','btn-rejoin'].forEach(function(id) {
+  ['btn-create','input-code','btn-rejoin'].forEach(function(id) {
     var el = document.getElementById(id);
     if (!el) return;
     el.style.pointerEvents = '';
@@ -798,6 +959,7 @@ function unlockHomeCTAs() {
     list.style.pointerEvents = '';
     list.removeAttribute('aria-disabled');
   }
+  if (window._updateRejoinBar) window._updateRejoinBar();
 }
 
 // Haptic feedback (Capacitor native, no-op in browser/Tauri)
@@ -895,8 +1057,21 @@ function isNonFatalPeerRuntimeError(err) {
   return type === 'peer-unavailable' || /Could not connect to peer\b/.test(message);
 }
 
+function friendlyPeerError(err) {
+  var type = err && (err.type || '');
+  var message = err && (err.message || String(err));
+  if (type === 'network' || type === 'disconnected' || /network/i.test(message))
+    return 'Network error — please check your connection and try again.';
+  if (type === 'server-error' || type === 'unavailable-id')
+    return 'Could not reach the signalling server. Try again in a moment.';
+  if (type === 'peer-unavailable' || /Could not connect to peer\b/.test(message))
+    return 'Room not found or host is unreachable.';
+  return message || 'An unexpected error occurred.';
+}
+
 function handlePeerRuntimeError(err, settled, reject) {
   if (!settled) {
+    err.message = friendlyPeerError(err);
     reject(err);
     return true;
   }
@@ -904,7 +1079,7 @@ function handlePeerRuntimeError(err, settled, reject) {
     console.warn('[peer-runtime]', err);
     return true;
   }
-  showError(err.message);
+  showError(friendlyPeerError(err));
   return true;
 }
 
@@ -998,6 +1173,32 @@ function shortId(id) {
 
 function isDevModeEnabled() {
   return localStorage.getItem(DEV_MODE_KEY) === 'true';
+}
+
+function devLog(msg, level) {
+  var lvl = level || 'info';
+  if (lvl === 'warn') console.warn('[dev]', msg);
+  else if (lvl === 'error') console.error('[dev]', msg);
+  else console.log('[dev]', msg);
+  if (!isDevModeEnabled()) return;
+  var panel = document.getElementById('dev-log-entries');
+  if (!panel) return;
+  var now = new Date();
+  var t = now.toTimeString().slice(0, 8) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+  var entry = document.createElement('div');
+  entry.className = 'dev-log-entry' + (lvl !== 'info' ? ' ' + lvl : '');
+  var safe = String(msg).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  entry.innerHTML = '<span class="dev-log-time">' + t + '</span><span class="dev-log-msg">' + safe + '</span>';
+  panel.appendChild(entry);
+  panel.scrollTop = panel.scrollHeight;
+  var entries = panel.children;
+  while (entries.length > 200) panel.removeChild(entries[0]);
+}
+
+function updateDevLogPanel() {
+  var panel = document.getElementById('dev-log-panel');
+  if (!panel) return;
+  panel.classList.toggle('hidden', !isDevModeEnabled());
 }
 
 // --- Rejoin snapshot ---------------------------------------------------------
@@ -1571,6 +1772,12 @@ function shouldAcceptJoinerDataConnection(joinerId) {
 }
 
 function leaveRoom() {
+  // If this host is the last participant in a published lobby, delete it from the API
+  if (isHost && _publishSecret && connections.size === 0) {
+    unpublishRoom();
+  } else {
+    clearPublishState();
+  }
   inRoom = false; freeHandMode = false; isTalking = false;
   connectingToHostId = null;
   ++_hostConnGeneration; // invalidate any pending retry timers
@@ -1788,6 +1995,11 @@ function becomeHost() {
   });
   // peer.on('connection') is already wired in joinRoom() and will route here
   // since isHost is now true
+
+  // If the room was published as a public lobby, update the API with our new peer ID
+  if (_publishedRoomId && _publishSecret) {
+    publishRoom().catch(function(e) { console.warn('[migration] re-publish failed:', e.message); });
+  }
 }
 
 function buildHostPeerList(excludedPeerId) {
@@ -1855,6 +2067,7 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
       roomCode = targetHostId;
       isHost = false;
       connectingToHostId = null;
+      clearPublishState();
       noteHostHeartbeat();
       startHostHeartbeatMonitor();
       stopPeerHeartbeatSweep();
@@ -1925,18 +2138,25 @@ function connectToHost(hostId, opts) {
     '[initial] Connecting to host ' + migrationPeerLabel(hostId) +
     '. Gen: ' + gen + '. Redirects left: ' + redirectsLeft + '.'
   );
+  devLog('→ DC to ' + hostId + ' (gen ' + gen + ')');
 
   // Timeout if connection doesn't open
   var timer = setTimeout(function() {
     if (gen !== _hostConnGeneration) return;
     console.warn('[initial] Connection to ' + migrationPeerLabel(hostId) + ' timed out before opening.');
-    if (!opened && !handled) hostData.close();
+    devLog('✗ DC timed out (8s)', 'warn');
+    if (!opened && !handled) {
+      handled = true;
+      hostData.close();
+      if (onInitialJoinReject) onInitialJoinReject(new Error('Could not reach host — connection timed out.'));
+    }
   }, HOST_CONNECT_TIMEOUT);
 
   hostData.on('open', function() {
     if (gen !== _hostConnGeneration) { hostData.close(); return; }
     opened = true;
     clearTimeout(timer);
+    devLog('✓ DC open → hello sent');
     hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
   });
 
@@ -1968,6 +2188,7 @@ function connectToHost(hostId, opts) {
       }
       redirected = true;
       console.log('[initial] ' + migrationPeerLabel(hostId) + ' redirected to ' + migrationPeerLabel(msg.hostId) + '.');
+      devLog('↻ Redirected to ' + msg.hostId);
       resetKnownPeers([msg.hostId]);
       hostData.close();
       connectToHost(msg.hostId, { redirectsLeft: redirectsLeft - 1, onInitialJoinResolve: onInitialJoinResolve, onInitialJoinReject: onInitialJoinReject });
@@ -1977,6 +2198,7 @@ function connectToHost(hostId, opts) {
     // Handle peer-list (join success)
     if (msg && msg.type === 'peer-list') {
       receivedPeerList = true;
+      devLog('✓ Joined! ' + (msg.peers ? msg.peers.length : 0) + ' peer(s) in room');
       finishJoin(hostId, hostData);
       handleHostMessage(msg);
       if (onInitialJoinResolve) onInitialJoinResolve(peer.id);
@@ -2002,12 +2224,15 @@ function connectToHost(hostId, opts) {
 
     // Never received peer-list — connection failed before joining
     handled = true;
+    devLog('✗ DC closed before joining', 'warn');
     if (redirected) return;
     if (onInitialJoinReject) onInitialJoinReject(new Error('Connection to host closed before joining.'));
   });
 
   hostData.on('error', function(err) {
-    console.warn('[initial] Host connection error: ' + (err && err.message ? err.message : String(err)));
+    var msg = err && err.message ? err.message : String(err);
+    console.warn('[initial] Host connection error: ' + msg);
+    devLog('✗ DC error: ' + msg, 'error');
   });
 }
 
@@ -2051,6 +2276,11 @@ function broadcastHostPeerLists() {
     if (!conn || !conn.data) return;
     sendHostPeerList(conn.data, peerId);
   });
+  // Keep the deputy in sync with the room secret whenever successor chain changes
+  if (_publishedRoomId) {
+    broadcastRoomPublished();
+    schedulePublishRefresh();
+  }
 }
 
 function handleJoinerDataConnection(dataConn) {
@@ -2082,6 +2312,12 @@ function handleJoinerDataConnection(dataConn) {
       connections.set(joinerId, Object.assign({}, existing, { pseudo: pseudo }));
 
       sendHostPeerList(dataConn, joinerId);
+
+      // Inform joiner of the public lobby ID if the room is published
+      if (_publishedRoomId) {
+        var isDeputy = (joinerId === currentDeputyId());
+        dataConn.send({ type: 'room-published', roomId: _publishedRoomId, secret: isDeputy ? (_publishSecret || null) : null });
+      }
 
       if (!dataConn._voxalExistingPeer) {
         connections.forEach(function(c, id) {
@@ -2269,20 +2505,40 @@ function handleHostMessage(msg) {
     const existing = connections.get(msg.peerId) || { data: null, media: null, talking: false };
     connections.set(msg.peerId, Object.assign({}, existing, { pseudo: msg.pseudo || shortId(msg.peerId) }));
     updatePeerList();
+  } else if (msg.type === 'room-published') {
+    _publishedRoomId = msg.roomId || null;
+    _publishSecret = msg.secret || null;
+    updateRoomHeader();
   }
 }
 
 async function joinRoom(code, onJoined) {
   if (!code) return;
+  devLog('→ Joining room ' + code + '…');
+  // Resolve public lobby identifier to PeerJS peer ID if applicable
+  var resolved = await lookupRoom(code);
+  if (resolved) {
+    devLog('✓ Resolved lobby "' + code + '" → ' + resolved);
+    code = resolved;
+  }
   if (!stream) {
-    stream = await getMicStream();
+    devLog('→ Acquiring mic…');
+    try {
+      stream = await getMicStream();
+    } catch (e) {
+      devLog('✗ Mic error: ' + e.message, 'error');
+      throw e;
+    }
     audioTrack = stream.getAudioTracks()[0];
     audioTrack.enabled = false;
+    devLog('✓ Mic OK');
   }
   resetKnownPeers([code]);
   _lastAuthoritativePeerIds = null;
   _authoritativeSuccessorIds = [];
   const iceServers = await fetchIceServers();
+  devLog('✓ ICE: ' + iceServers.length + ' server(s)');
+  devLog('→ Connecting to PeerJS broker…');
   peer = new Peer({ config: { iceServers } });
   // Accept incoming connections in case this peer becomes host after migration
   peer.on('connection', function(dataConn) {
@@ -2296,29 +2552,41 @@ async function joinRoom(code, onJoined) {
   peer.on('call',  function(call) { handleIncomingCall(call); });
   let settled = false;
   await new Promise(function(resolve, reject) {
+    var joinTimeout = setTimeout(function() {
+      devLog('✗ Timed out after 30s', 'error');
+      peer.destroy();
+      settle(reject, new Error('Could not join room — connection timed out. Please check your network and try again.'));
+    }, 30000);
+
+    function settle(fn, val) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(joinTimeout);
+      _cancelJoin = null;
+      fn(val);
+    }
+
+    // Expose a cancel handle so the UI can abort mid-attempt
+    _cancelJoin = function() {
+      devLog('→ Cancelled');
+      peer.destroy();
+      settle(reject, new Error('Connection cancelled.'));
+    };
+
     peer.on('open', function() {
+      devLog('✓ PeerJS open (' + peer.id + ') → connecting to host');
       if (onJoined) onJoined(peer.id); // register presence as soon as we have our peer_id
       roomState = ROOM_STATE_CONNECTING;
       connectToHost(code, {
         redirectsLeft: MAX_JOIN_REDIRECTS,
-        onInitialJoinResolve: function(peerId) {
-          if (!settled) {
-            settled = true;
-            resolve(peerId);
-          }
-        },
-        onInitialJoinReject: function(err) {
-          if (!settled) {
-            settled = true;
-            reject(err);
-          }
-        }
+        onInitialJoinResolve: function(peerId) { settle(resolve, peerId); },
+        onInitialJoinReject:  function(err)    { settle(reject, err); }
       });
     });
     peer.on('error', function(err) {
       if (!settled) {
-        settled = true;
-        handlePeerRuntimeError(err, false, reject);
+        devLog('✗ PeerJS error: ' + (err.message || String(err)), 'error');
+        handlePeerRuntimeError(err, false, function(e) { settle(reject, e); });
         return;
       }
       handlePeerRuntimeError(err, true, reject);
@@ -2489,6 +2757,39 @@ async function joinChannel(item) {
 
 window.addEventListener('DOMContentLoaded', function() {
 
+  // Dev log panel: show/hide based on current dev mode state
+  updateDevLogPanel();
+  var toggleBtn = document.getElementById('btn-toggle-dev-log');
+  if (toggleBtn) toggleBtn.addEventListener('click', function() {
+    var panel = document.getElementById('dev-log-panel');
+    if (!panel) return;
+    var collapsed = panel.classList.toggle('collapsed');
+    toggleBtn.textContent = collapsed ? '▸' : '▾';
+    toggleBtn.setAttribute('aria-label', collapsed ? 'Expand log' : 'Collapse log');
+  });
+  var clearBtn = document.getElementById('btn-clear-dev-log');
+  if (clearBtn) clearBtn.addEventListener('click', function() {
+    var entries = document.getElementById('dev-log-entries');
+    if (entries) entries.innerHTML = '';
+  });
+  var copyLogBtn = document.getElementById('btn-copy-dev-log');
+  if (copyLogBtn) copyLogBtn.addEventListener('click', function() {
+    var entries = document.getElementById('dev-log-entries');
+    if (!entries) return;
+    var lines = Array.from(entries.querySelectorAll('.dev-log-entry')).map(function(el) {
+      var time = el.querySelector('.dev-log-time');
+      var msg  = el.querySelector('.dev-log-msg');
+      return (time ? time.textContent : '') + '  ' + (msg ? msg.textContent : '');
+    });
+    var text = lines.join('\n');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function() { showCopyToast('Log copied'); }).catch(function() { fallbackCopy(text); showCopyToast('Log copied'); });
+    } else {
+      fallbackCopy(text);
+      showCopyToast('Log copied');
+    }
+  });
+
   // Pseudo: hide the home-screen name field once the user has set a name
   // Hide the home pseudo field only if a name was already set at load time.
   // Once visible in a session, it stays visible regardless of edits.
@@ -2584,18 +2885,37 @@ window.addEventListener('DOMContentLoaded', function() {
     createRoom().catch(function(err) { showError(err.message); }).finally(function() { setLoading(btn, false); unlockHomeCTAs(); endHomeAction(); });
   });
   $('btn-join').addEventListener('click', function() {
+    var btn = $('btn-join');
+    // If currently connecting, act as Cancel
+    if (_cancelJoin) {
+      _cancelJoin();
+      _cancelJoin = null;
+      return;
+    }
     if (!beginHomeAction()) return;
     if (_audioCtx.state === 'suspended') _audioCtx.resume();
-    var btn = $('btn-join');
-    setLoading(btn, true, 'Join');
+    btn.innerHTML = '<span class="btn-spinner"></span>Cancel';
+    btn.classList.add('btn-ghost');
+    btn.classList.remove('btn-secondary');
     lockHomeCTAs();
-    joinRoom($('input-code').value.trim()).catch(function(err) { showError(err.message); }).finally(function() { setLoading(btn, false); unlockHomeCTAs(); endHomeAction(); });
+    joinRoom($('input-code').value.trim())
+      .catch(function(err) {
+        if (err.message !== 'Connection cancelled.') showError(err.message);
+        else showCopyToast('Connection cancelled');
+      })
+      .finally(function() {
+        btn.textContent = 'Join';
+        btn.classList.remove('btn-ghost');
+        btn.classList.add('btn-secondary');
+        unlockHomeCTAs();
+        endHomeAction();
+      });
   });
   $('input-code').addEventListener('keydown', function(e) {
     if (e.key !== 'Enter') return;
     e.preventDefault();
     var joinBtn = $('btn-join');
-    if (joinBtn && !joinBtn.disabled) joinBtn.click();
+    if (joinBtn) joinBtn.click();
   });
 
   // TURN settings modal
@@ -2780,6 +3100,14 @@ window.addEventListener('DOMContentLoaded', function() {
       statusEl.onmouseenter = null;
     }
     updateDisconnectVisibility(); updateConnectVisibility();
+    // Sync dev mode toggle
+    var devBtn = document.getElementById('toggle-dev-mode-modal');
+    if (devBtn) {
+      var devOn = isDevModeEnabled();
+      devBtn.setAttribute('aria-checked', String(devOn));
+      devBtn.classList.toggle('active', devOn);
+      devBtn.textContent = devOn ? 'ON' : 'OFF';
+    }
     $('modal-settings').classList.remove('hidden');
     if (presenceToken()) loadOrgs();
   }
@@ -2872,6 +3200,18 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-disconnect').addEventListener('click', disconnectAccount);
   $('btn-connect-voxal').addEventListener('click', connectWithVoxalAccount);
 
+  var devToggleModal = document.getElementById('toggle-dev-mode-modal');
+  if (devToggleModal) {
+    devToggleModal.addEventListener('click', function() {
+      var on = !isDevModeEnabled();
+      localStorage.setItem(DEV_MODE_KEY, String(on));
+      devToggleModal.setAttribute('aria-checked', String(on));
+      devToggleModal.classList.toggle('active', on);
+      devToggleModal.textContent = on ? 'ON' : 'OFF';
+      updateDevLogPanel();
+    });
+  }
+
   // iOS: deep link comes back via @capacitor/app appUrlOpen
   if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
     var CapApp = window.Capacitor.Plugins.App;
@@ -2922,6 +3262,7 @@ window.addEventListener('DOMContentLoaded', function() {
                         METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
     if (e.key === DEV_MODE_KEY) {
+      updateDevLogPanel();
       if (inRoom) {
         if (isDevModeEnabled()) startStatsPolling(); else stopStatsPolling();
         updatePeerList();
@@ -2996,7 +3337,7 @@ window.addEventListener('DOMContentLoaded', function() {
   // Start presence polling on load (if configured)
   startPresencePolling();
   $('btn-copy').addEventListener('click', function() {
-    var text = roomCode;
+    var text = _publishedRoomId || roomCode;
     // On native mobile, open the system share sheet with a deep link
     if (window.Capacitor && window.Capacitor.isNativePlatform()) {
       var shareUrl = 'voxal://join?room=' + encodeURIComponent(text);
@@ -3010,6 +3351,28 @@ window.addEventListener('DOMContentLoaded', function() {
     copyTextToClipboard(text);
   });
   $('btn-leave').addEventListener('click', leaveRoom);
+
+  $('btn-publish-room').addEventListener('click', function() {
+    var btn = $('btn-publish-room');
+    btn.disabled = true;
+    publishRoom()
+      .catch(function(err) { showError('Could not publish room: ' + err.message); })
+      .finally(function() { btn.disabled = false; });
+  });
+
+  $('btn-unpublish-room').addEventListener('click', function() {
+    unpublishRoom();
+  });
+
+  $('btn-share-room').addEventListener('click', function() {
+    var url = _publishedShareUrl;
+    if (!url) return;
+    if (navigator.share) {
+      navigator.share({ title: 'Join my Voxal room', url: url }).catch(function(e) { console.warn('[Share]', e); });
+    } else {
+      fallbackCopy(url); showCopyToast();
+    }
+  });
 
   // --- Rejoin bar ---
   function _createRejoinBar() {
