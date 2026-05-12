@@ -15,6 +15,7 @@
  *   peer-renamed { peerId, pseudo }               host -> all
  *   heartbeat    { at, deputyId, successorIds }   host <-> peers
  *   redirect     { hostId, hostPseudo }          non-host -> misdirected joiner
+ *   room-published { roomId }                   host -> all (lobby ID changed)
  *
  * Host migration:
  *   When the host's DataConnection closes (or heartbeat times out), every peer runs
@@ -141,7 +142,7 @@ function handleDeepLink(urlStr) {
     if (url.protocol !== 'voxal:') return;
 
     if (url.hostname === 'join') {
-      // voxal://join?room=<peerId>
+      // voxal://join?room=<peerId or lobbyId>
       const roomId = url.searchParams.get('room');
       if (!roomId) return;
       if (_audioCtx.state === 'suspended') _audioCtx.resume();
@@ -475,10 +476,22 @@ var _publishSecret         = null;
 var _publishedRoomId       = null;
 var _publishedShareUrl     = null;
 var _publishHeartbeatId    = null;
+var _publishDebounceId     = null;
+var _lastPublishAt         = 0;
 var PUBLISH_HEARTBEAT_MS   = 50 * 60 * 1000; // 50 min (TTL is 1h)
+var PUBLISH_DEBOUNCE_MS    = 10000;
+var PUBLISH_MIN_INTERVAL   = 30000; // never POST more often than every 30s
 
 async function publishRoom() {
   if (!isHost || !peer || !roomCode) return;
+  var now = Date.now();
+  var elapsed = now - _lastPublishAt;
+  if (_lastPublishAt && elapsed < PUBLISH_MIN_INTERVAL) {
+    // Too soon — schedule a retry after the cooldown
+    schedulePublishRefresh();
+    return;
+  }
+  _lastPublishAt = now;
   var label = activeChannel || null;
   var peerCount = connections.size;
   var headers = { 'Content-Type': 'application/json' };
@@ -498,6 +511,7 @@ async function publishRoom() {
   _publishedRoomId  = data.room_code || data.room_id || null;
   _publishedShareUrl = data.share_url || null;
   updateRoomHeader();
+  broadcastRoomPublished();
   if (!_publishHeartbeatId) {
     _publishHeartbeatId = setInterval(function() {
       if (isHost && _publishSecret) publishRoom().catch(function() {});
@@ -507,18 +521,80 @@ async function publishRoom() {
 
 function unpublishRoom() {
   clearInterval(_publishHeartbeatId);
+  clearTimeout(_publishDebounceId);
   _publishHeartbeatId = null;
+  _publishDebounceId = null;
+  _lastPublishAt = 0;
   var secret = _publishSecret;
   var id = roomCode;
   _publishSecret = null;
   _publishedRoomId = null;
   _publishedShareUrl = null;
   updateRoomHeader();
+  broadcastRoomPublished();
   if (!secret || !id) return;
   tauriFetch(ANONYMOUS_ROOMS_BASE + '/' + encodeURIComponent(id), {
     method: 'DELETE',
     headers: { 'x-room-secret': secret },
   }).catch(function(e) { console.warn('[publish] unpublish failed:', e.message); });
+}
+
+// Clear local publish state without deleting from API.
+// Used when leaving a published room so the new host can take over.
+function clearPublishState() {
+  clearInterval(_publishHeartbeatId);
+  clearTimeout(_publishDebounceId);
+  _publishHeartbeatId = null;
+  _publishDebounceId = null;
+  _lastPublishAt = 0;
+  _publishSecret = null;
+  _publishedRoomId = null;
+  _publishedShareUrl = null;
+  updateRoomHeader();
+}
+
+function broadcastRoomPublished() {
+  if (!isHost || !peer) return;
+  var deputyId = currentDeputyId();
+  connections.forEach(function(c, peerId) {
+    if (!c.data) return;
+    c.data.send({
+      type: 'room-published',
+      roomId: _publishedRoomId,
+      secret: (peerId === deputyId) ? (_publishSecret || null) : null,
+    });
+  });
+}
+
+// Debounced re-publish to update peer_count on the API when membership changes.
+function schedulePublishRefresh() {
+  if (!isHost || !_publishSecret) return;
+  clearTimeout(_publishDebounceId);
+  _publishDebounceId = setTimeout(function() {
+    if (isHost && _publishSecret) publishRoom().catch(function() {});
+  }, PUBLISH_DEBOUNCE_MS);
+}
+
+var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Resolve a public lobby identifier to the actual PeerJS peer ID.
+// Skips the lookup if the code is already a UUID (PeerJS peer ID).
+// Returns the peer ID if found, or null if the code is not a published room.
+async function lookupRoom(code) {
+  if (UUID_RE.test(code)) return null;
+  try {
+    devLog('→ Resolving lobby "' + code + '"…');
+    var res = await tauriFetch(ANONYMOUS_ROOMS_BASE + '/' + encodeURIComponent(code));
+    if (!res.ok) {
+      devLog('✗ Lobby "' + code + '" not found');
+      return null;
+    }
+    var data = await res.json();
+    return (data && data.room_id) || null;
+  } catch (e) {
+    devLog('✗ Lobby lookup failed: ' + e.message, 'error');
+    return null;
+  }
 }
 
 let shortcutStr = localStorage.getItem('ptt-shortcut') || DEFAULT_SHORTCUT;
@@ -1696,7 +1772,12 @@ function shouldAcceptJoinerDataConnection(joinerId) {
 }
 
 function leaveRoom() {
-  unpublishRoom();
+  // If this host is the last participant in a published lobby, delete it from the API
+  if (isHost && _publishSecret && connections.size === 0) {
+    unpublishRoom();
+  } else {
+    clearPublishState();
+  }
   inRoom = false; freeHandMode = false; isTalking = false;
   connectingToHostId = null;
   ++_hostConnGeneration; // invalidate any pending retry timers
@@ -1914,6 +1995,11 @@ function becomeHost() {
   });
   // peer.on('connection') is already wired in joinRoom() and will route here
   // since isHost is now true
+
+  // If the room was published as a public lobby, update the API with our new peer ID
+  if (_publishedRoomId && _publishSecret) {
+    publishRoom().catch(function(e) { console.warn('[migration] re-publish failed:', e.message); });
+  }
 }
 
 function buildHostPeerList(excludedPeerId) {
@@ -1981,7 +2067,7 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
       roomCode = targetHostId;
       isHost = false;
       connectingToHostId = null;
-      unpublishRoom();
+      clearPublishState();
       noteHostHeartbeat();
       startHostHeartbeatMonitor();
       stopPeerHeartbeatSweep();
@@ -2190,6 +2276,11 @@ function broadcastHostPeerLists() {
     if (!conn || !conn.data) return;
     sendHostPeerList(conn.data, peerId);
   });
+  // Keep the deputy in sync with the room secret whenever successor chain changes
+  if (_publishedRoomId) {
+    broadcastRoomPublished();
+    schedulePublishRefresh();
+  }
 }
 
 function handleJoinerDataConnection(dataConn) {
@@ -2221,6 +2312,12 @@ function handleJoinerDataConnection(dataConn) {
       connections.set(joinerId, Object.assign({}, existing, { pseudo: pseudo }));
 
       sendHostPeerList(dataConn, joinerId);
+
+      // Inform joiner of the public lobby ID if the room is published
+      if (_publishedRoomId) {
+        var isDeputy = (joinerId === currentDeputyId());
+        dataConn.send({ type: 'room-published', roomId: _publishedRoomId, secret: isDeputy ? (_publishSecret || null) : null });
+      }
 
       if (!dataConn._voxalExistingPeer) {
         connections.forEach(function(c, id) {
@@ -2408,12 +2505,22 @@ function handleHostMessage(msg) {
     const existing = connections.get(msg.peerId) || { data: null, media: null, talking: false };
     connections.set(msg.peerId, Object.assign({}, existing, { pseudo: msg.pseudo || shortId(msg.peerId) }));
     updatePeerList();
+  } else if (msg.type === 'room-published') {
+    _publishedRoomId = msg.roomId || null;
+    _publishSecret = msg.secret || null;
+    updateRoomHeader();
   }
 }
 
 async function joinRoom(code, onJoined) {
   if (!code) return;
   devLog('→ Joining room ' + code + '…');
+  // Resolve public lobby identifier to PeerJS peer ID if applicable
+  var resolved = await lookupRoom(code);
+  if (resolved) {
+    devLog('✓ Resolved lobby "' + code + '" → ' + resolved);
+    code = resolved;
+  }
   if (!stream) {
     devLog('→ Acquiring mic…');
     try {
