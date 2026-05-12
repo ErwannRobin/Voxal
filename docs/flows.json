@@ -1,0 +1,744 @@
+{
+  "components": [
+    {
+      "id": "frontend",
+      "name": "Frontend UI",
+      "description": "index.html + main.js + styles.css — vanilla JS, no framework, no bundler",
+      "color": "#3b82f6",
+      "icon": "🖥️"
+    },
+    {
+      "id": "settings",
+      "name": "Settings",
+      "description": "settings.html (Tauri: separate WebviewWindow) or in-app modal (Web/Mobile). Syncs via localStorage + storage event.",
+      "color": "#8b5cf6",
+      "icon": "⚙️"
+    },
+    {
+      "id": "tauri",
+      "name": "Tauri Backend",
+      "description": "src-tauri/lib.rs — Rust process: global PTT shortcut, presence_fetch proxy, deep-link handler, app menu",
+      "color": "#f97316",
+      "icon": "🦀"
+    },
+    {
+      "id": "peerjs",
+      "name": "PeerJS Broker",
+      "description": "Cloud signaling server — brokers WebRTC connections. Room code = host's PeerJS peer ID.",
+      "color": "#10b981",
+      "icon": "📡"
+    },
+    {
+      "id": "webrtc",
+      "name": "WebRTC (P2P)",
+      "description": "DataConnection (signaling star: host↔peer) + MediaConnection (audio full mesh: every peer↔peer, Opus 16kHz mono)",
+      "color": "#06b6d4",
+      "icon": "🔊"
+    },
+    {
+      "id": "presence",
+      "name": "Voxal Presence API",
+      "description": "Supabase Edge Function — manages orgs, channels, sessions, ICE server config. Base URL from localStorage['service-url'].",
+      "color": "#ec4899",
+      "icon": "☁️"
+    },
+    {
+      "id": "voxal_connect",
+      "name": "Voxal Connect",
+      "description": "voxal.lovable.app — OAuth-style auth frontend. Redirects back via voxal://auth?token=… or postMessage.",
+      "color": "#f43f5e",
+      "icon": "🔑"
+    },
+    {
+      "id": "turn",
+      "name": "TURN / ICE Servers",
+      "description": "metered.ca (or org-configured) relay servers. Fallback: STUN-only. Credentials fetched at room creation/join.",
+      "color": "#eab308",
+      "icon": "🌐"
+    },
+    {
+      "id": "localstorage",
+      "name": "localStorage",
+      "description": "Persistent state: pseudo, PTT shortcut, presence token, org ID, TURN config, theme, metered status",
+      "color": "#a855f7",
+      "icon": "💾"
+    },
+    {
+      "id": "ios_native",
+      "name": "iOS Native (Capacitor)",
+      "description": "PTTPlugin.swift — PushToTalk framework, Dynamic Island, AVAudioSession, SceneDelegate for deep links",
+      "color": "#64748b",
+      "icon": "🍎"
+    },
+    {
+      "id": "android_native",
+      "name": "Android Native (Capacitor)",
+      "description": "AudioForegroundPlugin.java — foreground service for audio focus, notification channel",
+      "color": "#22c55e",
+      "icon": "🤖"
+    },
+    {
+      "id": "iframe_parent",
+      "name": "iframe Parent",
+      "description": "Optional embedding host page — controls Voxal via postMessage bridge (join/create/leave commands, state events)",
+      "color": "#78716c",
+      "icon": "🪟"
+    }
+  ],
+
+  "flows": [
+    {
+      "id": "create-room",
+      "name": "Create Room",
+      "description": "Host creates a new room and waits for peers to join",
+      "steps": [
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "getMicStream()",
+          "detail": "Requests microphone access (Opus, 16kHz mono, echo cancellation). Uses webkitGetUserMedia fallback."
+        },
+        {
+          "from": "frontend",
+          "to": "turn",
+          "label": "fetchIceServers()",
+          "detail": "Tries: 1) Org ICE servers from Presence API, 2) local metered.ca credentials, 3) STUN-only fallback"
+        },
+        {
+          "from": "frontend",
+          "to": "peerjs",
+          "label": "new Peer({ config: { iceServers } })",
+          "detail": "Connects to PeerJS broker with ICE config. Receives a random peer ID which becomes the room code."
+        },
+        {
+          "from": "peerjs",
+          "to": "frontend",
+          "label": "peer.on('open', id)",
+          "detail": "PeerJS assigns a unique ID. This ID IS the room code. Sets isHost=true, roomCode=id, inRoom=true."
+        },
+        {
+          "from": "frontend",
+          "to": "localstorage",
+          "label": "localStorage.setItem('active-room-code', id)",
+          "detail": "Persists room code for potential rejoin after crash/refresh."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "showScreen('room')",
+          "detail": "Switches UI to room view. Starts heartbeat broadcast, stats polling, keep-alive audio."
+        },
+        {
+          "from": "frontend",
+          "to": "ios_native",
+          "label": "nativePTTJoin(roomCode)",
+          "detail": "Joins the PushToTalk channel on iOS — enables Dynamic Island PTT button."
+        },
+        {
+          "from": "frontend",
+          "to": "android_native",
+          "label": "requestAudioFocus()",
+          "detail": "Starts foreground service to keep audio focus while in room."
+        }
+      ]
+    },
+
+    {
+      "id": "join-room",
+      "name": "Join Room",
+      "description": "Peer joins an existing room by entering the room code (host's peer ID)",
+      "steps": [
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "getMicStream()",
+          "detail": "Acquires mic if not already held."
+        },
+        {
+          "from": "frontend",
+          "to": "turn",
+          "label": "fetchIceServers()",
+          "detail": "Fetches TURN credentials (org → metered → STUN fallback)."
+        },
+        {
+          "from": "frontend",
+          "to": "peerjs",
+          "label": "new Peer({ config: { iceServers } })",
+          "detail": "Registers with PeerJS broker. Gets own random peer ID."
+        },
+        {
+          "from": "frontend",
+          "to": "webrtc",
+          "label": "peer.connect(hostId, { reliable: true })",
+          "detail": "Opens a DataConnection to the host (room code = host's peer ID)."
+        },
+        {
+          "from": "webrtc",
+          "to": "frontend",
+          "label": "hostData.on('open')",
+          "detail": "DataConnection established with host."
+        },
+        {
+          "from": "frontend",
+          "to": "webrtc",
+          "label": "hostData.send({ type: 'hello', pseudo })",
+          "detail": "Joiner sends its display name to the host."
+        },
+        {
+          "from": "webrtc",
+          "to": "frontend",
+          "label": "msg.type === 'peer-list'",
+          "detail": "Host replies with full peer roster: [{id, pseudo}], hostId, deputyId, successorIds. This confirms join success."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "finishJoin(hostId, hostData)",
+          "detail": "Sets roomCode, inRoom=true, starts heartbeat monitor, shows room screen."
+        },
+        {
+          "from": "frontend",
+          "to": "webrtc",
+          "label": "peer.call(peerId, stream) — for each peer",
+          "detail": "Opens MediaConnection (audio) to every peer in the room. Full mesh topology."
+        }
+      ]
+    },
+
+    {
+      "id": "ptt-desktop",
+      "name": "Push-to-Talk (Desktop)",
+      "description": "User presses the global PTT shortcut on macOS/Windows/Linux",
+      "steps": [
+        {
+          "from": "tauri",
+          "to": "tauri",
+          "label": "Global shortcut detected (default: Shift+Space)",
+          "detail": "tauri-plugin-global-shortcut captures system-wide key press, even when app is not focused."
+        },
+        {
+          "from": "tauri",
+          "to": "frontend",
+          "label": "app.emit('ptt-press')",
+          "detail": "Rust backend emits ptt-press event to the WebView via Tauri IPC."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "setTalking(true)",
+          "detail": "Enables audioTrack, plays blip sound, updates UI (#ptt-btn.active, status text)."
+        },
+        {
+          "from": "frontend",
+          "to": "webrtc",
+          "label": "broadcastTalkingState(true)",
+          "detail": "Sends { type: 'talking', peerId, active: true } over DataConnection. Host relays to all peers."
+        },
+        {
+          "from": "webrtc",
+          "to": "frontend",
+          "label": "Audio flows via MediaConnection",
+          "detail": "Opus-encoded audio is transmitted P2P to all connected peers via the full mesh."
+        },
+        {
+          "from": "tauri",
+          "to": "frontend",
+          "label": "app.emit('ptt-release')",
+          "detail": "Key released → ptt-release event → setTalking(false) → audioTrack.enabled = false."
+        }
+      ]
+    },
+
+    {
+      "id": "ptt-ios",
+      "name": "Push-to-Talk (iOS)",
+      "description": "User presses the Dynamic Island PTT button on iOS",
+      "steps": [
+        {
+          "from": "ios_native",
+          "to": "ios_native",
+          "label": "Dynamic Island PTT button pressed",
+          "detail": "iOS PushToTalk framework detects button press on Dynamic Island / Lock Screen."
+        },
+        {
+          "from": "ios_native",
+          "to": "ios_native",
+          "label": "didBeginTransmittingFrom callback",
+          "detail": "PTChannelManager delegate fires. Must resume AudioContext before setting gain."
+        },
+        {
+          "from": "ios_native",
+          "to": "frontend",
+          "label": "evaluateJavaScript('audioCtx.resume()…gainNode.gain.value=1')",
+          "detail": "Swift evaluates JS in WebView to unmute mic via GainNode (not audioTrack.enabled — Swift controls gain directly)."
+        },
+        {
+          "from": "frontend",
+          "to": "webrtc",
+          "label": "Audio flows through GainNode → MediaConnection",
+          "detail": "Mic audio, routed through Web Audio API GainNode, is transmitted to peers."
+        },
+        {
+          "from": "ios_native",
+          "to": "frontend",
+          "label": "didEndTransmittingFrom → gainNode.gain.value=0",
+          "detail": "Button released → Swift mutes the GainNode. JS engine may be suspended in background — gain control is synchronous."
+        }
+      ]
+    },
+
+    {
+      "id": "host-migration",
+      "name": "Host Migration",
+      "description": "When the host disconnects, peers elect a successor and reconnect signaling",
+      "steps": [
+        {
+          "from": "webrtc",
+          "to": "frontend",
+          "label": "Host heartbeat timeout / DataConnection close",
+          "detail": "Non-host peer detects host death via missing heartbeat (bidirectional) or DataConnection 'close' event."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "initiateHostMigration(oldHostId)",
+          "detail": "Sets roomState='migrating'. Cleans up old host's data+media connections. Idempotent via state machine."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "proceedWithHostElection()",
+          "detail": "Uses authoritativeSuccessorIds from last host peer-list/heartbeat. Skips _migrationExcluded candidates."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "Elected peer: becomeHost()",
+          "detail": "Sets isHost=true, roomCode=self, starts host heartbeat. Preserves knownPeerIds during settle window (8s)."
+        },
+        {
+          "from": "frontend",
+          "to": "webrtc",
+          "label": "Other peers: connectToNewHost(newHostId)",
+          "detail": "Opens new DataConnection to elected host. Retries up to 3 times before re-electing."
+        },
+        {
+          "from": "webrtc",
+          "to": "frontend",
+          "label": "New host sends peer-list",
+          "detail": "Migration succeeds when the new host's authoritative peer-list arrives. Audio mesh is NOT touched — survives handoff."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "broadcastHostPeerLists() after settle",
+          "detail": "After 8s settle timeout, new host prunes peers that never reconnected and broadcasts clean roster."
+        }
+      ]
+    },
+
+    {
+      "id": "auth-connect",
+      "name": "Connect Voxal Account",
+      "description": "OAuth-style authentication flow to link a Voxal account for presence/channels",
+      "steps": [
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "connectWithVoxalAccount()",
+          "detail": "Generates random state parameter, stores in sessionStorage for CSRF protection."
+        },
+        {
+          "from": "frontend",
+          "to": "voxal_connect",
+          "label": "Open voxal.lovable.app/connect?state=…",
+          "detail": "Tauri: shell.open() in system browser. Capacitor: window.open(_system). Web: popup window."
+        },
+        {
+          "from": "voxal_connect",
+          "to": "voxal_connect",
+          "label": "User authenticates",
+          "detail": "User logs in or creates account on the Voxal Connect web app."
+        },
+        {
+          "from": "voxal_connect",
+          "to": "frontend",
+          "label": "Redirect: voxal://auth?token=…&state=…",
+          "detail": "Desktop: deep-link caught by Tauri plugin. iOS: appUrlOpen event. Web: postMessage to opener window."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "handleDeepLink(url)",
+          "detail": "Validates state parameter. Stores token in localStorage. Triggers org selection."
+        },
+        {
+          "from": "frontend",
+          "to": "localstorage",
+          "label": "localStorage.setItem('presence-api-token', token)",
+          "detail": "Persists auth token for future API calls."
+        },
+        {
+          "from": "frontend",
+          "to": "presence",
+          "label": "selectOrgAndStartPolling()",
+          "detail": "Fetches user's orgs, selects first/saved org, starts channel polling."
+        }
+      ]
+    },
+
+    {
+      "id": "join-channel",
+      "name": "Join Presence Channel",
+      "description": "User selects a channel from their org's channel list",
+      "steps": [
+        {
+          "from": "frontend",
+          "to": "presence",
+          "label": "GET /session?org_id=…",
+          "detail": "Polls for channel list + connected peers. Response includes channel names and peer_ids of connected users."
+        },
+        {
+          "from": "presence",
+          "to": "frontend",
+          "label": "Channel data",
+          "detail": "Returns array of { channel: {name}, connected: [{peer_id, pseudo}] }."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "renderPresenceChannels()",
+          "detail": "Renders channel buttons in the home screen presence panel."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "User clicks a channel",
+          "detail": "joinChannel(item) — if no peers connected, createRoom(). If peers exist, joinRoom(firstPeerId)."
+        },
+        {
+          "from": "frontend",
+          "to": "presence",
+          "label": "POST /session (channelName, peerId)",
+          "detail": "Registers this peer in the presence system so others can see them in the channel."
+        },
+        {
+          "from": "frontend",
+          "to": "peerjs",
+          "label": "createRoom() or joinRoom(hostId)",
+          "detail": "Proceeds with standard room creation or joining flow."
+        }
+      ]
+    },
+
+    {
+      "id": "share-invite",
+      "name": "Share / Invite to Room",
+      "description": "Host shares the room code or deep link so others can join",
+      "steps": [
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "Copy room code button",
+          "detail": "Copies the room code (host's peer ID) to clipboard. Uses fallbackCopy() on iOS WebView."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "Share button → navigator.share()",
+          "detail": "Uses Web Share API with voxal://join?room=<code> in the text field (not url field — iOS rejects non-http schemes)."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "Recipient opens deep link",
+          "detail": "voxal://join?room=<peerId> — handled by handleDeepLink() which calls joinRoom(roomId)."
+        },
+        {
+          "from": "frontend",
+          "to": "presence",
+          "label": "publishRoom() — if presence configured",
+          "detail": "Optionally publishes room to the anonymous-rooms API so it appears in channel listings."
+        }
+      ]
+    },
+
+    {
+      "id": "settings-flow",
+      "name": "Open Settings",
+      "description": "User opens preferences to configure PTT shortcut, TURN, theme, etc.",
+      "steps": [
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "openSettings()",
+          "detail": "Platform detection determines settings UI mode."
+        },
+        {
+          "from": "frontend",
+          "to": "settings",
+          "label": "Tauri: new WebviewWindow('preferences', { url: 'settings.html' })",
+          "detail": "Opens a separate native window loading settings.html. Shares localStorage with main window."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "Web/Mobile: show #modal-settings",
+          "detail": "Reveals the in-app settings modal overlay. Populates fields from localStorage."
+        },
+        {
+          "from": "settings",
+          "to": "localstorage",
+          "label": "User changes a setting",
+          "detail": "settings.html writes to localStorage (pseudo, theme, TURN config, etc.)."
+        },
+        {
+          "from": "localstorage",
+          "to": "frontend",
+          "label": "window.addEventListener('storage', …)",
+          "detail": "Main window receives storage event when settings.html modifies localStorage. Applies changes live."
+        },
+        {
+          "from": "settings",
+          "to": "tauri",
+          "label": "invoke('update_ptt_shortcut', { shortcut })",
+          "detail": "Tauri desktop only: re-registers the global keyboard shortcut via Rust IPC command."
+        }
+      ]
+    },
+
+    {
+      "id": "ice-turn-setup",
+      "name": "ICE / TURN Setup",
+      "description": "Three-tier fallback for fetching relay server credentials",
+      "steps": [
+        {
+          "from": "frontend",
+          "to": "presence",
+          "label": "1. GET /org/{orgId}/ice-servers",
+          "detail": "If presenceConfigured(), tries org-managed ICE servers first. Header: x-api-token."
+        },
+        {
+          "from": "presence",
+          "to": "frontend",
+          "label": "{ ice_servers: [...] } or empty",
+          "detail": "Returns TURN/STUN server array if configured for the org. Falls through if empty/error."
+        },
+        {
+          "from": "frontend",
+          "to": "turn",
+          "label": "2. GET metered.ca credentials",
+          "detail": "If local metered-app-name + metered-api-key are in localStorage, fetches from metered.ca API."
+        },
+        {
+          "from": "turn",
+          "to": "frontend",
+          "label": "TURN server credentials",
+          "detail": "Returns array of ICE server objects with URLs and credentials."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "3. STUN-only fallback",
+          "detail": "If both TURN sources fail, uses Google STUN servers. Works for simple NATs but fails behind symmetric NAT."
+        },
+        {
+          "from": "frontend",
+          "to": "localstorage",
+          "label": "Cache TURN status",
+          "detail": "Stores metered-status ('ok'/'error'), metered-count, and metered-servers in localStorage for badge display."
+        }
+      ]
+    },
+
+    {
+      "id": "leave-room",
+      "name": "Leave Room",
+      "description": "User leaves the current room — cleans up all connections and state",
+      "steps": [
+        {
+          "from": "frontend",
+          "to": "presence",
+          "label": "unpublishRoom() + deleteSession()",
+          "detail": "Removes room from anonymous-rooms API and deletes presence session if channel was active."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "leaveRoom()",
+          "detail": "Sets inRoom=false, stops heartbeats, stats polling, keep-alive. Clears knownPeerIds."
+        },
+        {
+          "from": "frontend",
+          "to": "webrtc",
+          "label": "Close all DataConnections + MediaConnections",
+          "detail": "Iterates connections map, closes each peer's data and media links."
+        },
+        {
+          "from": "frontend",
+          "to": "peerjs",
+          "label": "peer.destroy()",
+          "detail": "Disconnects from PeerJS broker, releases the peer ID."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "Stop mic stream",
+          "detail": "stream.getTracks().forEach(t => t.stop()). Releases microphone hardware."
+        },
+        {
+          "from": "frontend",
+          "to": "ios_native",
+          "label": "nativePTTLeave()",
+          "detail": "Leaves the PushToTalk channel — removes Dynamic Island button."
+        },
+        {
+          "from": "frontend",
+          "to": "android_native",
+          "label": "releaseAudioFocus()",
+          "detail": "Stops the foreground service and releases audio focus."
+        },
+        {
+          "from": "frontend",
+          "to": "localstorage",
+          "label": "localStorage.removeItem('active-room-code')",
+          "detail": "Clears the persisted room code. Prevents stale rejoin attempts."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "showScreen('home')",
+          "detail": "Returns to the home screen."
+        }
+      ]
+    },
+
+    {
+      "id": "iframe-embed",
+      "name": "iframe Embed Control",
+      "description": "Parent page controls an embedded Voxal instance via postMessage",
+      "steps": [
+        {
+          "from": "iframe_parent",
+          "to": "frontend",
+          "label": "postMessage({ type: 'join', roomCode })",
+          "detail": "Parent page sends join command. Also supports 'create' and 'leave' types."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "joinRoom(roomCode) or createRoom()",
+          "detail": "Voxal iframe processes the command and joins/creates the room."
+        },
+        {
+          "from": "frontend",
+          "to": "iframe_parent",
+          "label": "iframeEmit({ source: 'voxal', type: 'joined', roomCode, peerId })",
+          "detail": "Voxal notifies parent of state changes: joined, left, talking, peers, host-changed."
+        }
+      ]
+    },
+
+    {
+      "id": "deep-link-join",
+      "name": "Deep Link Join",
+      "description": "User clicks a voxal://join?room=… link to join a room directly",
+      "steps": [
+        {
+          "from": "tauri",
+          "to": "frontend",
+          "label": "deep-link://new-url event",
+          "detail": "Tauri deep-link plugin catches voxal:// URL on macOS. Emits event to WebView."
+        },
+        {
+          "from": "ios_native",
+          "to": "frontend",
+          "label": "appUrlOpen event",
+          "detail": "iOS SceneDelegate routes voxal:// URL to Capacitor which fires appUrlOpen in JS."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "handleDeepLink('voxal://join?room=…')",
+          "detail": "Parses URL. If hostname='join', extracts room code. Leaves current room if needed."
+        },
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "joinRoom(roomId)",
+          "detail": "Standard join flow — getMicStream → PeerJS → connectToHost → finishJoin."
+        }
+      ]
+    },
+
+    {
+      "id": "ptt-shortcut-change",
+      "name": "Change PTT Shortcut",
+      "description": "User customizes the push-to-talk keyboard shortcut (Tauri desktop only)",
+      "steps": [
+        {
+          "from": "settings",
+          "to": "settings",
+          "label": "User records new shortcut",
+          "detail": "Settings UI captures keydown event and formats it as a shortcut string (e.g. 'Ctrl+M')."
+        },
+        {
+          "from": "settings",
+          "to": "localstorage",
+          "label": "localStorage.setItem('ptt-shortcut', newShortcut)",
+          "detail": "Persists the new shortcut string."
+        },
+        {
+          "from": "settings",
+          "to": "tauri",
+          "label": "invoke('update_ptt_shortcut', { shortcut })",
+          "detail": "Tauri IPC call to Rust backend."
+        },
+        {
+          "from": "tauri",
+          "to": "tauri",
+          "label": "Unregister old → register new global shortcut",
+          "detail": "Rust unregisters the previous shortcut and registers the new one system-wide. Returns Result<(), String>."
+        }
+      ]
+    },
+
+    {
+      "id": "presence-cors-proxy",
+      "name": "CORS Proxy (Tauri)",
+      "description": "Tauri desktop proxies HTTP requests through Rust to bypass WebView CORS restrictions",
+      "steps": [
+        {
+          "from": "frontend",
+          "to": "frontend",
+          "label": "tauriFetch(url, options)",
+          "detail": "JS wrapper that detects Tauri and routes through IPC instead of browser fetch."
+        },
+        {
+          "from": "frontend",
+          "to": "tauri",
+          "label": "invoke('presence_fetch', { url, method, token, body })",
+          "detail": "Sends HTTP request details to Rust via Tauri IPC."
+        },
+        {
+          "from": "tauri",
+          "to": "presence",
+          "label": "reqwest::Client → GET/POST/DELETE",
+          "detail": "Rust makes the actual HTTP request using reqwest. Adds x-api-token and x-room-secret headers."
+        },
+        {
+          "from": "presence",
+          "to": "tauri",
+          "label": "JSON response",
+          "detail": "API response flows back through Rust."
+        },
+        {
+          "from": "tauri",
+          "to": "frontend",
+          "label": "serde_json::Value → JS",
+          "detail": "Rust parses response as JSON and returns it to the WebView via IPC."
+        }
+      ]
+    }
+  ]
+}
