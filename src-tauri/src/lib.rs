@@ -3,6 +3,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri::menu::{AboutMetadata, MenuItem, MenuBuilder, SubmenuBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_deep_link::DeepLinkExt;
+use tauri_plugin_updater::UpdaterExt;
 
 const DEFAULT_SHORTCUT: &str = "Shift+Space";
 
@@ -71,6 +72,27 @@ fn update_ptt_shortcut(
     Ok(())
 }
 
+async fn check_for_updates(app: AppHandle) -> tauri_plugin_updater::Result<()> {
+    if let Some(update) = app.updater()?.check().await? {
+        eprintln!("[updater] Update available: {}", update.version);
+        let _ = app.emit("update-available", &update.version);
+
+        update.download_and_install(
+            |chunk, total| {
+                eprintln!("[updater] Downloaded {} / {:?}", chunk, total);
+            },
+            || {
+                eprintln!("[updater] Download complete, restarting…");
+            },
+        ).await?;
+
+        app.restart();
+    } else {
+        eprintln!("[updater] Already up to date");
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -78,6 +100,8 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(PttShortcut(Mutex::new(DEFAULT_SHORTCUT.to_string())))
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -164,6 +188,15 @@ pub fn run() {
                         ShortcutState::Released => { let _ = app.emit("ptt-release", ()); }
                     }
                 })?;
+
+            // Check for updates in the background
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = check_for_updates(handle).await {
+                    eprintln!("[updater] {}", e);
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![update_ptt_shortcut, presence_fetch])

@@ -3238,6 +3238,9 @@ window.addEventListener('DOMContentLoaded', function() {
   // Tauri: "Voxal → Preferences…" menu item
   if (window.__TAURI__) {
     window.__TAURI__.event.listen('open-preferences', openSettings);
+    window.__TAURI__.event.listen('update-available', function(e) {
+      showCopyToast('Updating to v' + (e.payload || '?') + '…');
+    });
   }
 
   // Cross-window sync: when settings.html (Tauri preferences window) writes to
