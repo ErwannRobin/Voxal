@@ -155,6 +155,22 @@
 
       <div class="settings-separator"></div>
 
+      <!-- Noise suppression -->
+      <p class="settings-group-title">Noise Suppression</p>
+      <p class="settings-desc">
+        Reduce background noise from your microphone. RNNoise uses ML-based suppression for best results.
+      </p>
+      <div class="settings-field">
+        <label for="select-noise-suppression">Mode</label>
+        <select id="select-noise-suppression" class="org-select">
+          <option value="rnnoise">RNNoise (ML-powered)</option>
+          <option value="browser">Browser built-in</option>
+          <option value="off">Off</option>
+        </select>
+      </div>
+
+      <div class="settings-separator"></div>
+
       <!-- TURN — collapsed by default -->
       <details class="turn-section" id="turn-details">
         <summary>Advanced</summary>
@@ -225,6 +241,7 @@
       const METERED_SERVERS_STORE_KEY = 'metered-servers';
       const SERVICE_URL_KEY         = 'service-url';
       const DEV_MODE_KEY            = 'dev-mode';
+      const NOISE_SUPPRESSION_KEY   = 'noise-suppression';
       const VOXAL_CONNECT_URL       = 'https://voxal.lovable.app';
       const FALLBACK_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
@@ -277,6 +294,7 @@
       $id('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
       $id('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
       $id('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
+      $id('select-noise-suppression').value = localStorage.getItem(NOISE_SUPPRESSION_KEY) || 'rnnoise';
 
       // --- Dev mode toggle ---
       (function() {
@@ -435,6 +453,9 @@
         var val = e.target.value.trim();
         if (val) localStorage.setItem(SERVICE_URL_KEY, val);
         else localStorage.removeItem(SERVICE_URL_KEY);
+      });
+      $id('select-noise-suppression').addEventListener('change', function(e) {
+        localStorage.setItem(NOISE_SUPPRESSION_KEY, e.target.value);
       });
       // Clear (×) buttons
       document.querySelectorAll('.input-clear').forEach(function(btn) {

@@ -38,6 +38,8 @@ const METERED_STATUS_STORE_KEY  = 'metered-status';  // 'ok' | 'error' | null
 const METERED_COUNT_STORE_KEY   = 'metered-count';   // number of servers when ok
 const METERED_SERVERS_STORE_KEY = 'metered-servers'; // JSON array of ICE server objects
 
+const NOISE_SUPPRESSION_KEY = 'noise-suppression'; // 'rnnoise' | 'browser' | 'off'
+
 // --- Audio focus (Android) ---------------------------------------------------
 
 async function requestAudioFocus() {
@@ -1618,6 +1620,81 @@ function updateSelfTalking(active) {
 
 // --- Audio helpers -----------------------------------------------------------
 
+// RNNoise AudioWorklet state (shared across mic acquisitions)
+let _rnnoiseCtx = null;       // AudioContext for the RNNoise pipeline
+let _rnnoiseNode = null;      // AudioWorkletNode
+let _rnnoiseReady = false;    // true once WASM is loaded
+let _rnnoiseInitPromise = null;
+
+async function initRNNoise() {
+  if (_rnnoiseReady) return true;
+  if (_rnnoiseInitPromise) return _rnnoiseInitPromise;
+
+  _rnnoiseInitPromise = (async () => {
+    try {
+      // AudioWorklet requires a running AudioContext at 48kHz (RNNoise native rate)
+      _rnnoiseCtx = new AudioContext({ sampleRate: 48000 });
+
+      // Register the worklet processor
+      await _rnnoiseCtx.audioWorklet.addModule('assets/rnnoise-processor.js');
+
+      // Load WASM binary and compile it (main thread can use WebAssembly.compileStreaming)
+      const wasmModule = await WebAssembly.compileStreaming(fetch('assets/rnnoise.wasm'));
+
+      // Create the worklet node
+      _rnnoiseNode = new AudioWorkletNode(_rnnoiseCtx, 'rnnoise-processor', {
+        numberOfInputs: 1, numberOfOutputs: 1,
+        outputChannelCount: [1]
+      });
+
+      // Send compiled WASM module to the worklet thread
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('RNNoise init timeout')), 5000);
+        _rnnoiseNode.port.onmessage = (e) => {
+          if (e.data.type === 'ready') { clearTimeout(timeout); resolve(); }
+          else if (e.data.type === 'error') { clearTimeout(timeout); reject(new Error(e.data.message)); }
+        };
+        _rnnoiseNode.port.postMessage({ type: 'wasm-module', module: wasmModule });
+      });
+
+      _rnnoiseReady = true;
+      devLog('[RNNoise] ✓ initialized');
+      return true;
+    } catch (err) {
+      devLog('[RNNoise] ✗ init failed: ' + err.message);
+      _rnnoiseCtx = null;
+      _rnnoiseNode = null;
+      _rnnoiseInitPromise = null;
+      return false;
+    }
+  })();
+  return _rnnoiseInitPromise;
+}
+
+function applyRNNoise(stream) {
+  if (!_rnnoiseCtx || !_rnnoiseNode || !_rnnoiseReady) return stream;
+
+  // Resume context if suspended (browser autoplay policy)
+  if (_rnnoiseCtx.state === 'suspended') _rnnoiseCtx.resume();
+
+  const source = _rnnoiseCtx.createMediaStreamSource(stream);
+  const dest = _rnnoiseCtx.createMediaStreamDestination();
+
+  source.connect(_rnnoiseNode);
+  _rnnoiseNode.connect(dest);
+
+  // Keep a reference so we can disconnect later
+  dest.stream._rnnoiseSource = source;
+  dest.stream._rnnoiseDest = dest;
+  dest.stream._rnnoiseOriginal = stream;
+
+  return dest.stream;
+}
+
+function getNoiseSuppressionMode() {
+  return localStorage.getItem(NOISE_SUPPRESSION_KEY) || 'rnnoise';
+}
+
 async function getMicStream() {
   // Normalise legacy webkit prefix (some older iOS/Android WebViews)
   const getUserMedia = (
@@ -1633,11 +1710,27 @@ async function getMicStream() {
           : null
   );
   if (!getUserMedia) throw new Error('Microphone access is not available in this environment.');
-  return getUserMedia({
-    audio: { channelCount: 1, sampleRate: 16000,
-             echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+
+  const mode = getNoiseSuppressionMode();
+  const useBrowserNS = (mode === 'browser');
+  const useRNNoise = (mode === 'rnnoise');
+
+  const rawStream = await getUserMedia({
+    audio: { channelCount: 1, sampleRate: useRNNoise ? 48000 : 16000,
+             echoCancellation: true,
+             noiseSuppression: useBrowserNS,
+             autoGainControl: true },
     video: false,
   });
+
+  if (useRNNoise) {
+    const ok = await initRNNoise();
+    if (ok) return applyRNNoise(rawStream);
+    // Fallback to raw stream if RNNoise fails
+    devLog('[RNNoise] Falling back to raw stream');
+  }
+
+  return rawStream;
 }
 
 function attachAudio(peerId, remoteStream) {
@@ -3087,6 +3180,7 @@ window.addEventListener('DOMContentLoaded', function() {
     $('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
     $('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
     $('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
+    $('select-noise-suppression').value = getNoiseSuppressionMode();
     $('input-presence-token').value = presenceToken();
     // Restore saved TURN test result
     var savedTurnStatus = localStorage.getItem(METERED_STATUS_STORE_KEY);
@@ -3185,6 +3279,9 @@ window.addEventListener('DOMContentLoaded', function() {
     localStorage.removeItem(METERED_STATUS_STORE_KEY);
     $('turn-test-status').textContent = '';
     updateTurnBadge();
+  });
+  $('select-noise-suppression').addEventListener('change', function(e) {
+    localStorage.setItem(NOISE_SUPPRESSION_KEY, e.target.value);
   });
   $('btn-open-settings').addEventListener('click', function() {
     // On web/mobile, open settings.

@@ -155,6 +155,22 @@
 
           <div class="settings-separator"></div>
 
+          <!-- Noise suppression -->
+          <p class="settings-group-title">Noise Suppression</p>
+          <p class="settings-desc">
+            Reduce background noise from your microphone. RNNoise uses ML-based suppression for best results.
+          </p>
+          <div class="settings-field">
+            <label for="select-noise-suppression">Mode</label>
+            <select id="select-noise-suppression" class="org-select">
+              <option value="rnnoise">RNNoise (ML-powered)</option>
+              <option value="browser">Browser built-in</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+
+          <div class="settings-separator"></div>
+
           <!-- TURN — collapsed by default -->
           <details class="turn-section" id="turn-details">
             <summary>Advanced</summary>
