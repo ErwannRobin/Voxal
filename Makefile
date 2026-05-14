@@ -137,12 +137,16 @@ release:
 	APP_TAR_NAME=$$(basename "$$APP_TAR"); \
 	echo '{ "version": "'$$VERSION'", "platforms": { "darwin-aarch64": { "url": "https://github.com/ErwannRobin/Voxel/releases/download/v'$$VERSION'/'$$APP_TAR_NAME'", "signature": "'$$SIG_CONTENT'" }, "darwin-x86_64": { "url": "https://github.com/ErwannRobin/Voxel/releases/download/v'$$VERSION'/'$$APP_TAR_NAME'", "signature": "'$$SIG_CONTENT'" } } }' > $$BUNDLE_DIR/latest.json; \
 	echo "→ Creating GitHub release v$$VERSION…"; \
-	ASSETS="$$APP_TAR $$SIG $$BUNDLE_DIR/latest.json"; \
+	MOBILE_ZIP="src-tauri/target/release/bundle/voxal-mobile-$$VERSION.zip"; \
+	(cd src && zip -qr "../$$MOBILE_ZIP" .); \
+	MOBILE_CHECKSUM=$$(shasum -a 256 "$$MOBILE_ZIP" | cut -d' ' -f1); \
+	echo '{"version":"'$$VERSION'","url":"https://github.com/ErwannRobin/Voxel/releases/download/v'$$VERSION'/voxal-mobile-'$$VERSION'.zip","checksum":"'$$MOBILE_CHECKSUM'"}' > src-tauri/target/release/bundle/mobile-update.json; \
+	ASSETS="$$APP_TAR $$SIG $$BUNDLE_DIR/latest.json $$MOBILE_ZIP src-tauri/target/release/bundle/mobile-update.json"; \
 	if [ -n "$$DMG" ]; then ASSETS="$$ASSETS $$DMG"; fi; \
 	gh release create "v$$VERSION" $$ASSETS \
 		--title "Voxal v$$VERSION" \
 		--generate-notes; \
-	echo "✓ Published v$$VERSION to GitHub Releases"
+	echo "✓ Published v$$VERSION to GitHub Releases (desktop + mobile OTA)"
 
 check:
 	cd src-tauri && cargo check

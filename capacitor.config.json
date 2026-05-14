@@ -7,6 +7,10 @@
       "overlaysWebView": true,
       "style": "DARK",
       "backgroundColor": "#16161e"
+    },
+    "CapacitorUpdater": {
+      "autoUpdate": true,
+      "updateUrl": "https://github.com/ErwannRobin/Voxel/releases/latest/download/mobile-update.json"
     }
   }
 }

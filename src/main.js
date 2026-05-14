@@ -2757,6 +2757,11 @@ async function joinChannel(item) {
 
 window.addEventListener('DOMContentLoaded', function() {
 
+  // Notify capacitor-updater that the bundle loaded successfully (enables auto-revert on crash)
+  if (IS_NATIVE_MOBILE && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorUpdater) {
+    window.Capacitor.Plugins.CapacitorUpdater.notifyAppReady();
+  }
+
   // Dev log panel: show/hide based on current dev mode state
   updateDevLogPanel();
   var toggleBtn = document.getElementById('btn-toggle-dev-log');
