@@ -14,38 +14,72 @@
 </head>
 <body>
   <video id="v" autoplay playsinline></video>
-  <div class="toolbar">
+  <div class="toolbar" id="toolbar">
     <button onclick="popIn()">⬇ Pop In</button>
   </div>
   <script>
     var v = document.getElementById('v');
+    var pc = null;
 
-    function attachStream() {
+    // Detect Tauri vs plain web
+    var isTauri = !!window.__TAURI__;
+
+    if (isTauri) {
+      // Hide "Pop In" button on native desktop (user just closes the window)
+      document.getElementById('toolbar').style.display = 'none';
+      // --- Tauri: use Tauri events + WebRTC loopback ---
+      var tauriEvent = window.__TAURI__.event;
+
+      tauriEvent.listen('video-main-signal', async function(ev) {
+        var msg = ev.payload;
+        if (msg.type === 'offer') {
+          pc = new RTCPeerConnection();
+          pc.ontrack = function(e) {
+            v.srcObject = e.streams[0] || new MediaStream([e.track]);
+          };
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+          var answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          await new Promise(function(resolve) {
+            if (pc.iceGatheringState === 'complete') return resolve();
+            pc.onicecandidate = function(ev) { if (!ev.candidate) resolve(); };
+          });
+          tauriEvent.emit('video-popup-signal', {
+            type: 'answer',
+            sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
+          });
+        }
+        if (msg.type === 'close') {
+          if (pc) { pc.close(); pc = null; }
+          window.close();
+        }
+      });
+
+      // Signal readiness to main window
+      tauriEvent.emit('video-popup-signal', { type: 'ready' });
+
+    } else {
+      // --- Web fallback: window.opener ---
       if (window.opener && window.opener._voxalVideoStream) {
         v.srcObject = window.opener._voxalVideoStream;
-        return true;
       }
-      return false;
-    }
-
-    // Try immediately, then retry a few times (stream may not be set yet)
-    if (!attachStream()) {
-      var attempts = 0;
-      var interval = setInterval(function() {
-        attempts++;
-        if (attachStream() || attempts > 20) clearInterval(interval);
-      }, 100);
     }
 
     function popIn() {
-      if (window.opener && window.opener._voxalVideoPopIn) {
+      if (isTauri) {
+        window.__TAURI__.event.emit('video-popup-signal', { type: 'pop-in' });
+        if (pc) { pc.close(); pc = null; }
+      } else if (window.opener && window.opener._voxalVideoPopIn) {
         window.opener._voxalVideoPopIn();
       }
       window.close();
     }
 
     window.addEventListener('beforeunload', function() {
-      if (window.opener && window.opener._voxalVideoPopIn) {
+      if (isTauri) {
+        window.__TAURI__.event.emit('video-popup-signal', { type: 'pop-in' });
+        if (pc) pc.close();
+      } else if (window.opener && window.opener._voxalVideoPopIn) {
         window.opener._voxalVideoPopIn();
       }
     });

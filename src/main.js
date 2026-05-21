@@ -2008,10 +2008,9 @@ function attachRemoteVideo(peerId, remoteStream) {
   var conn = connections.get(peerId);
   if (conn) conn.remoteVideoStream = remoteStream;
   updatePeerList();
-  // Auto-open viewer if it's already pointing at this peer
-  if (_videoViewerPeerId === peerId) {
-    var vid = document.getElementById('video-viewer-element');
-    if (vid) vid.srcObject = remoteStream;
+  // On web/mobile, auto-open the integrated viewer
+  if (!IS_TAURI_DESKTOP && (!_videoViewerPeerId || _videoViewerPeerId === peerId)) {
+    openVideoViewer(peerId);
   }
 }
 
@@ -2032,33 +2031,41 @@ function markPeerVideoActive(peerId, active) {
 function openVideoViewer(peerId) {
   var conn = connections.get(peerId);
   if (!conn || !conn.remoteVideoStream) return;
+  _videoViewerPeerId = peerId;
+  _videoPopoutWindow = null;
+
+  // On Tauri desktop, open directly in pop-out window (no integrated panel)
+  if (IS_TAURI_DESKTOP) {
+    popOutVideoViewer();
+    return;
+  }
+
   var panel = document.getElementById('video-viewer-panel');
   var vid   = document.getElementById('video-viewer-element');
   if (!panel || !vid) return;
   vid.srcObject = conn.remoteVideoStream;
   panel.classList.remove('hidden');
-  _videoViewerPeerId = peerId;
-  _videoPopoutWindow = null;
-  // Update pop-out button visibility
   var popoutBtn = document.getElementById('video-viewer-popout');
   if (popoutBtn) popoutBtn.classList.remove('hidden');
   // On mobile, request fullscreen
-  if (IS_NATIVE_MOBILE || (!IS_TAURI_DESKTOP && /Mobi|Android/i.test(navigator.userAgent))) {
+  if (IS_NATIVE_MOBILE || /Mobi|Android/i.test(navigator.userAgent)) {
     if (panel.requestFullscreen) panel.requestFullscreen().catch(function() {});
   }
 }
+
+var _videoLoopbackPC = null;
+var _videoPopoutUnlisten = null;
 
 function popOutVideoViewer() {
   if (!_videoViewerPeerId) return;
   var conn = connections.get(_videoViewerPeerId);
   if (!conn || !conn.remoteVideoStream) return;
 
-  if (IS_TAURI_DESKTOP) {
-    // macOS: use Picture-in-Picture API (native floating window)
+  // Web (non-Tauri): use Picture-in-Picture API
+  if (!IS_TAURI_DESKTOP) {
     var vid = document.getElementById('video-viewer-element');
-    if (vid && vid.requestPictureInPicture) {
+    if (vid && document.pictureInPictureEnabled && vid.requestPictureInPicture) {
       vid.requestPictureInPicture().then(function() {
-        // Hide the integrated panel while PiP is active
         var panel = document.getElementById('video-viewer-panel');
         if (panel) panel.classList.add('hidden');
       }).catch(function(e) {
@@ -2069,17 +2076,68 @@ function popOutVideoViewer() {
     return;
   }
 
-  // Web: open a popup window with the video stream
-  window._voxalVideoStream = conn.remoteVideoStream;
-  _videoPopoutWindow = window.open('video-popup.html', 'voxal-video', 'width=640,height=480,resizable=yes');
+  // Tauri: open a WebviewWindow and relay video via WebRTC loopback + Tauri events
+  var stream = conn.remoteVideoStream;
+  var tauriEvent = window.__TAURI__.event;
+  var peerName = conn.pseudo || 'Camera';
 
-  if (_videoPopoutWindow) {
-    // Hide integrated panel
-    var panel = document.getElementById('video-viewer-panel');
-    if (panel) panel.classList.add('hidden');
-  } else {
-    showCopyToast('Popup blocked — allow popups for this site');
-  }
+  // Register listener FIRST, then open window to avoid race
+  tauriEvent.listen('video-popup-signal', async function(ev) {
+    var msg = ev.payload;
+    if (msg.type === 'ready') {
+      _videoLoopbackPC = new RTCPeerConnection();
+      stream.getTracks().forEach(function(t) { _videoLoopbackPC.addTrack(t, stream); });
+      var offer = await _videoLoopbackPC.createOffer();
+      await _videoLoopbackPC.setLocalDescription(offer);
+      await new Promise(function(resolve) {
+        if (_videoLoopbackPC.iceGatheringState === 'complete') return resolve();
+        _videoLoopbackPC.onicecandidate = function(ev) { if (!ev.candidate) resolve(); };
+      });
+      tauriEvent.emit('video-main-signal', {
+        type: 'offer',
+        sdp: { type: _videoLoopbackPC.localDescription.type, sdp: _videoLoopbackPC.localDescription.sdp }
+      });
+    }
+    if (msg.type === 'answer') {
+      if (_videoLoopbackPC) {
+        await _videoLoopbackPC.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+      }
+    }
+    if (msg.type === 'pop-in') {
+      _cleanupLoopback();
+      _videoViewerPeerId = null;
+    }
+  }).then(function(unlisten) {
+    _videoPopoutUnlisten = unlisten;
+    // Open the popup AFTER listener is ready
+    var WebviewWindow = window.__TAURI__.webviewWindow.WebviewWindow;
+    var popWin = new WebviewWindow('video-popup', {
+      url: 'video-popup.html',
+      title: peerName,
+      width: 640,
+      height: 480,
+      resizable: true,
+      alwaysOnTop: true,
+    });
+    popWin.once('tauri://destroyed', function() {
+      _cleanupLoopback();
+      _videoViewerPeerId = null;
+    });
+    popWin.once('tauri://error', function(e) {
+      console.error('[video] Window creation error:', e);
+      _cleanupLoopback();
+    });
+  }).catch(function(err) {
+    console.error('[video] Failed to set up pop-out:', err);
+  });
+
+  var panel = document.getElementById('video-viewer-panel');
+  if (panel) panel.classList.add('hidden');
+}
+
+function _cleanupLoopback() {
+  if (_videoLoopbackPC) { _videoLoopbackPC.close(); _videoLoopbackPC = null; }
+  if (_videoPopoutUnlisten) { _videoPopoutUnlisten(); _videoPopoutUnlisten = null; }
 }
 
 // Called by the popup when user clicks "Pop In" or closes the popup
@@ -2106,6 +2164,7 @@ function closeVideoViewer() {
   }
   _videoPopoutWindow = null;
   window._voxalVideoStream = null;
+  _cleanupLoopback();
   _videoViewerPeerId = null;
   if (document.fullscreenElement) document.exitFullscreen().catch(function() {});
 }
