@@ -16,6 +16,9 @@
  *   heartbeat    { at, deputyId, successorIds }   host <-> peers
  *   redirect     { hostId, hostPseudo }          non-host -> misdirected joiner
  *   room-published { roomId }                   host -> all (lobby ID changed)
+ *   video-mode   { enabled }                    host -> peer (toggle video mode, dev only)
+ *   video-offer  { peerId }                     peer -> host (relayed) — peer started camera
+ *   video-stop   { peerId }                     peer -> host (relayed) — peer stopped camera
  *
  * Host migration:
  *   When the host's DataConnection closes (or heartbeat times out), every peer runs
@@ -468,6 +471,12 @@ let recordingShortcut = false;
 let myPseudo          = loadInitialPseudo();
 let editingSelfPseudo = false;
 let _cancelJoin       = null; // set during joinRoom(), called by Cancel button
+
+// --- Video prototype (dev mode, 1:1) -----------------------------------------
+var videoModeEnabled  = false;   // host toggled video mode for the room
+var localVideoActive  = false;   // this peer is sharing their camera
+var localVideoStream  = null;    // MediaStream (video only)
+var _videoViewerPeerId = null;   // whose video is displayed in viewer
 
 // --- WebRTC stats polling ---
 var _statsIntervalId  = null;
@@ -1525,6 +1534,21 @@ function updatePeerList() {
       div.appendChild(peerMain);
       appendCopyPeerButton(div, actualPeerId, label);
       appendWebrtcStats(div, actualPeerId);
+      // Video camera icon (dev mode video prototype)
+      if (videoModeEnabled && actualPeerId) {
+        var peerConn = connections.get(actualPeerId);
+        if (peerConn && peerConn.videoActive) {
+          var camBtn = document.createElement('button');
+          camBtn.className = 'btn-icon peer-cam-btn';
+          camBtn.title = 'View camera';
+          camBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>';
+          camBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            openVideoViewer(actualPeerId);
+          });
+          div.appendChild(camBtn);
+        }
+      }
       // Apply cached ICE dot color immediately
       const cachedConn = connections.get(actualPeerId);
       if (cachedConn && cachedConn.webrtcStats && cachedConn.webrtcStats.iceType) {
@@ -1864,7 +1888,175 @@ function shouldAcceptJoinerDataConnection(joinerId) {
   return accepted;
 }
 
+// --- Video prototype helpers -------------------------------------------------
+
+function updateVideoModeUI() {
+  var toggleBtn = document.getElementById('btn-video-mode');
+  var shareBtn  = document.getElementById('btn-share-camera');
+  if (toggleBtn) {
+    toggleBtn.classList.toggle('hidden', !isDevModeEnabled() || !isHost);
+    toggleBtn.classList.toggle('active', videoModeEnabled);
+    toggleBtn.textContent = videoModeEnabled ? '📹 ON' : '📹 OFF';
+    toggleBtn.setAttribute('aria-pressed', String(videoModeEnabled));
+  }
+  if (shareBtn) {
+    shareBtn.classList.toggle('hidden', !videoModeEnabled);
+    shareBtn.textContent = localVideoActive ? '⏹ Stop Camera' : '📷 Share Camera';
+    shareBtn.classList.toggle('active', localVideoActive);
+  }
+  updatePeerList();
+}
+
+function toggleVideoMode() {
+  if (!isHost || !inRoom) return;
+  videoModeEnabled = !videoModeEnabled;
+  // Notify the other peer
+  connections.forEach(function(c) {
+    if (c.data) c.data.send({ type: 'video-mode', enabled: videoModeEnabled });
+  });
+  if (!videoModeEnabled) stopVideoShare();
+  updateVideoModeUI();
+}
+
+async function startVideoShare() {
+  if (localVideoActive) return;
+  try {
+    localVideoStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false
+    });
+  } catch (e) {
+    showCopyToast('Camera access denied');
+    return;
+  }
+  localVideoActive = true;
+  // Open a video MediaConnection to each connected peer
+  connections.forEach(function(c, peerId) {
+    if (!peer || peerId === peer.id) return;
+    var videoCall = peer.call(peerId, localVideoStream, { metadata: { type: 'video' } });
+    if (!videoCall) return;
+    videoCall.on('stream', function(remote) { attachRemoteVideo(peerId, remote); });
+    videoCall.on('close', function() { detachRemoteVideo(peerId); });
+    c.videoMedia = videoCall;
+  });
+  // Signal via data channel
+  var msg = { type: 'video-offer', peerId: peer.id };
+  if (isHost) {
+    connections.forEach(function(c) { if (c.data) c.data.send(msg); });
+  } else {
+    var hc = connections.get(roomCode);
+    if (hc && hc.data) hc.data.send(msg);
+  }
+  updateVideoModeUI();
+}
+
+function stopVideoShare() {
+  if (!localVideoActive && !localVideoStream) return;
+  if (localVideoStream) {
+    localVideoStream.getTracks().forEach(function(t) { t.stop(); });
+    localVideoStream = null;
+  }
+  connections.forEach(function(c) {
+    if (c.videoMedia) { c.videoMedia.close(); c.videoMedia = null; }
+  });
+  if (peer && inRoom) {
+    var msg = { type: 'video-stop', peerId: peer.id };
+    if (isHost) {
+      connections.forEach(function(c) { if (c.data) c.data.send(msg); });
+    } else {
+      var hc = connections.get(roomCode);
+      if (hc && hc.data) hc.data.send(msg);
+    }
+  }
+  localVideoActive = false;
+  closeVideoViewer();
+  updateVideoModeUI();
+}
+
+function handleIncomingVideoCall(call) {
+  var answerStream = localVideoStream || new MediaStream();
+  call.answer(answerStream);
+  call.on('stream', function(remote) {
+    attachRemoteVideo(call.peer, remote);
+    markPeerVideoActive(call.peer, true);
+  });
+  call.on('close', function() {
+    detachRemoteVideo(call.peer);
+    markPeerVideoActive(call.peer, false);
+  });
+  call.on('error', function(err) { console.warn('[video-call]', err); });
+  var conn = connections.get(call.peer);
+  if (conn) conn.videoMedia = call;
+}
+
+function attachRemoteVideo(peerId, remoteStream) {
+  var conn = connections.get(peerId);
+  if (conn) conn.remoteVideoStream = remoteStream;
+  updatePeerList();
+  // Auto-open viewer if it's already pointing at this peer
+  if (_videoViewerPeerId === peerId) {
+    var vid = document.getElementById('video-viewer-element');
+    if (vid) vid.srcObject = remoteStream;
+  }
+}
+
+function detachRemoteVideo(peerId) {
+  var conn = connections.get(peerId);
+  if (conn) { conn.remoteVideoStream = null; conn.videoActive = false; }
+  if (_videoViewerPeerId === peerId) closeVideoViewer();
+  updatePeerList();
+}
+
+function markPeerVideoActive(peerId, active) {
+  var conn = connections.get(peerId);
+  if (conn) conn.videoActive = active;
+  if (!active && _videoViewerPeerId === peerId) closeVideoViewer();
+  updatePeerList();
+}
+
+function openVideoViewer(peerId) {
+  var conn = connections.get(peerId);
+  if (!conn || !conn.remoteVideoStream) return;
+  var panel = document.getElementById('video-viewer-panel');
+  var vid   = document.getElementById('video-viewer-element');
+  if (!panel || !vid) return;
+  vid.srcObject = conn.remoteVideoStream;
+  panel.classList.remove('hidden');
+  _videoViewerPeerId = peerId;
+  // On mobile, request fullscreen
+  if (IS_NATIVE_MOBILE || (!IS_TAURI_DESKTOP && /Mobi|Android/i.test(navigator.userAgent))) {
+    if (panel.requestFullscreen) panel.requestFullscreen().catch(function() {});
+  }
+}
+
+function closeVideoViewer() {
+  var panel = document.getElementById('video-viewer-panel');
+  var vid   = document.getElementById('video-viewer-element');
+  if (panel) panel.classList.add('hidden');
+  if (vid) vid.srcObject = null;
+  _videoViewerPeerId = null;
+  if (document.fullscreenElement) document.exitFullscreen().catch(function() {});
+}
+
+function resetVideoState() {
+  stopVideoShare();
+  videoModeEnabled = false;
+  localVideoActive = false;
+  localVideoStream = null;
+  _videoViewerPeerId = null;
+  connections.forEach(function(c) {
+    c.videoMedia = null;
+    c.remoteVideoStream = null;
+    c.videoActive = false;
+  });
+  closeVideoViewer();
+  updateVideoModeUI();
+}
+
+// --- End video prototype helpers ---------------------------------------------
+
 function leaveRoom() {
+  resetVideoState();
   // If this host is the last participant in a published lobby, delete it from the API
   if (isHost && _publishSecret && connections.size === 0) {
     unpublishRoom();
@@ -2330,6 +2522,11 @@ function connectToHost(hostId, opts) {
 }
 
 function handleIncomingCall(call) {
+  // Route video calls to the video handler
+  if (call.metadata && call.metadata.type === 'video') {
+    handleIncomingVideoCall(call);
+    return;
+  }
   call.answer(stream);
   call.on('stream', function(remote) {
     attachAudio(call.peer, remote);
@@ -2412,6 +2609,11 @@ function handleJoinerDataConnection(dataConn) {
         dataConn.send({ type: 'room-published', roomId: _publishedRoomId, secret: isDeputy ? (_publishSecret || null) : null });
       }
 
+      // Inform joiner of video mode if enabled
+      if (videoModeEnabled) {
+        dataConn.send({ type: 'video-mode', enabled: true });
+      }
+
       if (!dataConn._voxalExistingPeer) {
         connections.forEach(function(c, id) {
           if (id !== joinerId && c.data) c.data.send({ type: 'peer-joined', peerId: joinerId, pseudo: pseudo });
@@ -2441,6 +2643,18 @@ function handleJoinerDataConnection(dataConn) {
       updatePeerList();
       connections.forEach(function(c, id) {
         if (id !== joinerId && c.data) c.data.send({ type: 'peer-renamed', peerId: joinerId, pseudo: pseudo });
+      });
+    } else if (msg.type === 'video-offer') {
+      // Relay to all other peers
+      markPeerVideoActive(joinerId, true);
+      connections.forEach(function(c, id) {
+        if (id !== joinerId && c.data) c.data.send({ type: 'video-offer', peerId: joinerId });
+      });
+    } else if (msg.type === 'video-stop') {
+      // Relay to all other peers
+      markPeerVideoActive(joinerId, false);
+      connections.forEach(function(c, id) {
+        if (id !== joinerId && c.data) c.data.send({ type: 'video-stop', peerId: joinerId });
       });
     }
   });
@@ -2519,6 +2733,7 @@ async function createRoom(onJoined) {
       showScreen('room');
       updatePeerList();
       updateShortcutDisplay();
+      updateVideoModeUI();
       startStatsPolling();
       saveRejoinSnapshot();
       iframeEmit({ type: 'joined', roomCode: id, peerId: id });
@@ -2602,6 +2817,14 @@ function handleHostMessage(msg) {
     _publishedRoomId = msg.roomId || null;
     _publishSecret = msg.secret || null;
     updateRoomHeader();
+  } else if (msg.type === 'video-mode') {
+    videoModeEnabled = !!msg.enabled;
+    if (!videoModeEnabled) stopVideoShare();
+    updateVideoModeUI();
+  } else if (msg.type === 'video-offer') {
+    markPeerVideoActive(msg.peerId, true);
+  } else if (msg.type === 'video-stop') {
+    markPeerVideoActive(msg.peerId, false);
   }
 }
 
@@ -2737,6 +2960,7 @@ function finishJoin(targetHostId, hostData) {
   showScreen('room');
   updatePeerList();
   updateShortcutDisplay();
+  updateVideoModeUI();
   startStatsPolling();
   iframeEmit({ type: 'joined', roomCode: targetHostId, peerId: peer.id });
 }
@@ -3311,6 +3535,7 @@ window.addEventListener('DOMContentLoaded', function() {
       devToggleModal.classList.toggle('active', on);
       devToggleModal.textContent = on ? 'ON' : 'OFF';
       updateDevLogPanel();
+      if (inRoom) updateVideoModeUI();
     });
   }
 
@@ -3370,6 +3595,7 @@ window.addEventListener('DOMContentLoaded', function() {
       updateDevLogPanel();
       if (inRoom) {
         if (isDevModeEnabled()) startStatsPolling(); else stopStatsPolling();
+        updateVideoModeUI();
         updatePeerList();
       }
       return;
@@ -3574,6 +3800,35 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-freehand').addEventListener('click', function() { setFreeHand(!freeHandMode); });
   $('btn-edit-shortcut').addEventListener('click', startRecordingShortcut);
   $('btn-cancel-shortcut').addEventListener('click', stopRecordingShortcut);
+
+  // Video prototype buttons
+  $('btn-video-mode').addEventListener('click', toggleVideoMode);
+  $('btn-share-camera').addEventListener('click', function() {
+    if (localVideoActive) stopVideoShare(); else startVideoShare();
+  });
+  $('video-viewer-close').addEventListener('click', closeVideoViewer);
+
+  // Make video viewer panel draggable
+  (function() {
+    var titlebar = document.getElementById('video-viewer-titlebar');
+    var panel = document.getElementById('video-viewer-panel');
+    var dragging = false, startX, startY, startLeft, startTop;
+    titlebar.addEventListener('mousedown', function(e) {
+      dragging = true;
+      startX = e.clientX; startY = e.clientY;
+      var rect = panel.getBoundingClientRect();
+      startLeft = rect.left; startTop = rect.top;
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', function(e) {
+      if (!dragging) return;
+      panel.style.left = (startLeft + e.clientX - startX) + 'px';
+      panel.style.top = (startTop + e.clientY - startY) + 'px';
+      panel.style.right = 'auto';
+      panel.style.bottom = 'auto';
+    });
+    document.addEventListener('mouseup', function() { dragging = false; });
+  })();
 
   var lastSpaceRelease = 0;
   var ignoreSpaceUp = false;
