@@ -216,6 +216,10 @@
           <p class="settings-desc" style="margin-top:4px">
             Shows peer UUIDs, copy buttons, and Host / Deputy labels in the room.
           </p>
+          <div class="settings-field" id="video-mode-setting" style="margin-top:12px; display:none">
+            <label for="toggle-video-mode" style="flex:1">Video mode (1:1)</label>
+            <button id="toggle-video-mode" class="toggle-btn" role="switch" aria-pressed="false">OFF</button>
+          </div>
         </div>
       </details>
       </div><!-- end .prefs-scrollable -->
@@ -297,19 +301,37 @@
       $id('select-noise-suppression').value = localStorage.getItem(NOISE_SUPPRESSION_KEY) || 'rnnoise';
 
       // --- Dev mode toggle ---
+      const VIDEO_MODE_KEY = 'video-mode-enabled';
       (function() {
         var btn = $id('toggle-dev-mode');
-        function sync() {
+        var videoRow = $id('video-mode-setting');
+        var videoBtn = $id('toggle-video-mode');
+        var details = document.querySelector('details.turn-section');
+        function syncDev() {
           var on = localStorage.getItem(DEV_MODE_KEY) === 'true';
           btn.setAttribute('aria-checked', String(on));
           btn.classList.toggle('active', on);
           btn.textContent = on ? 'ON' : 'OFF';
+          videoRow.style.display = on ? '' : 'none';
+          if (on && details) details.open = true;
         }
-        sync();
+        function syncVideo() {
+          var on = localStorage.getItem(VIDEO_MODE_KEY) === 'true';
+          videoBtn.setAttribute('aria-pressed', String(on));
+          videoBtn.classList.toggle('active', on);
+          videoBtn.textContent = on ? 'ON' : 'OFF';
+        }
+        syncDev();
+        syncVideo();
         btn.addEventListener('click', function() {
           var on = localStorage.getItem(DEV_MODE_KEY) === 'true';
           localStorage.setItem(DEV_MODE_KEY, String(!on));
-          sync();
+          syncDev();
+        });
+        videoBtn.addEventListener('click', function() {
+          var on = localStorage.getItem(VIDEO_MODE_KEY) === 'true';
+          localStorage.setItem(VIDEO_MODE_KEY, String(!on));
+          syncVideo();
         });
       })();
 

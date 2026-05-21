@@ -81,6 +81,7 @@ const SERVICE_URL_KEY           = 'service-url';
 const PSEUDO_KEY                = 'pseudo';
 const PSEUDO_SESSION_KEY        = 'pseudo-session';
 const DEV_MODE_KEY              = 'dev-mode';
+const VIDEO_MODE_KEY            = 'video-mode-enabled';
 const REJOIN_SNAPSHOT_KEY       = 'rejoin-snapshot';
 const REJOIN_TTL_MS             = 30 * 60 * 1000; // 30 minutes
 var   _rejoinDismissed          = false;
@@ -473,7 +474,7 @@ let editingSelfPseudo = false;
 let _cancelJoin       = null; // set during joinRoom(), called by Cancel button
 
 // --- Video prototype (dev mode, 1:1) -----------------------------------------
-var videoModeEnabled  = false;   // host toggled video mode for the room
+var videoModeEnabled  = localStorage.getItem(VIDEO_MODE_KEY) === 'true';
 var localVideoActive  = false;   // this peer is sharing their camera
 var localVideoStream  = null;    // MediaStream (video only)
 var _videoViewerPeerId = null;   // whose video is displayed in viewer
@@ -1139,22 +1140,27 @@ function displayShortcut(raw) {
     .replace('Backslash', '\\\\').replace("Quote", "'").replace('Minus', '-').replace('Equal', '=');
 }
 
+var _editShortcutIconHtml = '<button id="btn-edit-shortcut" class="btn-icon shortcut-edit-inline" title="Change shortcut"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></button>';
+
+function pttHintHtml(prefix, suffix) {
+  return prefix + '<kbd id="shortcut-hint-kbd">' + displayShortcut(shortcutStr) + '</kbd>' + _editShortcutIconHtml + suffix;
+}
+
 function updateShortcutDisplay() {
   const label = displayShortcut(shortcutStr);
-  $('shortcut-kbd').textContent = label;
+  const kbd = document.getElementById('shortcut-kbd');
+  if (kbd) kbd.textContent = label;
   const hintKbd = $('shortcut-hint-kbd');
   if (hintKbd) hintKbd.textContent = label;
 }
 
 function startRecordingShortcut() {
   recordingShortcut = true;
-  $('shortcut-normal').classList.add('hidden');
   $('shortcut-recording').classList.remove('hidden');
 }
 
 function stopRecordingShortcut() {
   recordingShortcut = false;
-  $('shortcut-normal').classList.remove('hidden');
   $('shortcut-recording').classList.add('hidden');
 }
 
@@ -1803,7 +1809,6 @@ function setFreeHand(active) {
   if (audioTrack) audioTrack.enabled = active;
 
   const btn = $('btn-freehand');
-  btn.textContent = active ? 'ON' : 'OFF';
   btn.setAttribute('aria-pressed', String(active));
   btn.classList.toggle('active', active);
   $('ptt-btn').classList.toggle('freehand', active);
@@ -1814,7 +1819,7 @@ function setFreeHand(active) {
     if (isMobile) {
       $('ptt-hint').textContent = 'Free hand · tap to stop';
     } else {
-      $('ptt-hint').innerHTML = 'Free hand · press <kbd id="shortcut-hint-kbd">' + displayShortcut(shortcutStr) + '</kbd> to stop';
+      $('ptt-hint').innerHTML = pttHintHtml('Free hand · press ', ' to stop');
     }
     $('ptt-status').textContent = '\u25cf Live';
   } else {
@@ -1822,7 +1827,7 @@ function setFreeHand(active) {
     if (isMobile) {
       $('ptt-hint').textContent = 'Hold to talk · double-tap for free hand';
     } else {
-      $('ptt-hint').innerHTML = 'Hold <kbd id="shortcut-hint-kbd">' + displayShortcut(shortcutStr) + '</kbd> anywhere to talk · x2 for free hand';
+      $('ptt-hint').innerHTML = pttHintHtml('Hold ', ' anywhere to talk · x2 for free hand');
     }
     $('ptt-status').textContent = '';
   }
@@ -1892,29 +1897,36 @@ function shouldAcceptJoinerDataConnection(joinerId) {
 // --- Video prototype helpers -------------------------------------------------
 
 function updateVideoModeUI() {
-  var toggleBtn = document.getElementById('btn-video-mode');
-  var shareBtn  = document.getElementById('btn-share-camera');
-  if (toggleBtn) {
-    toggleBtn.classList.toggle('hidden', !isDevModeEnabled() || !isHost);
-    toggleBtn.classList.toggle('active', videoModeEnabled);
-    toggleBtn.textContent = videoModeEnabled ? '📹 ON' : '📹 OFF';
-    toggleBtn.setAttribute('aria-pressed', String(videoModeEnabled));
+  // Video mode toggle in settings (visible only when dev mode + host + in room)
+  var settingRow = document.getElementById('video-mode-setting');
+  if (settingRow) {
+    settingRow.classList.toggle('hidden', !isDevModeEnabled());
+    var toggleBtn = document.getElementById('btn-video-mode');
+    if (toggleBtn) {
+      toggleBtn.classList.toggle('active', videoModeEnabled);
+      toggleBtn.textContent = videoModeEnabled ? 'ON' : 'OFF';
+      toggleBtn.setAttribute('aria-pressed', String(videoModeEnabled));
+    }
   }
+  // Share camera button in room controls (visible when video mode is active)
+  var shareBtn = document.getElementById('btn-share-camera');
   if (shareBtn) {
     shareBtn.classList.toggle('hidden', !videoModeEnabled);
-    shareBtn.textContent = localVideoActive ? '⏹ Stop Camera' : '📷 Share Camera';
     shareBtn.classList.toggle('active', localVideoActive);
+    shareBtn.setAttribute('aria-pressed', String(localVideoActive));
   }
-  updatePeerList();
+  if (inRoom) updatePeerList();
 }
 
 function toggleVideoMode() {
-  if (!isHost || !inRoom) return;
   videoModeEnabled = !videoModeEnabled;
-  // Notify the other peer
-  connections.forEach(function(c) {
-    if (c.data) c.data.send({ type: 'video-mode', enabled: videoModeEnabled });
-  });
+  localStorage.setItem(VIDEO_MODE_KEY, String(videoModeEnabled));
+  // Notify peers if we're host in a room
+  if (isHost && inRoom) {
+    connections.forEach(function(c) {
+      if (c.data) c.data.send({ type: 'video-mode', enabled: videoModeEnabled });
+    });
+  }
   if (!videoModeEnabled) stopVideoShare();
   updateVideoModeUI();
 }
@@ -1931,6 +1943,8 @@ async function startVideoShare() {
     return;
   }
   localVideoActive = true;
+  // Auto-activate free hand when sharing camera
+  if (!freeHandMode) setFreeHand(true);
   // Open a video MediaConnection to each connected peer
   connections.forEach(function(c, peerId) {
     if (!peer || peerId === peer.id) return;
@@ -2098,7 +2112,7 @@ function closeVideoViewer() {
 
 function resetVideoState() {
   stopVideoShare();
-  videoModeEnabled = false;
+  videoModeEnabled = localStorage.getItem(VIDEO_MODE_KEY) === 'true';
   localVideoActive = false;
   localVideoStream = null;
   _videoViewerPeerId = null;
@@ -3491,7 +3505,11 @@ window.addEventListener('DOMContentLoaded', function() {
       devBtn.setAttribute('aria-checked', String(devOn));
       devBtn.classList.toggle('active', devOn);
       devBtn.textContent = devOn ? 'ON' : 'OFF';
+      // Auto-open Advanced section if dev mode is on
+      var advDetails = devBtn.closest('details');
+      if (advDetails && devOn) advDetails.open = true;
     }
+    updateVideoModeUI();
     $('modal-settings').classList.remove('hidden');
     if (presenceToken()) loadOrgs();
   }
@@ -3595,8 +3613,14 @@ window.addEventListener('DOMContentLoaded', function() {
       devToggleModal.setAttribute('aria-checked', String(on));
       devToggleModal.classList.toggle('active', on);
       devToggleModal.textContent = on ? 'ON' : 'OFF';
+      // Auto-open Advanced details when dev mode is turned on
+      var advDetails = devToggleModal.closest('details');
+      if (advDetails && on) advDetails.open = true;
       updateDevLogPanel();
-      if (inRoom) updateVideoModeUI();
+      updateVideoModeUI();
+      if (inRoom) {
+        updatePeerList();
+      }
     });
   }
 
@@ -3650,8 +3674,23 @@ window.addEventListener('DOMContentLoaded', function() {
       return;
     }
     var relevantKeys = [PRESENCE_TOKEN_KEY, PRESENCE_ORG_KEY, METERED_APP_STORE_KEY,
-                        METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY];
+                        METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY, VIDEO_MODE_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
+    if (e.key === VIDEO_MODE_KEY) {
+      // Settings window toggled video mode — apply if we're host in a room
+      if (inRoom && isHost) {
+        var newState = e.newValue === 'true';
+        if (newState !== videoModeEnabled) {
+          videoModeEnabled = newState;
+          connections.forEach(function(c) {
+            if (c.data) c.data.send({ type: 'video-mode', enabled: videoModeEnabled });
+          });
+          if (!videoModeEnabled) stopVideoShare();
+          updateVideoModeUI();
+        }
+      }
+      return;
+    }
     if (e.key === DEV_MODE_KEY) {
       updateDevLogPanel();
       if (inRoom) {
@@ -3859,7 +3898,11 @@ window.addEventListener('DOMContentLoaded', function() {
   });
 
   $('btn-freehand').addEventListener('click', function() { setFreeHand(!freeHandMode); });
-  $('btn-edit-shortcut').addEventListener('click', startRecordingShortcut);
+  // Edit shortcut — delegated since the button is dynamically rendered in ptt-hint
+  $('ptt-hint').addEventListener('click', function(e) {
+    var btn = e.target.closest('#btn-edit-shortcut');
+    if (btn) startRecordingShortcut();
+  });
   $('btn-cancel-shortcut').addEventListener('click', stopRecordingShortcut);
 
   // Video prototype buttons
