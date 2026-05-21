@@ -2069,8 +2069,8 @@ function openVideoViewer(peerId) {
   if (!panel || !vid) return;
   vid.srcObject = conn.remoteVideoStream;
   panel.classList.remove('hidden');
-  // On mobile, request fullscreen
-  if (IS_NATIVE_MOBILE || /Mobi|Android/i.test(navigator.userAgent)) {
+  // On Android mobile, request fullscreen
+  if (!IS_NATIVE_MOBILE && /Mobi|Android/i.test(navigator.userAgent)) {
     if (panel.requestFullscreen) panel.requestFullscreen().catch(function() {});
   }
 }
@@ -2083,17 +2083,27 @@ function popOutVideoViewer() {
   var conn = connections.get(_videoViewerPeerId);
   if (!conn || !conn.remoteVideoStream) return;
 
-  // Web (non-Tauri): use Picture-in-Picture API
+  // Web/mobile (non-Tauri): use Picture-in-Picture API
   if (!IS_TAURI_DESKTOP) {
     var vid = document.getElementById('video-viewer-element');
-    if (vid && document.pictureInPictureEnabled && vid.requestPictureInPicture) {
-      vid.requestPictureInPicture().then(function() {
+    if (vid) {
+      // Standard PiP (Chrome, Edge, etc.)
+      if (document.pictureInPictureEnabled && vid.requestPictureInPicture) {
+        vid.requestPictureInPicture().then(function() {
+          var panel = document.getElementById('video-viewer-panel');
+          if (panel) panel.classList.add('hidden');
+        }).catch(function(e) {
+          console.warn('[video] PiP failed:', e.message);
+          showCopyToast('Picture-in-Picture not available');
+        });
+      // iOS WebKit PiP
+      } else if (vid.webkitSetPresentationMode) {
+        vid.webkitSetPresentationMode('picture-in-picture');
         var panel = document.getElementById('video-viewer-panel');
         if (panel) panel.classList.add('hidden');
-      }).catch(function(e) {
-        console.warn('[video] PiP failed:', e.message);
+      } else {
         showCopyToast('Picture-in-Picture not available');
-      });
+      }
     }
     return;
   }
@@ -2189,6 +2199,7 @@ function closeVideoViewer() {
   window._voxalVideoStream = null;
   _cleanupLoopback();
   _videoViewerPeerId = null;
+  // Exit fullscreen if active
   if (document.fullscreenElement) document.exitFullscreen().catch(function() {});
 }
 
@@ -3405,9 +3416,9 @@ window.addEventListener('DOMContentLoaded', function() {
   }
   if (isNativeMobile) {
     document.body.classList.add('platform-mobile');
-    $('shortcut-normal').style.display   = 'none';
-    $('shortcut-recording').style.display = 'none';
-    $('shortcut-spacer').style.display   = 'none';
+    var _sn = $('shortcut-normal'); if (_sn) _sn.style.display = 'none';
+    var _sr = $('shortcut-recording'); if (_sr) _sr.style.display = 'none';
+    var _ss = $('shortcut-spacer'); if (_ss) _ss.style.display = 'none';
     $('ptt-hint').textContent = 'Hold to talk · double-tap for free hand';
     $('btn-copy').title = 'Share room code';
   }
@@ -4056,11 +4067,17 @@ window.addEventListener('DOMContentLoaded', function() {
     if (panel) {
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(function() {});
-      } else {
+      } else if (panel.requestFullscreen) {
         panel.requestFullscreen().catch(function() {});
       }
     }
   });
+
+  // Hide maximize and minimize buttons on iOS (WKWebView doesn't support fullscreen or PiP for WebRTC)
+  if (window.Capacitor && window.Capacitor.isNativePlatform() && /iPhone|iPad|iPod/.test(navigator.userAgent)) {
+    $('video-viewer-maximize').style.display = 'none';
+    $('video-viewer-minimize').style.display = 'none';
+  }
 
   // Return from PiP to integrated panel
   var viewerVid = document.getElementById('video-viewer-element');
@@ -4068,28 +4085,49 @@ window.addEventListener('DOMContentLoaded', function() {
     viewerVid.addEventListener('leavepictureinpicture', function() {
       if (_videoViewerPeerId) openVideoViewer(_videoViewerPeerId);
     });
+    // iOS webkit PiP: return to inline when exiting PiP
+    viewerVid.addEventListener('webkitpresentationmodechanged', function() {
+      if (viewerVid.webkitPresentationMode === 'inline' && _videoViewerPeerId) {
+        openVideoViewer(_videoViewerPeerId);
+      }
+    });
+    // iOS: when user exits native video fullscreen, hide the panel
+    viewerVid.addEventListener('webkitendfullscreen', function() {
+      var panel = document.getElementById('video-viewer-panel');
+      if (panel) panel.classList.add('hidden');
+    });
   }
 
-  // Make video viewer panel draggable
+  // Make video viewer panel draggable (mouse + touch)
   (function() {
     var titlebar = document.getElementById('video-viewer-titlebar');
     var panel = document.getElementById('video-viewer-panel');
     var dragging = false, startX, startY, startLeft, startTop;
-    titlebar.addEventListener('mousedown', function(e) {
+    function dragStart(x, y) {
       dragging = true;
-      startX = e.clientX; startY = e.clientY;
+      startX = x; startY = y;
       var rect = panel.getBoundingClientRect();
       startLeft = rect.left; startTop = rect.top;
-      e.preventDefault();
-    });
-    document.addEventListener('mousemove', function(e) {
+    }
+    function dragMove(x, y) {
       if (!dragging) return;
-      panel.style.left = (startLeft + e.clientX - startX) + 'px';
-      panel.style.top = (startTop + e.clientY - startY) + 'px';
+      panel.style.left = (startLeft + x - startX) + 'px';
+      panel.style.top = (startTop + y - startY) + 'px';
       panel.style.right = 'auto';
       panel.style.bottom = 'auto';
-    });
-    document.addEventListener('mouseup', function() { dragging = false; });
+    }
+    function dragEnd() { dragging = false; }
+    titlebar.addEventListener('mousedown', function(e) { dragStart(e.clientX, e.clientY); e.preventDefault(); });
+    document.addEventListener('mousemove', function(e) { dragMove(e.clientX, e.clientY); });
+    document.addEventListener('mouseup', dragEnd);
+    titlebar.addEventListener('touchstart', function(e) {
+      if (e.touches.length === 1) { dragStart(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); }
+    }, { passive: false });
+    document.addEventListener('touchmove', function(e) {
+      if (dragging && e.touches.length === 1) { dragMove(e.touches[0].clientX, e.touches[0].clientY); }
+    }, { passive: true });
+    document.addEventListener('touchend', dragEnd);
+    document.addEventListener('touchcancel', dragEnd);
   })();
 
   var lastSpaceRelease = 0;

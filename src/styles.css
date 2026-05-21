@@ -1239,6 +1239,14 @@ details.turn-section .turn-inner {
   min-width: 200px;
   min-height: 150px;
 }
+.platform-mobile .video-viewer-panel {
+  width: 60vw;
+  max-width: 280px;
+  bottom: auto;
+  top: 60px;
+  right: 10px;
+  resize: none;
+}
 .video-viewer-panel.hidden { display: none; }
 
 .video-viewer-titlebar {
