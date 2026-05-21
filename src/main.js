@@ -2790,6 +2790,31 @@ function handleJoinerDataConnection(dataConn) {
       // state — causing split-brain if the host dies right after the new join.
       broadcastHostPeerLists();
 
+      // If host has active video, call the newcomer
+      if (localVideoActive && localVideoStream) {
+        var videoCall = peer.call(joinerId, localVideoStream, { metadata: { type: 'video' } });
+        if (videoCall) {
+          var jConn = connections.get(joinerId);
+          if (jConn) jConn.videoMediaOut = videoCall;
+          videoCall.on('stream', function(remote) {
+            var ex = connections.get(joinerId);
+            if (!ex || !ex.remoteVideoStream || !ex.remoteVideoStream.active) {
+              attachRemoteVideo(joinerId, remote);
+            }
+          });
+          videoCall.on('close', function() {
+            var jc = connections.get(joinerId);
+            if (jc && jc.videoMediaOut === videoCall) jc.videoMediaOut = null;
+          });
+        }
+      }
+      // Tell other video-active peers to call the newcomer
+      connections.forEach(function(c, id) {
+        if (id !== joinerId && c.videoActive && c.data) {
+          c.data.send({ type: 'video-call-peer', peerId: joinerId });
+        }
+      });
+
       updatePeerList();
 
     } else if (msg.type === 'heartbeat') {
@@ -2997,6 +3022,25 @@ function handleHostMessage(msg) {
     markPeerVideoActive(msg.peerId, true);
   } else if (msg.type === 'video-stop') {
     detachRemoteVideo(msg.peerId);
+  } else if (msg.type === 'video-call-peer') {
+    // Host is telling us to call a newcomer with our video
+    if (localVideoActive && localVideoStream && msg.peerId) {
+      var vc = peer.call(msg.peerId, localVideoStream, { metadata: { type: 'video' } });
+      if (vc) {
+        var tc = connections.get(msg.peerId);
+        if (tc) tc.videoMediaOut = vc;
+        vc.on('stream', function(remote) {
+          var ex = connections.get(msg.peerId);
+          if (!ex || !ex.remoteVideoStream || !ex.remoteVideoStream.active) {
+            attachRemoteVideo(msg.peerId, remote);
+          }
+        });
+        vc.on('close', function() {
+          var tc2 = connections.get(msg.peerId);
+          if (tc2 && tc2.videoMediaOut === vc) tc2.videoMediaOut = null;
+        });
+      }
+    }
   }
 }
 
