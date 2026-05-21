@@ -1229,6 +1229,7 @@ function saveRejoinSnapshot() {
     hostId:    roomCode,
     deputyId:  currentDeputyId() || null,
     peerIds:   peerIds,
+    wasHost:   isHost,
     savedAt:   Date.now()
   };
   localStorage.setItem(REJOIN_SNAPSHOT_KEY, JSON.stringify(snapshot));
@@ -1252,7 +1253,11 @@ function clearRejoinSnapshot() {
 function rejoinCandidates(snapshot) {
   var seen = new Set();
   var result = [];
-  [snapshot.hostId, snapshot.deputyId].concat(snapshot.peerIds || []).forEach(function(id) {
+  // If we were the host, hostId was our own peer ID — skip it (it no longer exists)
+  var ids = snapshot.wasHost
+    ? [snapshot.deputyId].concat(snapshot.peerIds || [])
+    : [snapshot.hostId, snapshot.deputyId].concat(snapshot.peerIds || []);
+  ids.forEach(function(id) {
     if (id && !seen.has(id)) { seen.add(id); result.push(id); }
   });
   return result;
@@ -2234,6 +2239,7 @@ function resetVideoState() {
 // --- End video prototype helpers ---------------------------------------------
 
 function leaveRoom() {
+  saveRejoinSnapshot();
   resetVideoState();
   // If this host is the last participant in a published lobby, delete it from the API
   if (isHost && _publishSecret && connections.size === 0) {
