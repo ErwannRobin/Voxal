@@ -1949,6 +1949,8 @@ async function startVideoShare() {
   localVideoActive = true;
   // Auto-activate free hand when sharing camera
   if (!freeHandMode) setFreeHand(true);
+
+
   // Open a video MediaConnection to each connected peer
   connections.forEach(function(c, peerId) {
     if (!peer || peerId === peer.id) return;
@@ -2141,13 +2143,20 @@ function popOutVideoViewer() {
     }
   }).then(function(unlisten) {
     _videoPopoutUnlisten = unlisten;
+    // Get video dimensions from the track
+    var videoTrack = stream.getVideoTracks()[0];
+    var settings = videoTrack ? videoTrack.getSettings() : {};
+    var vw = settings.width || 640;
+    var vh = settings.height || 480;
+    // Cap to reasonable window size
+    if (vw > 1280) { vh = Math.round(vh * 1280 / vw); vw = 1280; }
     // Open the popup AFTER listener is ready
     var WebviewWindow = window.__TAURI__.webviewWindow.WebviewWindow;
     var popWin = new WebviewWindow('video-popup', {
       url: 'video-popup.html',
       title: peerName,
-      width: 640,
-      height: 480,
+      width: vw,
+      height: vh,
       resizable: true,
       alwaysOnTop: true,
     });
