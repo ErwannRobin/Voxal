@@ -2069,8 +2069,6 @@ function openVideoViewer(peerId) {
   if (!panel || !vid) return;
   vid.srcObject = conn.remoteVideoStream;
   panel.classList.remove('hidden');
-  var popoutBtn = document.getElementById('video-viewer-popout');
-  if (popoutBtn) popoutBtn.classList.remove('hidden');
   // On mobile, request fullscreen
   if (IS_NATIVE_MOBILE || /Mobi|Android/i.test(navigator.userAgent)) {
     if (panel.requestFullscreen) panel.requestFullscreen().catch(function() {});
@@ -4052,7 +4050,17 @@ window.addEventListener('DOMContentLoaded', function() {
     if (localVideoActive) stopVideoShare(); else startVideoShare();
   });
   $('video-viewer-close').addEventListener('click', closeVideoViewer);
-  $('video-viewer-popout').addEventListener('click', popOutVideoViewer);
+  $('video-viewer-minimize').addEventListener('click', popOutVideoViewer);
+  $('video-viewer-maximize').addEventListener('click', function() {
+    var panel = document.getElementById('video-viewer-panel');
+    if (panel) {
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(function() {});
+      } else {
+        panel.requestFullscreen().catch(function() {});
+      }
+    }
+  });
 
   // Return from PiP to integrated panel
   var viewerVid = document.getElementById('video-viewer-element');
