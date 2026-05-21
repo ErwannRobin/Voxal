@@ -1550,7 +1550,11 @@ function updatePeerList() {
           camBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>';
           camBtn.addEventListener('click', function(e) {
             e.stopPropagation();
-            openVideoViewer(actualPeerId);
+            if (_videoViewerPeerId === actualPeerId) {
+              closeVideoViewer();
+            } else {
+              openVideoViewer(actualPeerId);
+            }
           });
           div.appendChild(camBtn);
         }
@@ -1950,9 +1954,18 @@ async function startVideoShare() {
     if (!peer || peerId === peer.id) return;
     var videoCall = peer.call(peerId, localVideoStream, { metadata: { type: 'video' } });
     if (!videoCall) return;
-    videoCall.on('stream', function(remote) { attachRemoteVideo(peerId, remote); });
-    videoCall.on('close', function() { detachRemoteVideo(peerId); });
-    c.videoMedia = videoCall;
+    videoCall.on('stream', function(remote) {
+      // Only use this stream if we don't already have one from an incoming call
+      var existing = connections.get(peerId);
+      if (!existing || !existing.remoteVideoStream || !existing.remoteVideoStream.active) {
+        attachRemoteVideo(peerId, remote);
+      }
+    });
+    videoCall.on('close', function() {
+      // Only clean up outgoing ref; remote status is driven by video-stop messages
+      if (c.videoMediaOut === videoCall) c.videoMediaOut = null;
+    });
+    c.videoMediaOut = videoCall;
   });
   // Signal via data channel
   var msg = { type: 'video-offer', peerId: peer.id };
@@ -1972,7 +1985,8 @@ function stopVideoShare() {
     localVideoStream = null;
   }
   connections.forEach(function(c) {
-    if (c.videoMedia) { c.videoMedia.close(); c.videoMedia = null; }
+    // Just drop the reference; tracks are already stopped above via localVideoStream
+    c.videoMediaOut = null;
   });
   if (peer && inRoom) {
     var msg = { type: 'video-stop', peerId: peer.id };
@@ -1984,20 +1998,26 @@ function stopVideoShare() {
     }
   }
   localVideoActive = false;
-  closeVideoViewer();
   updateVideoModeUI();
 }
 
 function handleIncomingVideoCall(call) {
-  var answerStream = localVideoStream || new MediaStream();
-  call.answer(answerStream);
+  // Always answer with empty stream — we send our video via our own outgoing call
+  call.answer(new MediaStream());
   call.on('stream', function(remote) {
     attachRemoteVideo(call.peer, remote);
     markPeerVideoActive(call.peer, true);
   });
   call.on('close', function() {
-    detachRemoteVideo(call.peer);
-    markPeerVideoActive(call.peer, false);
+    // Only detach if this call is still the active incoming connection
+    var conn = connections.get(call.peer);
+    if (conn && conn.videoMedia === call) {
+      conn.videoMedia = null;
+      conn.remoteVideoStream = null;
+      conn.videoActive = false;
+      if (_videoViewerPeerId === call.peer) closeVideoViewer();
+      updatePeerList();
+    }
   });
   call.on('error', function(err) { console.warn('[video-call]', err); });
   var conn = connections.get(call.peer);
@@ -2008,15 +2028,19 @@ function attachRemoteVideo(peerId, remoteStream) {
   var conn = connections.get(peerId);
   if (conn) conn.remoteVideoStream = remoteStream;
   updatePeerList();
-  // On web/mobile, auto-open the integrated viewer
-  if (!IS_TAURI_DESKTOP && (!_videoViewerPeerId || _videoViewerPeerId === peerId)) {
+  // Re-open viewer if it's already pointing at this peer (e.g. reconnect)
+  if (_videoViewerPeerId === peerId) {
     openVideoViewer(peerId);
   }
 }
 
 function detachRemoteVideo(peerId) {
   var conn = connections.get(peerId);
-  if (conn) { conn.remoteVideoStream = null; conn.videoActive = false; }
+  if (conn) {
+    if (conn.videoMedia) { conn.videoMedia.close(); conn.videoMedia = null; }
+    conn.remoteVideoStream = null;
+    conn.videoActive = false;
+  }
   if (_videoViewerPeerId === peerId) closeVideoViewer();
   updatePeerList();
 }
@@ -2119,6 +2143,7 @@ function popOutVideoViewer() {
       resizable: true,
       alwaysOnTop: true,
     });
+    _videoPopoutWindow = popWin;
     popWin.once('tauri://destroyed', function() {
       _cleanupLoopback();
       _videoViewerPeerId = null;
@@ -2180,6 +2205,7 @@ function resetVideoState() {
   window._voxalVideoStream = null;
   connections.forEach(function(c) {
     c.videoMedia = null;
+    c.videoMediaOut = null;
     c.remoteVideoStream = null;
     c.videoActive = false;
   });
@@ -2790,7 +2816,7 @@ function handleJoinerDataConnection(dataConn) {
       });
     } else if (msg.type === 'video-stop') {
       // Relay to all other peers
-      markPeerVideoActive(joinerId, false);
+      detachRemoteVideo(joinerId);
       connections.forEach(function(c, id) {
         if (id !== joinerId && c.data) c.data.send({ type: 'video-stop', peerId: joinerId });
       });
@@ -2970,7 +2996,7 @@ function handleHostMessage(msg) {
   } else if (msg.type === 'video-offer') {
     markPeerVideoActive(msg.peerId, true);
   } else if (msg.type === 'video-stop') {
-    markPeerVideoActive(msg.peerId, false);
+    detachRemoteVideo(msg.peerId);
   }
 }
 
