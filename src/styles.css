@@ -1215,9 +1215,22 @@ details.turn-section .turn-inner {
   font-weight: 600;
   color: var(--text);
 }
+.video-viewer-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.video-viewer-action-btn,
 .video-viewer-close-btn {
-  font-size: 16px;
+  font-size: 14px;
   color: var(--text-muted);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.video-viewer-action-btn:hover,
+.video-viewer-close-btn:hover {
+  background: rgba(255,255,255,0.1);
+  color: var(--text);
 }
 
 .video-viewer-panel video {

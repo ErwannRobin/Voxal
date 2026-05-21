@@ -477,6 +477,7 @@ var videoModeEnabled  = false;   // host toggled video mode for the room
 var localVideoActive  = false;   // this peer is sharing their camera
 var localVideoStream  = null;    // MediaStream (video only)
 var _videoViewerPeerId = null;   // whose video is displayed in viewer
+var _videoPopoutWindow = null;   // reference to popup window (web) or null
 
 // --- WebRTC stats polling ---
 var _statsIntervalId  = null;
@@ -2023,17 +2024,74 @@ function openVideoViewer(peerId) {
   vid.srcObject = conn.remoteVideoStream;
   panel.classList.remove('hidden');
   _videoViewerPeerId = peerId;
+  _videoPopoutWindow = null;
+  // Update pop-out button visibility
+  var popoutBtn = document.getElementById('video-viewer-popout');
+  if (popoutBtn) popoutBtn.classList.remove('hidden');
   // On mobile, request fullscreen
   if (IS_NATIVE_MOBILE || (!IS_TAURI_DESKTOP && /Mobi|Android/i.test(navigator.userAgent))) {
     if (panel.requestFullscreen) panel.requestFullscreen().catch(function() {});
   }
 }
 
+function popOutVideoViewer() {
+  if (!_videoViewerPeerId) return;
+  var conn = connections.get(_videoViewerPeerId);
+  if (!conn || !conn.remoteVideoStream) return;
+
+  if (IS_TAURI_DESKTOP) {
+    // macOS: use Picture-in-Picture API (native floating window)
+    var vid = document.getElementById('video-viewer-element');
+    if (vid && vid.requestPictureInPicture) {
+      vid.requestPictureInPicture().then(function() {
+        // Hide the integrated panel while PiP is active
+        var panel = document.getElementById('video-viewer-panel');
+        if (panel) panel.classList.add('hidden');
+      }).catch(function(e) {
+        console.warn('[video] PiP failed:', e.message);
+        showCopyToast('Picture-in-Picture not available');
+      });
+    }
+    return;
+  }
+
+  // Web: open a popup window with the video stream
+  window._voxalVideoStream = conn.remoteVideoStream;
+  _videoPopoutWindow = window.open('video-popup.html', 'voxal-video', 'width=640,height=480,resizable=yes');
+
+  if (_videoPopoutWindow) {
+    // Hide integrated panel
+    var panel = document.getElementById('video-viewer-panel');
+    if (panel) panel.classList.add('hidden');
+  } else {
+    showCopyToast('Popup blocked — allow popups for this site');
+  }
+}
+
+// Called by the popup when user clicks "Pop In" or closes the popup
+window._voxalVideoPopIn = function() {
+  _videoPopoutWindow = null;
+  window._voxalVideoStream = null;
+  if (_videoViewerPeerId) {
+    openVideoViewer(_videoViewerPeerId);
+  }
+};
+
 function closeVideoViewer() {
   var panel = document.getElementById('video-viewer-panel');
   var vid   = document.getElementById('video-viewer-element');
   if (panel) panel.classList.add('hidden');
   if (vid) vid.srcObject = null;
+  // Exit PiP if active
+  if (document.pictureInPictureElement) {
+    document.exitPictureInPicture().catch(function() {});
+  }
+  // Close popup if open
+  if (_videoPopoutWindow && !_videoPopoutWindow.closed) {
+    _videoPopoutWindow.close();
+  }
+  _videoPopoutWindow = null;
+  window._voxalVideoStream = null;
   _videoViewerPeerId = null;
   if (document.fullscreenElement) document.exitFullscreen().catch(function() {});
 }
@@ -2044,6 +2102,9 @@ function resetVideoState() {
   localVideoActive = false;
   localVideoStream = null;
   _videoViewerPeerId = null;
+  if (_videoPopoutWindow && !_videoPopoutWindow.closed) _videoPopoutWindow.close();
+  _videoPopoutWindow = null;
+  window._voxalVideoStream = null;
   connections.forEach(function(c) {
     c.videoMedia = null;
     c.remoteVideoStream = null;
@@ -3807,6 +3868,15 @@ window.addEventListener('DOMContentLoaded', function() {
     if (localVideoActive) stopVideoShare(); else startVideoShare();
   });
   $('video-viewer-close').addEventListener('click', closeVideoViewer);
+  $('video-viewer-popout').addEventListener('click', popOutVideoViewer);
+
+  // Return from PiP to integrated panel
+  var viewerVid = document.getElementById('video-viewer-element');
+  if (viewerVid) {
+    viewerVid.addEventListener('leavepictureinpicture', function() {
+      if (_videoViewerPeerId) openVideoViewer(_videoViewerPeerId);
+    });
+  }
 
   // Make video viewer panel draggable
   (function() {

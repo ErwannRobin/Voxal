@@ -326,7 +326,10 @@
     <div id="video-viewer-panel" class="video-viewer-panel hidden">
       <div class="video-viewer-titlebar" id="video-viewer-titlebar">
         <span class="video-viewer-title">📹 Camera</span>
-        <button id="video-viewer-close" class="btn-icon video-viewer-close-btn" title="Close">✕</button>
+        <div class="video-viewer-actions">
+          <button id="video-viewer-popout" class="btn-icon video-viewer-action-btn" title="Pop out to separate window">⬆</button>
+          <button id="video-viewer-close" class="btn-icon video-viewer-close-btn" title="Close">✕</button>
+        </div>
       </div>
       <video id="video-viewer-element" autoplay playsinline muted></video>
     </div>

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Voxal — Camera</title>
+  <style>
+    body { margin: 0; background: #000; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; font-family: system-ui; }
+    video { width: 100%; height: 100%; object-fit: contain; }
+    .toolbar { position: fixed; top: 8px; right: 8px; display: flex; gap: 6px; opacity: 0; transition: opacity 0.2s; }
+    body:hover .toolbar { opacity: 1; }
+    .toolbar button { background: rgba(255,255,255,0.15); border: none; color: #fff; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; backdrop-filter: blur(4px); }
+    .toolbar button:hover { background: rgba(255,255,255,0.25); }
+  </style>
+</head>
+<body>
+  <video id="v" autoplay playsinline></video>
+  <div class="toolbar">
+    <button onclick="popIn()">⬇ Pop In</button>
+  </div>
+  <script>
+    var v = document.getElementById('v');
+
+    function attachStream() {
+      if (window.opener && window.opener._voxalVideoStream) {
+        v.srcObject = window.opener._voxalVideoStream;
+        return true;
+      }
+      return false;
+    }
+
+    // Try immediately, then retry a few times (stream may not be set yet)
+    if (!attachStream()) {
+      var attempts = 0;
+      var interval = setInterval(function() {
+        attempts++;
+        if (attachStream() || attempts > 20) clearInterval(interval);
+      }, 100);
+    }
+
+    function popIn() {
+      if (window.opener && window.opener._voxalVideoPopIn) {
+        window.opener._voxalVideoPopIn();
+      }
+      window.close();
+    }
+
+    window.addEventListener('beforeunload', function() {
+      if (window.opener && window.opener._voxalVideoPopIn) {
+        window.opener._voxalVideoPopIn();
+      }
+    });
+  </script>
+</body>
+</html>
