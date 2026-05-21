@@ -1216,6 +1216,7 @@ details.turn-section .turn-inner {
 
 .peer-cam-btn {
   margin-left: 6px;
+  flex-shrink: 0;
   color: var(--accent);
   cursor: pointer;
   transition: transform 0.15s;

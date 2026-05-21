@@ -1540,7 +1540,6 @@ function updatePeerList() {
       appendPeerUuid(peerMain, actualPeerId);
       div.appendChild(peerMain);
       appendCopyPeerButton(div, actualPeerId, label);
-      appendWebrtcStats(div, actualPeerId);
       // Video camera icon (dev mode video prototype)
       if (videoModeEnabled && actualPeerId) {
         var peerConn = connections.get(actualPeerId);
@@ -1556,6 +1555,7 @@ function updatePeerList() {
           div.appendChild(camBtn);
         }
       }
+      appendWebrtcStats(div, actualPeerId);
       // Apply cached ICE dot color immediately
       const cachedConn = connections.get(actualPeerId);
       if (cachedConn && cachedConn.webrtcStats && cachedConn.webrtcStats.iceType) {
@@ -2431,7 +2431,9 @@ function buildHostPeerList(excludedPeerId) {
     .map(function(id) {
       const conn = connections.get(id);
       const pseudo = (conn && conn.pseudo ? String(conn.pseudo).trim() : '') || shortId(id);
-      return { id: id, pseudo: pseudo };
+      var entry = { id: id, pseudo: pseudo };
+      if (conn && conn.videoActive) entry.videoActive = true;
+      return entry;
     });
 }
 
@@ -2682,6 +2684,8 @@ function sendHostPeerList(dataConn, excludedPeerId) {
     peers: buildHostPeerList(excludedPeerId),
     hostId: peer.id,
     hostPseudo: pseudoForHost(),
+    hostVideoActive: localVideoActive,
+    videoModeEnabled: videoModeEnabled,
     deputyId: successorIds[0] || null,
     successorIds: successorIds
   });
@@ -2907,13 +2911,21 @@ function handleHostMessage(msg) {
       }
     });
 
-    const authoritativePeers = msg.peers.concat([{ id: roomCode, pseudo: msg.hostPseudo || shortId(roomCode) }]);
+    const authoritativePeers = msg.peers.concat([{ id: roomCode, pseudo: msg.hostPseudo || shortId(roomCode), videoActive: !!msg.hostVideoActive }]);
     authoritativePeers.forEach(function(p) {
       const peerId = p.id;
       const pseudo = p.pseudo;
       const prev = connections.get(peerId) || { data: null, talking: false };
-      connections.set(peerId, Object.assign({}, prev, { pseudo: pseudo, media: prev.media || null }));
+      var update = { pseudo: pseudo, media: prev.media || null };
+      if (p.videoActive) update.videoActive = true;
+      connections.set(peerId, Object.assign({}, prev, update));
     });
+
+    // Sync video mode state from host
+    if (msg.videoModeEnabled !== undefined) {
+      videoModeEnabled = !!msg.videoModeEnabled;
+      updateVideoModeUI();
+    }
 
     authoritativePeers.forEach(function(p) {
       const peerId = p.id;
