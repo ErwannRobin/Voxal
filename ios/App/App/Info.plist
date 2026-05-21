@@ -56,6 +56,8 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Voxal needs the microphone to transmit your voice in a room.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Voxal needs the camera to share video with other participants.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

@@ -2,6 +2,8 @@
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+.hidden { display: none !important; }
+
 /* Remove Android WebView's default green tap highlight on all elements */
 a, button, [role="button"], input, select, textarea, label {
   -webkit-tap-highlight-color: transparent;
@@ -474,15 +476,31 @@ body {
 
 .ctrl-row .label { white-space: nowrap; }
 
-.shortcut-display {
+/* Inline shortcut edit icon (inside ptt-hint) */
+.shortcut-edit-inline {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  margin-left: 3px;
+  color: var(--text-muted);
+  opacity: 0.5;
+  transition: opacity 0.15s;
+  padding: 2px;
+}
+.shortcut-edit-inline:hover { opacity: 1; color: var(--accent); }
+
+.shortcut-recording-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 0;
 }
-.shortcut-display.hidden { display: none; }
+.shortcut-recording-bar.hidden { display: none; }
 
 /* Hide all keyboard shortcut UI on touch/mobile platforms */
-.platform-mobile .shortcut-display,
+.platform-mobile .shortcut-edit-inline,
+.platform-mobile .shortcut-recording-bar,
 .platform-mobile #shortcut-spacer,
 .platform-mobile #ptt-hint kbd {
   display: none !important;
@@ -1156,3 +1174,131 @@ details.turn-section .turn-inner {
 
 
 .presence-error  { font-size: 12px; color: var(--red);        padding: 8px 0; text-align: center; }
+
+/* --- Video prototype -------------------------------------------------------- */
+
+.room-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card, transparent);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.room-action-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.room-action-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#video-ctrl-row {
+  gap: 8px;
+  margin-top: 6px;
+}
+#video-ctrl-row:has(.hidden + .hidden) { display: none; }
+
+#btn-video-mode.active { background: var(--accent); color: #fff; }
+#btn-share-camera.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.peer-cam-btn {
+  margin-left: 6px;
+  flex-shrink: 0;
+  color: var(--accent);
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.peer-cam-btn:hover { transform: scale(1.15); }
+
+/* Floating video viewer panel */
+.video-viewer-panel {
+  position: fixed;
+  bottom: 80px;
+  right: 20px;
+  width: 320px;
+  background: var(--bg-card, #1a1a2e);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  z-index: 9000;
+  overflow: hidden;
+  resize: both;
+  min-width: 200px;
+  min-height: 150px;
+}
+.platform-mobile .video-viewer-panel {
+  width: 60vw;
+  max-width: 280px;
+  bottom: auto;
+  top: 60px;
+  right: 10px;
+  resize: none;
+}
+.video-viewer-panel.hidden { display: none; }
+
+.video-viewer-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: var(--bg-elevated, #16213e);
+  cursor: move;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.video-viewer-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.video-viewer-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.video-viewer-action-btn,
+.video-viewer-close-btn {
+  font-size: 14px;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.video-viewer-action-btn:hover,
+.video-viewer-close-btn:hover {
+  background: rgba(255,255,255,0.1);
+  color: var(--text);
+}
+
+.video-viewer-panel video {
+  width: 100%;
+  display: block;
+  background: #000;
+}
+
+/* Fullscreen overlay (mobile/web) */
+.video-viewer-panel:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  bottom: 0;
+  right: 0;
+  border-radius: 0;
+  border: none;
+  resize: none;
+}
+.video-viewer-panel:fullscreen video {
+  height: calc(100vh - 36px);
+  object-fit: contain;
+}
