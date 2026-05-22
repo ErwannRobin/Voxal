@@ -477,7 +477,9 @@ let _cancelJoin       = null; // set during joinRoom(), called by Cancel button
 var videoModeEnabled  = localStorage.getItem(VIDEO_MODE_KEY) === 'true';
 var localVideoActive  = false;   // this peer is sharing their camera
 var localVideoStream  = null;    // MediaStream (video only)
-var _videoViewerPeerId = null;   // whose video is displayed in viewer
+var localScreenActive = false;   // this peer is sharing their screen
+var localScreenStream = null;    // MediaStream (screen share)
+var _videoViewerPeerId = null;   // whose video/screen is displayed in viewer
 var _videoPopoutWindow = null;   // reference to popup window (web) or null
 
 // --- WebRTC stats polling ---
@@ -1563,6 +1565,22 @@ function updatePeerList() {
           });
           div.appendChild(camBtn);
         }
+        // Screen share icon
+        if (peerConn && peerConn.screenActive) {
+          var scrBtn = document.createElement('button');
+          scrBtn.className = 'btn-icon peer-cam-btn';
+          scrBtn.title = 'View screen';
+          scrBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>';
+          scrBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            if (_videoViewerPeerId === actualPeerId) {
+              closeVideoViewer();
+            } else {
+              openVideoViewer(actualPeerId, 'screen');
+            }
+          });
+          div.appendChild(scrBtn);
+        }
       }
       appendWebrtcStats(div, actualPeerId);
       // Apply cached ICE dot color immediately
@@ -1924,6 +1942,14 @@ function updateVideoModeUI() {
     shareBtn.classList.toggle('active', localVideoActive);
     shareBtn.setAttribute('aria-pressed', String(localVideoActive));
   }
+  // Share screen button (visible when video mode is active, hidden on mobile)
+  var screenBtn = document.getElementById('btn-share-screen');
+  if (screenBtn) {
+    var canShareScreen = videoModeEnabled && !IS_NATIVE_MOBILE && !!navigator.mediaDevices && !!navigator.mediaDevices.getDisplayMedia;
+    screenBtn.classList.toggle('hidden', !canShareScreen);
+    screenBtn.classList.toggle('active', localScreenActive);
+    screenBtn.setAttribute('aria-pressed', String(localScreenActive));
+  }
   if (inRoom) updatePeerList();
 }
 
@@ -2008,6 +2034,127 @@ function stopVideoShare() {
   updateVideoModeUI();
 }
 
+// --- Screen sharing (dev mode) -----------------------------------------------
+
+async function startScreenShare() {
+  if (localScreenActive) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+    showCopyToast('Screen sharing not supported');
+    return;
+  }
+  try {
+    localScreenStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { cursor: 'always' },
+      audio: false
+    });
+  } catch (e) {
+    showCopyToast('Screen share cancelled');
+    return;
+  }
+  localScreenActive = true;
+  // Auto-activate free hand when sharing screen
+  if (!freeHandMode) setFreeHand(true);
+  // Stop sharing when browser's native "Stop sharing" is clicked
+  localScreenStream.getVideoTracks()[0].addEventListener('ended', function() {
+    stopScreenShare();
+  });
+  // Open a screen MediaConnection to each connected peer
+  connections.forEach(function(c, peerId) {
+    if (!peer || peerId === peer.id) return;
+    var screenCall = peer.call(peerId, localScreenStream, { metadata: { type: 'screen' } });
+    if (!screenCall) return;
+    screenCall.on('stream', function(remote) {
+      var existing = connections.get(peerId);
+      if (!existing || !existing.remoteScreenStream || !existing.remoteScreenStream.active) {
+        attachRemoteScreen(peerId, remote);
+      }
+    });
+    screenCall.on('close', function() {
+      if (c.screenMediaOut === screenCall) c.screenMediaOut = null;
+    });
+    c.screenMediaOut = screenCall;
+  });
+  // Signal via data channel
+  var msg = { type: 'screen-offer', peerId: peer.id };
+  if (isHost) {
+    connections.forEach(function(c) { if (c.data) c.data.send(msg); });
+  } else {
+    var hc = connections.get(roomCode);
+    if (hc && hc.data) hc.data.send(msg);
+  }
+  updateVideoModeUI();
+}
+
+function stopScreenShare() {
+  if (!localScreenActive && !localScreenStream) return;
+  if (localScreenStream) {
+    localScreenStream.getTracks().forEach(function(t) { t.stop(); });
+    localScreenStream = null;
+  }
+  connections.forEach(function(c) {
+    c.screenMediaOut = null;
+  });
+  if (peer && inRoom) {
+    var msg = { type: 'screen-stop', peerId: peer.id };
+    if (isHost) {
+      connections.forEach(function(c) { if (c.data) c.data.send(msg); });
+    } else {
+      var hc = connections.get(roomCode);
+      if (hc && hc.data) hc.data.send(msg);
+    }
+  }
+  localScreenActive = false;
+  updateVideoModeUI();
+}
+
+function handleIncomingScreenCall(call) {
+  call.answer(new MediaStream());
+  call.on('stream', function(remote) {
+    attachRemoteScreen(call.peer, remote);
+    markPeerScreenActive(call.peer, true);
+  });
+  call.on('close', function() {
+    var conn = connections.get(call.peer);
+    if (conn && conn.screenMedia === call) {
+      conn.screenMedia = null;
+      conn.remoteScreenStream = null;
+      conn.screenActive = false;
+      if (_videoViewerPeerId === call.peer) closeVideoViewer();
+      updatePeerList();
+    }
+  });
+  call.on('error', function(err) { console.warn('[screen-call]', err); });
+  var conn = connections.get(call.peer);
+  if (conn) conn.screenMedia = call;
+}
+
+function attachRemoteScreen(peerId, remoteStream) {
+  var conn = connections.get(peerId);
+  if (conn) conn.remoteScreenStream = remoteStream;
+  updatePeerList();
+  if (_videoViewerPeerId === peerId) {
+    openVideoViewer(peerId);
+  }
+}
+
+function detachRemoteScreen(peerId) {
+  var conn = connections.get(peerId);
+  if (conn) {
+    if (conn.screenMedia) { conn.screenMedia.close(); conn.screenMedia = null; }
+    conn.remoteScreenStream = null;
+    conn.screenActive = false;
+  }
+  if (_videoViewerPeerId === peerId) closeVideoViewer();
+  updatePeerList();
+}
+
+function markPeerScreenActive(peerId, active) {
+  var conn = connections.get(peerId);
+  if (conn) conn.screenActive = active;
+  if (!active && _videoViewerPeerId === peerId) closeVideoViewer();
+  updatePeerList();
+}
+
 function handleIncomingVideoCall(call) {
   // Always answer with empty stream — we send our video via our own outgoing call
   call.answer(new MediaStream());
@@ -2059,9 +2206,16 @@ function markPeerVideoActive(peerId, active) {
   updatePeerList();
 }
 
-function openVideoViewer(peerId) {
+function openVideoViewer(peerId, streamType) {
   var conn = connections.get(peerId);
-  if (!conn || !conn.remoteVideoStream) return;
+  // Prefer the explicitly requested stream type, fallback to whatever is available
+  var viewStream;
+  if (streamType === 'screen') {
+    viewStream = (conn && conn.remoteScreenStream) || (conn && conn.remoteVideoStream);
+  } else {
+    viewStream = (conn && conn.remoteVideoStream) || (conn && conn.remoteScreenStream);
+  }
+  if (!conn || !viewStream) return;
   _videoViewerPeerId = peerId;
   _videoPopoutWindow = null;
 
@@ -2074,7 +2228,7 @@ function openVideoViewer(peerId) {
   var panel = document.getElementById('video-viewer-panel');
   var vid   = document.getElementById('video-viewer-element');
   if (!panel || !vid) return;
-  vid.srcObject = conn.remoteVideoStream;
+  vid.srcObject = viewStream;
   panel.classList.remove('hidden');
   // On Android mobile, request fullscreen
   if (!IS_NATIVE_MOBILE && /Mobi|Android/i.test(navigator.userAgent)) {
@@ -2088,7 +2242,8 @@ var _videoPopoutUnlisten = null;
 function popOutVideoViewer() {
   if (!_videoViewerPeerId) return;
   var conn = connections.get(_videoViewerPeerId);
-  if (!conn || !conn.remoteVideoStream) return;
+  var stream = (conn && conn.remoteVideoStream) || (conn && conn.remoteScreenStream);
+  if (!conn || !stream) return;
 
   // Web/mobile (non-Tauri): use Picture-in-Picture API
   if (!IS_TAURI_DESKTOP) {
@@ -2116,9 +2271,8 @@ function popOutVideoViewer() {
   }
 
   // Tauri: open a WebviewWindow and relay video via WebRTC loopback + Tauri events
-  var stream = conn.remoteVideoStream;
   var tauriEvent = window.__TAURI__.event;
-  var peerName = conn.pseudo || 'Camera';
+  var peerName = conn.screenActive ? (conn.pseudo || 'Screen') : (conn.pseudo || 'Camera');
 
   // Register listener FIRST, then open window to avoid race
   tauriEvent.listen('video-popup-signal', async function(ev) {
@@ -2219,9 +2373,12 @@ function closeVideoViewer() {
 
 function resetVideoState() {
   stopVideoShare();
+  stopScreenShare();
   videoModeEnabled = localStorage.getItem(VIDEO_MODE_KEY) === 'true';
   localVideoActive = false;
   localVideoStream = null;
+  localScreenActive = false;
+  localScreenStream = null;
   _videoViewerPeerId = null;
   if (_videoPopoutWindow && !_videoPopoutWindow.closed) _videoPopoutWindow.close();
   _videoPopoutWindow = null;
@@ -2231,6 +2388,10 @@ function resetVideoState() {
     c.videoMediaOut = null;
     c.remoteVideoStream = null;
     c.videoActive = false;
+    c.screenMedia = null;
+    c.screenMediaOut = null;
+    c.remoteScreenStream = null;
+    c.screenActive = false;
   });
   closeVideoViewer();
   updateVideoModeUI();
@@ -2483,6 +2644,7 @@ function buildHostPeerList(excludedPeerId) {
       const pseudo = (conn && conn.pseudo ? String(conn.pseudo).trim() : '') || shortId(id);
       var entry = { id: id, pseudo: pseudo };
       if (conn && conn.videoActive) entry.videoActive = true;
+      if (conn && conn.screenActive) entry.screenActive = true;
       return entry;
     });
 }
@@ -2713,6 +2875,11 @@ function handleIncomingCall(call) {
     handleIncomingVideoCall(call);
     return;
   }
+  // Route screen share calls to the screen handler
+  if (call.metadata && call.metadata.type === 'screen') {
+    handleIncomingScreenCall(call);
+    return;
+  }
   call.answer(stream);
   call.on('stream', function(remote) {
     attachAudio(call.peer, remote);
@@ -2735,6 +2902,7 @@ function sendHostPeerList(dataConn, excludedPeerId) {
     hostId: peer.id,
     hostPseudo: pseudoForHost(),
     hostVideoActive: localVideoActive,
+    hostScreenActive: localScreenActive,
     videoModeEnabled: videoModeEnabled,
     deputyId: successorIds[0] || null,
     successorIds: successorIds
@@ -2839,6 +3007,25 @@ function handleJoinerDataConnection(dataConn) {
         }
       });
 
+      // If host has active screen share, call the newcomer
+      if (localScreenActive && localScreenStream) {
+        var screenCall = peer.call(joinerId, localScreenStream, { metadata: { type: 'screen' } });
+        if (screenCall) {
+          var jConn2 = connections.get(joinerId);
+          if (jConn2) jConn2.screenMediaOut = screenCall;
+          screenCall.on('close', function() {
+            var jc2 = connections.get(joinerId);
+            if (jc2 && jc2.screenMediaOut === screenCall) jc2.screenMediaOut = null;
+          });
+        }
+      }
+      // Tell other screen-active peers to call the newcomer
+      connections.forEach(function(c, id) {
+        if (id !== joinerId && c.screenActive && c.data) {
+          c.data.send({ type: 'screen-call-peer', peerId: joinerId });
+        }
+      });
+
       updatePeerList();
 
     } else if (msg.type === 'heartbeat') {
@@ -2868,6 +3055,16 @@ function handleJoinerDataConnection(dataConn) {
       detachRemoteVideo(joinerId);
       connections.forEach(function(c, id) {
         if (id !== joinerId && c.data) c.data.send({ type: 'video-stop', peerId: joinerId });
+      });
+    } else if (msg.type === 'screen-offer') {
+      markPeerScreenActive(joinerId, true);
+      connections.forEach(function(c, id) {
+        if (id !== joinerId && c.data) c.data.send({ type: 'screen-offer', peerId: joinerId });
+      });
+    } else if (msg.type === 'screen-stop') {
+      detachRemoteScreen(joinerId);
+      connections.forEach(function(c, id) {
+        if (id !== joinerId && c.data) c.data.send({ type: 'screen-stop', peerId: joinerId });
       });
     }
   });
@@ -2986,13 +3183,14 @@ function handleHostMessage(msg) {
       }
     });
 
-    const authoritativePeers = msg.peers.concat([{ id: roomCode, pseudo: msg.hostPseudo || shortId(roomCode), videoActive: !!msg.hostVideoActive }]);
+    const authoritativePeers = msg.peers.concat([{ id: roomCode, pseudo: msg.hostPseudo || shortId(roomCode), videoActive: !!msg.hostVideoActive, screenActive: !!msg.hostScreenActive }]);
     authoritativePeers.forEach(function(p) {
       const peerId = p.id;
       const pseudo = p.pseudo;
       const prev = connections.get(peerId) || { data: null, talking: false };
       var update = { pseudo: pseudo, media: prev.media || null };
       if (p.videoActive) update.videoActive = true;
+      if (p.screenActive) update.screenActive = true;
       connections.set(peerId, Object.assign({}, prev, update));
     });
 
@@ -3062,6 +3260,29 @@ function handleHostMessage(msg) {
         vc.on('close', function() {
           var tc2 = connections.get(msg.peerId);
           if (tc2 && tc2.videoMediaOut === vc) tc2.videoMediaOut = null;
+        });
+      }
+    }
+  } else if (msg.type === 'screen-offer') {
+    markPeerScreenActive(msg.peerId, true);
+  } else if (msg.type === 'screen-stop') {
+    detachRemoteScreen(msg.peerId);
+  } else if (msg.type === 'screen-call-peer') {
+    // Host is telling us to call a newcomer with our screen
+    if (localScreenActive && localScreenStream && msg.peerId) {
+      var sc = peer.call(msg.peerId, localScreenStream, { metadata: { type: 'screen' } });
+      if (sc) {
+        var tc3 = connections.get(msg.peerId);
+        if (tc3) tc3.screenMediaOut = sc;
+        sc.on('stream', function(remote) {
+          var ex2 = connections.get(msg.peerId);
+          if (!ex2 || !ex2.remoteScreenStream || !ex2.remoteScreenStream.active) {
+            attachRemoteScreen(msg.peerId, remote);
+          }
+        });
+        sc.on('close', function() {
+          var tc4 = connections.get(msg.peerId);
+          if (tc4 && tc4.screenMediaOut === sc) tc4.screenMediaOut = null;
         });
       }
     }
@@ -4075,6 +4296,12 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-share-camera').addEventListener('click', function() {
     if (localVideoActive) stopVideoShare(); else startVideoShare();
   });
+  var screenBtnEl = $('btn-share-screen');
+  if (screenBtnEl) {
+    screenBtnEl.addEventListener('click', function() {
+      if (localScreenActive) stopScreenShare(); else startScreenShare();
+    });
+  }
   $('video-viewer-close').addEventListener('click', closeVideoViewer);
   $('video-viewer-minimize').addEventListener('click', popOutVideoViewer);
   $('video-viewer-maximize').addEventListener('click', function() {
