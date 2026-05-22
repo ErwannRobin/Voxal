@@ -457,7 +457,7 @@ body {
   50%       { box-shadow: 0 0 24px rgba(74, 222, 128, 0.55); }
 }
 
-/* ── Room controls (shortcut + free-hand) ───────────────────────── */
+/* ── Room controls (shortcut + hands-free) ───────────────────────── */
 
 .room-controls {
   border-top: 1px solid var(--border);

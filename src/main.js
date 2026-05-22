@@ -1801,7 +1801,7 @@ function attachAudio(peerId, remoteStream) {
 
 function detachAudio(peerId) { const el = document.getElementById('audio-' + peerId); if (el) el.remove(); }
 
-// --- PTT & free-hand ---------------------------------------------------------
+// --- PTT & hands-free ---------------------------------------------------------
 
 function broadcastTalkingState(active) {
   if (!inRoom || !peer) return;
@@ -1846,17 +1846,17 @@ function setFreeHand(active) {
   if (active) {
     var isMobile = window.Capacitor && window.Capacitor.isNativePlatform();
     if (isMobile) {
-      $('ptt-hint').textContent = 'Free hand · tap to stop';
+      $('ptt-hint').textContent = 'Hands-free · tap to stop';
     } else {
-      $('ptt-hint').innerHTML = pttHintHtml('Free hand · press ', ' to stop');
+      $('ptt-hint').innerHTML = pttHintHtml('Hands-free · press ', ' to stop');
     }
     $('ptt-status').textContent = '\u25cf Live';
   } else {
     var isMobile = window.Capacitor && window.Capacitor.isNativePlatform();
     if (isMobile) {
-      $('ptt-hint').textContent = 'Hold to talk · double-tap for free hand';
+      $('ptt-hint').textContent = 'Hold to talk · double-tap for hands-free';
     } else {
-      $('ptt-hint').innerHTML = pttHintHtml('Hold ', ' anywhere to talk · x2 for free hand');
+      $('ptt-hint').innerHTML = pttHintHtml('Hold ', ' anywhere to talk · x2 for hands-free');
     }
     $('ptt-status').textContent = '';
   }
@@ -1980,7 +1980,7 @@ async function startVideoShare() {
     return;
   }
   localVideoActive = true;
-  // Auto-activate free hand when sharing camera
+  // Auto-activate hands-free when sharing camera
   if (!freeHandMode) setFreeHand(true);
 
 
@@ -2054,7 +2054,7 @@ async function startScreenShare() {
     return;
   }
   localScreenActive = true;
-  // Auto-activate free hand when sharing screen
+  // Auto-activate hands-free when sharing screen
   if (!freeHandMode) setFreeHand(true);
   // Stop sharing when browser's native "Stop sharing" is clicked
   localScreenStream.getVideoTracks()[0].addEventListener('ended', function() {
@@ -3786,7 +3786,7 @@ window.addEventListener('DOMContentLoaded', function() {
     var _sn = $('shortcut-normal'); if (_sn) _sn.style.display = 'none';
     var _sr = $('shortcut-recording'); if (_sr) _sr.style.display = 'none';
     var _ss = $('shortcut-spacer'); if (_ss) _ss.style.display = 'none';
-    $('ptt-hint').textContent = 'Hold to talk · double-tap for free hand';
+    $('ptt-hint').textContent = 'Hold to talk · double-tap for hands-free';
     $('btn-copy').title = 'Share room code';
   }
 
@@ -4396,7 +4396,7 @@ window.addEventListener('DOMContentLoaded', function() {
       return;
     }
     if (freeHandMode) {
-      pttBtn.classList.add('active'); // visual press feedback while free hand is on
+      pttBtn.classList.add('active'); // visual press feedback while hands-free is on
     } else {
       setTalking(true);
     }
@@ -4616,14 +4616,14 @@ window.addEventListener('DOMContentLoaded', function() {
       if (recordingShortcut || shouldIgnorePTTShortcuts()) return;
       var now = Date.now();
       if (now - lastTauriRelease < DOUBLE_TAP_MS) {
-        // Double-press: toggle free hand mode (same as double-tap on mobile)
+        // Double-press: toggle hands-free mode (same as double-tap on mobile)
         lastTauriRelease = 0;
         ignoreTauriRelease = true;
         setFreeHand(!freeHandMode);
         return;
       }
       if (freeHandMode) {
-        // In free hand mode: shortcut acts as PTT override (mic already on — just show visual feedback)
+        // In hands-free mode: shortcut acts as PTT override (mic already on — just show visual feedback)
         $('ptt-btn').classList.add('active');
       } else {
         setTalking(true);
@@ -4634,7 +4634,7 @@ window.addEventListener('DOMContentLoaded', function() {
       if (ignoreTauriRelease) { ignoreTauriRelease = false; return; }
       lastTauriRelease = Date.now();
       if (freeHandMode) {
-        // Release while in free hand mode: turn off free hand (mic goes silent)
+        // Release while in hands-free mode: turn off hands-free (mic goes silent)
         $('ptt-btn').classList.remove('active');
         setFreeHand(false);
       } else {
