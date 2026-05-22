@@ -479,8 +479,10 @@ var localVideoActive  = false;   // this peer is sharing their camera
 var localVideoStream  = null;    // MediaStream (video only)
 var localScreenActive = false;   // this peer is sharing their screen
 var localScreenStream = null;    // MediaStream (screen share)
-var _videoViewerPeerId = null;   // whose video/screen is displayed in viewer
-var _videoPopoutWindow = null;   // reference to popup window (web) or null
+var _videoViewerPeerId = null;   // whose camera is displayed in viewer
+var _screenViewerPeerId = null;  // whose screen is displayed in viewer
+var _videoPopoutWindow = null;   // reference to video popup window
+var _screenPopoutWindow = null;  // reference to screen popup window
 
 // --- WebRTC stats polling ---
 var _statsIntervalId  = null;
@@ -1573,10 +1575,10 @@ function updatePeerList() {
           scrBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>';
           scrBtn.addEventListener('click', function(e) {
             e.stopPropagation();
-            if (_videoViewerPeerId === actualPeerId) {
-              closeVideoViewer();
+            if (_screenViewerPeerId === actualPeerId) {
+              closeScreenViewer();
             } else {
-              openVideoViewer(actualPeerId, 'screen');
+              openScreenViewer(actualPeerId);
             }
           });
           div.appendChild(scrBtn);
@@ -2119,7 +2121,7 @@ function handleIncomingScreenCall(call) {
       conn.screenMedia = null;
       conn.remoteScreenStream = null;
       conn.screenActive = false;
-      if (_videoViewerPeerId === call.peer) closeVideoViewer();
+      if (_screenViewerPeerId === call.peer) closeScreenViewer();
       updatePeerList();
     }
   });
@@ -2132,8 +2134,8 @@ function attachRemoteScreen(peerId, remoteStream) {
   var conn = connections.get(peerId);
   if (conn) conn.remoteScreenStream = remoteStream;
   updatePeerList();
-  if (_videoViewerPeerId === peerId) {
-    openVideoViewer(peerId);
+  if (_screenViewerPeerId === peerId) {
+    openScreenViewer(peerId);
   }
 }
 
@@ -2144,14 +2146,14 @@ function detachRemoteScreen(peerId) {
     conn.remoteScreenStream = null;
     conn.screenActive = false;
   }
-  if (_videoViewerPeerId === peerId) closeVideoViewer();
+  if (_screenViewerPeerId === peerId) closeScreenViewer();
   updatePeerList();
 }
 
 function markPeerScreenActive(peerId, active) {
   var conn = connections.get(peerId);
   if (conn) conn.screenActive = active;
-  if (!active && _videoViewerPeerId === peerId) closeVideoViewer();
+  if (!active && _screenViewerPeerId === peerId) closeScreenViewer();
   updatePeerList();
 }
 
@@ -2206,16 +2208,9 @@ function markPeerVideoActive(peerId, active) {
   updatePeerList();
 }
 
-function openVideoViewer(peerId, streamType) {
+function openVideoViewer(peerId) {
   var conn = connections.get(peerId);
-  // Prefer the explicitly requested stream type, fallback to whatever is available
-  var viewStream;
-  if (streamType === 'screen') {
-    viewStream = (conn && conn.remoteScreenStream) || (conn && conn.remoteVideoStream);
-  } else {
-    viewStream = (conn && conn.remoteVideoStream) || (conn && conn.remoteScreenStream);
-  }
-  if (!conn || !viewStream) return;
+  if (!conn || !conn.remoteVideoStream) return;
   _videoViewerPeerId = peerId;
   _videoPopoutWindow = null;
 
@@ -2228,9 +2223,33 @@ function openVideoViewer(peerId, streamType) {
   var panel = document.getElementById('video-viewer-panel');
   var vid   = document.getElementById('video-viewer-element');
   if (!panel || !vid) return;
-  vid.srcObject = viewStream;
+  vid.srcObject = conn.remoteVideoStream;
+  var title = document.getElementById('video-viewer-title');
+  if (title) title.textContent = '📹 ' + (conn.pseudo || 'Camera');
   panel.classList.remove('hidden');
-  // On Android mobile, request fullscreen
+  if (!IS_NATIVE_MOBILE && /Mobi|Android/i.test(navigator.userAgent)) {
+    if (panel.requestFullscreen) panel.requestFullscreen().catch(function() {});
+  }
+}
+
+function openScreenViewer(peerId) {
+  var conn = connections.get(peerId);
+  if (!conn || !conn.remoteScreenStream) return;
+  _screenViewerPeerId = peerId;
+  _screenPopoutWindow = null;
+
+  if (IS_TAURI_DESKTOP) {
+    popOutScreenViewer();
+    return;
+  }
+
+  var panel = document.getElementById('screen-viewer-panel');
+  var vid   = document.getElementById('screen-viewer-element');
+  if (!panel || !vid) return;
+  vid.srcObject = conn.remoteScreenStream;
+  var title = document.getElementById('screen-viewer-title');
+  if (title) title.textContent = '🖥 ' + (conn.pseudo || 'Screen');
+  panel.classList.remove('hidden');
   if (!IS_NATIVE_MOBILE && /Mobi|Android/i.test(navigator.userAgent)) {
     if (panel.requestFullscreen) panel.requestFullscreen().catch(function() {});
   }
@@ -2242,14 +2261,13 @@ var _videoPopoutUnlisten = null;
 function popOutVideoViewer() {
   if (!_videoViewerPeerId) return;
   var conn = connections.get(_videoViewerPeerId);
-  var stream = (conn && conn.remoteVideoStream) || (conn && conn.remoteScreenStream);
+  var stream = conn && conn.remoteVideoStream;
   if (!conn || !stream) return;
 
   // Web/mobile (non-Tauri): use Picture-in-Picture API
   if (!IS_TAURI_DESKTOP) {
     var vid = document.getElementById('video-viewer-element');
     if (vid) {
-      // Standard PiP (Chrome, Edge, etc.)
       if (document.pictureInPictureEnabled && vid.requestPictureInPicture) {
         vid.requestPictureInPicture().then(function() {
           var panel = document.getElementById('video-viewer-panel');
@@ -2258,7 +2276,6 @@ function popOutVideoViewer() {
           console.warn('[video] PiP failed:', e.message);
           showCopyToast('Picture-in-Picture not available');
         });
-      // iOS WebKit PiP
       } else if (vid.webkitSetPresentationMode) {
         vid.webkitSetPresentationMode('picture-in-picture');
         var panel = document.getElementById('video-viewer-panel');
@@ -2272,7 +2289,7 @@ function popOutVideoViewer() {
 
   // Tauri: open a WebviewWindow and relay video via WebRTC loopback + Tauri events
   var tauriEvent = window.__TAURI__.event;
-  var peerName = conn.screenActive ? (conn.pseudo || 'Screen') : (conn.pseudo || 'Camera');
+  var peerName = (conn.pseudo || 'Camera');
 
   // Register listener FIRST, then open window to avoid race
   tauriEvent.listen('video-popup-signal', async function(ev) {
@@ -2341,6 +2358,100 @@ function _cleanupLoopback() {
   if (_videoPopoutUnlisten) { _videoPopoutUnlisten(); _videoPopoutUnlisten = null; }
 }
 
+var _screenLoopbackPC = null;
+var _screenPopoutUnlisten = null;
+
+function popOutScreenViewer() {
+  if (!_screenViewerPeerId) return;
+  var conn = connections.get(_screenViewerPeerId);
+  var stream = conn && conn.remoteScreenStream;
+  if (!conn || !stream) return;
+
+  // Web/mobile (non-Tauri): use Picture-in-Picture API
+  if (!IS_TAURI_DESKTOP) {
+    var vid = document.getElementById('screen-viewer-element');
+    if (vid) {
+      if (document.pictureInPictureEnabled && vid.requestPictureInPicture) {
+        vid.requestPictureInPicture().then(function() {
+          var panel = document.getElementById('screen-viewer-panel');
+          if (panel) panel.classList.add('hidden');
+        }).catch(function(e) {
+          showCopyToast('Picture-in-Picture not available');
+        });
+      } else {
+        showCopyToast('Picture-in-Picture not available');
+      }
+    }
+    return;
+  }
+
+  // Tauri: open a WebviewWindow for screen share
+  var tauriEvent = window.__TAURI__.event;
+  var peerName = (conn.pseudo || 'Screen') + ' — Screen';
+
+  tauriEvent.listen('screen-popup-signal', async function(ev) {
+    var msg = ev.payload;
+    if (msg.type === 'ready') {
+      _screenLoopbackPC = new RTCPeerConnection();
+      stream.getTracks().forEach(function(t) { _screenLoopbackPC.addTrack(t, stream); });
+      var offer = await _screenLoopbackPC.createOffer();
+      await _screenLoopbackPC.setLocalDescription(offer);
+      await new Promise(function(resolve) {
+        if (_screenLoopbackPC.iceGatheringState === 'complete') return resolve();
+        _screenLoopbackPC.onicecandidate = function(ev) { if (!ev.candidate) resolve(); };
+      });
+      tauriEvent.emit('screen-main-signal', {
+        type: 'offer',
+        sdp: { type: _screenLoopbackPC.localDescription.type, sdp: _screenLoopbackPC.localDescription.sdp }
+      });
+    }
+    if (msg.type === 'answer') {
+      if (_screenLoopbackPC) {
+        await _screenLoopbackPC.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+      }
+    }
+    if (msg.type === 'pop-in') {
+      _cleanupScreenLoopback();
+      _screenViewerPeerId = null;
+    }
+  }).then(function(unlisten) {
+    _screenPopoutUnlisten = unlisten;
+    var videoTrack = stream.getVideoTracks()[0];
+    var settings = videoTrack ? videoTrack.getSettings() : {};
+    var vw = settings.width || 1280;
+    var vh = settings.height || 720;
+    if (vw > 1920) { vh = Math.round(vh * 1920 / vw); vw = 1920; }
+    var WebviewWindow = window.__TAURI__.webviewWindow.WebviewWindow;
+    var popWin = new WebviewWindow('screen-popup', {
+      url: 'video-popup.html?signal=screen',
+      title: peerName,
+      width: vw,
+      height: vh,
+      resizable: true,
+      alwaysOnTop: true,
+    });
+    _screenPopoutWindow = popWin;
+    popWin.once('tauri://destroyed', function() {
+      _cleanupScreenLoopback();
+      _screenViewerPeerId = null;
+    });
+    popWin.once('tauri://error', function(e) {
+      console.error('[screen] Window creation error:', e);
+      _cleanupScreenLoopback();
+    });
+  }).catch(function(err) {
+    console.error('[screen] Failed to set up pop-out:', err);
+  });
+
+  var panel = document.getElementById('screen-viewer-panel');
+  if (panel) panel.classList.add('hidden');
+}
+
+function _cleanupScreenLoopback() {
+  if (_screenLoopbackPC) { _screenLoopbackPC.close(); _screenLoopbackPC = null; }
+  if (_screenPopoutUnlisten) { _screenPopoutUnlisten(); _screenPopoutUnlisten = null; }
+}
+
 // Called by the popup when user clicks "Pop In" or closes the popup
 window._voxalVideoPopIn = function() {
   _videoPopoutWindow = null;
@@ -2355,11 +2466,9 @@ function closeVideoViewer() {
   var vid   = document.getElementById('video-viewer-element');
   if (panel) panel.classList.add('hidden');
   if (vid) vid.srcObject = null;
-  // Exit PiP if active
   if (document.pictureInPictureElement) {
     document.exitPictureInPicture().catch(function() {});
   }
-  // Close popup if open
   if (_videoPopoutWindow && !_videoPopoutWindow.closed) {
     _videoPopoutWindow.close();
   }
@@ -2367,8 +2476,20 @@ function closeVideoViewer() {
   window._voxalVideoStream = null;
   _cleanupLoopback();
   _videoViewerPeerId = null;
-  // Exit fullscreen if active
   if (document.fullscreenElement) document.exitFullscreen().catch(function() {});
+}
+
+function closeScreenViewer() {
+  var panel = document.getElementById('screen-viewer-panel');
+  var vid   = document.getElementById('screen-viewer-element');
+  if (panel) panel.classList.add('hidden');
+  if (vid) vid.srcObject = null;
+  if (_screenPopoutWindow && !_screenPopoutWindow.closed) {
+    _screenPopoutWindow.close();
+  }
+  _screenPopoutWindow = null;
+  _cleanupScreenLoopback();
+  _screenViewerPeerId = null;
 }
 
 function resetVideoState() {
@@ -2380,8 +2501,11 @@ function resetVideoState() {
   localScreenActive = false;
   localScreenStream = null;
   _videoViewerPeerId = null;
+  _screenViewerPeerId = null;
   if (_videoPopoutWindow && !_videoPopoutWindow.closed) _videoPopoutWindow.close();
   _videoPopoutWindow = null;
+  if (_screenPopoutWindow && !_screenPopoutWindow.closed) _screenPopoutWindow.close();
+  _screenPopoutWindow = null;
   window._voxalVideoStream = null;
   connections.forEach(function(c) {
     c.videoMedia = null;
@@ -2394,6 +2518,7 @@ function resetVideoState() {
     c.screenActive = false;
   });
   closeVideoViewer();
+  closeScreenViewer();
   updateVideoModeUI();
 }
 
@@ -4314,11 +4439,25 @@ window.addEventListener('DOMContentLoaded', function() {
       }
     }
   });
+  $('screen-viewer-close').addEventListener('click', closeScreenViewer);
+  $('screen-viewer-minimize').addEventListener('click', popOutScreenViewer);
+  $('screen-viewer-maximize').addEventListener('click', function() {
+    var panel = document.getElementById('screen-viewer-panel');
+    if (panel) {
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(function() {});
+      } else if (panel.requestFullscreen) {
+        panel.requestFullscreen().catch(function() {});
+      }
+    }
+  });
 
   // Hide maximize and minimize buttons on iOS (WKWebView doesn't support fullscreen or PiP for WebRTC)
   if (window.Capacitor && window.Capacitor.isNativePlatform() && /iPhone|iPad|iPod/.test(navigator.userAgent)) {
     $('video-viewer-maximize').style.display = 'none';
     $('video-viewer-minimize').style.display = 'none';
+    $('screen-viewer-maximize').style.display = 'none';
+    $('screen-viewer-minimize').style.display = 'none';
   }
 
   // Return from PiP to integrated panel
@@ -4344,6 +4483,39 @@ window.addEventListener('DOMContentLoaded', function() {
   (function() {
     var titlebar = document.getElementById('video-viewer-titlebar');
     var panel = document.getElementById('video-viewer-panel');
+    var dragging = false, startX, startY, startLeft, startTop;
+    function dragStart(x, y) {
+      dragging = true;
+      startX = x; startY = y;
+      var rect = panel.getBoundingClientRect();
+      startLeft = rect.left; startTop = rect.top;
+    }
+    function dragMove(x, y) {
+      if (!dragging) return;
+      panel.style.left = (startLeft + x - startX) + 'px';
+      panel.style.top = (startTop + y - startY) + 'px';
+      panel.style.right = 'auto';
+      panel.style.bottom = 'auto';
+    }
+    function dragEnd() { dragging = false; }
+    titlebar.addEventListener('mousedown', function(e) { dragStart(e.clientX, e.clientY); e.preventDefault(); });
+    document.addEventListener('mousemove', function(e) { dragMove(e.clientX, e.clientY); });
+    document.addEventListener('mouseup', dragEnd);
+    titlebar.addEventListener('touchstart', function(e) {
+      if (e.touches.length === 1) { dragStart(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); }
+    }, { passive: false });
+    document.addEventListener('touchmove', function(e) {
+      if (dragging && e.touches.length === 1) { dragMove(e.touches[0].clientX, e.touches[0].clientY); }
+    }, { passive: true });
+    document.addEventListener('touchend', dragEnd);
+    document.addEventListener('touchcancel', dragEnd);
+  })();
+
+  // Make screen viewer panel draggable (mouse + touch)
+  (function() {
+    var titlebar = document.getElementById('screen-viewer-titlebar');
+    var panel = document.getElementById('screen-viewer-panel');
+    if (!titlebar || !panel) return;
     var dragging = false, startX, startY, startLeft, startTop;
     function dragStart(x, y) {
       dragging = true;

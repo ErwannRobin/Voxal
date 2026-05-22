@@ -1249,6 +1249,16 @@ details.turn-section .turn-inner {
 }
 .video-viewer-panel.hidden { display: none; }
 
+#screen-viewer-panel {
+  bottom: 80px;
+  left: 20px;
+  right: auto;
+}
+.platform-mobile #screen-viewer-panel {
+  left: 10px;
+  right: auto;
+}
+
 .video-viewer-titlebar {
   display: flex;
   align-items: center;

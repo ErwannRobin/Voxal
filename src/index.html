@@ -325,7 +325,7 @@
     <!-- Video viewer panel (floating, for video prototype) -->
     <div id="video-viewer-panel" class="video-viewer-panel hidden">
       <div class="video-viewer-titlebar" id="video-viewer-titlebar">
-        <span class="video-viewer-title">📹 Camera</span>
+        <span class="video-viewer-title" id="video-viewer-title">📹 Camera</span>
         <div class="video-viewer-actions">
           <button id="video-viewer-minimize" class="btn-icon video-viewer-action-btn" title="Minimize (Picture-in-Picture)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="11" width="8" height="6" rx="1" fill="currentColor"/></svg>
@@ -337,6 +337,22 @@
         </div>
       </div>
       <video id="video-viewer-element" autoplay playsinline muted></video>
+    </div>
+
+    <div id="screen-viewer-panel" class="video-viewer-panel hidden">
+      <div class="video-viewer-titlebar" id="screen-viewer-titlebar">
+        <span class="video-viewer-title" id="screen-viewer-title">🖥 Screen</span>
+        <div class="video-viewer-actions">
+          <button id="screen-viewer-minimize" class="btn-icon video-viewer-action-btn" title="Minimize (Picture-in-Picture)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="11" width="8" height="6" rx="1" fill="currentColor"/></svg>
+          </button>
+          <button id="screen-viewer-maximize" class="btn-icon video-viewer-action-btn" title="Maximize (Fullscreen)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+          </button>
+          <button id="screen-viewer-close" class="btn-icon video-viewer-close-btn" title="Close">✕</button>
+        </div>
+      </div>
+      <video id="screen-viewer-element" autoplay playsinline muted></video>
     </div>
 
     <script src="assets/peerjs.min.js"></script>
