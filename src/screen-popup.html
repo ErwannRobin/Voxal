@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Voxal — Screen</title>
+  <style>
+    body { margin: 0; background: #000; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; font-family: system-ui; }
+    video { width: 100%; height: 100%; object-fit: contain; }
+  </style>
+</head>
+<body>
+  <video id="v" autoplay playsinline></video>
+  <script>
+    var v = document.getElementById('v');
+    var pc = null;
+    var tauriEvent = window.__TAURI__ && window.__TAURI__.event;
+
+    if (tauriEvent) {
+      tauriEvent.listen('screen-main-signal', async function(ev) {
+        var msg = ev.payload;
+        if (msg.type === 'offer') {
+          pc = new RTCPeerConnection();
+          pc.ontrack = function(e) {
+            v.srcObject = e.streams[0] || new MediaStream([e.track]);
+            v.play().catch(function() {});
+          };
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+          var answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          await new Promise(function(resolve) {
+            if (pc.iceGatheringState === 'complete') return resolve();
+            pc.onicecandidate = function(ev) { if (!ev.candidate) resolve(); };
+          });
+          tauriEvent.emit('screen-popup-signal', {
+            type: 'answer',
+            sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
+          });
+        }
+        if (msg.type === 'close') {
+          if (pc) { pc.close(); pc = null; }
+          window.close();
+        }
+      });
+
+      // Signal readiness
+      tauriEvent.emit('screen-popup-signal', { type: 'ready' });
+    }
+
+    window.addEventListener('beforeunload', function() {
+      if (tauriEvent) {
+        tauriEvent.emit('screen-popup-signal', { type: 'pop-in' });
+        if (pc) pc.close();
+      }
+    });
+  </script>
+</body>
+</html>

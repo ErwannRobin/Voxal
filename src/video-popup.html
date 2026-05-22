@@ -29,17 +29,14 @@
       document.getElementById('toolbar').style.display = 'none';
       // --- Tauri: use Tauri events + WebRTC loopback ---
       var tauriEvent = window.__TAURI__.event;
-      // Determine signal channel based on query param
-      var isScreen = window.location.search.indexOf('signal=screen') !== -1;
-      var mainSignal = isScreen ? 'screen-main-signal' : 'video-main-signal';
-      var popupSignal = isScreen ? 'screen-popup-signal' : 'video-popup-signal';
 
-      tauriEvent.listen(mainSignal, async function(ev) {
+      tauriEvent.listen('video-main-signal', async function(ev) {
         var msg = ev.payload;
         if (msg.type === 'offer') {
           pc = new RTCPeerConnection();
           pc.ontrack = function(e) {
             v.srcObject = e.streams[0] || new MediaStream([e.track]);
+            v.play().catch(function() {});
           };
           await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
           var answer = await pc.createAnswer();
@@ -48,7 +45,7 @@
             if (pc.iceGatheringState === 'complete') return resolve();
             pc.onicecandidate = function(ev) { if (!ev.candidate) resolve(); };
           });
-          tauriEvent.emit(popupSignal, {
+          tauriEvent.emit('video-popup-signal', {
             type: 'answer',
             sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
           });
@@ -60,7 +57,7 @@
       });
 
       // Signal readiness to main window
-      tauriEvent.emit(popupSignal, { type: 'ready' });
+      tauriEvent.emit('video-popup-signal', { type: 'ready' });
 
     } else {
       // --- Web fallback: window.opener ---
@@ -71,7 +68,7 @@
 
     function popIn() {
       if (isTauri) {
-        window.__TAURI__.event.emit(popupSignal, { type: 'pop-in' });
+        window.__TAURI__.event.emit('video-popup-signal', { type: 'pop-in' });
         if (pc) { pc.close(); pc = null; }
       } else if (window.opener && window.opener._voxalVideoPopIn) {
         window.opener._voxalVideoPopIn();
@@ -81,7 +78,7 @@
 
     window.addEventListener('beforeunload', function() {
       if (isTauri) {
-        window.__TAURI__.event.emit(popupSignal, { type: 'pop-in' });
+        window.__TAURI__.event.emit('video-popup-signal', { type: 'pop-in' });
         if (pc) pc.close();
       } else if (window.opener && window.opener._voxalVideoPopIn) {
         window.opener._voxalVideoPopIn();

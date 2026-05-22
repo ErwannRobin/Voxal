@@ -2392,8 +2392,14 @@ function popOutScreenViewer() {
   tauriEvent.listen('screen-popup-signal', async function(ev) {
     var msg = ev.payload;
     if (msg.type === 'ready') {
+      var freshConn = connections.get(_screenViewerPeerId);
+      var freshStream = freshConn && freshConn.remoteScreenStream;
+      if (!freshStream || !freshStream.getVideoTracks().length) {
+        console.warn('[screen] No video tracks in screen stream');
+        return;
+      }
       _screenLoopbackPC = new RTCPeerConnection();
-      stream.getTracks().forEach(function(t) { _screenLoopbackPC.addTrack(t, stream); });
+      freshStream.getTracks().forEach(function(t) { _screenLoopbackPC.addTrack(t, freshStream); });
       var offer = await _screenLoopbackPC.createOffer();
       await _screenLoopbackPC.setLocalDescription(offer);
       await new Promise(function(resolve) {
@@ -2423,7 +2429,7 @@ function popOutScreenViewer() {
     if (vw > 1920) { vh = Math.round(vh * 1920 / vw); vw = 1920; }
     var WebviewWindow = window.__TAURI__.webviewWindow.WebviewWindow;
     var popWin = new WebviewWindow('screen-popup', {
-      url: 'video-popup.html?signal=screen',
+      url: 'screen-popup.html',
       title: peerName,
       width: vw,
       height: vh,
