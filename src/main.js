@@ -668,8 +668,10 @@ function setMyPseudo(nextPseudo) {
   sessionStorage.setItem(PSEUDO_SESSION_KEY, myPseudo);
   if (shouldPersistPseudoGlobally()) localStorage.setItem(PSEUDO_KEY, myPseudo);
   const homeInput = $('input-pseudo');
+  const settingsInput = $('input-pseudo-settings');
   const inviteInput = $('input-pseudo-invite');
   if (homeInput && homeInput.value !== myPseudo) homeInput.value = myPseudo;
+  if (settingsInput && settingsInput.value !== myPseudo) settingsInput.value = myPseudo;
   if (inviteInput && inviteInput.value !== myPseudo) inviteInput.value = myPseudo;
   if (inRoom) {
     updatePeerList();
@@ -3799,6 +3801,11 @@ window.addEventListener('DOMContentLoaded', function() {
     homePseudoInput.value = myPseudo;
     homePseudoInput.addEventListener('input', function(e) { setMyPseudo(e.target.value); });
   }
+  const settingsPseudoInput = $('input-pseudo-settings');
+  if (settingsPseudoInput) {
+    settingsPseudoInput.value = myPseudo;
+    settingsPseudoInput.addEventListener('input', function(e) { setMyPseudo(e.target.value); });
+  }
   const invitePseudoInput = $('input-pseudo-invite');
   if (invitePseudoInput) {
     invitePseudoInput.value = myPseudo;
@@ -4100,7 +4107,7 @@ window.addEventListener('DOMContentLoaded', function() {
       }
     }
     // Web / mobile (or Tauri fallback): use the in-app modal
-    $('input-pseudo').value         = myPseudo;
+    $('input-pseudo-settings').value = myPseudo;
     $('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
     $('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
     $('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
@@ -4291,8 +4298,10 @@ window.addEventListener('DOMContentLoaded', function() {
       myPseudo = e.newValue || '';
       sessionStorage.setItem(PSEUDO_SESSION_KEY, myPseudo);
       const homeInput = $('input-pseudo');
+      const settingsInput = $('input-pseudo-settings');
       const inviteInput = $('input-pseudo-invite');
       if (homeInput) homeInput.value = myPseudo;
+      if (settingsInput) settingsInput.value = myPseudo;
       if (inviteInput) inviteInput.value = myPseudo;
       updateHomeLoggedOutLayout();
       if (inRoom) {
