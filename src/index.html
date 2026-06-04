@@ -90,6 +90,24 @@
       </div>
     </div>
 
+    <!-- Invite join loading screen -->
+    <div id="screen-invite-loading" class="screen">
+      <div class="invite-loading-panel">
+        <span class="brand-icon">🎙️</span>
+        <h2>Joining room</h2>
+        <code id="invite-room-code" class="invite-room-code"></code>
+        <p class="invite-loading-status">
+          <span class="btn-spinner invite-spinner"></span>
+          <span id="invite-join-status">Connecting…</span>
+        </p>
+        <div class="pseudo-field invite-pseudo-field">
+          <input id="input-pseudo-invite" type="text" placeholder="Your name…" maxlength="20"
+                 spellcheck="false" autocomplete="off" />
+        </div>
+        <button id="btn-cancel-invite-join" class="btn btn-secondary">Back</button>
+      </div>
+    </div>
+
     <!-- Settings modal (web / mobile only — Tauri uses a separate window) -->
     <div id="modal-settings" class="modal hidden" role="dialog" aria-modal="true" aria-label="Settings">
       <div class="modal-backdrop" id="modal-backdrop"></div>

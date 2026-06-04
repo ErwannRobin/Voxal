@@ -668,7 +668,9 @@ function setMyPseudo(nextPseudo) {
   sessionStorage.setItem(PSEUDO_SESSION_KEY, myPseudo);
   if (shouldPersistPseudoGlobally()) localStorage.setItem(PSEUDO_KEY, myPseudo);
   const homeInput = $('input-pseudo');
+  const inviteInput = $('input-pseudo-invite');
   if (homeInput && homeInput.value !== myPseudo) homeInput.value = myPseudo;
+  if (inviteInput && inviteInput.value !== myPseudo) inviteInput.value = myPseudo;
   if (inRoom) {
     updatePeerList();
     announcePseudoChange();
@@ -1237,6 +1239,18 @@ function clearRoomCodeInput() {
   if (!input) return;
   input.value = '';
   input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function startInviteRoomJoin(rawRoomCode) {
+  var roomId = normalizeRoomCode(rawRoomCode);
+  if (!roomId) return;
+  var roomCodeEl = $('invite-room-code');
+  if (roomCodeEl) roomCodeEl.textContent = roomId;
+  var statusEl = $('invite-join-status');
+  if (statusEl) statusEl.textContent = 'Connecting…';
+  showScreen('invite-loading');
+  if (_audioCtx.state === 'suspended') _audioCtx.resume();
+  joinRoom(roomId).catch(function(err) { showError(err.message); });
 }
 
 function applyNewShortcut(newShortcut) {
@@ -3778,6 +3792,11 @@ window.addEventListener('DOMContentLoaded', function() {
     homePseudoInput.value = myPseudo;
     homePseudoInput.addEventListener('input', function(e) { setMyPseudo(e.target.value); });
   }
+  const invitePseudoInput = $('input-pseudo-invite');
+  if (invitePseudoInput) {
+    invitePseudoInput.value = myPseudo;
+    invitePseudoInput.addEventListener('input', function(e) { setMyPseudo(e.target.value); });
+  }
 
   // Connect button: visible only when NOT logged in
   window.updateConnectVisibility = function updateConnectVisibility() {
@@ -3897,11 +3916,20 @@ window.addEventListener('DOMContentLoaded', function() {
     if (joinBtn) joinBtn.click();
   });
 
+  var cancelInviteJoinBtn = $('btn-cancel-invite-join');
+  if (cancelInviteJoinBtn) {
+    cancelInviteJoinBtn.addEventListener('click', function() {
+      if (_cancelJoin) {
+        _cancelJoin();
+        _cancelJoin = null;
+      }
+      showScreen('home');
+    });
+  }
+
   var invitedRoomCode = consumeRoomInviteFromQuery();
   if (invitedRoomCode) {
-    $('input-code').value = invitedRoomCode;
-    var joinBtn = $('btn-join');
-    if (joinBtn) joinBtn.click();
+    startInviteRoomJoin(invitedRoomCode);
   }
 
   // TURN settings modal
@@ -4255,7 +4283,9 @@ window.addEventListener('DOMContentLoaded', function() {
       myPseudo = e.newValue || '';
       sessionStorage.setItem(PSEUDO_SESSION_KEY, myPseudo);
       const homeInput = $('input-pseudo');
+      const inviteInput = $('input-pseudo-invite');
       if (homeInput) homeInput.value = myPseudo;
+      if (inviteInput) inviteInput.value = myPseudo;
       if (inRoom) {
         updatePeerList();
         announcePseudoChange();
