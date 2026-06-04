@@ -594,6 +594,38 @@ function schedulePublishRefresh() {
 
 var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function parseRoomFromUrlCandidate(raw) {
+  if (!raw) return '';
+  try {
+    var url = new URL(raw);
+    var room = (url.searchParams.get('room') || '').trim();
+    return room ? decodeURIComponent(room) : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function normalizeRoomCode(raw) {
+  var code = (raw || '').trim();
+  if (!code) return '';
+
+  var fromDirectUrl = parseRoomFromUrlCandidate(code);
+  if (fromDirectUrl) code = fromDirectUrl;
+
+  if (!fromDirectUrl) {
+    var roomMatch = code.match(/[?&]room=([^&#\s]+)/i);
+    if (roomMatch && roomMatch[1]) {
+      try { code = decodeURIComponent(roomMatch[1]); } catch (_) { code = roomMatch[1]; }
+    }
+  }
+
+  if (UUID_RE.test(code)) return code;
+  var uuidMatch = code.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  if (uuidMatch) return uuidMatch[0];
+
+  return code;
+}
+
 // Resolve a public lobby identifier to the actual PeerJS peer ID.
 // Skips the lookup if the code is already a UUID (PeerJS peer ID).
 // Returns the peer ID if found, or null if the code is not a published room.
@@ -657,16 +689,14 @@ function updateRoomHeader() {
   if (!isHost) {
     publishBtn.classList.add('hidden');
     unpublishBtn.classList.add('hidden');
-    if (shareBtn) shareBtn.classList.add('hidden');
   } else if (_publishSecret) {
     publishBtn.classList.add('hidden');
     unpublishBtn.classList.remove('hidden');
-    if (shareBtn) shareBtn.classList.toggle('hidden', !_publishedShareUrl);
   } else {
     publishBtn.classList.remove('hidden');
     unpublishBtn.classList.add('hidden');
-    if (shareBtn) shareBtn.classList.add('hidden');
   }
+  if (shareBtn) shareBtn.classList.toggle('hidden', !(_publishedRoomId || roomCode));
 }
 
 // peerId -> { data, media, pseudo, talking }
@@ -1064,6 +1094,40 @@ function copyTextToClipboard(text, toastMessage) {
   } else {
     fallbackCopy(text);
     showCopyToast(toastMessage);
+  }
+}
+
+function roomInviteBaseUrl() {
+  try {
+    var current = new URL(window.location.href);
+    if (current.protocol === 'http:' || current.protocol === 'https:') {
+      current.search = '';
+      current.hash = '';
+      return current.toString();
+    }
+  } catch (_) {}
+  return voxalConnectUrl().replace(/\/$/, '') + '/';
+}
+
+function roomInviteUrl(roomId) {
+  if (!roomId) return '';
+  var url = new URL(roomInviteBaseUrl());
+  url.searchParams.set('room', roomId);
+  return url.toString();
+}
+
+function consumeRoomInviteFromQuery() {
+  try {
+    var current = new URL(window.location.href);
+    var roomId = normalizeRoomCode(current.searchParams.get('room') || '');
+    if (!roomId) return '';
+    current.searchParams.delete('room');
+    if (window.history && window.history.replaceState) {
+      window.history.replaceState({}, document.title, current.toString());
+    }
+    return roomId;
+  } catch (_) {
+    return '';
   }
 }
 
@@ -3421,6 +3485,7 @@ function handleHostMessage(msg) {
 }
 
 async function joinRoom(code, onJoined) {
+  code = normalizeRoomCode(code);
   if (!code) return;
   devLog('→ Joining room ' + code + '…');
   // Resolve public lobby identifier to PeerJS peer ID if applicable
@@ -3787,7 +3852,7 @@ window.addEventListener('DOMContentLoaded', function() {
     var _sr = $('shortcut-recording'); if (_sr) _sr.style.display = 'none';
     var _ss = $('shortcut-spacer'); if (_ss) _ss.style.display = 'none';
     $('ptt-hint').textContent = 'Hold to talk · double-tap for hands-free';
-    $('btn-copy').title = 'Share room code';
+    $('btn-copy').title = 'Copy room code';
   }
 
   $('btn-create').addEventListener('click', function() {
@@ -3831,6 +3896,13 @@ window.addEventListener('DOMContentLoaded', function() {
     var joinBtn = $('btn-join');
     if (joinBtn) joinBtn.click();
   });
+
+  var invitedRoomCode = consumeRoomInviteFromQuery();
+  if (invitedRoomCode) {
+    $('input-code').value = invitedRoomCode;
+    var joinBtn = $('btn-join');
+    if (joinBtn) joinBtn.click();
+  }
 
   // TURN settings modal
   function connStatusHTML() {
@@ -4286,17 +4358,8 @@ window.addEventListener('DOMContentLoaded', function() {
   startPresencePolling();
   $('btn-copy').addEventListener('click', function() {
     var text = _publishedRoomId || roomCode;
-    // On native mobile, open the system share sheet with a deep link
-    if (window.Capacitor && window.Capacitor.isNativePlatform()) {
-      var shareUrl = 'voxal://join?room=' + encodeURIComponent(text);
-      if (navigator.share) {
-        navigator.share({ title: 'Join my Voxal room', text: shareUrl }).catch(function(e) { console.warn('[Share]', e); });
-      } else {
-        fallbackCopy(shareUrl); showCopyToast();
-      }
-      return;
-    }
-    copyTextToClipboard(text);
+    if (!text) return;
+    copyTextToClipboard(text, 'Room code copied!');
   });
   $('btn-leave').addEventListener('click', leaveRoom);
 
@@ -4313,12 +4376,14 @@ window.addEventListener('DOMContentLoaded', function() {
   });
 
   $('btn-share-room').addEventListener('click', function() {
-    var url = _publishedShareUrl;
+    var roomId = _publishedRoomId || roomCode;
+    if (!roomId) return;
+    var url = roomInviteUrl(roomId);
     if (!url) return;
     if (navigator.share) {
       navigator.share({ title: 'Join my Voxal room', url: url }).catch(function(e) { console.warn('[Share]', e); });
     } else {
-      fallbackCopy(url); showCopyToast();
+      fallbackCopy(url); showCopyToast('Invite link copied!');
     }
   });
 
