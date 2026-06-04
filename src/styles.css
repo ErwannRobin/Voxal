@@ -65,10 +65,11 @@ html[data-theme="light"] {
 }
 
 body {
-  width: 100vw;
+  width: 100%;
   height: 100vh;
   height: 100dvh; /* shrinks when browser chrome is visible */
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: none;       /* no rubber-band bounce on iOS/Android */
   display: flex;
   align-items: stretch;
@@ -82,15 +83,22 @@ body {
   display: none;
   flex-direction: column;
   width: 100%;
+  max-width: 100vw;
   height: 100vh;
   height: 100dvh; /* shrinks when browser chrome is visible */
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: visible;
   padding-top:    max(calc(env(safe-area-inset-top)    + 24px), 24px);
   padding-right:  max(calc(env(safe-area-inset-right)  + 20px), 20px);
   padding-bottom: max(calc(env(safe-area-inset-bottom) + 24px), 24px);
   padding-left:   max(calc(env(safe-area-inset-left)   + 20px), 20px);
 }
 .screen.active { display: flex; }
+
+#screen-home {
+  height: auto;
+  min-height: 100dvh;
+}
 
 /* ── Home ───────────────────────────────────────────────────────── */
 
@@ -118,7 +126,8 @@ body {
   text-transform: uppercase;
 }
 
-.home-actions { display: flex; flex-direction: column; gap: 10px; flex: 1; overflow-y: auto; min-height: 0; }
+.home-actions { display: flex; flex-direction: column; gap: 10px; flex: 0 0 auto; overflow: visible; min-height: 0; }
+.home-actions > * { min-width: 0; }
 
 .pseudo-field input {
   text-align: center;
@@ -140,9 +149,62 @@ body {
   background: var(--border);
 }
 
+.divider-line {
+  width: min(240px, 60%);
+  max-width: 240px;
+  height: 1px;
+  background: var(--border);
+  align-self: center;
+}
+
+#divider-after-connect {
+  margin: 30px 0 30px;
+}
+
 .join-row { display: flex; gap: 8px; }
 .join-row .input-clearable { flex: 1; min-width: 0; }
 .join-row input { flex: 1; min-width: 0; }
+
+@media (max-width: 480px) {
+  .screen {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .brand {
+    padding: 24px 0 20px;
+  }
+
+  .home-actions {
+    gap: 8px;
+  }
+
+  .join-row {
+    gap: 6px;
+  }
+
+  .btn-connect-voxal,
+  .join-row .btn,
+  .join-row .input-clearable,
+  .pseudo-field,
+  .divider-line {
+    max-width: 100%;
+  }
+
+  .divider-line {
+    width: min(180px, 48%);
+  }
+}
+
+@media (max-width: 480px) and (orientation: landscape) {
+  .brand {
+    padding: 14px 0 12px;
+  }
+
+  .home-actions {
+    gap: 6px;
+  }
+}
 
 /* ── Invite loading ──────────────────────────────────────────────── */
 

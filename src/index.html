@@ -38,6 +38,8 @@
                  spellcheck="false" autocomplete="off" />
         </div>
 
+        <div id="divider-before-connect" class="divider"><span>or</span></div>
+
         <!-- Presence channels (shown when API token + org are configured) -->
         <div id="presence-panel" class="presence-panel hidden">
           <div class="presence-header">
@@ -51,9 +53,9 @@
         <!-- Connect CTA (hidden once logged in) -->
         <div id="btn-connect-voxal-home" class="connect-cta btn-connect-voxal">
           <button class="btn btn-primary btn-full" onclick="connectWithVoxalAccount()">Connect</button>
-          <p class="connect-tagline">to use named channels, and see who's online</p>
-          <div class="divider"><span>or</span></div>
         </div>
+
+        <div id="divider-after-connect" class="divider-line"></div>
 
         <button id="btn-create" class="btn btn-primary btn-full">Create Room</button>
         <div class="divider"><span>or join one</span></div>

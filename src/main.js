@@ -675,6 +675,17 @@ function setMyPseudo(nextPseudo) {
     updatePeerList();
     announcePseudoChange();
   }
+  updateHomeLoggedOutLayout();
+}
+
+function updateHomeLoggedOutLayout() {
+  var connected = !!presenceToken();
+  var pseudoField = $('pseudo-field-home');
+  var beforeConnect = $('divider-before-connect');
+  var afterConnect = $('divider-after-connect');
+  if (pseudoField) pseudoField.style.display = (!connected || !myPseudo) ? '' : 'none';
+  if (beforeConnect) beforeConnect.style.display = connected ? 'none' : '';
+  if (afterConnect) afterConnect.style.display = connected ? 'none' : '';
 }
 
 // Presence state
@@ -3783,10 +3794,6 @@ window.addEventListener('DOMContentLoaded', function() {
     }
   });
 
-  // Pseudo: hide the home-screen name field once the user has set a name
-  // Hide the home pseudo field only if a name was already set at load time.
-  // Once visible in a session, it stays visible regardless of edits.
-  if (myPseudo) $('pseudo-field-home').style.display = 'none';
   const homePseudoInput = $('input-pseudo');
   if (homePseudoInput) {
     homePseudoInput.value = myPseudo;
@@ -3805,6 +3812,7 @@ window.addEventListener('DOMContentLoaded', function() {
     var btnSettings = document.getElementById('btn-connect-voxal');
     if (btnMain)     btnMain.style.display     = connected ? 'none' : '';
     if (btnSettings) btnSettings.style.display = connected ? 'none' : '';
+    updateHomeLoggedOutLayout();
   }
 
   // Disconnect row: visible only when token is set
@@ -4286,6 +4294,7 @@ window.addEventListener('DOMContentLoaded', function() {
       const inviteInput = $('input-pseudo-invite');
       if (homeInput) homeInput.value = myPseudo;
       if (inviteInput) inviteInput.value = myPseudo;
+      updateHomeLoggedOutLayout();
       if (inRoom) {
         updatePeerList();
         announcePseudoChange();
