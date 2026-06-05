@@ -27,12 +27,12 @@ All Voxal-originated events carry `source: 'voxal'` so they are trivial to filte
 <iframe
   id="voxal-frame"
   src="https://voxal-ptt.vercel.app"
-  allow="microphone"
+  allow="camera; microphone"
   style="width: 400px; height: 600px; border: none; border-radius: 12px;"
 ></iframe>
 ```
 
-> **`allow="microphone"` is required.** Cross-origin iframes do not inherit the parent page's microphone permission — this attribute explicitly delegates it.
+> **`allow="camera; microphone"` is required for video.** Cross-origin iframes do not inherit the parent page's camera or microphone permission — this attribute explicitly delegates both.
 
 ---
 
@@ -142,7 +142,7 @@ window.addEventListener('message', (e) => {
   <iframe
     id="voxal-frame"
     src="https://voxal-ptt.vercel.app"
-    allow="microphone"
+    allow="camera; microphone"
     style="width:400px;height:600px;border:none;"
   ></iframe>
 
@@ -201,5 +201,6 @@ window.addEventListener('message', (e) => {
 
 - **Room codes** are PeerJS peer IDs (UUIDs). They are created by Voxal when a user clicks "Create room". You can obtain one from the `joined` event (`e.data.roomCode`) and store it in your presence database so others can join later.
 - **Microphone permission** is requested by Voxal the first time the user joins a room. The browser will prompt the user; no action is needed on the portal side.
+- **Camera permission** must be delegated by the embedding page with `allow="camera"` (or `allow="camera; microphone"`). If Voxal is nested inside another iframe, every ancestor iframe must also allow camera access.
 - **No same-origin restriction** — the bridge uses `*` as the target origin when emitting events outward. To harden security you can restrict inbound commands by checking `e.origin` against your portal's origin inside Voxal's message listener.
 - **No authentication passthrough** — the iframe loads Voxal independently. If you want the embedded Voxal to be pre-logged-in with a presence account, pass the token via `postMessage` after the frame loads, or use a URL hash/query parameter that Voxal reads on startup.

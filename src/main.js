@@ -2046,6 +2046,19 @@ function updateVideoModeUI() {
   if (inRoom) updatePeerList();
 }
 
+function cameraAccessHint(err) {
+  var name = String((err && err.name) || '');
+  var message = String((err && err.message) || '');
+  var policyBlocked = /permissions policy|camera is not allowed in this document/i.test(message) || name === 'SecurityError';
+  if (policyBlocked && _isIframe) {
+    return 'Camera is blocked in this iframe — add allow="camera" to the <iframe>.';
+  }
+  if (policyBlocked || name === 'NotAllowedError') {
+    return 'Camera access was blocked by the browser.';
+  }
+  return 'Camera access failed';
+}
+
 function toggleVideoMode() {
   videoModeEnabled = !videoModeEnabled;
   localStorage.setItem(VIDEO_MODE_KEY, String(videoModeEnabled));
@@ -2067,7 +2080,8 @@ async function startVideoShare() {
       audio: false
     });
   } catch (e) {
-    showCopyToast('Camera access denied');
+    devLog('[Video] Camera share failed: ' + (e && e.message ? e.message : String(e)), 'warn');
+    showCopyToast(cameraAccessHint(e));
     return;
   }
   localVideoActive = true;
