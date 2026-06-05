@@ -1612,10 +1612,31 @@ function updatePeerList() {
     parent.appendChild(_buildStatsBadge(conn.webrtcStats));
   };
 
+  const appendCameraLiveDot = function(parent, active, title) {
+    if (!active) return;
+    const dot = document.createElement('span');
+    dot.className = 'peer-video-live-dot';
+    dot.title = title || 'Camera live';
+    dot.setAttribute('aria-label', title || 'Camera live');
+    parent.appendChild(dot);
+  };
+
+  const appendScreenLiveDot = function(parent, active, title) {
+    if (!active) return;
+    const dot = document.createElement('span');
+    dot.className = 'peer-screen-live-dot';
+    dot.title = title || 'Screen shared';
+    dot.setAttribute('aria-label', title || 'Screen shared');
+    parent.appendChild(dot);
+  };
+
   const addItem = (id, label, self, talking, editable, actualPeerId) => {
     const div = document.createElement('div');
     div.id = 'peer-item-' + id;
     div.className = 'peer-item' + (self ? ' peer-self' : '') + (talking ? ' talking' : '');
+    const peerConn = actualPeerId ? connections.get(actualPeerId) : null;
+    const videoLive = self && localVideoActive;
+    const screenLive = self && localScreenActive;
 
     const dot = document.createElement('span');
     dot.className = 'peer-dot' + (!self ? ' peer-dot-clickable' : '');
@@ -1642,7 +1663,6 @@ function updatePeerList() {
       appendCopyPeerButton(div, actualPeerId, label);
       // Video camera icon (dev mode video prototype)
       if (videoModeEnabled && actualPeerId) {
-        var peerConn = connections.get(actualPeerId);
         if (peerConn && peerConn.videoActive) {
           var camBtn = document.createElement('button');
           camBtn.className = 'btn-icon peer-cam-btn';
@@ -1713,6 +1733,8 @@ function updatePeerList() {
         setMyPseudo(input.value);
       });
       nameWrap.appendChild(input);
+      appendCameraLiveDot(nameWrap, videoLive, 'Your camera is live');
+      appendScreenLiveDot(nameWrap, screenLive, 'Your screen is shared');
       appendPeerRole(nameWrap, actualPeerId);
       peerMain.appendChild(nameWrap);
       appendPeerUuid(peerMain, actualPeerId);
@@ -1726,6 +1748,8 @@ function updatePeerList() {
     const name = document.createElement('span');
     name.textContent = myPseudo || 'You';
     nameWrap.appendChild(name);
+    appendCameraLiveDot(nameWrap, videoLive, 'Your camera is live');
+    appendScreenLiveDot(nameWrap, screenLive, 'Your screen is shared');
     appendPeerRole(nameWrap, peer && peer.id);
     const editBtn = document.createElement('button');
     editBtn.className = 'btn-icon peer-edit-btn';
