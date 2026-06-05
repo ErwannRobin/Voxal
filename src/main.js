@@ -696,7 +696,7 @@ let activeChannel    = null; // channel name for the current presence session
 let presenceInterval = null;
 
 function updateRoomHeader() {
-  $('room-code-display').textContent = _publishedRoomId || activeChannel || roomCode;
+  $('room-code-display').textContent = roomDisplayCode();
   var publishBtn   = $('btn-publish-room');
   var unpublishBtn = $('btn-unpublish-room');
   var shareBtn     = $('btn-share-room');
@@ -711,7 +711,7 @@ function updateRoomHeader() {
     publishBtn.classList.remove('hidden');
     unpublishBtn.classList.add('hidden');
   }
-  if (shareBtn) shareBtn.classList.toggle('hidden', !(_publishedRoomId || roomCode));
+  if (shareBtn) shareBtn.classList.toggle('hidden', !roomDisplayCode());
 }
 
 // peerId -> { data, media, pseudo, talking }
@@ -1131,6 +1131,11 @@ function roomInviteUrl(roomId) {
   return url.toString();
 }
 
+function roomDisplayCode() {
+  if (activeChannel && roomCode) return roomCode;
+  return _publishedRoomId || roomCode || activeChannel || '';
+}
+
 function consumeRoomInviteFromQuery() {
   try {
     var current = new URL(window.location.href);
@@ -1257,13 +1262,17 @@ function clearRoomCodeInput() {
 function startInviteRoomJoin(rawRoomCode) {
   var roomId = normalizeRoomCode(rawRoomCode);
   if (!roomId) return;
-  var roomCodeEl = $('invite-room-code');
-  if (roomCodeEl) roomCodeEl.textContent = roomId;
-  var statusEl = $('invite-join-status');
-  if (statusEl) statusEl.textContent = 'Connecting…';
-  showScreen('invite-loading');
+  showInviteLoading(roomId, 'Connecting…');
   if (_audioCtx.state === 'suspended') _audioCtx.resume();
   joinRoom(roomId).catch(function(err) { showError(err.message); });
+}
+
+function showInviteLoading(roomLabel, statusText) {
+  var roomCodeEl = $('invite-room-code');
+  if (roomCodeEl) roomCodeEl.textContent = roomLabel || '';
+  var statusEl = $('invite-join-status');
+  if (statusEl) statusEl.textContent = statusText || 'Connecting…';
+  showScreen('invite-loading');
 }
 
 function applyNewShortcut(newShortcut) {
@@ -3785,6 +3794,7 @@ async function joinChannel(item) {
     });
   };
   if (connected.length === 0) {
+    showInviteLoading(activeChannel || '', 'Creating room…');
     await createRoom(postPresence);
   } else {
     const hostId = connected.map(function(c) { return c.peer_id; }).sort()[0];
@@ -4414,6 +4424,7 @@ window.addEventListener('DOMContentLoaded', function() {
       } else if (msg.type === 'create') {
         if (_audioCtx.state === 'suspended') _audioCtx.resume();
         if (inRoom) leaveRoom();
+        showInviteLoading(activeChannel || '', 'Creating room…');
         createRoom().catch(function(err) { iframeEmit({ type: 'error', message: err.message }); });
       } else if (msg.type === 'leave') {
         if (inRoom) leaveRoom();
@@ -4446,7 +4457,7 @@ window.addEventListener('DOMContentLoaded', function() {
   // Start presence polling on load (if configured)
   startPresencePolling();
   $('btn-copy').addEventListener('click', function() {
-    var text = _publishedRoomId || roomCode;
+    var text = roomDisplayCode();
     if (!text) return;
     copyTextToClipboard(text, 'Room code copied!');
   });
@@ -4465,7 +4476,7 @@ window.addEventListener('DOMContentLoaded', function() {
   });
 
   $('btn-share-room').addEventListener('click', function() {
-    var roomId = _publishedRoomId || roomCode;
+    var roomId = roomDisplayCode();
     if (!roomId) return;
     var url = roomInviteUrl(roomId);
     if (!url) return;
