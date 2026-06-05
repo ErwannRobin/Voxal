@@ -72,6 +72,7 @@ The desktop binary is ~10–20 MB. The web version is three static files.
 | Tauri CLI | installed via `npm install` |
 
 On macOS you also need Xcode Command Line Tools (`xcode-select --install`).
+On a blank Mac, install Xcode Command Line Tools first, then Node.js, then Rust.
 
 ---
 
@@ -87,6 +88,8 @@ make dev
 # Or serve the web version locally
 make run-web          # → http://localhost:8080
 ```
+
+If `make install` reports that `npm` is missing, install Node.js first and rerun it.
 
 ---
 

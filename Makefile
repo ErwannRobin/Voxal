@@ -16,7 +16,7 @@ help:
 	@echo "  cap-sync     Sync web assets to iOS & Android"
 	@echo "  cap-ios      Open Xcode (iOS)"
 	@echo "  cap-android  Open Android Studio"
-	@echo "  install      Install npm + Rust dependencies"
+	@echo "  install      Check prereqs, then install npm + Rust dependencies"
 	@echo "  release      Build signed release and publish to GitHub (requires gh CLI)"
 	@echo "  docs         Serve architecture flow docs on http://localhost:8090"
 	@echo "  check        Run Rust type-check (no binary)"
@@ -104,7 +104,31 @@ cap-android: cap-sync
 # ── Misc ──────────────────────────────────────────────────────────────────────
 
 install:
+	@missing=0; \
+	if ! command -v npm >/dev/null 2>&1; then \
+		echo "Error: npm not found."; \
+		echo "Install Node.js 18+ first: https://nodejs.org/"; \
+		echo "Or, if you have Homebrew: brew install node"; \
+		missing=1; \
+	fi; \
+	if ! command -v cargo >/dev/null 2>&1; then \
+		echo "Error: cargo not found."; \
+		echo "Install Rust with rustup: curl https://sh.rustup.rs -sSf | sh"; \
+		missing=1; \
+	fi; \
+	if ! xcode-select -p >/dev/null 2>&1; then \
+		echo "Error: Xcode Command Line Tools are missing."; \
+		echo "Install them with: xcode-select --install"; \
+		missing=1; \
+	fi; \
+	if [ "$$missing" -ne 0 ]; then \
+		echo ""; \
+		echo "After installing the missing tools, rerun: make install"; \
+		exit 1; \
+	fi
+	@echo "→ Installing npm dependencies..."
 	npm install
+	@echo "→ Fetching Rust crates..."
 	cd src-tauri && cargo fetch
 
 # Build a signed release and publish it as a GitHub Release.
