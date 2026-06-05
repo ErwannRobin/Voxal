@@ -4108,8 +4108,8 @@ window.addEventListener('DOMContentLoaded', function() {
         const win = new WebviewWindow('preferences', {
           url: 'settings.html',
           title: 'Voxal — Preferences',
-          width: 420,
-          height: 720,
+          width: 760,
+          height: 760,
           resizable: true,
           center: true,
         });
@@ -4235,6 +4235,9 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-open-settings').addEventListener('click', function() {
     // On web/mobile, open settings.
     if (!window.__TAURI__) openSettings();
+  });
+  $('btn-open-settings-room').addEventListener('click', function() {
+    openSettings();
   });
   // On desktop the native menu handles settings — hide the gear icon,
   // but keep the button visible so the TURN status LED remains.
