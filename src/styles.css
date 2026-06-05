@@ -171,6 +171,30 @@ body {
     padding-left: 16px;
   }
 
+  .room-header {
+    gap: 6px;
+  }
+
+  .room-header-left {
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .room-meta {
+    gap: 4px;
+  }
+
+  .room-code-copy {
+    flex: 1 1 auto;
+    max-width: 100%;
+    padding: 2px 6px;
+  }
+
+  .room-code {
+    max-width: 100%;
+    font-size: 11px;
+  }
+
   .brand {
     padding: 24px 0 20px;
   }
@@ -307,7 +331,13 @@ body {
   transform: translateX(-50%) translateY(0);
 }
 
-.room-meta { display: flex; align-items: center; gap: 6px; }
+.room-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
 
 .label {
   font-size: 10px;
@@ -325,6 +355,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 5px;
   padding: 2px 7px;
+  min-width: 0;
   cursor: pointer;
   touch-action: manipulation;
   transition: border-color 0.15s, background 0.15s;
@@ -354,6 +385,8 @@ body {
   font-size: 12px;
   line-height: 1;
   color: var(--accent);
+  flex: 1 1 auto;
+  min-width: 0;
   max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
