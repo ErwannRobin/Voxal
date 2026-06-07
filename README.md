@@ -191,7 +191,7 @@ All sounds are synthesized via the Web Audio API — no audio files are bundled.
 voxal/
 ├── src/                       # Frontend (desktop + web)
 │   ├── index.html             # App shell (home, room, error screens)
-│   ├── main.js                # All app logic (~450 lines, no framework)
+│   ├── main.js                # All app logic (no framework)
 │   ├── styles.css             # Dark theme, responsive layout
 │   └── assets/
 │       └── peerjs.min.js      # PeerJS bundled locally (no CDN)
