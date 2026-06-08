@@ -1,21 +1,26 @@
 # Voxal
 
-> Serverless push-to-talk voice chat for your desktop and browser — no accounts, no central server, just a room code.
+> Serverless push-to-talk voice chat for desktop, mobile, and browser — no accounts, no central server, just a room code.
 
-![screenshot placeholder](docs/voxal-screenshot.png)
+![screenshot](docs/voxal-screenshot.png)
 
 ---
 
 ## Features
 
-- 🎙 **Push-to-talk** — hold a configurable keyboard shortcut (or click-and-hold the mic button) to transmit
+- 🎙 **Push-to-talk** — hold a configurable keyboard shortcut (desktop) or tap-and-hold the mic button (mobile/web) to transmit
 - 🔓 **Free-hand mode** — toggle always-on mic when you don't want to hold a key
 - 🔑 **Private rooms** — share a room code; only people with the code can join
 - 👤 **Pseudonyms** — pick a nickname that shows in the participant list
 - 🟢 **Talking indicator** — speaking participants are highlighted in real time
 - 🔔 **Audio cues** — synthesized sounds for PTT on/off, peer join, and peer leave
-- 🖥 **Desktop + web** — runs as a native Tauri app or as a plain static web page
-- ☁️ **No server** — P2P audio via WebRTC; only the PeerJS free signaling tier is used
+- 📹 **Video & screen sharing** — optional camera and screen share per participant
+- 🎛 **Noise suppression** — RNNoise WASM or browser-native noise cancellation
+- 🖥 **Desktop + mobile + web** — native Tauri app, Capacitor iOS/Android app, or a plain static web page
+- 🍎 **iOS Dynamic Island PTT** — system-level push-to-talk button via `PushToTalkUI`
+- 🔄 **Auto-updater** — built-in update check on Tauri desktop (signed releases)
+- 🔗 **Optional presence** — connect a Voxal account to see org channels and online status
+- ☁️ **No mandatory server** — P2P audio via WebRTC; only the PeerJS free signaling tier is required
 
 ---
 
@@ -33,18 +38,25 @@ Signaling server    :  PeerJS public server (0.peerjs.com) — free tier, ~50 us
 1. **Host** creates a room → PeerJS assigns them a peer ID (this *is* the room code)
 2. **Joiner** enters the room code → connects to host via DataConnection, sends `hello { pseudo }`
 3. Host replies with the full peer list, then broadcasts `peer-joined` to all existing peers
-4. Everyone calls everyone else directly over WebRTC (full mesh) for audio
+4. Everyone connects to everyone else directly over WebRTC for audio (full mesh)
 5. Talking state is relayed through the host's data channel so all participants see who's speaking
+6. When the host leaves, peers elect a new host by following the authoritative successor chain published in every `peer-list` and `heartbeat`; audio is uninterrupted
 
 ### Data protocol
 
 | Message | Direction | Payload |
 |---|---|---|
 | `hello` | joiner → host | `{ pseudo }` |
-| `peer-list` | host → joiner | `{ peers:[{id,pseudo}], hostId, hostPseudo }` |
+| `peer-list` | host → joiner | `{ peers:[{id,pseudo}], hostId, hostPseudo, deputyId, successorIds }` |
 | `peer-joined` | host → all | `{ peerId, pseudo }` |
 | `peer-left` | host → all | `{ peerId }` |
+| `peer-renamed` | host → all | `{ peerId, pseudo }` |
 | `talking` | peer → host → all | `{ peerId, active }` |
+| `heartbeat` | host ↔ peers | `{ at, deputyId, successorIds }` |
+| `redirect` | peer → misdirected joiner | `{ hostId, hostPseudo }` |
+| `room-published` | host → all | `{ roomId }` |
+| `video-offer` | peer → host (relayed) | `{ peerId }` |
+| `video-stop` | peer → host (relayed) | `{ peerId }` |
 
 ---
 
@@ -53,13 +65,17 @@ Signaling server    :  PeerJS public server (0.peerjs.com) — free tier, ~50 us
 | Layer | Technology |
 |---|---|
 | Desktop shell | [Tauri 2](https://v2.tauri.app) (Rust + WebView) |
-| Frontend | Vanilla HTML / CSS / JS (no build step) |
+| Mobile shell | [Capacitor 8](https://capacitorjs.com) (iOS + Android) |
+| Frontend | Vanilla HTML / CSS / JS — no framework, no build step |
 | P2P signaling | [PeerJS 1.5](https://peerjs.com) — bundled locally (`src/assets/peerjs.min.js`) |
 | Audio | WebRTC `getUserMedia` + Opus |
+| Noise suppression | RNNoise WASM / browser constraints |
 | Audio feedback | Web Audio API (synthesized, no audio files) |
 | Global shortcut | `tauri-plugin-global-shortcut` (desktop only) |
+| Auto-updater | `tauri-plugin-updater` (desktop only) |
+| Deep links | `tauri-plugin-deep-link` / `CFBundleURLSchemes` (`voxal://`) |
 
-The desktop binary is ~10–20 MB. The web version is three static files.
+The desktop binary is ~10–20 MB. The web version is a handful of static files.
 
 ---
 
@@ -89,29 +105,56 @@ make dev
 make run-web          # → http://localhost:8080
 ```
 
-If `make install` reports that `npm` is missing, install Node.js first and rerun it.
+If `make install` reports that a tool is missing, follow the printed guidance and rerun it.
 
 ---
 
 ## All Makefile targets
 
 ```
-make help        Show this list
-make dev         Tauri hot-reload dev mode
-make run         Build & launch the desktop release binary
-make build       Full Tauri release build (produces installer)
-make run-web     Serve src/ on http://localhost:8080
-make build-web   Copy src/ to dist/ for static hosting
-make install     npm install + cargo fetch
-make check       Rust type-check without building
-make clean       Remove Cargo build artifacts and dist/
+make help          Show this list
+make dev           Tauri hot-reload dev mode
+make run           Build & launch the desktop release binary
+make build         Full Tauri release build
+make build-debug   macOS debug bundle (registers voxal:// URL scheme)
+make build-signed  Release build with signing key (for auto-updater)
+make run-web       Serve src/ on http://localhost:8080
+make build-web     Copy src/ to dist/ for static hosting
+make cap-sync      Sync src/ assets to iOS & Android
+make cap-ios       cap-sync + open Xcode
+make cap-android   cap-sync + open Android Studio
+make install       npm install + cargo fetch
+make check         Rust type-check without building
+make clean         Remove Cargo build artifacts and dist/
+make docs          Serve architecture docs on http://localhost:8090
 ```
+
+> **macOS URL scheme note:** `make dev` cannot register the `voxal://` custom scheme — it requires a signed `.app` bundle. Run `make build-debug` once and open the resulting `.app` to register it; the registration persists when you switch back to `make dev`.
+
+---
+
+## Deploying the web version
+
+The `src/` folder is a self-contained static web app — no bundler, no build step.
+
+```sh
+# Copy to dist/
+make build-web
+
+# Then deploy dist/ to any static host, for example:
+npx netlify deploy --dir dist
+# or drag dist/ into Netlify/Vercel/GitHub Pages
+```
+
+> **Note:** the web version requires the page to be served over **HTTPS** (or `localhost`) for `getUserMedia` microphone access.
+
+A `vercel.json` is included that sets the required `Cross-Origin-Opener-Policy` / `Cross-Origin-Embedder-Policy` headers (needed for `SharedArrayBuffer` / RNNoise WASM).
 
 ---
 
 ## Mobile (Capacitor — iOS & Android)
 
-The `src/` web app is wrapped as a native mobile app via [Capacitor](https://capacitorjs.com). All Tauri-specific calls are already guarded so they silently no-op on mobile.
+The `src/` web app is wrapped as a native mobile app via [Capacitor](https://capacitorjs.com). All Tauri-specific calls are guarded with `if (window.__TAURI__)` and silently no-op on mobile.
 
 ### Prerequisites
 - **iOS:** Mac + Xcode + Apple Developer account (for device builds)
@@ -130,42 +173,31 @@ make cap-ios
 make cap-android
 ```
 
+> **Important:** every change to `src/` must be manually synced to `ios/App/App/public/` and `android/app/src/main/assets/public/` (or via `make cap-sync`) before building.
+
 ### What works on mobile
 - Full P2P room creation and joining
 - Push-to-talk via tap-and-hold on the mic button
+- iOS system-level PTT via Dynamic Island (`PushToTalkUI` framework)
 - Free-hand mode toggle
 - Pseudonyms and talking indicators
-- Audio cues and haptic feedback on PTT (via `@capacitor/haptics`)
-- Microphone permissions declared for both platforms
+- Audio cues and haptic feedback on PTT
+- Noise suppression
+- Deep links (`voxal://`) for room sharing
 
 ### What's different vs desktop
 - No global keyboard shortcut (mobile has no background keyboard access) — PTT is touch-only
-- Space/Enter shortcuts only work if a hardware keyboard is connected
-
-
-
-The `src/` folder is a self-contained static web app — no bundler, no build step.
-
-```sh
-# Copy to dist/
-make build-web
-
-# Then deploy dist/ to any static host, for example:
-npx netlify deploy --dir dist
-# or drag dist/ into Netlify/Vercel/GitHub Pages
-```
-
-> **Note:** the web version requires the page to be served over **HTTPS** (or `localhost`) for `getUserMedia` microphone access.
+- Hardware keyboard Space/Enter shortcuts work if a keyboard is connected
 
 ---
 
 ## Push-to-talk
 
 ### Desktop (Tauri)
-The global shortcut works **even when the app is in the background**. Default: `Ctrl+\``. You can change it inside the app — press the **Edit** button next to the shortcut display, then press your desired key combination.
+The global shortcut works **even when the app is in the background**. Default: `Shift+Space`. You can change it inside the app — press the **Edit** button next to the shortcut display, then press your desired key combination.
 
 ### Web (browser)
-PTT only works when the **tab is focused**. The configured shortcut is respected in the same way.
+PTT only works when the **tab is focused** (browser security limitation). Default shortcut: `Space`.
 
 ### Free-hand mode
 Click the **Free hand OFF/ON** button to keep your mic permanently open without holding any key.
@@ -185,24 +217,45 @@ All sounds are synthesized via the Web Audio API — no audio files are bundled.
 
 ---
 
+## Optional presence / channels
+
+Voxal can optionally connect to a presence backend to show org channels and online status. This is entirely opt-in — the app works fully without it.
+
+The default hosted instance is `https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session`. You can override the URL in Settings → Advanced to point at your own deployment, or leave the token field empty to use Voxal in pure peer-to-peer mode.
+
+---
+
 ## Project structure
 
 ```
 voxal/
-├── src/                       # Frontend (desktop + web)
-│   ├── index.html             # App shell (home, room, error screens)
-│   ├── main.js                # All app logic (no framework)
-│   ├── styles.css             # Dark theme, responsive layout
+├── src/                         # Frontend — shared by desktop, mobile, and web
+│   ├── index.html               # App shell (home, room, error screens)
+│   ├── main.js                  # All app logic (~3 000 lines, no framework)
+│   ├── styles.css               # Dark/light theme, responsive layout
+│   ├── settings.html            # Standalone preferences page (Tauri window / in-app modal)
+│   ├── devlog.html              # Standalone dev log pop-out window
 │   └── assets/
-│       └── peerjs.min.js      # PeerJS bundled locally (no CDN)
-├── src-tauri/                 # Tauri / Rust backend
+│       └── peerjs.min.js        # PeerJS bundled locally (no CDN)
+├── src-tauri/                   # Tauri / Rust backend
 │   ├── src/
-│   │   ├── lib.rs             # Global shortcut + update_ptt_shortcut command
-│   │   └── main.rs            # Entry point
+│   │   ├── lib.rs               # IPC commands + global shortcut + PTT events
+│   │   └── main.rs              # Entry point
 │   ├── Cargo.toml
-│   ├── tauri.conf.json        # Window config (340×520, resizable)
+│   ├── tauri.conf.json
+│   ├── Info.plist               # macOS usage descriptions (mic, camera)
+│   ├── entitlements.plist
 │   └── capabilities/
-│       └── default.json       # IPC permissions
+│       └── default.json         # IPC permissions
+├── ios/                         # Capacitor iOS project
+├── android/                     # Capacitor Android project
+├── KNOWLEDGE/                   # Development notes and gotchas (not shipped)
+│   ├── learning.md
+│   ├── todos.md
+│   └── universal-links-aasa.md
+├── docs/                        # Architecture diagrams
+├── capacitor.config.json
+├── vercel.json
 ├── Makefile
 └── package.json
 ```
@@ -211,13 +264,13 @@ voxal/
 
 ## Known limitations
 
-- **NAT traversal** — PeerJS uses Google's STUN servers by default. Users behind very strict NAT/firewalls may fail to connect. For maximum reliability, add a TURN server to the PeerJS config.
+- **NAT traversal** — PeerJS uses Google's STUN servers by default. Users behind very strict NAT/firewalls may fail to connect. For maximum reliability, configure a TURN server in Settings → Advanced.
 - **PeerJS free tier** — `0.peerjs.com` allows ~50 simultaneous connections per IP. For larger groups or production use, [self-host the PeerJS server](https://github.com/peers/peerjs-server).
 - **Browser PTT scope** — the keyboard shortcut only fires when the tab is focused (browser security limitation). Click-and-hold the mic button always works.
-- **Room persistence** — rooms exist only while at least one participant remains. When the host leaves, the remaining peer with the smallest peer ID is automatically elected as the new host; audio is uninterrupted since MediaConnections are fully peer-to-peer. The room code updates to reflect the new host's ID.
+- **Room persistence** — rooms exist only while at least one participant remains. When the host disconnects, the remaining peer designated as deputy is automatically promoted; audio MediaConnections are never torn down during the handoff.
 
 ---
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

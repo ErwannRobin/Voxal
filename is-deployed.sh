@@ -1,6 +1,6 @@
 #!/bin/sh
 
-REPO="ErwannRobin/Voxel"
+REPO="ErwannRobin/Voxal"
 
 LOCAL_SHA=$(git rev-parse HEAD)
 LOCAL_SHORT=$(git rev-parse --short HEAD)
