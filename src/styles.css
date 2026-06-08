@@ -740,6 +740,11 @@ body {
   font-size: 11px;
   color: var(--text-muted);
 }
+.shortcut-focused-note {
+  color: var(--text-muted);
+  opacity: 0.7;
+  font-style: italic;
+}
 kbd {
   font-family: 'SF Mono', 'Fira Code', monospace;
   font-size: 10px;

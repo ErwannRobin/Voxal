@@ -59,15 +59,19 @@ fn update_ptt_shortcut(
     shortcut: String,
 ) -> Result<(), String> {
     let mut current = state.0.lock().unwrap();
-    app.global_shortcut().unregister(current.as_str()).ok();
-    app.global_shortcut()
-        .on_shortcut(shortcut.as_str(), |app, _, event| {
-            match event.state {
-                ShortcutState::Pressed  => { let _ = app.emit("ptt-press",   ()); }
-                ShortcutState::Released => { let _ = app.emit("ptt-release", ()); }
-            }
-        })
-        .map_err(|e| e.to_string())?;
+    if !current.is_empty() {
+        app.global_shortcut().unregister(current.as_str()).ok();
+    }
+    if !shortcut.is_empty() {
+        app.global_shortcut()
+            .on_shortcut(shortcut.as_str(), |app, _, event| {
+                match event.state {
+                    ShortcutState::Pressed  => { let _ = app.emit("ptt-press",   ()); }
+                    ShortcutState::Released => { let _ = app.emit("ptt-release", ()); }
+                }
+            })
+            .map_err(|e| e.to_string())?;
+    }
     *current = shortcut;
     Ok(())
 }

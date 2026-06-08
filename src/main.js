@@ -1193,6 +1193,22 @@ const MODIFIER_CODES = [
   'ShiftLeft','ShiftRight','MetaLeft','MetaRight',
 ];
 
+const MODIFIER_ONLY_MAP = {
+  'AltLeft': 'Alt',     'AltRight': 'Alt',
+  'ShiftLeft': 'Shift', 'ShiftRight': 'Shift',
+  'ControlLeft': 'Ctrl','ControlRight': 'Ctrl',
+  'MetaLeft': 'Meta',   'MetaRight': 'Meta',
+};
+
+const MODIFIER_ONLY_VARIANTS = {
+  'Alt':   ['AltLeft',     'AltRight'],
+  'Shift': ['ShiftLeft',   'ShiftRight'],
+  'Ctrl':  ['ControlLeft', 'ControlRight'],
+  'Meta':  ['MetaLeft',    'MetaRight'],
+};
+
+function isModifierOnly(s) { return s in MODIFIER_ONLY_VARIANTS; }
+
 function shortcutFromEvent(e) {
   if (MODIFIER_CODES.includes(e.code)) return null;
   const mods = [];
@@ -1207,6 +1223,9 @@ function keyCodeOf(sc) { const parts = sc.split('+'); return parts[parts.length 
 
 // Returns true if a keydown event matches the current shortcut
 function matchesShortcut(e) {
+  if (isModifierOnly(shortcutStr)) {
+    return (MODIFIER_ONLY_VARIANTS[shortcutStr] || []).includes(e.code);
+  }
   const parts = shortcutStr.split('+');
   const keyCode = parts[parts.length - 1];
   const needCtrl  = parts.includes('Ctrl');
@@ -1242,6 +1261,8 @@ function updateShortcutDisplay() {
   if (kbd) kbd.textContent = label;
   const hintKbd = $('shortcut-hint-kbd');
   if (hintKbd) hintKbd.textContent = label;
+  const note = $('shortcut-focused-note');
+  if (note) note.classList.toggle('hidden', !(window.__TAURI__ && isModifierOnly(shortcutStr)));
 }
 
 function startRecordingShortcut() {
@@ -1284,7 +1305,9 @@ function applyNewShortcut(newShortcut) {
   localStorage.setItem('ptt-shortcut', newShortcut);
   updateShortcutDisplay();
   if (window.__TAURI__) {
-    window.__TAURI__.core.invoke('update_ptt_shortcut', { shortcut: newShortcut })
+    // Modifier-only shortcuts can't be registered as global hotkeys — they work only when focused
+    const tauriShortcut = isModifierOnly(newShortcut) ? '' : newShortcut;
+    window.__TAURI__.core.invoke('update_ptt_shortcut', { shortcut: tauriShortcut })
       .catch(function(err) { console.warn('Failed to update global shortcut:', err); shortcutStr = old; updateShortcutDisplay(); });
   }
 }
@@ -3929,7 +3952,7 @@ window.addEventListener('DOMContentLoaded', function() {
     });
   });
 
-  if (window.__TAURI__ && shortcutStr !== DEFAULT_SHORTCUT) {
+  if (window.__TAURI__ && shortcutStr !== DEFAULT_SHORTCUT && !isModifierOnly(shortcutStr)) {
     window.__TAURI__.core.invoke('update_ptt_shortcut', { shortcut: shortcutStr })
       .catch(function() { shortcutStr = DEFAULT_SHORTCUT; localStorage.removeItem('ptt-shortcut'); });
   }
@@ -4807,7 +4830,7 @@ window.addEventListener('DOMContentLoaded', function() {
       return; // don't process PTT or shortcuts while modal is open
     }
     if (shouldIgnorePTTShortcuts()) return;
-    if (recordingShortcut) { e.preventDefault(); const s = shortcutFromEvent(e); if (s) applyNewShortcut(s); return; }
+    if (recordingShortcut) { e.preventDefault(); if (!MODIFIER_CODES.includes(e.code)) { const s = shortcutFromEvent(e); if (s) applyNewShortcut(s); } return; }
     if (e.code === 'Space' && !e.repeat) {
       e.preventDefault();
       var now = Date.now();
@@ -4826,6 +4849,7 @@ window.addEventListener('DOMContentLoaded', function() {
     if (matchesShortcut(e) && !e.repeat) { setTalking(true);                                          e.preventDefault(); }
   });
   document.addEventListener('keyup', function(e) {
+    if (recordingShortcut && MODIFIER_ONLY_MAP[e.code]) { e.preventDefault(); applyNewShortcut(MODIFIER_ONLY_MAP[e.code]); return; }
     if (shouldIgnorePTTShortcuts()) return;
     if (e.code === 'Space') {
       if (ignoreSpaceUp) { ignoreSpaceUp = false; return; }
@@ -4839,6 +4863,7 @@ window.addEventListener('DOMContentLoaded', function() {
       return;
     }
     if (keyCodeOf(shortcutStr) === e.code) setTalking(false);
+    if (isModifierOnly(shortcutStr) && (MODIFIER_ONLY_VARIANTS[shortcutStr] || []).includes(e.code)) setTalking(false);
   });
 
   // Tauri-only: global shortcut works even when app is in background
