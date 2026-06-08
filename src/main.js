@@ -483,6 +483,8 @@ var _videoViewerPeerId = null;   // whose camera is displayed in viewer
 var _screenViewerPeerId = null;  // whose screen is displayed in viewer
 var _videoPopoutWindow = null;   // reference to video popup window
 var _screenPopoutWindow = null;  // reference to screen popup window
+var _devLogBuffer  = [];         // ring buffer of all log entries (max 200)
+var _devLogChannel = null;       // BroadcastChannel to the detached devlog window
 
 // --- WebRTC stats polling ---
 var _statsIntervalId  = null;
@@ -1302,19 +1304,32 @@ function devLog(msg, level) {
   if (lvl === 'warn') console.warn('[dev]', msg);
   else if (lvl === 'error') console.error('[dev]', msg);
   else console.log('[dev]', msg);
+
+  var now = new Date();
+  var t = now.toTimeString().slice(0, 8) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+  var entry = { t: t, msg: String(msg), lvl: lvl };
+
+  _devLogBuffer.push(entry);
+  while (_devLogBuffer.length > 200) _devLogBuffer.shift();
+
+  if (_devLogChannel) {
+    try { _devLogChannel.postMessage({ type: 'entry', entry: entry }); } catch (_) {}
+  }
+
   if (!isDevModeEnabled()) return;
   var panel = document.getElementById('dev-log-entries');
   if (!panel) return;
-  var now = new Date();
-  var t = now.toTimeString().slice(0, 8) + '.' + String(now.getMilliseconds()).padStart(3, '0');
-  var entry = document.createElement('div');
-  entry.className = 'dev-log-entry' + (lvl !== 'info' ? ' ' + lvl : '');
-  var safe = String(msg).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  entry.innerHTML = '<span class="dev-log-time">' + t + '</span><span class="dev-log-msg">' + safe + '</span>';
-  panel.appendChild(entry);
-  panel.scrollTop = panel.scrollHeight;
-  var entries = panel.children;
-  while (entries.length > 200) panel.removeChild(entries[0]);
+  appendDevLogEntryToContainer(panel, entry);
+}
+
+function appendDevLogEntryToContainer(container, entry) {
+  var el = document.createElement('div');
+  el.className = 'dev-log-entry' + (entry.lvl !== 'info' ? ' ' + entry.lvl : '');
+  var safe = entry.msg.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  el.innerHTML = '<span class="dev-log-time">' + entry.t + '</span><span class="dev-log-msg">' + safe + '</span>';
+  container.appendChild(el);
+  container.scrollTop = container.scrollHeight;
+  while (container.children.length > 200) container.removeChild(container.firstChild);
 }
 
 function updateDevLogPanel() {
@@ -3825,7 +3840,11 @@ window.addEventListener('DOMContentLoaded', function() {
   if (clearBtn) clearBtn.addEventListener('click', function() {
     var entries = document.getElementById('dev-log-entries');
     if (entries) entries.innerHTML = '';
+    _devLogBuffer.length = 0;
+    if (_devLogChannel) try { _devLogChannel.postMessage({ type: 'clear' }); } catch (_) {}
   });
+  var popoutBtn = document.getElementById('btn-popout-dev-log');
+  if (popoutBtn) popoutBtn.addEventListener('click', openDevLogWindow);
   var copyLogBtn = document.getElementById('btn-copy-dev-log');
   if (copyLogBtn) copyLogBtn.addEventListener('click', function() {
     var entries = document.getElementById('dev-log-entries');
@@ -4125,7 +4144,57 @@ window.addEventListener('DOMContentLoaded', function() {
     if (pop) pop.classList.add('hidden');
   }
 
-  let _prefsWin = null; // track the Tauri preferences window
+  let _prefsWin   = null; // track the Tauri preferences window
+  let _devLogWin  = null; // track the Tauri devlog window
+
+  function setDevLogPopped(popped) {
+    var panel = document.getElementById('dev-log-panel');
+    if (panel) panel.classList.toggle('popped-out', popped);
+  }
+
+  function openDevLogWindow() {
+    if (!_devLogChannel) {
+      _devLogChannel = new BroadcastChannel('voxal-devlog');
+      _devLogChannel.onmessage = function(e) {
+        if (e.data && e.data.type === 'ready') {
+          _devLogChannel.postMessage({ type: 'backfill', entries: _devLogBuffer.slice() });
+        } else if (e.data && e.data.type === 'clear') {
+          var panel = document.getElementById('dev-log-entries');
+          if (panel) panel.innerHTML = '';
+          _devLogBuffer.length = 0;
+        } else if (e.data && e.data.type === 'dock') {
+          setDevLogPopped(false);
+          if (_devLogWin) { try { _devLogWin.close(); } catch (_) {} _devLogWin = null; }
+        }
+      };
+    }
+    if (window.__TAURI__) {
+      try {
+        const { WebviewWindow } = window.__TAURI__.webviewWindow;
+        if (_devLogWin) {
+          _devLogWin.setFocus().catch(function() { _devLogWin = null; openDevLogWindow(); });
+          return;
+        }
+        const win = new WebviewWindow('devlog', {
+          url: 'devlog.html',
+          title: 'Voxal — Dev Log',
+          width: 640,
+          height: 480,
+          resizable: true,
+          center: true,
+        });
+        _devLogWin = win;
+        win.once('tauri://destroyed', function() { _devLogWin = null; setDevLogPopped(false); });
+        setDevLogPopped(true);
+        return;
+      } catch (e) {
+        console.warn('[DevLog] Could not open devlog window:', e.message);
+      }
+    }
+    // Web fallback
+    var w = window.open('devlog.html', 'voxal-devlog', 'width=640,height=480,resizable=yes');
+    if (w) { w.focus(); setDevLogPopped(true); }
+  }
 
   function openSettings() {
     // On Tauri desktop: try to open / focus a dedicated preferences window

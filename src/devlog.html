@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voxal — Dev Log</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script>
+    (function() {
+      var t = localStorage.getItem('theme') || 'system';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <style>
+    body { flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
+    .devlog-win { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 0; }
+    .devlog-win-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 12px; border-bottom: 1px solid var(--border);
+      flex-shrink: 0; background: var(--bg-surface);
+    }
+    .devlog-win-entries {
+      flex: 1; overflow-y: auto; padding: 6px 12px;
+      font-family: ui-monospace, 'Cascadia Code', monospace;
+      font-size: 11px; line-height: 1.55;
+      user-select: text; -webkit-user-select: text;
+    }
+  </style>
+</head>
+<body>
+  <div class="devlog-win">
+    <div class="devlog-win-header">
+      <span class="dev-log-title">Dev Log</span>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <button id="btn-dock" class="btn-icon dev-log-popout-btn" title="Dock back to main window">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="10 9 10 14 15 14"/><line x1="21" y1="3" x2="10" y2="14"/></svg>
+        </button>
+        <button id="btn-copy" class="btn-icon dev-log-copy-btn" title="Copy full log">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>
+        <button id="btn-clear" class="btn btn-secondary dev-log-clear">Clear</button>
+      </div>
+    </div>
+    <div id="entries" class="devlog-win-entries"></div>
+    <div id="copy-toast" class="copy-toast"></div>
+  </div>
+  <script>
+    var entries = document.getElementById('entries');
+
+    function appendEntry(data) {
+      var el = document.createElement('div');
+      el.className = 'dev-log-entry' + (data.lvl !== 'info' ? ' ' + data.lvl : '');
+      var safe = String(data.msg).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      el.innerHTML = '<span class="dev-log-time">' + data.t + '</span><span class="dev-log-msg">' + safe + '</span>';
+      entries.appendChild(el);
+      entries.scrollTop = entries.scrollHeight;
+    }
+
+    var channel = new BroadcastChannel('voxal-devlog');
+    channel.onmessage = function(e) {
+      var d = e.data;
+      if (!d) return;
+      if (d.type === 'backfill') {
+        entries.innerHTML = '';
+        (d.entries || []).forEach(appendEntry);
+      } else if (d.type === 'entry') {
+        appendEntry(d.entry);
+      } else if (d.type === 'clear') {
+        entries.innerHTML = '';
+      }
+    };
+    // Request existing entries from main window
+    channel.postMessage({ type: 'ready' });
+
+    document.getElementById('btn-dock').addEventListener('click', function() {
+      channel.postMessage({ type: 'dock' });
+      window.close();
+    });
+
+    var _copyToastTimer = null;
+    function showCopyToast(msg) {
+      var toast = document.getElementById('copy-toast');
+      if (!toast) return;
+      toast.textContent = msg || 'Copied!';
+      toast.classList.add('visible');
+      clearTimeout(_copyToastTimer);
+      _copyToastTimer = setTimeout(function() { toast.classList.remove('visible'); }, 1500);
+    }
+
+    document.getElementById('btn-copy').addEventListener('click', function() {
+      var lines = Array.from(entries.querySelectorAll('.dev-log-entry')).map(function(el) {
+        var time = el.querySelector('.dev-log-time');
+        var msg  = el.querySelector('.dev-log-msg');
+        return (time ? time.textContent : '') + '  ' + (msg ? msg.textContent : '');
+      });
+      var text = lines.join('\n');
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() { showCopyToast('Log copied'); }).catch(function() { fallback(); showCopyToast('Log copied'); });
+      } else {
+        fallback();
+        showCopyToast('Log copied');
+      }
+      function fallback() {
+        var ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); } catch(_) {}
+        document.body.removeChild(ta);
+      }
+    });
+
+    document.getElementById('btn-clear').addEventListener('click', function() {
+      entries.innerHTML = '';
+      channel.postMessage({ type: 'clear' });
+    });
+  </script>
+</body>
+</html>
