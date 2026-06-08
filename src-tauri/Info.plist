@@ -4,5 +4,7 @@
 <dict>
   <key>NSMicrophoneUsageDescription</key>
   <string>Voxal needs microphone access to transmit your voice in a room.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Voxal needs camera access to share video with other participants.</string>
 </dict>
 </plist>
