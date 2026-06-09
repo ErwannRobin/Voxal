@@ -97,18 +97,7 @@
         opacity: 0.6;
         margin: 0 0 20px;
       }
-      .btn-close-about {
-        font-size: 13px;
-        font-weight: 600;
-        padding: 8px 28px;
-        border-radius: 8px;
-        border: none;
-        background: var(--accent);
-        color: #fff;
-        cursor: pointer;
-        transition: opacity 0.12s;
-      }
-      .btn-close-about:hover { opacity: 0.85; }
+      .btn-close-about { display: none; }
     </style>
   </head>
   <body>
@@ -118,7 +107,6 @@
     <p id="about-build-date" class="about-build-date"></p>
     <p class="about-desc">
       Serverless P2P push-to-talk voice chat.<br>
-      No account, no server — just share a room code.
     </p>
     <div class="about-links">
       <a class="about-link-btn" data-url="https://github.com/ErwannRobin/Voxal">GitHub</a>
@@ -126,7 +114,6 @@
       <a class="about-link-btn" data-url="https://github.com/ErwannRobin/Voxal/issues/new">Report issue</a>
     </div>
     <p class="about-legal">MIT License · © 2026 Erwann Robin</p>
-    <button class="btn-close-about" id="btn-close">Close</button>
 
     <script>
       (function() {
@@ -160,16 +147,12 @@
           });
         });
 
-        // Close button
-        document.getElementById('btn-close').addEventListener('click', function() {
-          if (window.__TAURI__) {
-            window.__TAURI__.core.invoke('plugin:window|close').catch(function() {});
-          }
-        });
-
+        // Close on Escape / ⌘W
         document.addEventListener('keydown', function(e) {
           if (e.key === 'Escape' || (e.key === 'w' && (e.metaKey || e.ctrlKey))) {
-            document.getElementById('btn-close').click();
+            if (window.__TAURI__) {
+              window.__TAURI__.core.invoke('plugin:window|close').catch(function() {});
+            }
           }
         });
       })();

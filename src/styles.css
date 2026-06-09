@@ -1673,7 +1673,6 @@ details.turn-section .turn-inner {
   font-size: 11px;
   color: var(--text-muted);
   margin: 0;
-  padding-left: 56px;
 }
 .about-links {
   display: flex;
