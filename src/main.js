@@ -4801,7 +4801,13 @@ window.addEventListener('DOMContentLoaded', function() {
       lockHomeCTAs();
       bar.querySelector('#btn-dismiss-rejoin').disabled = true;
       attemptRejoin()
-        .catch(function(err) { showError(err.message); })
+        .catch(function(err) {
+          showError(err.message);
+          clearRejoinSnapshot();
+          _rejoinDismissed = true;
+          var b = $('rejoin-bar');
+          if (b) b.remove();
+        })
         .finally(function() {
           setLoading(btn, false, 'Rejoin');
           unlockHomeCTAs();
@@ -4821,6 +4827,8 @@ window.addEventListener('DOMContentLoaded', function() {
     var snapshot = loadRejoinSnapshot();
     var bar = $('rejoin-bar');
     if (!snapshot || _rejoinDismissed) { if (bar) bar.classList.add('hidden'); return; }
+    // No point rejoining if there were no other peers in the room
+    if (rejoinCandidates(snapshot).length === 0) { if (bar) bar.classList.add('hidden'); return; }
     if (!bar) bar = _createRejoinBar();
     var peerCount = (snapshot.peerIds || []).length;
     var labelEl = $('rejoin-label');
