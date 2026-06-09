@@ -4,6 +4,7 @@ use tauri::menu::{AboutMetadata, MenuItem, MenuBuilder, SubmenuBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_updater::UpdaterExt;
+use tauri_plugin_autostart::MacosLauncher;
 
 const DEFAULT_SHORTCUT: &str = "Shift+Space";
 
@@ -106,6 +107,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .manage(PttShortcut(Mutex::new(DEFAULT_SHORTCUT.to_string())))
         .setup(|app| {
             #[cfg(target_os = "macos")]

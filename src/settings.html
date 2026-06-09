@@ -126,6 +126,16 @@
 
       <div class="settings-separator"></div>
 
+      <!-- General (desktop only) -->
+      <div id="section-general" style="display:none">
+        <p class="settings-group-title">General</p>
+        <div class="settings-field" style="flex-direction:row;align-items:center">
+          <label for="toggle-launch-at-login" style="flex:1">Launch at login</label>
+          <button id="toggle-launch-at-login" class="toggle-btn" role="switch" aria-checked="false">OFF</button>
+        </div>
+        <div class="settings-separator"></div>
+      </div>
+
       <!-- Presence / Voxal account -->
       <p class="settings-group-title">Voxal Account</p>
       <p class="settings-desc">
@@ -332,6 +342,34 @@
           var on = localStorage.getItem(VIDEO_MODE_KEY) === 'true';
           localStorage.setItem(VIDEO_MODE_KEY, String(!on));
           syncVideo();
+        });
+      })();
+
+      // --- Launch at login (Tauri desktop only) ---
+      (function() {
+        if (!window.__TAURI__) return;
+        var section = $id('section-general');
+        var btn     = $id('toggle-launch-at-login');
+        section.style.display = '';
+
+        function syncBtn(enabled) {
+          btn.setAttribute('aria-checked', String(enabled));
+          btn.classList.toggle('active', enabled);
+          btn.textContent = enabled ? 'ON' : 'OFF';
+        }
+
+        window.__TAURI__.core.invoke('plugin:autostart|is_enabled')
+          .then(syncBtn)
+          .catch(function(e) { console.warn('[autostart] is_enabled failed', e); });
+
+        btn.addEventListener('click', function() {
+          var enabling = btn.getAttribute('aria-checked') !== 'true';
+          var cmd = enabling ? 'plugin:autostart|enable' : 'plugin:autostart|disable';
+          btn.disabled = true;
+          window.__TAURI__.core.invoke(cmd)
+            .then(function() { syncBtn(enabling); })
+            .catch(function(e) { console.error('[autostart]', e); })
+            .finally(function() { btn.disabled = false; });
         });
       })();
 
