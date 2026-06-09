@@ -4306,6 +4306,7 @@ window.addEventListener('DOMContentLoaded', function() {
 
   let _prefsWin   = null; // track the Tauri preferences window
   let _devLogWin  = null; // track the Tauri devlog window
+  let _aboutWin   = null; // track the Tauri about window
 
   function setDevLogPopped(popped) {
     var panel = document.getElementById('dev-log-panel');
@@ -4584,12 +4585,39 @@ window.addEventListener('DOMContentLoaded', function() {
     });
   }
 
-  // Tauri: "Voxal → Preferences…" menu item
+  // Tauri: "Voxal → Preferences…" and "About Voxal" menu items
   if (window.__TAURI__) {
     window.__TAURI__.event.listen('open-preferences', openSettings);
+    window.__TAURI__.event.listen('open-about', function() {
+      if (_aboutWin) {
+        _aboutWin.setFocus().catch(function() { _aboutWin = null; openAboutWindow(); });
+        return;
+      }
+      openAboutWindow();
+    });
     window.__TAURI__.event.listen('update-available', function(e) {
       showCopyToast('Updating to v' + (e.payload || '?') + '…');
     });
+  }
+
+  function openAboutWindow() {
+    try {
+      const { WebviewWindow } = window.__TAURI__.webviewWindow;
+      const win = new WebviewWindow('about', {
+        url: 'about.html',
+        title: 'About Voxal',
+        width: 340,
+        height: 420,
+        resizable: false,
+        center: true,
+        minimizable: false,
+        maximizable: false,
+      });
+      _aboutWin = win;
+      win.once('tauri://destroyed', function() { _aboutWin = null; });
+    } catch (e) {
+      console.warn('[About] Could not open about window:', e.message);
+    }
   }
 
   // Cross-window sync: when settings.html (Tauri preferences window) writes to

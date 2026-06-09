@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>About Voxal</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="version.js"></script>
+    <script>
+      (function() {
+        var t = localStorage.getItem('theme') || 'system';
+        document.documentElement.setAttribute('data-theme', t);
+      })();
+    </script>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 32px 28px 24px;
+        gap: 0;
+        text-align: center;
+      }
+      .about-icon {
+        width: 80px;
+        height: 80px;
+        border-radius: 18px;
+        margin-bottom: 16px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+      }
+      .about-app-name {
+        font-size: 22px;
+        font-weight: 700;
+        color: var(--text);
+        margin: 0 0 6px;
+        letter-spacing: -0.3px;
+      }
+      .about-version-badge {
+        display: inline-block;
+        font-size: 12px;
+        color: var(--text-muted);
+        background: var(--bg-raised);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 2px 10px;
+        margin-bottom: 6px;
+      }
+      .about-build-date {
+        font-size: 11px;
+        color: var(--text-muted);
+        margin: 0 0 20px;
+      }
+      .about-desc {
+        font-size: 12px;
+        color: var(--text-muted);
+        line-height: 1.6;
+        max-width: 260px;
+        margin: 0 0 22px;
+      }
+      .about-links {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 24px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      .about-link-btn {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--accent);
+        text-decoration: none;
+        cursor: pointer;
+        padding: 5px 12px;
+        border-radius: 7px;
+        border: 1px solid var(--border);
+        background: transparent;
+        transition: background 0.12s;
+      }
+      .about-link-btn:hover {
+        background: var(--bg-raised);
+      }
+      .about-legal {
+        font-size: 10px;
+        color: var(--text-muted);
+        opacity: 0.6;
+        margin: 0 0 20px;
+      }
+      .btn-close-about {
+        font-size: 13px;
+        font-weight: 600;
+        padding: 8px 28px;
+        border-radius: 8px;
+        border: none;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+        transition: opacity 0.12s;
+      }
+      .btn-close-about:hover { opacity: 0.85; }
+    </style>
+  </head>
+  <body>
+    <img src="assets/icon-192.png" alt="Voxal" class="about-icon" />
+    <p class="about-app-name">Voxal</p>
+    <span id="about-version" class="about-version-badge">v—</span>
+    <p id="about-build-date" class="about-build-date"></p>
+    <p class="about-desc">
+      Serverless P2P push-to-talk voice chat.<br>
+      No account, no server — just share a room code.
+    </p>
+    <div class="about-links">
+      <a class="about-link-btn" data-url="https://github.com/ErwannRobin/Voxal">GitHub</a>
+      <a class="about-link-btn" data-url="https://ptt.voxal.app">Website</a>
+      <a class="about-link-btn" data-url="https://github.com/ErwannRobin/Voxal/issues/new">Report issue</a>
+    </div>
+    <p class="about-legal">MIT License · © 2026 Erwann Robin</p>
+    <button class="btn-close-about" id="btn-close">Close</button>
+
+    <script>
+      (function() {
+        // Populate version and build date
+        var buildDate = new Date(VOXAL_BUILD_DATE).toLocaleDateString('en-GB', {
+          day: 'numeric', month: 'short', year: 'numeric'
+        });
+        document.getElementById('about-build-date').textContent = 'Built ' + buildDate;
+
+        function setVersion(v) {
+          document.getElementById('about-version').textContent = 'v' + v;
+        }
+
+        if (window.__TAURI__ && window.__TAURI__.app && typeof window.__TAURI__.app.getVersion === 'function') {
+          window.__TAURI__.app.getVersion().then(setVersion).catch(function() { setVersion(VOXAL_VERSION); });
+        } else {
+          setVersion(VOXAL_VERSION);
+        }
+
+        // Open external links via Tauri shell
+        document.querySelectorAll('.about-link-btn').forEach(function(el) {
+          el.addEventListener('click', function(e) {
+            e.preventDefault();
+            var url = el.getAttribute('data-url');
+            if (!url) return;
+            if (window.__TAURI__) {
+              window.__TAURI__.shell.open(url).catch(function() { window.open(url, '_blank', 'noopener'); });
+            } else {
+              window.open(url, '_blank', 'noopener');
+            }
+          });
+        });
+
+        // Close button
+        document.getElementById('btn-close').addEventListener('click', function() {
+          if (window.__TAURI__) {
+            window.__TAURI__.core.invoke('plugin:window|close').catch(function() {});
+          }
+        });
+
+        document.addEventListener('keydown', function(e) {
+          if (e.key === 'Escape' || (e.key === 'w' && (e.metaKey || e.ctrlKey))) {
+            document.getElementById('btn-close').click();
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

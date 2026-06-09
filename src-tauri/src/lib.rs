@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
-use tauri::menu::{AboutMetadata, MenuItem, MenuBuilder, SubmenuBuilder};
+use tauri::menu::{MenuItem, MenuBuilder, SubmenuBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_updater::UpdaterExt;
@@ -125,36 +125,12 @@ pub fn run() {
             // macOS: requires a proper build — scheme is baked into the .app bundle)
             app.deep_link().register_all().ok();
 
-            // Build the app menu with a native About Voxal dialog
-            let build_type = if cfg!(debug_assertions) { "Debug build" } else { "Release build" };
-            let comments = format!(
-                "P2P push-to-talk voice chat — no servers, no accounts required.\n\
-                \n\
-                Create or join a room with a code, then hold the PTT shortcut (default: Shift+Space) \
-                to transmit. Tap the mic button on mobile. Enable Free-hand mode to keep the mic \
-                permanently open.\n\
-                \n\
-                Audio is transmitted directly peer-to-peer over WebRTC (Opus codec). \
-                Only the PeerJS signalling server is used to establish connections.\n\
-                \n\
-                {}",
-                build_type
-            );
-
-            let about = AboutMetadata {
-                name: Some("Voxal".to_string()),
-                version: Some(env!("CARGO_PKG_VERSION").to_string()),
-                comments: Some(comments),
-                website: Some("https://github.com/erwannrobin/voxal".to_string()),
-                license: Some("MIT".to_string()),
-                icon: app.default_window_icon().cloned(),
-                ..Default::default()
-            };
-
+            // Build the app menu
+            let about = MenuItem::with_id(app, "about", "About Voxal", true, None::<&str>)?;
             let prefs = MenuItem::with_id(app, "preferences", "Preferences…", true, Some("CmdOrCtrl+,"))?;
 
             let app_submenu = SubmenuBuilder::new(app, "Voxal")
-                .about(Some(about))
+                .item(&about)
                 .separator()
                 .item(&prefs)
                 .separator()
@@ -179,9 +155,12 @@ pub fn run() {
 
             app.set_menu(menu)?;
 
+            let about_id = about.id().clone();
             let prefs_id = prefs.id().clone();
             app.on_menu_event(move |app, event| {
-                if event.id() == &prefs_id {
+                if event.id() == &about_id {
+                    app.emit("open-about", ()).ok();
+                } else if event.id() == &prefs_id {
                     app.emit("open-preferences", ()).ok();
                 }
             });

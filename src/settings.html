@@ -234,25 +234,6 @@
         </div>
       </details>
 
-      <!-- About Voxal -->
-      <div class="settings-separator"></div>
-      <p class="settings-group-title">About</p>
-      <div class="about-card">
-        <div class="about-approw">
-          <img src="assets/icon-192.png" alt="Voxal" class="about-app-icon" />
-          <div class="about-meta">
-            <span class="about-name">Voxal</span>
-            <span id="about-version" class="about-version">v—</span>
-          </div>
-        </div>
-        <p id="about-build-date" class="about-build-date"></p>
-        <div class="about-links">
-          <a class="about-link" data-url="https://github.com/ErwannRobin/Voxal">GitHub</a>
-          <a class="about-link" data-url="https://ptt.voxal.app">Website</a>
-          <a class="about-link" data-url="https://github.com/ErwannRobin/Voxal/issues/new">Report issue</a>
-        </div>
-      </div>
-
       </div><!-- end .prefs-scrollable -->
 
       <!-- Footer — always visible, sticky at bottom -->
@@ -596,37 +577,6 @@
           loadOrgs();
         } catch(e) {}
       }
-
-      // About section — populate version and build date
-      (function initAbout() {
-        var buildDate = new Date(VOXAL_BUILD_DATE).toLocaleDateString('en-GB', {
-          day: 'numeric', month: 'short', year: 'numeric'
-        });
-        $id('about-build-date').textContent = 'Built ' + buildDate;
-
-        function setVersion(v) {
-          $id('about-version').textContent = 'v' + v;
-        }
-
-        if (window.__TAURI__ && window.__TAURI__.app && typeof window.__TAURI__.app.getVersion === 'function') {
-          window.__TAURI__.app.getVersion().then(setVersion).catch(function() { setVersion(VOXAL_VERSION); });
-        } else {
-          setVersion(VOXAL_VERSION);
-        }
-
-        document.querySelectorAll('.about-link').forEach(function(el) {
-          el.addEventListener('click', function(e) {
-            e.preventDefault();
-            var url = el.getAttribute('data-url');
-            if (!url) return;
-            if (window.__TAURI__) {
-              window.__TAURI__.shell.open(url).catch(function() { window.open(url, '_blank', 'noopener'); });
-            } else {
-              window.open(url, '_blank', 'noopener');
-            }
-          });
-        });
-      })();
 
       function closeWindow() {
         if (window.__TAURI__) {
