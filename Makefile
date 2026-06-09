@@ -3,7 +3,7 @@
 
 # Default target
 help:
-	@echo "voxel — available targets:"
+	@echo "voxal — available targets:"
 	@echo ""
 	@echo "  run          Start the Tauri desktop app (release)"
 	@echo "  run-web      Serve the web version locally on http://localhost:8080"
@@ -11,7 +11,7 @@ help:
 	@echo "  debug        Build debug bundle if needed, then launch it"
 	@echo "  build        Build the Tauri desktop app (release binary)"
 	@echo "  build-signed Build release with updater signing (requires key)"
-	@echo "  build-debug  Build the Tauri desktop app (debug bundle — registers voxel:// scheme)"
+	@echo "  build-debug  Build the Tauri desktop app (debug bundle — registers voxal:// scheme)"
 	@echo "  build-web    Bundle the web version into dist/"
 	@echo "  cap-sync     Sync web assets to iOS & Android"
 	@echo "  cap-ios      Open Xcode (iOS)"
@@ -27,15 +27,15 @@ help:
 
 run:
 	npm run tauri build -- --no-bundle
-	./src-tauri/target/release/voxel
+	./src-tauri/target/release/voxal
 
 dev:
 	npm run tauri dev
 
-# Build and run the debug .app bundle (registers voxel:// URL scheme).
+# Build and run the debug .app bundle (registers voxal:// URL scheme).
 # Rebuilds only when Rust sources or config have changed.
 debug:
-	@APP="src-tauri/target/debug/bundle/macos/Voxel.app"; \
+	@APP="src-tauri/target/debug/bundle/macos/Voxal.app"; \
 	NEEDS_BUILD=0; \
 	if [ ! -d "$$APP" ]; then \
 		NEEDS_BUILD=1; \
@@ -54,7 +54,7 @@ debug:
 	else \
 		echo "→ Bundle up to date, skipping build."; \
 	fi; \
-	echo "→ Launching Voxel (debug)..."; \
+	echo "→ Launching Voxal (debug)..."; \
 	open "$$APP"
 
 build:
@@ -75,8 +75,8 @@ build-signed:
 build-debug:
 	npm run tauri build -- --debug
 	@echo ""
-	@echo "Debug bundle: src-tauri/target/debug/bundle/macos/Voxel.app"
-	@echo "Open it once to register the voxel:// URL scheme with macOS."
+	@echo "Debug bundle: src-tauri/target/debug/bundle/macos/Voxal.app"
+	@echo "Open it once to register the voxal:// URL scheme with macOS."
 
 # ── Web ───────────────────────────────────────────────────────────────────────
 
@@ -159,12 +159,12 @@ release:
 	fi; \
 	SIG_CONTENT=$$(cat "$$SIG"); \
 	APP_TAR_NAME=$$(basename "$$APP_TAR"); \
-	echo '{ "version": "'$$VERSION'", "platforms": { "darwin-aarch64": { "url": "https://github.com/ErwannRobin/Voxel/releases/download/v'$$VERSION'/'$$APP_TAR_NAME'", "signature": "'$$SIG_CONTENT'" }, "darwin-x86_64": { "url": "https://github.com/ErwannRobin/Voxel/releases/download/v'$$VERSION'/'$$APP_TAR_NAME'", "signature": "'$$SIG_CONTENT'" } } }' > $$BUNDLE_DIR/latest.json; \
+	echo '{ "version": "'$$VERSION'", "platforms": { "darwin-aarch64": { "url": "https://github.com/ErwannRobin/Voxal/releases/download/v'$$VERSION'/'$$APP_TAR_NAME'", "signature": "'$$SIG_CONTENT'" }, "darwin-x86_64": { "url": "https://github.com/ErwannRobin/Voxal/releases/download/v'$$VERSION'/'$$APP_TAR_NAME'", "signature": "'$$SIG_CONTENT'" } } }' > $$BUNDLE_DIR/latest.json; \
 	echo "→ Creating GitHub release v$$VERSION…"; \
 	MOBILE_ZIP="src-tauri/target/release/bundle/voxal-mobile-$$VERSION.zip"; \
 	(cd src && zip -qr "../$$MOBILE_ZIP" .); \
 	MOBILE_CHECKSUM=$$(shasum -a 256 "$$MOBILE_ZIP" | cut -d' ' -f1); \
-	echo '{"version":"'$$VERSION'","url":"https://github.com/ErwannRobin/Voxel/releases/download/v'$$VERSION'/voxal-mobile-'$$VERSION'.zip","checksum":"'$$MOBILE_CHECKSUM'"}' > src-tauri/target/release/bundle/mobile-update.json; \
+	echo '{"version":"'$$VERSION'","url":"https://github.com/ErwannRobin/Voxal/releases/download/v'$$VERSION'/voxal-mobile-'$$VERSION'.zip","checksum":"'$$MOBILE_CHECKSUM'"}' > src-tauri/target/release/bundle/mobile-update.json; \
 	ASSETS="$$APP_TAR $$SIG $$BUNDLE_DIR/latest.json $$MOBILE_ZIP src-tauri/target/release/bundle/mobile-update.json"; \
 	if [ -n "$$DMG" ]; then ASSETS="$$ASSETS $$DMG"; fi; \
 	gh release create "v$$VERSION" $$ASSETS \

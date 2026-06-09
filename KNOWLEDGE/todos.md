@@ -15,6 +15,7 @@ See [universal-links-aasa.md](./universal-links-aasa.md) for full setup instruct
 
 **Status:** ✅ Implemented
 - AASA file at `src/.well-known/apple-app-site-association` (Team `RFJ383NTK7`, app `com.erwann.voxal.app`)
+- Xcode bundle ID updated to `com.erwann.voxal.app` (now matches `capacitor.config.json`)
 - Vercel header added to serve AASA as `application/json`
 - `ios/App/App/App.entitlements` — `applinks:ptt.voxal.app` associated domain
 - `src/main.js` — native invite links now use `https://ptt.voxal.app/` as base

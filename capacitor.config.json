@@ -10,7 +10,7 @@
     },
     "CapacitorUpdater": {
       "autoUpdate": true,
-      "updateUrl": "https://github.com/ErwannRobin/Voxel/releases/latest/download/mobile-update.json"
+      "updateUrl": "https://github.com/ErwannRobin/Voxal/releases/latest/download/mobile-update.json"
     }
   }
 }

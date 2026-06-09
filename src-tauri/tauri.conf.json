@@ -47,7 +47,7 @@
       }
     },
     "updater": {
-      "endpoints": ["https://github.com/ErwannRobin/Voxel/releases/latest/download/latest.json"],
+      "endpoints": ["https://github.com/ErwannRobin/Voxal/releases/latest/download/latest.json"],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFGN0MyN0IyMTcxNjc4QzQKUldURWVCWVhzaWQ4citZT1JjTTR2ZlVFUElFQ0ZFQklwWFdDcUxSKzlnV29oaWx2eXhqL05DWHcK"
     }
   }
