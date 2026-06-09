@@ -27,10 +27,10 @@
 ## Architecture
 
 ```
-Signaling topology  :  star  — host ↔ each peer via PeerJS DataConnection
-Audio topology      :  mesh  — every peer ↔ every peer via WebRTC MediaConnection
-Codec               :  Opus (browser default for WebRTC), 16 kHz mono
-Signaling server    :  PeerJS public server (0.peerjs.com) — free tier, ~50 users/IP
+Signaling topology   :  star  — host ↔ each peer via PeerJS DataConnection
+Audio topology       :  mesh  — every peer ↔ every peer via WebRTC MediaConnection
+Codec                :  Opus (browser default for WebRTC), 16 kHz mono
+Signaling server     :  PeerJS public server (0.peerjs.com) — free tier, ~50 users/IP
 ```
 
 ### How a room works
@@ -102,7 +102,7 @@ make install
 make dev
 
 # Or serve the web version locally
-make run-web          # → http://localhost:8080
+make run-web           # → http://localhost:8080
 ```
 
 If `make install` reports that a tool is missing, follow the printed guidance and rerun it.
@@ -189,6 +189,16 @@ make cap-android
 - No global keyboard shortcut (mobile has no background keyboard access) — PTT is touch-only
 - Hardware keyboard Space/Enter shortcuts work if a keyboard is connected
 
+### Forking / building your own iOS app
+
+If you fork this repo and want to build the iOS app under your own Apple Developer account, you need to update three places:
+
+1. **`capacitor.config.json`** — change `appId` to your own bundle ID (e.g. `com.yourname.voxal`)
+2. **Xcode project** — open `ios/App/App.xcodeproj`, update the bundle identifier in *Signing & Capabilities* to match
+3. **`src/.well-known/apple-app-site-association`** — replace `RFJ383NTK7.com.erwann.voxal.app` with `<YOUR_TEAM_ID>.<your.bundle.id>` so Universal Links route to your build
+
+Without step 3, tapping a room invite link on iOS will open the web page instead of the app.
+
 ---
 
 ## Push-to-talk
@@ -229,31 +239,33 @@ The default hosted instance is `https://vybzjzwsqrggatcrnqxe.supabase.co/functio
 
 ```
 voxal/
-├── src/                         # Frontend — shared by desktop, mobile, and web
-│   ├── index.html               # App shell (home, room, error screens)
-│   ├── main.js                  # All app logic (~3 000 lines, no framework)
-│   ├── styles.css               # Dark/light theme, responsive layout
-│   ├── settings.html            # Standalone preferences page (Tauri window / in-app modal)
-│   ├── devlog.html              # Standalone dev log pop-out window
+├── src/                          # Frontend — shared by desktop, mobile, and web
+│   ├── index.html                # App shell (home, room, error screens)
+│   ├── main.js                   # All app logic (no framework)
+│   ├── styles.css                # Dark/light theme, responsive layout
+│   ├── settings.html             # Preferences page (Tauri window / in-app modal)
+│   ├── screen-popup.html         # Screen share pop-out window
+│   ├── video-popup.html          # Video pop-out window
+│   ├── devlog.html               # Dev log pop-out window
 │   └── assets/
-│       └── peerjs.min.js        # PeerJS bundled locally (no CDN)
-├── src-tauri/                   # Tauri / Rust backend
+│       └── peerjs.min.js         # PeerJS bundled locally (no CDN)
+├── src-tauri/                    # Tauri / Rust backend
 │   ├── src/
-│   │   ├── lib.rs               # IPC commands + global shortcut + PTT events
-│   │   └── main.rs              # Entry point
+│   │   ├── lib.rs                # IPC commands + global shortcut + PTT events
+│   │   └── main.rs               # Entry point
 │   ├── Cargo.toml
 │   ├── tauri.conf.json
-│   ├── Info.plist               # macOS usage descriptions (mic, camera)
+│   ├── Info.plist                # macOS usage descriptions (mic, camera)
 │   ├── entitlements.plist
 │   └── capabilities/
-│       └── default.json         # IPC permissions
-├── ios/                         # Capacitor iOS project
-├── android/                     # Capacitor Android project
-├── KNOWLEDGE/                   # Development notes and gotchas (not shipped)
+│       └── default.json          # IPC permissions
+├── ios/                          # Capacitor iOS project
+├── android/                      # Capacitor Android project
+├── KNOWLEDGE/                    # Development notes and gotchas (not shipped)
 │   ├── learning.md
 │   ├── todos.md
 │   └── universal-links-aasa.md
-├── docs/                        # Architecture diagrams
+├── docs/                         # Architecture diagrams
 ├── capacitor.config.json
 ├── vercel.json
 ├── Makefile

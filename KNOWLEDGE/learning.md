@@ -64,7 +64,7 @@ Copilot should read this file at the start of every session.
 - **`navigator.share()` with both `text` and `url` set to the same invite link** can produce malformed duplicated links in some share targets. For HTTP invite links, share with `url` only.
 
 - **PushToTalk framework iOS 17 Swift method names** (read from Xcode SDK + Swift overlay): `channelDescriptor(restoredChannelUUID:)`, `channelManager(_:didJoinChannel:reason:)`, `channelManager(_:didLeaveChannel:reason:)`, `channelManager(_:channelUUID:didBeginTransmittingFrom:)`, `channelManager(_:channelUUID:didEndTransmittingFrom:)`, `incomingPushResult(channelManager:channelUUID:pushPayload:)`, `channelManager(_:didActivate:)`, `channelManager(_:didDeactivate:)`. The PTT button events are `didBeginTransmittingFrom`/`didEndTransmittingFrom`, NOT `didActivate`/`didDeactivate` (those are only audio session lifecycle).
- added as `.swift` files inside `ios/App/App/` must be manually registered in `project.pbxproj` (PBXBuildFile, PBXFileReference, PBXGroup, and PBXSourcesBuildPhase). The file existing on disk is not enough — if not in the project file, it is never compiled and `window.Capacitor.Plugins.PluginName` will be `undefined` at runtime.
+- **New Capacitor Swift plugin files** added as `.swift` files inside `ios/App/App/` must be manually registered in `project.pbxproj` (PBXBuildFile, PBXFileReference, PBXGroup, and PBXSourcesBuildPhase). The file existing on disk is not enough — if not in the project file, it is never compiled and `window.Capacitor.Plugins.PluginName` will be `undefined` at runtime.
 
 ## Sync rule
 
