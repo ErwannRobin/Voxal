@@ -33,6 +33,7 @@
     <meta name="twitter:image"       content="https://ptt.voxal.app/assets/social-card.png" />
 
     <link rel="stylesheet" href="styles.css" />
+    <script src="version.js"></script>
     <script>
       // Apply theme before paint to avoid flash
       (function() {
@@ -276,6 +277,25 @@
           <!-- Disconnect — hidden when not authenticated -->
           <div class="settings-disconnect-row" id="disconnect-row">
             <button id="btn-disconnect" class="btn btn-ghost btn-sm btn-danger">Disconnect</button>
+          </div>
+
+          <!-- About Voxal -->
+          <div class="settings-separator"></div>
+          <p class="settings-group-title">About</p>
+          <div class="about-card">
+            <div class="about-approw">
+              <img src="assets/icon-192.png" alt="Voxal" class="about-app-icon" />
+              <div class="about-meta">
+                <span class="about-name">Voxal</span>
+                <span id="about-version-modal" class="about-version">v—</span>
+              </div>
+            </div>
+            <p id="about-build-date-modal" class="about-build-date"></p>
+            <div class="about-links">
+              <a class="about-link" href="https://github.com/ErwannRobin/Voxal" target="_blank" rel="noopener">GitHub</a>
+              <a class="about-link" href="https://ptt.voxal.app" target="_blank" rel="noopener">Website</a>
+              <a class="about-link" href="https://github.com/ErwannRobin/Voxal/issues/new" target="_blank" rel="noopener">Report issue</a>
+            </div>
           </div>
         </div>
         <!-- Footer — always visible -->

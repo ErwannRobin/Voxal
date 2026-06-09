@@ -4356,6 +4356,28 @@ window.addEventListener('DOMContentLoaded', function() {
     if (w) { w.focus(); setDevLogPopped(true); }
   }
 
+  function initAboutSection(versionElId, dateElId) {
+    var versionEl = document.getElementById(versionElId);
+    var dateEl    = document.getElementById(dateElId);
+    if (!versionEl || !dateEl) return;
+
+    var buildDate = new Date(VOXAL_BUILD_DATE).toLocaleDateString('en-GB', {
+      day: 'numeric', month: 'short', year: 'numeric'
+    });
+    dateEl.textContent = 'Built ' + buildDate;
+
+    function setVersion(v) { versionEl.textContent = 'v' + v; }
+
+    if (window.Capacitor && window.Capacitor.isNativePlatform() &&
+        window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+      window.Capacitor.Plugins.App.getInfo()
+        .then(function(info) { setVersion(info.version); })
+        .catch(function() { setVersion(VOXAL_VERSION); });
+    } else {
+      setVersion(VOXAL_VERSION);
+    }
+  }
+
   function openSettings() {
     // On Tauri desktop: try to open / focus a dedicated preferences window
     if (window.__TAURI__) {
@@ -4419,6 +4441,8 @@ window.addEventListener('DOMContentLoaded', function() {
       if (advDetails && devOn) advDetails.open = true;
     }
     updateVideoModeUI();
+    // Populate About section
+    initAboutSection('about-version-modal', 'about-build-date-modal');
     $('modal-settings').classList.remove('hidden');
     if (presenceToken()) loadOrgs();
   }

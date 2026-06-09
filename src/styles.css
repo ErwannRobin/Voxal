@@ -1629,3 +1629,69 @@ details.turn-section .turn-inner {
   .brand { padding: 56px 0 40px; }
   .ptt-area { gap: 14px; padding: 18px 0 8px; }
 }
+
+/* ——— About section ——— */
+.about-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 0 4px;
+}
+.about-approw {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.about-app-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+.about-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.about-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+}
+.about-version {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  line-height: 1.6;
+}
+.about-build-date {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0;
+  padding-left: 56px;
+}
+.about-links {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.about-link {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  transition: background 0.12s;
+}
+.about-link:hover {
+  background: var(--bg-raised);
+}
