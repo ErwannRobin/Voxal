@@ -1818,6 +1818,25 @@ function updatePeerList() {
   addItem('self', myPseudo || 'You', true, isTalking || freeHandMode, true, peer && peer.id);
   connections.forEach((conn, id) => addItem(id, conn.pseudo || shortId(id), false, conn.talking || false, false, id));
 
+  // Invite nudge — shown when no other peers are in the room yet
+  if (connections.size === 0) {
+    var nudge = document.createElement('div');
+    nudge.className = 'room-invite-nudge';
+    var nudgeText = document.createElement('span');
+    nudgeText.className = 'room-invite-nudge-text';
+    nudgeText.textContent = 'Share the room code to invite others';
+    var nudgeBtn = document.createElement('button');
+    nudgeBtn.className = 'btn btn-secondary btn-sm';
+    nudgeBtn.textContent = 'Copy code';
+    nudgeBtn.addEventListener('click', function() {
+      var text = roomDisplayCode();
+      if (text) copyTextToClipboard(text, 'Room code copied!');
+    });
+    nudge.appendChild(nudgeText);
+    nudge.appendChild(nudgeBtn);
+    list.appendChild(nudge);
+  }
+
   // Notify the parent iframe of the current peer list
   if (_isIframe && inRoom) {
     var peers = [{ id: peer ? peer.id : 'self', pseudo: myPseudo || 'You', self: true, talking: isTalking || freeHandMode }];
@@ -4494,7 +4513,14 @@ window.addEventListener('DOMContentLoaded', function() {
     }
   });
 
-  window.addEventListener('online',  updateTurnBadge);
+  window.addEventListener('online', function() {
+    updateTurnBadge();
+    // Auto-reconnect the PeerJS signaling channel if we dropped while offline
+    if (inRoom && peer && peer.disconnected && !peer.destroyed) {
+      console.log('[network] Back online — reconnecting peer signaling...');
+      peer.reconnect();
+    }
+  });
   window.addEventListener('offline', updateTurnBadge);
 
   // iframe postMessage: receive commands from the parent page

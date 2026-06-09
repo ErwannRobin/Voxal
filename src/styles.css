@@ -427,6 +427,22 @@ body {
   color: var(--text-muted);
 }
 .peer-item.peer-self { color: var(--text); }
+
+/* Nudge shown when you're alone in the room */
+.room-invite-nudge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 8px 4px;
+  margin-top: 2px;
+  border-top: 1px dashed var(--border);
+}
+.room-invite-nudge-text {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
 .peer-main {
   display: flex;
   flex-direction: column;
