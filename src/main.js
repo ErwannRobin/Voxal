@@ -75,6 +75,8 @@ async function releaseAudioFocus() {
 const DEFAULT_PRESENCE_BASE     = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
 const ANONYMOUS_ROOMS_BASE      = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/anonymous-rooms';
 const DEFAULT_VOXAL_CONNECT_URL = 'https://voxal.lovable.app';
+// Canonical web URL — used for invite links on native (Tauri/iOS) and for Universal Links
+const VOXAL_WEB_URL             = 'https://ptt.voxal.app';
 const PRESENCE_TOKEN_KEY        = 'presence-api-token';
 const PRESENCE_ORG_KEY          = 'presence-org-id';
 const SERVICE_URL_KEY           = 'service-url';
@@ -145,6 +147,21 @@ function generateState() {
 function handleDeepLink(urlStr) {
   try {
     const url = new URL(urlStr);
+
+    // ── Universal Links: https://ptt.voxal.app/*?room=<id> ───────────
+    if (url.protocol === 'https:' && url.hostname === 'ptt.voxal.app') {
+      const roomId = url.searchParams.get('room');
+      if (roomId) {
+        if (_audioCtx.state === 'suspended') _audioCtx.resume();
+        var doJoinUL = function() {
+          joinRoom(roomId).catch(function(err) { showError(err.message); });
+        };
+        if (inRoom) { leaveRoom(); setTimeout(doJoinUL, 150); }
+        else { doJoinUL(); }
+      }
+      return;
+    }
+
     if (url.protocol !== 'voxal:') return;
 
     if (url.hostname === 'join') {
@@ -1123,7 +1140,9 @@ function roomInviteBaseUrl() {
       return current.toString();
     }
   } catch (_) {}
-  return voxalConnectUrl().replace(/\/$/, '') + '/';
+  // Tauri (tauri://) or Capacitor (capacitor://) — use the canonical web URL
+  // so shared links open in Safari/Chrome and iOS Universal Links can intercept them.
+  return VOXAL_WEB_URL + '/';
 }
 
 function roomInviteUrl(roomId) {

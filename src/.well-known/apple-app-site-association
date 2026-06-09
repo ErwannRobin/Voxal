@@ -1,0 +1,17 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appIDs": ["RFJ383NTK7.com.erwann.voxal.app"],
+        "components": [
+          {
+            "/": "/*",
+            "?": { "room": "?*" },
+            "comment": "Matches https://ptt.voxal.app/*?room=<anything> — opens Voxal and joins the room"
+          }
+        ]
+      }
+    ]
+  }
+}

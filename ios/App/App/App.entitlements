@@ -4,5 +4,9 @@
 <dict>
 	<key>com.apple.developer.push-to-talk</key>
 	<true/>
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:ptt.voxal.app</string>
+	</array>
 </dict>
 </plist>

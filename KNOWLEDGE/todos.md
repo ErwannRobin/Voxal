@@ -9,11 +9,17 @@ Things to implement or investigate, ordered roughly by priority.
 **Goal:** Make shared room links clickable in WhatsApp, iMessage, etc.
 
 Custom scheme URLs (`voxal://`) are treated as plain text in most messaging apps.
-The fix is to share `https://voxal.lovable.app/join?room=<uuid>` instead.
+The fix is to share `https://ptt.voxal.app/?room=<uuid>` instead.
 
 See [universal-links-aasa.md](./universal-links-aasa.md) for full setup instructions.
 
-**Status:** Not started
+**Status:** ✅ Implemented
+- AASA file at `src/.well-known/apple-app-site-association` (Team `RFJ383NTK7`, app `com.erwann.voxal.app`)
+- Vercel header added to serve AASA as `application/json`
+- `ios/App/App/App.entitlements` — `applinks:ptt.voxal.app` associated domain
+- `src/main.js` — native invite links now use `https://ptt.voxal.app/` as base
+- `src/main.js` — `handleDeepLink()` handles `https://ptt.voxal.app/?room=` Universal Links
+- **Requires:** deploy to Vercel to publish AASA, then rebuild iOS app in Xcode on a real device
 
 ---
 
