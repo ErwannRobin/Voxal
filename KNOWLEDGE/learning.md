@@ -17,7 +17,7 @@ Copilot should read this file at the start of every session.
 - **AudioContext may be suspended in background** by WebKit even if the process is alive. In `didBeginTransmittingFrom`, call `audioCtx.resume().then(function(){ gainNode.gain.value=1 })` to ensure the context is running before setting gain. Direct `gain.value=1` on a suspended context has no effect.
 - **PTChannelManager async init race**: `PTChannelManager.channelManager(delegate:restorationDelegate:)` is async. If `join()` is called before it completes, the channel is never joined and the Dynamic Island button press silently does nothing. Fix: store `CheckedContinuation` objects and signal them once the manager is ready; `join()` awaits them with a 5s timeout.
 - **`call.resolve()` / `call.reject()`** in Capacitor plugins must be called on the main thread when inside a Swift `Task {}`. Use `await MainActor.run { call.resolve() }` to avoid `unsafeForcedSync` warnings.
-- **UIScene lifecycle** warning ("UIScene lifecycle will soon be required"): requires `SceneDelegate.swift` + `UIApplicationSceneManifest` in `Info.plist`. `AppDelegate` loses `var window: UIWindow?`; deep links must also be handled in `scene(_:openURLContexts:)`.
+- **Universal Links cold-launch**: iOS delivers the `NSUserActivity` via `scene(_:willConnectTo:options:connectionOptions.userActivities)`, NOT `scene(_:continue:)`. Without handling `willConnectTo`, cold-launch Universal Links are silently dropped. Warm-launch (app already running) correctly uses `scene(_:continue:)`.
 - **`voxal://` custom scheme** is registered in `ios/App/App/Info.plist` under `CFBundleURLSchemes`. Cold-launch deep links come via `App.getLaunchUrl()`, runtime links via `appUrlOpen` event.
 
 ## macOS / Tauri

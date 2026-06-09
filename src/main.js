@@ -1309,6 +1309,44 @@ function startInviteRoomJoin(rawRoomCode) {
   joinRoom(roomId).catch(function(err) { showError(err.message); });
 }
 
+// On web: try to open the native Voxal app first (voxal:// scheme).
+// If the page goes hidden the app launched → cancel the web join.
+// If 800 ms pass with the page still visible → fall back to browser join.
+function _tryNativeAppThenJoin(roomId) {
+  showInviteLoading(roomId, 'Opening Voxal…');
+
+  var appLaunched = false;
+  var WAIT_MS = 800;
+
+  var onVis = function() {
+    if (document.hidden) {
+      appLaunched = true;
+      clearTimeout(timeout);
+      document.removeEventListener('visibilitychange', onVis);
+      // Native app took over — go back to home so the web tab is clean on return
+      showScreen('home');
+    }
+  };
+  document.addEventListener('visibilitychange', onVis);
+
+  // Trigger the custom scheme via a hidden link (avoids page-navigation errors)
+  var a = document.createElement('a');
+  a.href = 'voxal://join?room=' + encodeURIComponent(roomId);
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+
+  var timeout = setTimeout(function() {
+    document.removeEventListener('visibilitychange', onVis);
+    if (appLaunched) return;
+    // App not installed or didn't respond — join in the browser
+    showInviteLoading(roomId, 'Connecting…');
+    if (_audioCtx.state === 'suspended') _audioCtx.resume();
+    joinRoom(roomId).catch(function(err) { showError(err.message); });
+  }, WAIT_MS);
+}
+
 function showInviteLoading(roomLabel, statusText) {
   var roomCodeEl = $('invite-room-code');
   if (roomCodeEl) roomCodeEl.textContent = roomLabel || '';
@@ -4072,7 +4110,14 @@ window.addEventListener('DOMContentLoaded', function() {
 
   var invitedRoomCode = consumeRoomInviteFromQuery();
   if (invitedRoomCode) {
-    startInviteRoomJoin(invitedRoomCode);
+    // On native (Tauri/Capacitor) the deep-link is already being handled; join directly.
+    // On web: try opening the native app first, fall back to browser join after 800 ms.
+    var isNative = window.__TAURI__ || (window.Capacitor && window.Capacitor.isNativePlatform());
+    if (isNative) {
+      startInviteRoomJoin(invitedRoomCode);
+    } else {
+      _tryNativeAppThenJoin(invitedRoomCode);
+    }
   }
 
   // TURN settings modal

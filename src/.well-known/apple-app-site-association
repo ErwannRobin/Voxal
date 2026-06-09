@@ -7,8 +7,7 @@
         "components": [
           {
             "/": "/*",
-            "?": { "room": "?*" },
-            "comment": "Matches https://ptt.voxal.app/*?room=<anything> — opens Voxal and joins the room"
+            "comment": "Any URL on ptt.voxal.app — app checks for ?room= param and joins if present"
           }
         ]
       }
