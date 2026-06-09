@@ -199,6 +199,20 @@ If you fork this repo and want to build the iOS app under your own Apple Develop
 
 Without step 3, tapping a room invite link on iOS will open the web page instead of the app.
 
+### Forking / building your own Android app
+
+Android App Links (HTTPS deep links) are enabled when a matching `assetlinks.json` is deployed at `ptt.voxal.app/.well-known/assetlinks.json`. To set this up for your own build:
+
+1. Get your release certificate SHA-256 fingerprint:
+   ```sh
+   keytool -list -v -keystore your-release.jks -alias your-alias
+   ```
+2. Replace the `REPLACE_WITH_RELEASE_SHA256_FINGERPRINT` placeholder in `src/.well-known/assetlinks.json` with the `XX:XX:…` fingerprint from the output
+3. Update `package_name` in the same file if you changed the bundle ID
+4. Deploy (push to main — Vercel will serve the updated file)
+
+Until the fingerprint is filled in, invite links on Android will open in the browser and the app can be joined from there as normal.
+
 ---
 
 ## Push-to-talk

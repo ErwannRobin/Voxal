@@ -82,6 +82,6 @@ Use Python string replacement scripts for multi-line patches to avoid manual err
 
 - Host migration uses a state machine (`idle`/`connecting`/`connected`/`migrating`) and reuses `connectToHost(hostId, { mode })` for both initial join and migration. Migration success = first authoritative `peer-list` from the new host, not DataConnection open. Failed candidates are added to `_migrationExcluded` to allow re-election without restart. Audio MediaConnections to non-host peers are never touched during migration.
 
----
+- **Android App Links** (`https://ptt.voxal.app/?room=…` opening the app) require: (1) `autoVerify="true"` intent filter in `AndroidManifest.xml`, (2) `src/.well-known/assetlinks.json` deployed with the release certificate SHA-256 fingerprint. The `appUrlOpen` Capacitor event fires for both `voxal://` and HTTPS links — `handleDeepLink()` already handles both. Without the correct fingerprint in `assetlinks.json`, links silently fall back to browser.
 
-_Copilot: append new learnings here as they are discovered. Keep entries concise and actionable._
+---

@@ -4536,7 +4536,8 @@ window.addEventListener('DOMContentLoaded', function() {
     });
   }
 
-  // iOS: deep link comes back via @capacitor/app appUrlOpen
+  // iOS/Android: deep links come back via @capacitor/app appUrlOpen.
+  // Handles both voxal:// custom scheme and https://ptt.voxal.app App Links.
   if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
     var CapApp = window.Capacitor.Plugins.App;
     CapApp.addListener('appUrlOpen', function(data) {

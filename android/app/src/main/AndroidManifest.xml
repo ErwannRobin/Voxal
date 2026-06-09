@@ -26,6 +26,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- Android App Links: https://ptt.voxal.app/?room=… opens the app directly.
+                 Requires a matching assetlinks.json at ptt.voxal.app/.well-known/assetlinks.json
+                 containing the SHA-256 certificate fingerprint of the release signing key. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="ptt.voxal.app" />
+            </intent-filter>
+
         </activity>
 
         <service
