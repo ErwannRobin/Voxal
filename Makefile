@@ -1,5 +1,5 @@
 .PHONY: help run run-web dev debug build build-debug build-signed build-web install clean lint check \
-        cap-sync cap-ios cap-android docs release
+        cap-sync cap-ios cap-android build-android docs release
 
 # Default target
 help:
@@ -16,6 +16,7 @@ help:
 	@echo "  cap-sync     Sync web assets to iOS & Android"
 	@echo "  cap-ios      Open Xcode (iOS)"
 	@echo "  cap-android  Open Android Studio"
+	@echo "  build-android Build signed release AAB for Google Play"
 	@echo "  install      Check prereqs, then install npm + Rust dependencies"
 	@echo "  release      Build signed release and publish to GitHub (requires gh CLI)"
 	@echo "  docs         Serve architecture flow docs on http://localhost:8090"
@@ -100,6 +101,12 @@ cap-ios: cap-sync
 
 cap-android: cap-sync
 	npx cap open android
+
+build-android: cap-sync
+	cd android && ./gradlew bundleRelease
+	@echo ""
+	@echo "Signed AAB: android/app/build/outputs/bundle/release/app-release.aab"
+	@echo "Upload this file to Google Play Console."
 
 # ── Misc ──────────────────────────────────────────────────────────────────────
 

@@ -201,17 +201,22 @@ Without step 3, tapping a room invite link on iOS will open the web page instead
 
 ### Forking / building your own Android app
 
-Android App Links (HTTPS deep links) are enabled when a matching `assetlinks.json` is deployed at `ptt.voxal.app/.well-known/assetlinks.json`. To set this up for your own build:
+Android App Links (HTTPS deep links) are enabled via `src/.well-known/assetlinks.json`. If you fork this repo and build under your own signing key:
 
-1. Get your release certificate SHA-256 fingerprint:
+1. Generate your release keystore:
    ```sh
-   keytool -list -v -keystore your-release.jks -alias your-alias
+   keytool -genkey -v -keystore ~/.android/your-release.jks -alias your-alias \
+     -keyalg RSA -keysize 2048 -validity 10000
    ```
-2. Replace the `REPLACE_WITH_RELEASE_SHA256_FINGERPRINT` placeholder in `src/.well-known/assetlinks.json` with the `XX:XX:…` fingerprint from the output
-3. Update `package_name` in the same file if you changed the bundle ID
-4. Deploy (push to main — Vercel will serve the updated file)
+2. Create `android/keystore.properties` (gitignored) with `storeFile`, `storePassword`, `keyAlias`, `keyPassword`
+3. Get your SHA-256 fingerprint:
+   ```sh
+   keytool -list -keystore ~/.android/your-release.jks -storepass <password>
+   ```
+4. Replace the `sha256_cert_fingerprints` value in `src/.well-known/assetlinks.json` and update `package_name` if you changed the bundle ID
+5. Deploy → Vercel serves the updated file
 
-Until the fingerprint is filled in, invite links on Android will open in the browser and the app can be joined from there as normal.
+Build a signed AAB for Google Play with `make build-android`.
 
 ---
 
