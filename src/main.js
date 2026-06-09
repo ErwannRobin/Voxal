@@ -1103,7 +1103,46 @@ function showScreen(name) {
 
 function showError(msg) {
   $('error-message').textContent = msg;
+  // Hide recovery hints by default
+  var hint = $('error-recovery-hint');
+  var retryBtn = $('btn-retry-mic');
+  if (hint)     { hint.textContent = ''; hint.classList.add('hidden'); }
+  if (retryBtn) retryBtn.classList.add('hidden');
   showScreen('error');
+}
+
+var _pendingMicAction = null; // function to re-run after mic permission is granted
+
+function showMicDeniedError(retryFn) {
+  _pendingMicAction = retryFn || null;
+
+  var hint = '';
+  var ua = navigator.userAgent || '';
+  if (window.Capacitor && window.Capacitor.isNativePlatform()) {
+    if (/iPhone|iPad|iPod/i.test(ua)) {
+      hint = 'To allow access: open Settings → Voxal → Microphone.';
+    } else {
+      hint = 'To allow access: open Settings → Apps → Voxal → Permissions → Microphone.';
+    }
+  } else if (/iPhone|iPad|iPod/i.test(ua) || /CriOS|FxiOS|Safari/i.test(ua)) {
+    hint = 'To allow access: tap the \u24b6 / \u2712 icon in the address bar → Website Settings → Microphone → Allow.';
+  } else if (/Android/i.test(ua)) {
+    hint = 'To allow access: tap the lock icon in the address bar → Site settings → Microphone → Allow.';
+  } else {
+    hint = 'To allow access: click the microphone icon in the browser address bar and choose \u201cAllow\u201d.';
+  }
+
+  $('error-message').textContent = 'Microphone access was denied.';
+  var hintEl   = $('error-recovery-hint');
+  var retryBtn = $('btn-retry-mic');
+  if (hintEl)   { hintEl.textContent = hint; hintEl.classList.remove('hidden'); }
+  if (retryBtn) retryBtn.classList.toggle('hidden', !retryFn);
+  showScreen('error');
+}
+
+function isMicDeniedError(err) {
+  var name = err && err.name;
+  return name === 'NotAllowedError' || name === 'PermissionDeniedError';
 }
 
 var _copyToastTimer = null;
@@ -1881,16 +1920,27 @@ function updatePeerList() {
     nudge.className = 'room-invite-nudge';
     var nudgeText = document.createElement('span');
     nudgeText.className = 'room-invite-nudge-text';
-    nudgeText.textContent = 'Share the room code to invite others';
-    var nudgeBtn = document.createElement('button');
-    nudgeBtn.className = 'btn btn-secondary btn-sm';
-    nudgeBtn.textContent = 'Copy code';
-    nudgeBtn.addEventListener('click', function() {
-      var text = roomDisplayCode();
-      if (text) copyTextToClipboard(text, 'Room code copied!');
-    });
+    nudgeText.textContent = 'Share your invite link to invite others';
     nudge.appendChild(nudgeText);
-    nudge.appendChild(nudgeBtn);
+
+    var inviteUrl = roomInviteUrl(roomCode);
+    if (navigator.share && IS_NATIVE_MOBILE) {
+      var shareBtn = document.createElement('button');
+      shareBtn.className = 'btn btn-secondary btn-sm';
+      shareBtn.textContent = 'Share invite';
+      shareBtn.addEventListener('click', function() {
+        if (inviteUrl) navigator.share({ title: 'Join my Voxal room', url: inviteUrl }).catch(function() {});
+      });
+      nudge.appendChild(shareBtn);
+    } else {
+      var nudgeBtn = document.createElement('button');
+      nudgeBtn.className = 'btn btn-secondary btn-sm';
+      nudgeBtn.textContent = 'Copy invite link';
+      nudgeBtn.addEventListener('click', function() {
+        if (inviteUrl) copyTextToClipboard(inviteUrl, 'Invite link copied!');
+      });
+      nudge.appendChild(nudgeBtn);
+    }
     list.appendChild(nudge);
   }
 
@@ -4061,7 +4111,10 @@ window.addEventListener('DOMContentLoaded', function() {
     var btn = $('btn-create');
     setLoading(btn, true, 'Create Room');
     lockHomeCTAs();
-    createRoom().catch(function(err) { showError(err.message); }).finally(function() { setLoading(btn, false); unlockHomeCTAs(); endHomeAction(); });
+    createRoom().catch(function(err) {
+      if (isMicDeniedError(err)) showMicDeniedError(function() { $('btn-create').click(); });
+      else showError(err.message);
+    }).finally(function() { setLoading(btn, false); unlockHomeCTAs(); endHomeAction(); });
   });
   $('btn-join').addEventListener('click', function() {
     var btn = $('btn-join');
@@ -4079,8 +4132,9 @@ window.addEventListener('DOMContentLoaded', function() {
     lockHomeCTAs();
     joinRoom($('input-code').value.trim())
       .catch(function(err) {
-        if (err.message !== 'Connection cancelled.') showError(err.message);
-        else showCopyToast('Connection cancelled');
+        if (err.message === 'Connection cancelled.') { showCopyToast('Connection cancelled'); return; }
+        if (isMicDeniedError(err)) showMicDeniedError(function() { $('btn-join').click(); });
+        else showError(err.message);
       })
       .finally(function() {
         btn.textContent = 'Join';
@@ -4726,6 +4780,12 @@ window.addEventListener('DOMContentLoaded', function() {
   var _initialBar = $('rejoin-bar');
   if (_initialBar) _wireRejoinBar(_initialBar);
   $('btn-back').addEventListener('click', function() { showScreen('home'); });
+  $('btn-retry-mic').addEventListener('click', function() {
+    if (typeof _pendingMicAction === 'function') {
+      _pendingMicAction();
+      _pendingMicAction = null;
+    }
+  });
 
   const pttBtn = $('ptt-btn');
   var lastPttTapTime = 0;
