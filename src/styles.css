@@ -1542,3 +1542,63 @@ details.turn-section .turn-inner {
   height: calc(100vh - 36px);
   object-fit: contain;
 }
+
+/* ── Wide / desktop layout (≥ 640px) ──────────────────────────── */
+/*
+ * On large viewports the app is displayed as a narrow centered panel.
+ * The body background gets a subtle accent glow; the panel has side
+ * borders to delineate it from the surrounding canvas.
+ */
+
+@media (min-width: 640px) {
+  body {
+    justify-content: center;
+    /* Subtle accent radial glow behind the panel */
+    background-image: radial-gradient(
+      ellipse 110% 45% at 50% -5%,
+      rgba(124, 106, 247, 0.09) 0%,
+      transparent 65%
+    );
+  }
+
+  .screen {
+    max-width: 480px;
+    /* Clean panel background so the glow stays behind it */
+    background: var(--bg);
+    border-left:  1px solid var(--border);
+    border-right: 1px solid var(--border);
+  }
+
+  /* Brand hero — larger on desktop */
+  .brand {
+    padding: 44px 0 32px;
+    gap: 8px;
+  }
+  .brand-icon { font-size: 52px; }
+  .brand h1   { font-size: 26px; }
+
+  /* More breathing room between home actions */
+  .home-actions { gap: 13px; }
+
+  /* Taller presence channels list */
+  .channels-list { max-height: 220px; }
+
+  /* Bigger PTT button */
+  .ptt-btn {
+    width: 96px;
+    height: 96px;
+    font-size: 36px;
+  }
+
+  /* Peers list can grow taller */
+  .peers-list { max-height: 260px; }
+
+  /* Settings modal — slightly wider */
+  .modal-content { max-width: 400px; }
+}
+
+@media (min-width: 640px) and (min-height: 700px) {
+  /* Extra vertical breathing room on tall viewports */
+  .brand { padding: 56px 0 40px; }
+  .ptt-area { gap: 14px; padding: 18px 0 8px; }
+}
