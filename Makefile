@@ -103,6 +103,8 @@ cap-android: cap-sync
 	npx cap open android
 
 build-android: cap-sync
+	@JAVA_HOME="$$( /usr/libexec/java_home 2>/dev/null || echo /opt/homebrew/Cellar/openjdk/26.0.1/libexec/openjdk.jdk/Contents/Home )"; \
+	export JAVA_HOME; \
 	cd android && ./gradlew bundleRelease
 	@echo ""
 	@echo "Signed AAB: android/app/build/outputs/bundle/release/app-release.aab"

@@ -26,10 +26,10 @@ android {
     signingConfigs {
         release {
             if (keystorePropsFile.exists()) {
-                keyAlias      keystoreProps['keyAlias']
-                keyPassword   keystoreProps['keyPassword']
-                storeFile     file(keystoreProps['storeFile'])
-                storePassword keystoreProps['storePassword']
+                keyAlias      = keystoreProps['keyAlias']
+                keyPassword   = keystoreProps['keyPassword']
+                storeFile     = file(keystoreProps['storeFile'])
+                storePassword = keystoreProps['storePassword']
             }
         }
     }
