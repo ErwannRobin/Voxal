@@ -87,3 +87,5 @@ Use Python string replacement scripts for multi-line patches to avoid manual err
 - **Android signing setup**: `android/app/build.gradle` reads `android/keystore.properties` when present; if absent (e.g. CI without the key), the release build is unsigned. `versionCode` must be incremented before each Play Store upload — it's in `defaultConfig` in `build.gradle`. `versionCode 2` = first Play Store release.
 
 ---
+
+- **Verified GitHub release tags** require a locally-created signed annotated tag (`git tag -s`) pushed before `gh release create`. Tags created purely via the GitHub API (which is what `gh release create` does without a pre-existing tag) are lightweight and never show Verified. Use SSH signing: configure `gpg.format = ssh` + `user.signingkey = <pub key content>` + `tag.gpgsign = true`, and add the public key as a **signing key** (not auth key) on GitHub under Settings → SSH keys. `make release` now handles this automatically.

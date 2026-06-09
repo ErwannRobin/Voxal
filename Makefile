@@ -169,6 +169,9 @@ release:
 	SIG_CONTENT=$$(cat "$$SIG"); \
 	APP_TAR_NAME=$$(basename "$$APP_TAR"); \
 	echo '{ "version": "'$$VERSION'", "platforms": { "darwin-aarch64": { "url": "https://github.com/ErwannRobin/Voxal/releases/download/v'$$VERSION'/'$$APP_TAR_NAME'", "signature": "'$$SIG_CONTENT'" }, "darwin-x86_64": { "url": "https://github.com/ErwannRobin/Voxal/releases/download/v'$$VERSION'/'$$APP_TAR_NAME'", "signature": "'$$SIG_CONTENT'" } } }' > $$BUNDLE_DIR/latest.json; \
+	echo "→ Creating signed git tag v$$VERSION…"; \
+	git tag -s "v$$VERSION" -m "Voxal v$$VERSION" 2>/dev/null || git tag -f -s "v$$VERSION" -m "Voxal v$$VERSION"; \
+	git push origin "v$$VERSION" --force; \
 	echo "→ Creating GitHub release v$$VERSION…"; \
 	MOBILE_ZIP="src-tauri/target/release/bundle/voxal-mobile-$$VERSION.zip"; \
 	(cd src && zip -qr "../$$MOBILE_ZIP" .); \
