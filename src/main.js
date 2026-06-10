@@ -155,8 +155,16 @@ function iframeEmit(msg) {
 // --- OAuth-style deep link auth ---------------------------------------------
 
 function generateState() {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
-  return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+  if (typeof crypto !== 'undefined') {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    if (crypto.getRandomValues) {
+      var bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      return Array.from(bytes, function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+    }
+  }
+  // Last-resort fallback for very old runtimes.
+  return String(Date.now()) + '-' + String(performance.now());
 }
 
 function handleDeepLink(urlStr) {
