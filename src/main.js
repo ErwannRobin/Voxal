@@ -4172,6 +4172,17 @@ window.addEventListener('DOMContentLoaded', function() {
         endHomeAction();
       });
   });
+  function normalizeRoomInputField() {
+    var input = $('input-code');
+    if (!input) return;
+    var normalized = normalizeRoomCode(input.value);
+    if (normalized && normalized !== input.value) input.value = normalized;
+  }
+  $('input-code').addEventListener('paste', function() {
+    // Let the pasted value land first, then normalize invite URLs to room codes.
+    setTimeout(normalizeRoomInputField, 0);
+  });
+  $('input-code').addEventListener('blur', normalizeRoomInputField);
   $('input-code').addEventListener('keydown', function(e) {
     if (e.key !== 'Enter') return;
     e.preventDefault();
