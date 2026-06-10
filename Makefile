@@ -176,9 +176,9 @@ release:
 	else \
 		echo "→ Using existing version $$NEW_VERSION"; \
 	fi; \
-	NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/("version"\s*:\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e if !$$done++' package.json; \
-	NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/("version"\s*:\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e if !$$done++' src-tauri/tauri.conf.json; \
-	NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/^(version\s*=\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e if !$$done++' src-tauri/Cargo.toml; \
+	NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/("version"\s*:\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e' package.json; \
+	NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/("version"\s*:\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e' src-tauri/tauri.conf.json; \
+	NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/^(version\s*=\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e' src-tauri/Cargo.toml; \
 	NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/^(\s*versionName\s+)"[^"]+"/$$1 . "\"" . $$ENV{NEW_VERSION} . "\""/e' android/app/build.gradle; \
 	if [ "$$NEW_VERSION" != "$$CURRENT_VERSION" ]; then \
 		perl -i -pe 's/^(\s*versionCode\s+)(\d+)/$$1.($$2+1)/e' android/app/build.gradle; \
