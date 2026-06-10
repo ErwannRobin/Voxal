@@ -76,7 +76,13 @@ make check        # Fast Rust type-check (run before every commit)
 make build-debug  # macOS debug bundle (required once to register voxal:// URL scheme)
 ```
 
-There are no automated tests. `make check` is the closest equivalent to a lint/type-check pass — always run it before opening a PR.
+Run tests before opening a PR:
+
+```sh
+npm test              # Playwright web smoke tests + cargo tests
+cd src-tauri && cargo test
+make check            # fast Rust type-check
+```
 
 ### Architecture overview
 

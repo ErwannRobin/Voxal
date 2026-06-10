@@ -10,6 +10,25 @@ const DEFAULT_SHORTCUT: &str = "Shift+Space";
 
 struct PttShortcut(Mutex<String>);
 
+fn presence_method(method: &str) -> &str {
+    match method.to_uppercase().as_str() {
+        "POST" => "POST",
+        "DELETE" => "DELETE",
+        _ => "GET",
+    }
+}
+
+fn parse_presence_response_text(text: &str) -> Result<serde_json::Value, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok(serde_json::Value::Null);
+    }
+    serde_json::from_str(trimmed).map_err(|_| {
+        let preview = &trimmed[..trimmed.len().min(120)];
+        format!("Non-JSON response: {}", preview)
+    })
+}
+
 // Proxy HTTP requests through Rust to bypass WebView CORS restrictions.
 // The Tauri WebView origin (tauri://localhost) is not whitelisted by external APIs.
 #[tauri::command]
@@ -22,10 +41,10 @@ async fn presence_fetch(
 ) -> Result<serde_json::Value, String> {
     eprintln!("[presence_fetch] {} {}", method.to_uppercase(), url);
     let client = reqwest::Client::new();
-    let mut req = match method.to_uppercase().as_str() {
-        "POST"   => client.post(&url),
+    let mut req = match presence_method(&method) {
+        "POST" => client.post(&url),
         "DELETE" => client.delete(&url),
-        _        => client.get(&url),
+        _ => client.get(&url),
     };
     if let Some(t) = token {
         req = req.header("x-api-token", t);
@@ -43,14 +62,7 @@ async fn presence_fetch(
         return Err(format!("HTTP {}", status));
     }
     let text = res.text().await.map_err(|e| e.to_string())?;
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return Ok(serde_json::Value::Null);
-    }
-    serde_json::from_str(trimmed).map_err(|_| {
-        let preview = &trimmed[..trimmed.len().min(120)];
-        format!("Non-JSON response: {}", preview)
-    })
+    parse_presence_response_text(&text)
 }
 
 #[tauri::command]
@@ -118,6 +130,7 @@ pub fn run() {
                         api.prevent_close();
                         let _ = window.minimize();
                     }
+
                 });
             }
 
@@ -187,4 +200,40 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![update_ptt_shortcut, presence_fetch])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_presence_response_text, presence_method};
+
+    #[test]
+    fn presence_method_defaults_to_get() {
+        assert_eq!(presence_method("PATCH"), "GET");
+        assert_eq!(presence_method(""), "GET");
+    }
+
+    #[test]
+    fn presence_method_accepts_post_and_delete_case_insensitive() {
+        assert_eq!(presence_method("post"), "POST");
+        assert_eq!(presence_method("DELETE"), "DELETE");
+    }
+
+    #[test]
+    fn parse_presence_response_handles_empty_as_null() {
+        let parsed = parse_presence_response_text("   \n\t").unwrap();
+        assert!(parsed.is_null());
+    }
+
+    #[test]
+    fn parse_presence_response_parses_valid_json() {
+        let parsed = parse_presence_response_text("{\"ok\":true,\"count\":2}").unwrap();
+        assert_eq!(parsed.get("ok").unwrap().as_bool(), Some(true));
+        assert_eq!(parsed.get("count").unwrap().as_i64(), Some(2));
+    }
+
+    #[test]
+    fn parse_presence_response_returns_non_json_error_with_preview() {
+        let err = parse_presence_response_text("not-json-response").unwrap_err();
+        assert!(err.starts_with("Non-JSON response:"));
+    }
 }
