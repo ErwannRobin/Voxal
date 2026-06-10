@@ -19,6 +19,22 @@ Exit criteria:
 
 ---
 
+## 🧩 Revisit rand 0.7 security update unblock
+
+**Goal:** Eliminate `rand 0.7.3` from the lockfile once upstream dependencies stop requiring `rand ^0.7`.
+
+Current state:
+- `rand 0.8.5` was updated to `0.8.6` in `src-tauri/Cargo.lock`.
+- `rand 0.7.3` still comes from `tauri-utils -> kuchikiki -> selectors 0.24 -> phf_codegen 0.8 -> phf_generator 0.8`.
+- Forcing `rand@0.7.3` to `0.8.6` fails due semver constraints in that upstream chain.
+
+Exit criteria:
+- Upstream `tauri-utils` / `kuchikiki` / `selectors` chain no longer pulls `phf_generator 0.8` (`rand ^0.7`)
+- `cargo tree --target all -i rand@0.7.3` returns nothing
+- Run `make check` and commit lockfile updates
+
+---
+
 ## 🔗 Universal Links for room sharing
 
 **Goal:** Make shared room links clickable in WhatsApp, iMessage, etc.
