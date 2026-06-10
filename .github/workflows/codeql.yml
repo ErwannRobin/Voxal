@@ -14,7 +14,7 @@ permissions:
   security-events: write
 
 jobs:
-  analyze:
+  analyze-android:
     name: Analyze (java-kotlin)
     runs-on: ubuntu-latest
 
@@ -43,3 +43,54 @@ jobs:
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
 
+  analyze-ios:
+    name: Analyze (swift)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Sync Capacitor iOS project
+        run: npx cap sync ios
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: swift
+          build-mode: manual
+
+      - name: Resolve Swift package dependencies
+        env:
+          GIT_CONFIG_PARAMETERS: "'safe.bareRepository=all'"
+        run: |
+          cd ios/App
+          xcodebuild -resolvePackageDependencies \
+            -project App.xcodeproj \
+            -scheme App \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/SourcePackages"
+
+      - name: Build iOS app for CodeQL extraction
+        env:
+          GIT_CONFIG_PARAMETERS: "'safe.bareRepository=all'"
+        run: |
+          cd ios/App
+          xcodebuild build \
+            -project App.xcodeproj \
+            -scheme App \
+            -destination "generic/platform=iOS" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/SourcePackages" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
