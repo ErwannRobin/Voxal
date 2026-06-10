@@ -4352,6 +4352,15 @@ window.addEventListener('DOMContentLoaded', function() {
     if (panel) panel.classList.toggle('popped-out', popped);
   }
 
+  function closeDevLogWindow() {
+    if (!_devLogWin) return;
+    try {
+      _devLogWin.close();
+    } catch (_) {}
+    _devLogWin = null;
+    setDevLogPopped(false);
+  }
+
   function openDevLogWindow() {
     if (!_devLogChannel) {
       _devLogChannel = new BroadcastChannel('voxal-devlog');
@@ -4363,8 +4372,7 @@ window.addEventListener('DOMContentLoaded', function() {
           if (panel) panel.innerHTML = '';
           _devLogBuffer.length = 0;
         } else if (e.data && e.data.type === 'dock') {
-          setDevLogPopped(false);
-          if (_devLogWin) { try { _devLogWin.close(); } catch (_) {} _devLogWin = null; }
+          closeDevLogWindow();
         }
       };
     }
@@ -4393,8 +4401,14 @@ window.addEventListener('DOMContentLoaded', function() {
     }
     // Web fallback
     var w = window.open('devlog.html', 'voxal-devlog', 'width=640,height=480,resizable=yes');
-    if (w) { w.focus(); setDevLogPopped(true); }
+    if (w) {
+      _devLogWin = w;
+      w.focus();
+      setDevLogPopped(true);
+    }
   }
+
+  window.addEventListener('beforeunload', closeDevLogWindow);
 
   function initAboutSection(versionElId, dateElId) {
     var versionEl = document.getElementById(versionElId);
