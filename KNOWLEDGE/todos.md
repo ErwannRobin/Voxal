@@ -4,6 +4,21 @@ Things to implement or investigate, ordered roughly by priority.
 
 ---
 
+## 🧩 Revisit glib security update unblock
+
+**Goal:** Remove temporary Dependabot ignore for `glib` and upgrade to `glib >= 0.20` once upstream supports it.
+
+Current blocker:
+- `tauri 2.11.x` pulls `gtk 0.18.x`, which requires `glib ^0.18`.
+- Forced update (`cargo update -p glib --precise 0.20.0`) fails with resolver conflict.
+
+Exit criteria:
+- Tauri/gtk-rs chain allows `glib 0.20+`
+- Remove `glib` ignore from `.github/dependabot.yml`
+- Run `make check` and commit lockfile updates
+
+---
+
 ## 🔗 Universal Links for room sharing
 
 **Goal:** Make shared room links clickable in WhatsApp, iMessage, etc.

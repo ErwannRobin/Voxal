@@ -13,6 +13,11 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    ignore:
+      # Blocked by tauri -> gtk 0.18.x -> glib ^0.18. Revisit when tauri upgrades gtk-rs.
+      - dependency-name: "glib"
+        versions:
+          - ">=0.20.0"
     labels:
       - "dependencies"
 
