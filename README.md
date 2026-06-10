@@ -141,7 +141,7 @@ make release VERSION=1.2.0
 ```
 
 `make release` publishes the macOS artifacts locally. A separate GitHub Actions workflow (`Release Windows build`) is triggered on release publish to build and upload Windows installers to the same release.
-During `make release`, the version is also synchronized in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` so Tauri updater version checks stay consistent.
+During `make release`, the version is synchronized in `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and `src/version.js` (with an updated build date) so updater checks and web About metadata stay consistent.
 
 > **macOS URL scheme note:** `make dev` cannot register the `voxal://` custom scheme — it requires a signed `.app` bundle. Run `make build-debug` once and open the resulting `.app` to register it; the registration persists when you switch back to `make dev`.
 

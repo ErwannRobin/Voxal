@@ -149,6 +149,7 @@ install:
 # - package.json version
 # - src-tauri/tauri.conf.json version
 # - src-tauri/Cargo.toml version
+# - src/version.js VOXAL_VERSION + VOXAL_BUILD_DATE
 # - android/app/build.gradle versionName
 # and increments android/app/build.gradle versionCode by 1.
 # Without VERSION, it auto-bumps patch version from tauri.conf.json.
@@ -176,14 +177,17 @@ release:
 	else \
 		echo "→ Using existing version $$NEW_VERSION"; \
 	fi; \
+	BUILD_DATE=$$(date +%F); \
 	NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/("version"\s*:\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e' package.json; \
 	NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/("version"\s*:\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e' src-tauri/tauri.conf.json; \
 	NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/^(version\s*=\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e' src-tauri/Cargo.toml; \
+	NEW_VERSION="$$NEW_VERSION" perl -i -pe "s/^(const VOXAL_VERSION\\s*=\\s*')[^']+(';)/\$$1.\$$ENV{NEW_VERSION}.\$$2/e" src/version.js; \
+	BUILD_DATE="$$BUILD_DATE" perl -i -pe "s/^(const VOXAL_BUILD_DATE\\s*=\\s*')[^']+(';)/\$$1.\$$ENV{BUILD_DATE}.\$$2/e" src/version.js; \
 	NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/^(\s*versionName\s+)"[^"]+"/$$1 . "\"" . $$ENV{NEW_VERSION} . "\""/e' android/app/build.gradle; \
 	if [ "$$NEW_VERSION" != "$$CURRENT_VERSION" ]; then \
 		perl -i -pe 's/^(\s*versionCode\s+)(\d+)/$$1.($$2+1)/e' android/app/build.gradle; \
 	fi; \
-	echo "→ Updated package.json, tauri.conf.json, Cargo.toml, and Android version fields"; \
+	echo "→ Updated package.json, tauri.conf.json, Cargo.toml, version.js, and Android version fields"; \
 	VERSION="$$NEW_VERSION"; \
 	echo "→ Building Voxal v$$VERSION (signed release)…"; \
 	export TAURI_SIGNING_PRIVATE_KEY="$${TAURI_SIGNING_PRIVATE_KEY:-$$(cat ~/.tauri/voxal.key)}"; \
