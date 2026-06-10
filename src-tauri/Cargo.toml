@@ -1,6 +1,6 @@
 [package]
 name = "voxal"
-version = "1.0.0"
+version = "1.0.1"
 description = "Serverless push-to-talk voice chat"
 authors = ["Erwann Robin"]
 edition = "2021"
