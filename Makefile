@@ -148,6 +148,7 @@ install:
 # If VERSION is set (for example: make release VERSION=1.2.3), it syncs:
 # - package.json version
 # - src-tauri/tauri.conf.json version
+# - src-tauri/Cargo.toml version
 # - android/app/build.gradle versionName
 # and increments android/app/build.gradle versionCode by 1.
 # Without VERSION, it auto-bumps patch version from tauri.conf.json.
@@ -172,14 +173,17 @@ release:
 	}; \
 	if [ "$$NEW_VERSION" != "$$CURRENT_VERSION" ]; then \
 		echo "→ Syncing release version $$CURRENT_VERSION → $$NEW_VERSION"; \
-		NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/("version"\s*:\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e if !$$done++' package.json; \
-		NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/("version"\s*:\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e if !$$done++' src-tauri/tauri.conf.json; \
-		NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/^(\s*versionName\s+)"[^"]+"/$$1 . "\"" . $$ENV{NEW_VERSION} . "\""/e' android/app/build.gradle; \
-		perl -i -pe 's/^(\s*versionCode\s+)(\d+)/$$1.($$2+1)/e' android/app/build.gradle; \
-		echo "→ Updated package.json, tauri.conf.json, and Android version fields"; \
 	else \
 		echo "→ Using existing version $$NEW_VERSION"; \
 	fi; \
+	NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/("version"\s*:\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e if !$$done++' package.json; \
+	NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/("version"\s*:\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e if !$$done++' src-tauri/tauri.conf.json; \
+	NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/^(version\s*=\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e if !$$done++' src-tauri/Cargo.toml; \
+	NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/^(\s*versionName\s+)"[^"]+"/$$1 . "\"" . $$ENV{NEW_VERSION} . "\""/e' android/app/build.gradle; \
+	if [ "$$NEW_VERSION" != "$$CURRENT_VERSION" ]; then \
+		perl -i -pe 's/^(\s*versionCode\s+)(\d+)/$$1.($$2+1)/e' android/app/build.gradle; \
+	fi; \
+	echo "→ Updated package.json, tauri.conf.json, Cargo.toml, and Android version fields"; \
 	VERSION="$$NEW_VERSION"; \
 	echo "→ Building Voxal v$$VERSION (signed release)…"; \
 	export TAURI_SIGNING_PRIVATE_KEY="$${TAURI_SIGNING_PRIVATE_KEY:-$$(cat ~/.tauri/voxal.key)}"; \
