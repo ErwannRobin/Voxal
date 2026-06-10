@@ -77,6 +77,7 @@ Use Python string replacement scripts for multi-line patches to avoid manual err
 ## Workflow
 
 - Suggest a commit message in the final response only when the current turn actually changed repository files.
+- **Node 24 + Playwright 1.60** emits `DEP0205` (`module.register()` deprecated) from Playwright internals during `playwright test`. This is upstream noise, not app code. `package.json` suppresses only that code via `NODE_OPTIONS=--disable-warning=DEP0205` in `test:e2e`.
 
 ## Host migration refactor
 

@@ -6,7 +6,7 @@
     "tauri": "tauri",
     "test": "npm run test:rust && npm run test:e2e",
     "test:rust": "cd src-tauri && cargo test",
-    "test:e2e": "playwright test"
+    "test:e2e": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
