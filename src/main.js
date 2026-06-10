@@ -132,9 +132,24 @@ function loadInitialPseudo() {
 
 var _isIframe = (function() { try { return window.self !== window.top; } catch(e) { return true; } })();
 
+function getAllowedParentOrigin() {
+  try {
+    var params = new URLSearchParams(window.location.search || '');
+    var raw = params.get('parentOrigin');
+    if (!raw) return window.location.origin;
+    var parsed = new URL(raw, window.location.href);
+    if (!/^https?:$/.test(parsed.protocol)) return null;
+    return parsed.origin;
+  } catch (_) {
+    return window.location.origin;
+  }
+}
+
 function iframeEmit(msg) {
   if (!_isIframe) return;
-  window.parent.postMessage(Object.assign({ source: 'voxal' }, msg), '*');
+  var targetOrigin = getAllowedParentOrigin();
+  if (!targetOrigin) return;
+  window.parent.postMessage(Object.assign({ source: 'voxal' }, msg), targetOrigin);
 }
 
 // --- OAuth-style deep link auth ---------------------------------------------
