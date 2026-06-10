@@ -89,3 +89,5 @@ Use Python string replacement scripts for multi-line patches to avoid manual err
 ---
 
 - **Verified GitHub release tags** require a locally-created signed annotated tag (`git tag -s`) pushed before `gh release create`. Tags created purely via the GitHub API (which is what `gh release create` does without a pre-existing tag) are lightweight and never show Verified. Use SSH signing: configure `gpg.format = ssh` + `user.signingkey = <pub key content>` + `tag.gpgsign = true`, and add the public key as a **signing key** (not auth key) on GitHub under Settings → SSH keys. `make release` now handles this automatically.
+
+- **Dependabot `glib` security alerts (>=0.15,<0.20) are currently upstream-blocked** in this repo: `tauri 2.11.x` pulls `gtk 0.18.x`, which pins `glib ^0.18`, so `glib 0.20+` cannot be selected yet. `cargo update -p glib --precise 0.20.0` fails with a version-selection conflict. Resolution depends on upstream `tauri/gtk-rs` moving to newer `glib`.
