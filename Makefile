@@ -1,4 +1,4 @@
-.PHONY: help run run-web dev debug build build-debug build-signed build-web install clean lint check \
+.PHONY: help run run-web dev debug build build-debug build-signed build-web install clean lint check test \
         cap-sync cap-ios cap-android build-android docs release
 
 # Default target
@@ -21,6 +21,7 @@ help:
 	@echo "  release      Build signed release and publish to GitHub (requires gh CLI)"
 	@echo "  docs         Serve architecture flow docs on http://localhost:8090"
 	@echo "  check        Run Rust type-check (no binary)"
+	@echo "  test         Run all automated tests (Rust + Playwright)"
 	@echo "  clean        Remove build artifacts"
 	@echo ""
 
@@ -186,6 +187,9 @@ release:
 
 check:
 	cd src-tauri && cargo check
+
+test:
+	npm test
 
 clean:
 	cd src-tauri && cargo clean
