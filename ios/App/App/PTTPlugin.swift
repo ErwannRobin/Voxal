@@ -27,7 +27,7 @@ private class PTTChannelDelegate: NSObject, PTChannelManagerDelegate {
         do {
             try audioSession.setCategory(.playAndRecord,
                                          mode: .voiceChat,
-                                         options: [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker])
+                                         options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker])
             try audioSession.setActive(true)
         } catch {
             print("[PTT] Audio session activation failed: \(error)")

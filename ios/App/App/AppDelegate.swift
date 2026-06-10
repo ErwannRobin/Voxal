@@ -41,7 +41,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         do {
             try session.setCategory(.playAndRecord,
                                     mode: .voiceChat,
-                                    options: [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker])
+                                    options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker])
         } catch {
             print("[AVAudioSession] Configuration failed: \(error)")
         }
@@ -62,4 +62,3 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return ApplicationDelegateProxy.shared.application(application, continue: userActivity, restorationHandler: restorationHandler)
     }
 }
-
