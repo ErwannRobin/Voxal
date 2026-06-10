@@ -1056,7 +1056,12 @@ function setLoading(el, on, originalLabel) {
   if (on) {
     el.disabled = true;
     el._origLabel = el.textContent;
-    el.innerHTML = '<span class="btn-spinner"></span>' + (originalLabel || el._origLabel);
+    var label = originalLabel || el._origLabel || '';
+    el.textContent = '';
+    var spinner = document.createElement('span');
+    spinner.className = 'btn-spinner';
+    el.appendChild(spinner);
+    el.appendChild(document.createTextNode(label));
   } else {
     el.disabled = false;
     el.textContent = el._origLabel || el.textContent;
