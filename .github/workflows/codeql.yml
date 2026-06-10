@@ -44,6 +44,9 @@ jobs:
           build-mode: manual
           config-file: ./.github/codeql/codeql-config.yml
 
+      - name: Sync Capacitor Android project
+        run: npx cap sync android
+
       - name: Build Android app for CodeQL extraction
         run: |
           cd android
