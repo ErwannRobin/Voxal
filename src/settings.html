@@ -533,8 +533,20 @@
       $id('btn-test-turn').addEventListener('click', testTurn);
       $id('btn-disconnect').addEventListener('click', disconnect);
       $id('btn-done').addEventListener('click', closeWindow);
+      function generateAuthState() {
+        if (typeof crypto !== 'undefined') {
+          if (crypto.randomUUID) return crypto.randomUUID();
+          if (crypto.getRandomValues) {
+            var bytes = new Uint8Array(16);
+            crypto.getRandomValues(bytes);
+            return Array.from(bytes, function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+          }
+        }
+        return String(Date.now()) + '-' + String(performance.now());
+      }
+
       $id('btn-connect-voxal').addEventListener('click', function() {
-        var state = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+        var state = generateAuthState();
         sessionStorage.setItem('voxal-auth-state', state);
         var url = VOXAL_CONNECT_URL + '/connect?state=' + state;
         if (window.__TAURI__) {
