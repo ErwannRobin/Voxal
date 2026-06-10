@@ -2,4 +2,5 @@ paths-ignore:
   - android/app/build/**
   - android/**/generated/**
   - android/capacitor-cordova-android-plugins/**
+  - node_modules/**
   - node_modules/@capgo/capacitor-updater/android/**
