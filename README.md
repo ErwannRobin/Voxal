@@ -118,6 +118,7 @@ make run           Build & launch the desktop release binary
 make build         Full Tauri release build
 make build-debug   macOS debug bundle (registers voxal:// URL scheme)
 make build-signed  Release build with signing key (for auto-updater)
+make release       Build + tag + publish GitHub release (auto-bumps patch by default)
 make run-web       Serve src/ on http://localhost:8080
 make build-web     Copy src/ to dist/ for static hosting
 make cap-sync      Sync src/ assets to iOS & Android
@@ -127,6 +128,16 @@ make install       npm install + cargo fetch
 make check         Rust type-check without building
 make clean         Remove Cargo build artifacts and dist/
 make docs          Serve architecture docs on http://localhost:8090
+```
+
+Release versioning shortcuts:
+
+```sh
+# Auto-bump patch (e.g. 1.0.0 -> 1.0.1), sync files, build and release
+make release
+
+# Or force an explicit version
+make release VERSION=1.2.0
 ```
 
 > **macOS URL scheme note:** `make dev` cannot register the `voxal://` custom scheme — it requires a signed `.app` bundle. Run `make build-debug` once and open the resulting `.app` to register it; the registration persists when you switch back to `make dev`.

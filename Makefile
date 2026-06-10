@@ -145,7 +145,12 @@ install:
 	cd src-tauri && cargo fetch
 
 # Build a signed release and publish it as a GitHub Release.
-# Reads version from tauri.conf.json. Creates a latest.json manifest for the updater.
+# If VERSION is set (for example: make release VERSION=1.2.3), it syncs:
+# - package.json version
+# - src-tauri/tauri.conf.json version
+# - android/app/build.gradle versionName
+# and increments android/app/build.gradle versionCode by 1.
+# Without VERSION, it auto-bumps patch version from tauri.conf.json.
 release:
 	@command -v gh >/dev/null 2>&1 || { echo "Error: gh CLI not installed (https://cli.github.com)"; exit 1; }
 	@if [ -z "$$TAURI_SIGNING_PRIVATE_KEY" ] && [ ! -f ~/.tauri/voxal.key ]; then \
@@ -153,7 +158,29 @@ release:
 		echo "Set TAURI_SIGNING_PRIVATE_KEY or place key at ~/.tauri/voxal.key"; \
 		exit 1; \
 	fi
-	@VERSION=$$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*: *"//;s/".*//'); \
+	@CURRENT_VERSION=$$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*: *"//;s/".*//'); \
+	NEW_VERSION="$(VERSION)"; \
+	if [ -z "$$NEW_VERSION" ]; then \
+		NEW_VERSION=$$(node --input-type=module -e "const v='$$CURRENT_VERSION'; const m=v.match(/^([0-9]+)\.([0-9]+)\.([0-9]+)$$/); if (!m) { process.exit(1); } console.log(m[1] + '.' + m[2] + '.' + (Number(m[3]) + 1));") || { \
+			echo "Error: could not auto-bump version from '$$CURRENT_VERSION'. Use make release VERSION=x.y.z"; \
+			exit 1; \
+		}; \
+	fi; \
+	echo "$$NEW_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { \
+		echo "Error: VERSION must be semver x.y.z (got '$$NEW_VERSION')"; \
+		exit 1; \
+	}; \
+	if [ "$$NEW_VERSION" != "$$CURRENT_VERSION" ]; then \
+		echo "→ Syncing release version $$CURRENT_VERSION → $$NEW_VERSION"; \
+		NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/("version"\s*:\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e if !$$done++' package.json; \
+		NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/("version"\s*:\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e if !$$done++' src-tauri/tauri.conf.json; \
+		NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/^(\s*versionName\s+)"[^"]+"/$$1 . "\"" . $$ENV{NEW_VERSION} . "\""/e' android/app/build.gradle; \
+		perl -i -pe 's/^(\s*versionCode\s+)(\d+)/$$1.($$2+1)/e' android/app/build.gradle; \
+		echo "→ Updated package.json, tauri.conf.json, and Android version fields"; \
+	else \
+		echo "→ Using existing version $$NEW_VERSION"; \
+	fi; \
+	VERSION="$$NEW_VERSION"; \
 	echo "→ Building Voxal v$$VERSION (signed release)…"; \
 	export TAURI_SIGNING_PRIVATE_KEY="$${TAURI_SIGNING_PRIVATE_KEY:-$$(cat ~/.tauri/voxal.key)}"; \
 	if [ -z "$$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]; then \
