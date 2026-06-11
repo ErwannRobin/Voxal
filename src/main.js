@@ -42,6 +42,10 @@ const METERED_COUNT_STORE_KEY   = 'metered-count';   // number of servers when o
 const METERED_SERVERS_STORE_KEY = 'metered-servers'; // JSON array of ICE server objects
 
 const NOISE_SUPPRESSION_KEY = 'noise-suppression'; // 'rnnoise' | 'browser' | 'off'
+const MIC_DEVICE_KEY        = 'mic-device-id';
+const CAMERA_DEVICE_KEY     = 'camera-device-id';
+const SPEAKER_DEVICE_KEY    = 'speaker-device-id';
+const DEVICE_LABELS_KEY     = 'media-device-labels';
 
 // --- Audio focus (Android) ---------------------------------------------------
 
@@ -2071,6 +2075,88 @@ function getNoiseSuppressionMode() {
   return localStorage.getItem(NOISE_SUPPRESSION_KEY) || 'rnnoise';
 }
 
+function selectedMicDeviceId() {
+  return localStorage.getItem(MIC_DEVICE_KEY) || '';
+}
+
+function selectedCameraDeviceId() {
+  return localStorage.getItem(CAMERA_DEVICE_KEY) || '';
+}
+
+function selectedSpeakerDeviceId() {
+  return localStorage.getItem(SPEAKER_DEVICE_KEY) || '';
+}
+
+function selectedMicConstraints() {
+  var micDeviceId = selectedMicDeviceId();
+  return micDeviceId ? { deviceId: { exact: micDeviceId } } : {};
+}
+
+function selectedCameraConstraints() {
+  var cameraId = selectedCameraDeviceId();
+  return cameraId
+    ? { deviceId: { exact: cameraId } }
+    : { facingMode: 'user' };
+}
+
+function readStoredDeviceLabels() {
+  try {
+    var raw = localStorage.getItem(DEVICE_LABELS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function writeStoredDeviceLabels(map) {
+  try { localStorage.setItem(DEVICE_LABELS_KEY, JSON.stringify(map || {})); } catch (_) {}
+}
+
+function setDeviceSelectOptions(select, devices, selectedId, prefix, labelMap) {
+  if (!select) return;
+  var html = '<option value="">System default</option>';
+  devices.forEach(function(d, idx) {
+    var label = d.label || (labelMap && labelMap[d.deviceId]) || (prefix + ' ' + (idx + 1));
+    html += '<option value="' + d.deviceId + '">' +
+      label.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') +
+      '</option>';
+  });
+  select.innerHTML = html;
+  var hasSelected = selectedId && devices.some(function(d) { return d.deviceId === selectedId; });
+  select.value = hasSelected ? selectedId : '';
+}
+
+async function refreshMediaDeviceSelectors() {
+  var micSelect = document.getElementById('select-mic-device');
+  var camSelect = document.getElementById('select-camera-device');
+  var speakerSelect = document.getElementById('select-speaker-device');
+  if (!micSelect && !camSelect && !speakerSelect) return;
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    if (micSelect) micSelect.innerHTML = '<option value="">Unavailable in this browser</option>';
+    if (camSelect) camSelect.innerHTML = '<option value="">Unavailable in this browser</option>';
+    if (speakerSelect) speakerSelect.innerHTML = '<option value="">Unavailable in this browser</option>';
+    return;
+  }
+
+  try {
+    var devices = await navigator.mediaDevices.enumerateDevices();
+    var mics = devices.filter(function(d) { return d.kind === 'audioinput'; });
+    var cams = devices.filter(function(d) { return d.kind === 'videoinput'; });
+    var speakers = devices.filter(function(d) { return d.kind === 'audiooutput'; });
+    var labelMap = readStoredDeviceLabels();
+    devices.forEach(function(d) {
+      if (d.deviceId && d.label) labelMap[d.deviceId] = d.label;
+    });
+    writeStoredDeviceLabels(labelMap);
+    setDeviceSelectOptions(micSelect, mics, selectedMicDeviceId(), 'Microphone', labelMap);
+    setDeviceSelectOptions(camSelect, cams, selectedCameraDeviceId(), 'Camera', labelMap);
+    setDeviceSelectOptions(speakerSelect, speakers, selectedSpeakerDeviceId(), 'Speaker', labelMap);
+  } catch (e) {
+    console.warn('[Media devices] enumerate failed:', e.message);
+  }
+}
+
 async function getMicStream() {
   // Normalise legacy webkit prefix (some older iOS/Android WebViews)
   const getUserMedia = (
@@ -2090,12 +2176,17 @@ async function getMicStream() {
   const mode = getNoiseSuppressionMode();
   const useBrowserNS = (mode === 'browser');
   const useRNNoise = (mode === 'rnnoise');
+  var audioConstraints = {
+    channelCount: 1,
+    sampleRate: useRNNoise ? 48000 : 16000,
+    echoCancellation: true,
+    noiseSuppression: useBrowserNS,
+    autoGainControl: true
+  };
+  Object.assign(audioConstraints, selectedMicConstraints());
 
   const rawStream = await getUserMedia({
-    audio: { channelCount: 1, sampleRate: useRNNoise ? 48000 : 16000,
-             echoCancellation: true,
-             noiseSuppression: useBrowserNS,
-             autoGainControl: true },
+    audio: audioConstraints,
     video: false,
   });
 
@@ -2113,9 +2204,242 @@ function attachAudio(peerId, remoteStream) {
   let el = document.getElementById('audio-' + peerId);
   if (!el) { el = new Audio(); el.id = 'audio-' + peerId; el.autoplay = true; document.body.appendChild(el); }
   el.srcObject = remoteStream;
+  applySpeakerSink(el);
 }
 
 function detachAudio(peerId) { const el = document.getElementById('audio-' + peerId); if (el) el.remove(); }
+
+async function applySpeakerSink(el) {
+  if (!el || typeof el.setSinkId !== 'function') return;
+  var sinkId = selectedSpeakerDeviceId();
+  try {
+    await el.setSinkId(sinkId || 'default');
+  } catch (e) {
+    console.warn('[Audio output] setSinkId failed:', e.message);
+  }
+}
+
+function applySpeakerSinkToAllAudio() {
+  document.querySelectorAll('audio[id^="audio-"]').forEach(function(el) {
+    applySpeakerSink(el);
+  });
+}
+
+var _micTestStream = null;
+var _micTestCtx = null;
+var _micTestAnalyser = null;
+var _micTestRaf = null;
+var _micTestRecorder = null;
+var _micTestChunks = [];
+var _micTestPlaybackUrl = '';
+var _cameraPreviewStream = null;
+
+function clearMicTestPlayback() {
+  var audio = document.getElementById('mic-test-playback');
+  if (!audio) return;
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.load();
+  audio.classList.add('hidden');
+  if (_micTestPlaybackUrl) {
+    URL.revokeObjectURL(_micTestPlaybackUrl);
+    _micTestPlaybackUrl = '';
+  }
+}
+
+function renderMicTestPlayback(blob) {
+  clearMicTestPlayback();
+  if (!blob || !blob.size) return;
+  var audio = document.getElementById('mic-test-playback');
+  if (!audio) return;
+  _micTestPlaybackUrl = URL.createObjectURL(blob);
+  audio.src = _micTestPlaybackUrl;
+  audio.classList.remove('hidden');
+  audio.play().catch(function() {});
+}
+
+async function stopMicTest(options) {
+  options = options || {};
+  var replay = !!options.replay;
+  if (_micTestRaf) {
+    cancelAnimationFrame(_micTestRaf);
+    _micTestRaf = null;
+  }
+  var recorder = _micTestRecorder;
+  var chunks = _micTestChunks;
+  var recordedBlob = null;
+  if (recorder && recorder.state !== 'inactive') {
+    recordedBlob = await new Promise(function(resolve) {
+      recorder.onstop = function() {
+        resolve(chunks.length ? new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }) : null);
+      };
+      recorder.stop();
+    });
+  } else if (chunks.length) {
+    recordedBlob = new Blob(chunks, { type: 'audio/webm' });
+  }
+  _micTestRecorder = null;
+  _micTestChunks = [];
+  if (_micTestCtx) {
+    _micTestCtx.close().catch(function() {});
+    _micTestCtx = null;
+  }
+  _micTestAnalyser = null;
+  if (_micTestStream) {
+    _micTestStream.getTracks().forEach(function(t) { t.stop(); });
+    _micTestStream = null;
+  }
+  var fill = document.getElementById('mic-test-level-fill');
+  if (fill) {
+    fill.style.width = '0%';
+    var meter = fill.closest('.media-level');
+    if (meter) meter.classList.add('hidden');
+  }
+  var btn = document.getElementById('btn-test-mic');
+  if (btn) btn.textContent = 'Test';
+  if (replay) renderMicTestPlayback(recordedBlob);
+  else clearMicTestPlayback();
+}
+
+async function startMicTest() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+  await stopMicTest();
+  clearMicTestPlayback();
+  var constraints = { audio: Object.assign({ echoCancellation: true }, selectedMicConstraints()), video: false };
+  _micTestStream = await navigator.mediaDevices.getUserMedia(constraints);
+  _micTestCtx = new (window.AudioContext || window.webkitAudioContext)();
+  var source = _micTestCtx.createMediaStreamSource(_micTestStream);
+  _micTestAnalyser = _micTestCtx.createAnalyser();
+  _micTestAnalyser.fftSize = 1024;
+  source.connect(_micTestAnalyser);
+  if (typeof window.MediaRecorder === 'function') {
+    try {
+      _micTestRecorder = new MediaRecorder(_micTestStream);
+      _micTestChunks = [];
+      _micTestRecorder.ondataavailable = function(ev) {
+        if (ev.data && ev.data.size > 0) _micTestChunks.push(ev.data);
+      };
+      _micTestRecorder.start();
+    } catch (e) {
+      _micTestRecorder = null;
+      _micTestChunks = [];
+      console.warn('[Mic test] recorder unavailable:', e.message);
+    }
+  }
+
+  var btn = document.getElementById('btn-test-mic');
+  if (btn) btn.textContent = 'Stop & Replay';
+  var fill = document.getElementById('mic-test-level-fill');
+  if (fill) {
+    var meter = fill.closest('.media-level');
+    if (meter) meter.classList.remove('hidden');
+  }
+  var data = new Uint8Array(_micTestAnalyser.fftSize);
+  var tick = function() {
+    if (!_micTestAnalyser) return;
+    _micTestAnalyser.getByteTimeDomainData(data);
+    var sum = 0;
+    for (var i = 0; i < data.length; i++) {
+      var centered = (data[i] - 128) / 128;
+      sum += centered * centered;
+    }
+    var rms = Math.sqrt(sum / data.length);
+    var percent = Math.max(0, Math.min(100, Math.round(rms * 220)));
+    if (fill) fill.style.width = percent + '%';
+    _micTestRaf = requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+async function toggleMicTest() {
+  if (_micTestStream) await stopMicTest({ replay: true });
+  else {
+    try { await startMicTest(); }
+    catch (e) { showCopyToast('Microphone test failed'); console.warn('[Mic test]', e.message); }
+  }
+}
+
+function stopCameraPreview() {
+  if (_cameraPreviewStream) {
+    _cameraPreviewStream.getTracks().forEach(function(t) { t.stop(); });
+    _cameraPreviewStream = null;
+  }
+  var video = document.getElementById('camera-preview-video');
+  if (video) {
+    video.srcObject = null;
+    video.classList.add('hidden');
+  }
+  var btn = document.getElementById('btn-preview-camera');
+  if (btn) btn.textContent = 'Preview';
+}
+
+async function startCameraPreview() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+  stopCameraPreview();
+  _cameraPreviewStream = await navigator.mediaDevices.getUserMedia({
+    video: selectedCameraConstraints(),
+    audio: false
+  });
+  var video = document.getElementById('camera-preview-video');
+  if (video) {
+    video.srcObject = _cameraPreviewStream;
+    video.classList.remove('hidden');
+    video.play().catch(function() {});
+  }
+  var btn = document.getElementById('btn-preview-camera');
+  if (btn) btn.textContent = 'Stop Preview';
+}
+
+async function toggleCameraPreview() {
+  if (_cameraPreviewStream) stopCameraPreview();
+  else {
+    try { await startCameraPreview(); }
+    catch (e) { showCopyToast(cameraAccessHint(e)); console.warn('[Camera preview]', e.message); }
+  }
+}
+
+async function testSpeakerOutput() {
+  var statusEl = document.getElementById('speaker-test-status');
+  if (statusEl) statusEl.textContent = 'Playing…';
+  var ctx = new (window.AudioContext || window.webkitAudioContext)();
+  var dest = ctx.createMediaStreamDestination();
+  var tone = new Audio();
+  tone.autoplay = true;
+  tone.srcObject = dest.stream;
+  tone.volume = 0.9;
+  if (typeof tone.setSinkId === 'function') {
+    try {
+      var sink = selectedSpeakerDeviceId();
+      await tone.setSinkId(sink || 'default');
+    } catch (e) {
+      if (statusEl) statusEl.textContent = 'Output routing unavailable';
+      console.warn('[Speaker test]', e.message);
+    }
+  }
+  var now = ctx.currentTime;
+  var notes = [523.25, 659.25, 783.99, 659.25, 698.46, 880];
+  notes.forEach(function(freq, idx) {
+    var start = now + (idx * 0.13);
+    var end = start + 0.12;
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(freq, start);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.12, start + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, end);
+    osc.connect(gain);
+    gain.connect(dest);
+    osc.start(start);
+    osc.stop(end);
+  });
+  setTimeout(function() {
+    tone.pause();
+    tone.srcObject = null;
+    ctx.close().catch(function() {});
+    if (statusEl) statusEl.textContent = '';
+  }, 1300);
+}
 
 // --- PTT & hands-free ---------------------------------------------------------
 
@@ -2301,7 +2625,7 @@ async function startVideoShare() {
   if (localVideoActive) return;
   try {
     localVideoStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+      video: selectedCameraConstraints(),
       audio: false
     });
   } catch (e) {
@@ -4465,6 +4789,7 @@ window.addEventListener('DOMContentLoaded', function() {
     $('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
     $('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
     $('select-noise-suppression').value = getNoiseSuppressionMode();
+    refreshMediaDeviceSelectors();
     $('input-presence-token').value = presenceToken();
     // Restore saved TURN test result
     var savedTurnStatus = localStorage.getItem(METERED_STATUS_STORE_KEY);
@@ -4495,12 +4820,18 @@ window.addEventListener('DOMContentLoaded', function() {
       if (advDetails && devOn) advDetails.open = true;
     }
     updateVideoModeUI();
+    stopMicTest();
+    stopCameraPreview();
     // Populate About section
     initAboutSection('about-version-modal', 'about-build-date-modal');
     $('modal-settings').classList.remove('hidden');
     if (presenceToken()) loadOrgs();
   }
   function closeSettings() {
+    stopMicTest();
+    stopCameraPreview();
+    var speakerStatus = $('speaker-test-status');
+    if (speakerStatus) speakerStatus.textContent = '';
     $('modal-settings').classList.add('hidden');
     startPresencePolling(); // refresh in case org changed
   }
@@ -4573,6 +4904,34 @@ window.addEventListener('DOMContentLoaded', function() {
   $('select-noise-suppression').addEventListener('change', function(e) {
     localStorage.setItem(NOISE_SUPPRESSION_KEY, e.target.value);
   });
+  var micSelect = $('select-mic-device');
+  if (micSelect) {
+    micSelect.addEventListener('change', function(e) {
+      if (e.target.value) localStorage.setItem(MIC_DEVICE_KEY, e.target.value);
+      else localStorage.removeItem(MIC_DEVICE_KEY);
+      if (_micTestStream) startMicTest().catch(function(err) { console.warn('[Mic test]', err.message); stopMicTest(); });
+    });
+  }
+  var camSelect = $('select-camera-device');
+  if (camSelect) {
+    camSelect.addEventListener('change', function(e) {
+      if (e.target.value) localStorage.setItem(CAMERA_DEVICE_KEY, e.target.value);
+      else localStorage.removeItem(CAMERA_DEVICE_KEY);
+      if (_cameraPreviewStream) startCameraPreview().catch(function(err) { console.warn('[Camera preview]', err.message); stopCameraPreview(); });
+    });
+  }
+  var speakerSelect = $('select-speaker-device');
+  if (speakerSelect) {
+    speakerSelect.addEventListener('change', function(e) {
+      if (e.target.value) localStorage.setItem(SPEAKER_DEVICE_KEY, e.target.value);
+      else localStorage.removeItem(SPEAKER_DEVICE_KEY);
+      applySpeakerSinkToAllAudio();
+    });
+  }
+  refreshMediaDeviceSelectors();
+  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener('devicechange', refreshMediaDeviceSelectors);
+  }
   $('btn-open-settings').addEventListener('click', function() {
     // On web/mobile, open settings.
     if (!window.__TAURI__) openSettings();
@@ -4592,6 +4951,12 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-close-settings-footer').addEventListener('click', closeSettings);
   $('modal-backdrop').addEventListener('click', closeSettings);
   $('btn-test-turn').addEventListener('click', testTurnCredentials);
+  var btnMicTest = $('btn-test-mic');
+  if (btnMicTest) btnMicTest.addEventListener('click', toggleMicTest);
+  var btnSpeakerTest = $('btn-test-speaker');
+  if (btnSpeakerTest) btnSpeakerTest.addEventListener('click', function() { testSpeakerOutput().catch(function(e) { console.warn('[Speaker test]', e.message); }); });
+  var btnCameraPreview = $('btn-preview-camera');
+  if (btnCameraPreview) btnCameraPreview.addEventListener('click', toggleCameraPreview);
   $('btn-disconnect').addEventListener('click', disconnectAccount);
   $('btn-connect-voxal').addEventListener('click', connectWithVoxalAccount);
 
@@ -4697,7 +5062,8 @@ window.addEventListener('DOMContentLoaded', function() {
       return;
     }
     var relevantKeys = [PRESENCE_TOKEN_KEY, PRESENCE_ORG_KEY, METERED_APP_STORE_KEY,
-                        METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY, VIDEO_MODE_KEY];
+                          METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY, VIDEO_MODE_KEY,
+                          SPEAKER_DEVICE_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
     if (e.key === VIDEO_MODE_KEY) {
       // Settings window toggled video mode — apply if we're host in a room
@@ -4721,6 +5087,10 @@ window.addEventListener('DOMContentLoaded', function() {
         updateVideoModeUI();
         updatePeerList();
       }
+      return;
+    }
+    if (e.key === SPEAKER_DEVICE_KEY) {
+      applySpeakerSinkToAllAudio();
       return;
     }
     updateTurnBadge();

@@ -24,6 +24,8 @@ Copilot should read this file at the start of every session.
 
 - **`make dev`** (`npx tauri dev`) does NOT register the `voxal://` URL scheme. Run `make build-debug` once and open the `.app` bundle to register it. The registration persists while switching back to `make dev`.
 - **Global PTT shortcut default** is `Shift+Space` (changed from `Ctrl+Backquote`).
+- **Device labels in `settings.html` (separate Tauri WebView)** can stay generic (`Microphone 1`, `Camera 1`) until that window itself gets media permission. A one-time `getUserMedia({ audio: true, video: true })` probe in preferences unlocks real labels for `enumerateDevices()`.
+- **Desk View / virtual cameras** can render incorrectly (split frame) when we force fixed camera constraints (`width/height` ideals). Prefer selecting by `deviceId` only and let the OS pick the native profile.
 
 ## Android / Capacitor
 

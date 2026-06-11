@@ -223,6 +223,54 @@
 
           <div class="settings-separator"></div>
 
+          <!-- Media devices -->
+          <p class="settings-group-title">Media Devices</p>
+          <div class="settings-device-row">
+            <div class="settings-device-head">
+              <label for="select-mic-device">Microphone</label>
+            </div>
+            <div class="settings-device-control">
+              <select id="select-mic-device" class="org-select">
+                <option value="">System default</option>
+              </select>
+              <button id="btn-test-mic" type="button" class="btn btn-primary btn-sm media-test-cta">Test</button>
+            </div>
+            <div class="settings-test-result">
+              <span class="media-level hidden"><span id="mic-test-level-fill" class="media-level-fill"></span></span>
+              <audio id="mic-test-playback" class="mic-test-playback hidden" controls preload="none"></audio>
+            </div>
+          </div>
+          <div class="settings-device-row">
+            <div class="settings-device-head">
+              <label for="select-camera-device">Camera</label>
+            </div>
+            <div class="settings-device-control">
+              <select id="select-camera-device" class="org-select">
+                <option value="">System default</option>
+              </select>
+              <button id="btn-preview-camera" type="button" class="btn btn-primary btn-sm media-test-cta">Preview</button>
+            </div>
+            <div class="settings-test-result">
+              <video id="camera-preview-video" class="camera-preview hidden" autoplay playsinline muted></video>
+            </div>
+          </div>
+          <div class="settings-device-row">
+            <div class="settings-device-head">
+              <label for="select-speaker-device">Speaker</label>
+            </div>
+            <div class="settings-device-control">
+              <select id="select-speaker-device" class="org-select">
+                <option value="">System default</option>
+              </select>
+              <button id="btn-test-speaker" type="button" class="btn btn-primary btn-sm media-test-cta">Test</button>
+            </div>
+            <div class="settings-test-result">
+              <span id="speaker-test-status" class="settings-test-status"></span>
+            </div>
+          </div>
+
+          <div class="settings-separator"></div>
+
           <!-- TURN — collapsed by default -->
           <details class="turn-section" id="turn-details">
             <summary>Advanced</summary>

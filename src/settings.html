@@ -182,6 +182,54 @@
 
       <div class="settings-separator"></div>
 
+      <!-- Media devices -->
+      <p class="settings-group-title">Media Devices</p>
+      <div class="settings-device-row">
+        <div class="settings-device-head">
+          <label for="select-mic-device">Microphone</label>
+        </div>
+        <div class="settings-device-control">
+          <select id="select-mic-device" class="org-select">
+            <option value="">System default</option>
+          </select>
+          <button id="btn-test-mic" type="button" class="btn btn-primary btn-sm media-test-cta">Test</button>
+        </div>
+        <div class="settings-test-result">
+          <span class="media-level hidden"><span id="mic-test-level-fill" class="media-level-fill"></span></span>
+          <audio id="mic-test-playback" class="mic-test-playback hidden" controls preload="none"></audio>
+        </div>
+      </div>
+      <div class="settings-device-row">
+        <div class="settings-device-head">
+          <label for="select-camera-device">Camera</label>
+        </div>
+        <div class="settings-device-control">
+          <select id="select-camera-device" class="org-select">
+            <option value="">System default</option>
+          </select>
+          <button id="btn-preview-camera" type="button" class="btn btn-primary btn-sm media-test-cta">Preview</button>
+        </div>
+        <div class="settings-test-result">
+          <video id="camera-preview-video" class="camera-preview hidden" autoplay playsinline muted></video>
+        </div>
+      </div>
+      <div class="settings-device-row">
+        <div class="settings-device-head">
+          <label for="select-speaker-device">Speaker</label>
+        </div>
+        <div class="settings-device-control">
+          <select id="select-speaker-device" class="org-select">
+            <option value="">System default</option>
+          </select>
+          <button id="btn-test-speaker" type="button" class="btn btn-primary btn-sm media-test-cta">Test</button>
+        </div>
+        <div class="settings-test-result">
+          <span id="speaker-test-status" class="settings-test-status"></span>
+        </div>
+      </div>
+
+      <div class="settings-separator"></div>
+
       <!-- TURN — collapsed by default -->
       <details class="turn-section" id="turn-details">
         <summary>Advanced</summary>
@@ -258,6 +306,10 @@
       const SERVICE_URL_KEY         = 'service-url';
       const DEV_MODE_KEY            = 'dev-mode';
       const NOISE_SUPPRESSION_KEY   = 'noise-suppression';
+      const MIC_DEVICE_KEY          = 'mic-device-id';
+      const CAMERA_DEVICE_KEY       = 'camera-device-id';
+      const SPEAKER_DEVICE_KEY      = 'speaker-device-id';
+      const DEVICE_LABELS_KEY       = 'media-device-labels';
       const VOXAL_CONNECT_URL       = 'https://voxal.lovable.app';
       const FALLBACK_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
@@ -265,6 +317,16 @@
       function presenceToken() { return localStorage.getItem(PRESENCE_TOKEN_KEY) || ''; }
       function presenceOrgId() { return localStorage.getItem(PRESENCE_ORG_KEY)   || ''; }
       function presenceBase()  { return (localStorage.getItem(SERVICE_URL_KEY) || DEFAULT_PRESENCE_BASE).replace(/\/$/, ''); }
+      function selectedMicConstraints() {
+        var id = localStorage.getItem(MIC_DEVICE_KEY) || '';
+        return id ? { deviceId: { exact: id } } : {};
+      }
+      function selectedCameraConstraints() {
+        var id = localStorage.getItem(CAMERA_DEVICE_KEY) || '';
+        return id
+          ? { deviceId: { exact: id } }
+          : { facingMode: 'user' };
+      }
       function tauriFetch(url, options) {
         if (window.__TAURI__) {
           var method = (options && options.method) || 'GET';
@@ -311,6 +373,320 @@
       $id('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
       $id('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
       $id('select-noise-suppression').value = localStorage.getItem(NOISE_SUPPRESSION_KEY) || 'rnnoise';
+
+      function readStoredDeviceLabels() {
+        try {
+          var raw = localStorage.getItem(DEVICE_LABELS_KEY);
+          return raw ? JSON.parse(raw) : {};
+        } catch (_) {
+          return {};
+        }
+      }
+
+      function writeStoredDeviceLabels(map) {
+        try { localStorage.setItem(DEVICE_LABELS_KEY, JSON.stringify(map || {})); } catch (_) {}
+      }
+
+      var _mediaLabelProbeTried = false;
+
+      function setDeviceSelectOptions(select, devices, selectedId, prefix, labelMap) {
+        if (!select) return;
+        var html = '<option value="">System default</option>';
+        devices.forEach(function(d, idx) {
+          var label = d.label || (labelMap && labelMap[d.deviceId]) || (prefix + ' ' + (idx + 1));
+          html += '<option value="' + d.deviceId + '">' +
+            label.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') +
+            '</option>';
+        });
+        select.innerHTML = html;
+        var hasSelected = selectedId && devices.some(function(d) { return d.deviceId === selectedId; });
+        select.value = hasSelected ? selectedId : '';
+      }
+
+      function hasNamedDeviceKind(devices, labelMap, kind) {
+        var list = (devices || []).filter(function(d) { return d.kind === kind; });
+        if (!list.length) return true;
+        return list.every(function(d) {
+          return !!d.label || !!(labelMap && labelMap[d.deviceId]);
+        });
+      }
+
+      function hasInputLabels(devices, labelMap) {
+        return hasNamedDeviceKind(devices, labelMap, 'audioinput') &&
+               hasNamedDeviceKind(devices, labelMap, 'videoinput');
+      }
+
+      async function probeMediaLabelsIfNeeded(devices, labelMap) {
+        if (_mediaLabelProbeTried) return;
+        if (hasInputLabels(devices, labelMap)) return;
+        if (!window.__TAURI__) return; // Keep this behavior desktop-only
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+        _mediaLabelProbeTried = true;
+
+        try {
+          // In Tauri, preferences runs in a separate WebView; labels may remain blank
+          // until this window itself gets media permission once.
+          var probe = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+          probe.getTracks().forEach(function(t) { t.stop(); });
+        } catch (_) {
+          // Permission denied or missing camera/mic is fine; we still keep generic labels.
+        }
+      }
+
+      async function refreshMediaDeviceSelectors() {
+        var micSelect = $id('select-mic-device');
+        var camSelect = $id('select-camera-device');
+        var speakerSelect = $id('select-speaker-device');
+        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+          if (micSelect) micSelect.innerHTML = '<option value="">Unavailable in this browser</option>';
+          if (camSelect) camSelect.innerHTML = '<option value="">Unavailable in this browser</option>';
+          if (speakerSelect) speakerSelect.innerHTML = '<option value="">Unavailable in this browser</option>';
+          return;
+        }
+        try {
+          var devices = await navigator.mediaDevices.enumerateDevices();
+          var labelMap = readStoredDeviceLabels();
+          await probeMediaLabelsIfNeeded(devices, labelMap);
+          if (!hasInputLabels(devices, labelMap)) {
+            devices = await navigator.mediaDevices.enumerateDevices();
+          }
+
+          var mics = devices.filter(function(d) { return d.kind === 'audioinput'; });
+          var cams = devices.filter(function(d) { return d.kind === 'videoinput'; });
+          var speakers = devices.filter(function(d) { return d.kind === 'audiooutput'; });
+          devices.forEach(function(d) {
+            if (d.deviceId && d.label) labelMap[d.deviceId] = d.label;
+          });
+          writeStoredDeviceLabels(labelMap);
+          setDeviceSelectOptions(micSelect, mics, localStorage.getItem(MIC_DEVICE_KEY) || '', 'Microphone', labelMap);
+          setDeviceSelectOptions(camSelect, cams, localStorage.getItem(CAMERA_DEVICE_KEY) || '', 'Camera', labelMap);
+          setDeviceSelectOptions($id('select-speaker-device'), speakers, localStorage.getItem(SPEAKER_DEVICE_KEY) || '', 'Speaker', labelMap);
+        } catch (e) {
+          console.warn('[Media devices] enumerate failed:', e.message);
+        }
+      }
+      refreshMediaDeviceSelectors();
+      if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+        navigator.mediaDevices.addEventListener('devicechange', refreshMediaDeviceSelectors);
+      }
+
+      var _micTestStream = null;
+      var _micTestCtx = null;
+      var _micTestAnalyser = null;
+      var _micTestRaf = null;
+      var _micTestRecorder = null;
+      var _micTestChunks = [];
+      var _micTestPlaybackUrl = '';
+      var _cameraPreviewStream = null;
+
+      function clearMicTestPlayback() {
+        var audio = $id('mic-test-playback');
+        if (!audio) return;
+        audio.pause();
+        audio.removeAttribute('src');
+        audio.load();
+        audio.classList.add('hidden');
+        if (_micTestPlaybackUrl) {
+          URL.revokeObjectURL(_micTestPlaybackUrl);
+          _micTestPlaybackUrl = '';
+        }
+      }
+
+      function renderMicTestPlayback(blob) {
+        clearMicTestPlayback();
+        if (!blob || !blob.size) return;
+        var audio = $id('mic-test-playback');
+        if (!audio) return;
+        _micTestPlaybackUrl = URL.createObjectURL(blob);
+        audio.src = _micTestPlaybackUrl;
+        audio.classList.remove('hidden');
+        audio.play().catch(function() {});
+      }
+
+      async function stopMicTest(options) {
+        options = options || {};
+        var replay = !!options.replay;
+        if (_micTestRaf) {
+          cancelAnimationFrame(_micTestRaf);
+          _micTestRaf = null;
+        }
+        var recorder = _micTestRecorder;
+        var chunks = _micTestChunks;
+        var recordedBlob = null;
+        if (recorder && recorder.state !== 'inactive') {
+          recordedBlob = await new Promise(function(resolve) {
+            recorder.onstop = function() {
+              resolve(chunks.length ? new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }) : null);
+            };
+            recorder.stop();
+          });
+        } else if (chunks.length) {
+          recordedBlob = new Blob(chunks, { type: 'audio/webm' });
+        }
+        _micTestRecorder = null;
+        _micTestChunks = [];
+        if (_micTestCtx) {
+          _micTestCtx.close().catch(function() {});
+          _micTestCtx = null;
+        }
+        _micTestAnalyser = null;
+        if (_micTestStream) {
+          _micTestStream.getTracks().forEach(function(t) { t.stop(); });
+          _micTestStream = null;
+        }
+        var fill = $id('mic-test-level-fill');
+        if (fill) {
+          fill.style.width = '0%';
+          var meter = fill.closest('.media-level');
+          if (meter) meter.classList.add('hidden');
+        }
+        var btn = $id('btn-test-mic');
+        if (btn) btn.textContent = 'Test';
+        if (replay) renderMicTestPlayback(recordedBlob);
+        else clearMicTestPlayback();
+      }
+
+      async function startMicTest() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+        await stopMicTest();
+        clearMicTestPlayback();
+        _micTestStream = await navigator.mediaDevices.getUserMedia({
+          audio: Object.assign({ echoCancellation: true }, selectedMicConstraints()),
+          video: false
+        });
+        _micTestCtx = new (window.AudioContext || window.webkitAudioContext)();
+        var source = _micTestCtx.createMediaStreamSource(_micTestStream);
+        _micTestAnalyser = _micTestCtx.createAnalyser();
+        _micTestAnalyser.fftSize = 1024;
+        source.connect(_micTestAnalyser);
+        if (typeof window.MediaRecorder === 'function') {
+          try {
+            _micTestRecorder = new MediaRecorder(_micTestStream);
+            _micTestChunks = [];
+            _micTestRecorder.ondataavailable = function(ev) {
+              if (ev.data && ev.data.size > 0) _micTestChunks.push(ev.data);
+            };
+            _micTestRecorder.start();
+          } catch (e) {
+            _micTestRecorder = null;
+            _micTestChunks = [];
+            console.warn('[Mic test] recorder unavailable:', e.message);
+          }
+        }
+
+        var btn = $id('btn-test-mic');
+        if (btn) btn.textContent = 'Stop & Replay';
+        var fill = $id('mic-test-level-fill');
+        if (fill) {
+          var meter = fill.closest('.media-level');
+          if (meter) meter.classList.remove('hidden');
+        }
+        var data = new Uint8Array(_micTestAnalyser.fftSize);
+        var tick = function() {
+          if (!_micTestAnalyser) return;
+          _micTestAnalyser.getByteTimeDomainData(data);
+          var sum = 0;
+          for (var i = 0; i < data.length; i++) {
+            var centered = (data[i] - 128) / 128;
+            sum += centered * centered;
+          }
+          var rms = Math.sqrt(sum / data.length);
+          var percent = Math.max(0, Math.min(100, Math.round(rms * 220)));
+          if (fill) fill.style.width = percent + '%';
+          _micTestRaf = requestAnimationFrame(tick);
+        };
+        tick();
+      }
+
+      async function toggleMicTest() {
+        if (_micTestStream) await stopMicTest({ replay: true });
+        else {
+          try { await startMicTest(); }
+          catch (e) { console.warn('[Mic test]', e.message); }
+        }
+      }
+
+      function stopCameraPreview() {
+        if (_cameraPreviewStream) {
+          _cameraPreviewStream.getTracks().forEach(function(t) { t.stop(); });
+          _cameraPreviewStream = null;
+        }
+        var video = $id('camera-preview-video');
+        if (video) {
+          video.srcObject = null;
+          video.classList.add('hidden');
+        }
+        var btn = $id('btn-preview-camera');
+        if (btn) btn.textContent = 'Preview';
+      }
+
+      async function startCameraPreview() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+        stopCameraPreview();
+        _cameraPreviewStream = await navigator.mediaDevices.getUserMedia({
+          video: selectedCameraConstraints(),
+          audio: false
+        });
+        var video = $id('camera-preview-video');
+        if (video) {
+          video.srcObject = _cameraPreviewStream;
+          video.classList.remove('hidden');
+          video.play().catch(function() {});
+        }
+        var btn = $id('btn-preview-camera');
+        if (btn) btn.textContent = 'Stop Preview';
+      }
+
+      async function toggleCameraPreview() {
+        if (_cameraPreviewStream) stopCameraPreview();
+        else {
+          try { await startCameraPreview(); }
+          catch (e) { console.warn('[Camera preview]', e.message); }
+        }
+      }
+
+      async function testSpeakerOutput() {
+        var statusEl = $id('speaker-test-status');
+        if (statusEl) statusEl.textContent = 'Playing…';
+        var ctx = new (window.AudioContext || window.webkitAudioContext)();
+        var dest = ctx.createMediaStreamDestination();
+        var tone = new Audio();
+        tone.autoplay = true;
+        tone.srcObject = dest.stream;
+        tone.volume = 0.9;
+        if (typeof tone.setSinkId === 'function') {
+          try {
+            var sinkId = localStorage.getItem(SPEAKER_DEVICE_KEY) || '';
+            await tone.setSinkId(sinkId || 'default');
+          } catch (e) {
+            if (statusEl) statusEl.textContent = 'Output routing unavailable';
+            console.warn('[Speaker test]', e.message);
+          }
+        }
+        var now = ctx.currentTime;
+        var notes = [523.25, 659.25, 783.99, 659.25, 698.46, 880];
+        notes.forEach(function(freq, idx) {
+          var start = now + (idx * 0.13);
+          var end = start + 0.12;
+          var osc = ctx.createOscillator();
+          var gain = ctx.createGain();
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(freq, start);
+          gain.gain.setValueAtTime(0.0001, start);
+          gain.gain.exponentialRampToValueAtTime(0.12, start + 0.01);
+          gain.gain.exponentialRampToValueAtTime(0.0001, end);
+          osc.connect(gain);
+          gain.connect(dest);
+          osc.start(start);
+          osc.stop(end);
+        });
+        setTimeout(function() {
+          tone.pause();
+          tone.srcObject = null;
+          ctx.close().catch(function() {});
+          if (statusEl) statusEl.textContent = '';
+        }, 1300);
+      }
 
       // --- Dev mode toggle ---
       const VIDEO_MODE_KEY = 'video-mode-enabled';
@@ -519,6 +895,20 @@
       $id('select-noise-suppression').addEventListener('change', function(e) {
         localStorage.setItem(NOISE_SUPPRESSION_KEY, e.target.value);
       });
+      $id('select-mic-device').addEventListener('change', function(e) {
+        if (e.target.value) localStorage.setItem(MIC_DEVICE_KEY, e.target.value);
+        else localStorage.removeItem(MIC_DEVICE_KEY);
+        if (_micTestStream) startMicTest().catch(function(err) { console.warn('[Mic test]', err.message); stopMicTest(); });
+      });
+      $id('select-camera-device').addEventListener('change', function(e) {
+        if (e.target.value) localStorage.setItem(CAMERA_DEVICE_KEY, e.target.value);
+        else localStorage.removeItem(CAMERA_DEVICE_KEY);
+        if (_cameraPreviewStream) startCameraPreview().catch(function(err) { console.warn('[Camera preview]', err.message); stopCameraPreview(); });
+      });
+      $id('select-speaker-device').addEventListener('change', function(e) {
+        if (e.target.value) localStorage.setItem(SPEAKER_DEVICE_KEY, e.target.value);
+        else localStorage.removeItem(SPEAKER_DEVICE_KEY);
+      });
       // Clear (×) buttons
       document.querySelectorAll('.input-clear').forEach(function(btn) {
         btn.addEventListener('click', function() {
@@ -531,6 +921,9 @@
       });
 
       $id('btn-test-turn').addEventListener('click', testTurn);
+      $id('btn-test-mic').addEventListener('click', toggleMicTest);
+      $id('btn-test-speaker').addEventListener('click', function() { testSpeakerOutput().catch(function(e) { console.warn('[Speaker test]', e.message); }); });
+      $id('btn-preview-camera').addEventListener('click', toggleCameraPreview);
       $id('btn-disconnect').addEventListener('click', disconnect);
       $id('btn-done').addEventListener('click', closeWindow);
       function generateAuthState() {
@@ -563,6 +956,10 @@
       document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') closeWindow();
       });
+      window.addEventListener('beforeunload', function() {
+        stopMicTest();
+        stopCameraPreview();
+      });
 
       // Sync connect/disconnect button state when main window changes the token
       window.addEventListener('storage', function(e) {
@@ -591,6 +988,10 @@
       }
 
       function closeWindow() {
+        stopMicTest();
+        stopCameraPreview();
+        var speakerStatus = $id('speaker-test-status');
+        if (speakerStatus) speakerStatus.textContent = '';
         if (window.__TAURI__) {
           // Direct Tauri v2 invoke — most reliable path
           window.__TAURI__.core.invoke('plugin:window|close').catch(function(e) {
