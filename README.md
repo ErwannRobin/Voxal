@@ -143,6 +143,12 @@ make release VERSION=1.2.0
 `make release` publishes the macOS artifacts locally. Separate GitHub Actions workflows (`Release Windows build` and `Release Linux build`) are triggered on release publish to build and upload Windows and Linux artifacts to the same release.
 During `make release`, the version is synchronized in `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and `src/version.js` (with an updated build date) so updater checks and web About metadata stay consistent.
 The Windows workflow requires repository secrets `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` and either `TAURI_SIGNING_PRIVATE_KEY` (full minisign private key text) or `TAURI_SIGNING_PRIVATE_KEY_B64` (base64-encoded key file).
+`make release` aborts if the macOS app is ad-hoc signed, since those DMGs are commonly blocked by Gatekeeper as “damaged” for end users. If you still want to publish that DMG, use `make release ALLOW_ADHOC_DMG=1`.
+
+For local/manual installs of ad-hoc builds, users can bypass Gatekeeper by right-clicking the app and choosing **Open**, or by removing quarantine:
+```sh
+xattr -dr com.apple.quarantine /Applications/Voxal.app
+```
 
 > **macOS URL scheme note:** `make dev` cannot register the `voxal://` custom scheme — it requires a signed `.app` bundle. Run `make build-debug` once and open the resulting `.app` to register it; the registration persists when you switch back to `make dev`.
 

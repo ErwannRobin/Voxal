@@ -198,6 +198,19 @@ release:
 	fi; \
 	npm run tauri build || exit 1; \
 	BUNDLE_DIR="src-tauri/target/release/bundle"; \
+	APP_DIR=$$(find $$BUNDLE_DIR/macos -maxdepth 1 -name '*.app' -type d 2>/dev/null | head -1); \
+	if [ -n "$$APP_DIR" ]; then \
+		if codesign -dv --verbose=2 "$$APP_DIR" 2>&1 | grep -q 'Signature=adhoc'; then \
+			if [ "$(ALLOW_ADHOC_DMG)" = "1" ]; then \
+				echo "Warning: $$APP_DIR is ad-hoc signed; continuing because ALLOW_ADHOC_DMG=1."; \
+			else \
+				echo "Error: $$APP_DIR is ad-hoc signed."; \
+				echo "Configure Developer ID signing/notarization before publishing a DMG,"; \
+				echo "or run: make release ALLOW_ADHOC_DMG=1"; \
+				exit 1; \
+			fi; \
+		fi; \
+	fi; \
 	DMG=$$(find $$BUNDLE_DIR/dmg -name '*.dmg' 2>/dev/null | head -1); \
 	APP_TAR=$$(find $$BUNDLE_DIR/macos -name '*.app.tar.gz' 2>/dev/null | head -1); \
 	SIG=$$(find $$BUNDLE_DIR/macos -name '*.app.tar.gz.sig' 2>/dev/null | head -1); \
