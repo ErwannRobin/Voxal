@@ -56,9 +56,21 @@ jobs:
           }
           $raw = $raw.Trim()
 
+          if ($raw.StartsWith("untrusted comment:") -and $raw -notmatch "`n") {
+            # Secret may have header + key on one line; split before key material.
+            $raw = $raw -replace '^(untrusted comment:[^\r\n]*?)\s+([A-Za-z0-9+/=]+)$', '$1' + "`n" + '$2'
+          }
+
           if (-not $raw.StartsWith("untrusted comment:")) {
             # Accept key-body-only secrets by injecting the expected minisign header.
             $raw = "untrusted comment: minisign secret key`n$raw"
+          }
+
+          $lines = $raw -split "`n"
+          if ($lines.Count -ge 2) {
+            # Remove accidental spaces in key line (commonly introduced when copying secrets).
+            $lines[1] = ($lines[1] -replace '\s', '')
+            $raw = ($lines -join "`n")
           }
 
           "TAURI_SIGNING_PRIVATE_KEY<<EOF" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
