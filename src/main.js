@@ -145,6 +145,12 @@ function getAllowedParentOrigin() {
     if (!/^https?:$/.test(parsed.protocol)) return null;
     return parsed.origin;
   } catch (_) {
+    try {
+      if (document.referrer) {
+        var ref = new URL(document.referrer, window.location.href);
+        if (/^https?:$/.test(ref.protocol)) return ref.origin;
+      }
+    } catch (_) {}
     return window.location.origin;
   }
 }
