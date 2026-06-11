@@ -181,8 +181,14 @@ function handleDeepLink(urlStr) {
   try {
     const url = new URL(urlStr);
 
-    // ── Universal Links: https://ptt.voxal.app/*?room=<id> ───────────
-    if (url.protocol === 'https:' && url.hostname === 'ptt.voxal.app') {
+    // ── Universal Links: https://ptt.voxal.app/*?room=<id> (and voxal.app aliases) ──
+    if ((url.protocol === 'https:' || url.protocol === 'http:') &&
+        (url.hostname === 'ptt.voxal.app' ||
+         url.hostname === 'voxal.app' ||
+         url.hostname === 'www.voxal.app' ||
+         url.hostname === 'web.voxal.app' ||
+         url.hostname === 'localhost' ||
+         url.hostname === '127.0.0.1')) {
       const roomId = url.searchParams.get('room');
       if (roomId) {
         if (_audioCtx.state === 'suspended') _audioCtx.resume();
@@ -1394,18 +1400,43 @@ function _tryNativeAppThenJoin(roomId) {
   showInviteLoading(roomId, 'Opening Voxal…');
 
   var appLaunched = false;
-  var WAIT_MS = 800;
+  var WAIT_MS = 2000;
+  var timeout = null;
+  var cleanedUp = false;
+
+  function markNativeLaunch() {
+    appLaunched = true;
+    clearTimeout(timeout);
+    cleanupSignals();
+    // Native app took over — keep a web fallback CTA if the user comes back.
+    showInviteLoading(roomId, 'Redirected to the desktop app.');
+    setInviteLoadingSpinnerVisible(false);
+    _inviteWebFallbackRoomId = roomId;
+    setInviteLoadingCtaMode('join-web');
+  }
+
+  function cleanupSignals() {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    document.removeEventListener('visibilitychange', onVis);
+    window.removeEventListener('blur', onBlur);
+    window.removeEventListener('pagehide', onPageHide);
+  }
 
   var onVis = function() {
-    if (document.hidden) {
-      appLaunched = true;
-      clearTimeout(timeout);
-      document.removeEventListener('visibilitychange', onVis);
-      // Native app took over — go back to home so the web tab is clean on return
-      showScreen('home');
-    }
+    if (document.hidden) markNativeLaunch();
+  };
+  var onBlur = function() {
+    // Some desktop/browser combinations don't toggle document.hidden
+    // immediately when handing off to a custom URL scheme.
+    markNativeLaunch();
+  };
+  var onPageHide = function() {
+    markNativeLaunch();
   };
   document.addEventListener('visibilitychange', onVis);
+  window.addEventListener('blur', onBlur);
+  window.addEventListener('pagehide', onPageHide);
 
   // Trigger the custom scheme via a hidden link (avoids page-navigation errors)
   var a = document.createElement('a');
@@ -1415,8 +1446,8 @@ function _tryNativeAppThenJoin(roomId) {
   a.click();
   document.body.removeChild(a);
 
-  var timeout = setTimeout(function() {
-    document.removeEventListener('visibilitychange', onVis);
+  timeout = setTimeout(function() {
+    cleanupSignals();
     if (appLaunched) return;
     // App not installed or didn't respond — join in the browser
     showInviteLoading(roomId, 'Connecting…');
@@ -1430,7 +1461,29 @@ function showInviteLoading(roomLabel, statusText) {
   if (roomCodeEl) roomCodeEl.textContent = roomLabel || '';
   var statusEl = $('invite-join-status');
   if (statusEl) statusEl.textContent = statusText || 'Connecting…';
+  setInviteLoadingSpinnerVisible(true);
+  _inviteWebFallbackRoomId = '';
+  setInviteLoadingCtaMode('back');
   showScreen('invite-loading');
+}
+
+var _inviteWebFallbackRoomId = '';
+function setInviteLoadingSpinnerVisible(visible) {
+  var spinner = $('invite-spinner') || document.querySelector('.invite-spinner');
+  if (!spinner) return;
+  spinner.classList.toggle('hidden', !visible);
+}
+
+function setInviteLoadingCtaMode(mode) {
+  var btn = $('btn-cancel-invite-join');
+  if (!btn) return;
+  if (mode === 'join-web') {
+    btn.dataset.action = 'join-web';
+    btn.textContent = 'Join on web';
+    return;
+  }
+  btn.dataset.action = 'back';
+  btn.textContent = 'Back';
 }
 
 function applyNewShortcut(newShortcut) {
@@ -4592,10 +4645,16 @@ window.addEventListener('DOMContentLoaded', function() {
   var cancelInviteJoinBtn = $('btn-cancel-invite-join');
   if (cancelInviteJoinBtn) {
     cancelInviteJoinBtn.addEventListener('click', function() {
+      if (cancelInviteJoinBtn.dataset.action === 'join-web' && _inviteWebFallbackRoomId) {
+        startInviteRoomJoin(_inviteWebFallbackRoomId);
+        return;
+      }
       if (_cancelJoin) {
         _cancelJoin();
         _cancelJoin = null;
       }
+      _inviteWebFallbackRoomId = '';
+      setInviteLoadingCtaMode('back');
       showScreen('home');
     });
   }
@@ -5082,6 +5141,20 @@ window.addEventListener('DOMContentLoaded', function() {
 
   // Tauri: "Voxal → Preferences…" and "About Voxal" menu items
   if (window.__TAURI__) {
+    window.__TAURI__.event.listen('deep-link://new-url', function(e) {
+      var urls = Array.isArray(e.payload) ? e.payload : [e.payload];
+      urls.forEach(function(url) {
+        if (url) handleDeepLink(url);
+      });
+    });
+    var tauriDeepLink = window.__TAURI__.deepLink;
+    if (tauriDeepLink && typeof tauriDeepLink.getCurrent === 'function') {
+      tauriDeepLink.getCurrent().then(function(urls) {
+        (urls || []).forEach(function(url) {
+          if (url) handleDeepLink(url);
+        });
+      }).catch(function() {});
+    }
     window.__TAURI__.event.listen('open-preferences', openSettings);
     window.__TAURI__.event.listen('open-about', function() {
       if (_aboutWin) {
