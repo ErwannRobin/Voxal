@@ -101,194 +101,182 @@
         <p class="prefs-title">Preferences</p>
       </div>
 
-      <!-- Display name -->
-      <p class="settings-group-title">Display Name</p>
-      <div class="settings-field">
-        <label for="input-pseudo">Your name</label>
-        <div class="input-clearable">
-          <input id="input-pseudo" type="text" placeholder="Your name…" maxlength="20"
-                 spellcheck="false" autocomplete="off" />
-          <button class="input-clear" data-target="input-pseudo" aria-label="Clear">✕</button>
+      <div class="settings-card">
+        <p class="settings-group-title">Profile</p>
+        <div class="settings-field">
+          <label for="input-pseudo">Display name</label>
+          <div class="input-clearable">
+            <input id="input-pseudo" type="text" placeholder="Your name…" maxlength="20"
+                   spellcheck="false" autocomplete="off" />
+            <button class="input-clear" data-target="input-pseudo" aria-label="Clear">✕</button>
+          </div>
+          <p class="field-helper">Shown to other people in rooms.</p>
+        </div>
+        <p class="settings-desc">Connect to your organisation to access channels and presence.</p>
+        <button id="btn-connect-voxal" class="btn btn-primary btn-connect-voxal">Connect with Voxal</button>
+        <div id="account-org-section" class="settings-field hidden">
+          <label for="select-presence-org">Organisation</label>
+          <select id="select-presence-org" class="org-select" disabled>
+            <option value="">— enter API token first —</option>
+          </select>
+          <span id="org-load-status" class="org-load-status"></span>
+        </div>
+        <details class="manual-token-details">
+          <summary>Advanced account options</summary>
+          <div class="settings-field" style="margin-top:8px">
+            <label for="input-presence-token">API token</label>
+            <div class="input-clearable">
+              <input id="input-presence-token" type="password" placeholder="API token"
+                     autocomplete="off" />
+              <button class="input-clear" data-target="input-presence-token" aria-label="Clear">✕</button>
+            </div>
+          </div>
+        </details>
+        <div class="settings-disconnect-row" id="disconnect-row">
+          <button id="btn-disconnect" class="btn btn-ghost btn-sm btn-danger">Disconnect</button>
         </div>
       </div>
 
-      <div class="settings-separator"></div>
-
-      <!-- Appearance -->
-      <p class="settings-group-title">Appearance</p>
-      <div class="settings-field">
-        <label>Theme</label>
-        <div class="theme-toggle" id="theme-toggle">
-          <button data-theme="dark">🌙 Dark</button>
-          <button data-theme="light">☀️ Light</button>
-          <button data-theme="system">⚙ System</button>
+      <div class="settings-card">
+        <p class="settings-group-title">Audio</p>
+        <div class="settings-device-row">
+          <div class="settings-device-head">
+            <label for="select-mic-device">Microphone</label>
+          </div>
+          <div class="settings-device-control">
+            <select id="select-mic-device" class="org-select">
+              <option value="">System default</option>
+            </select>
+            <button id="btn-test-mic" type="button" class="btn btn-primary btn-sm media-test-cta">Test</button>
+          </div>
+          <div class="settings-test-result">
+            <span class="media-level hidden"><span id="mic-test-level-fill" class="media-level-fill"></span></span>
+            <audio id="mic-test-playback" class="mic-test-playback hidden" controls preload="none"></audio>
+          </div>
+        </div>
+        <p class="settings-subtitle">Noise suppression</p>
+        <div class="noise-card-group" id="noise-suppression-group" role="radiogroup" aria-label="Noise suppression mode">
+          <label class="noise-card">
+            <input type="radio" name="noise-suppression-mode" value="rnnoise" />
+            <span class="noise-card-title">Best Quality <em>(Recommended)</em></span>
+            <span class="noise-card-desc">AI-powered RNNoise</span>
+          </label>
+          <label class="noise-card">
+            <input type="radio" name="noise-suppression-mode" value="browser" />
+            <span class="noise-card-title">Standard</span>
+            <span class="noise-card-desc">Browser built-in suppression</span>
+          </label>
+          <label class="noise-card">
+            <input type="radio" name="noise-suppression-mode" value="off" />
+            <span class="noise-card-title">Off</span>
+          </label>
+        </div>
+        <p class="settings-subtitle">Output</p>
+        <div class="settings-device-row">
+          <div class="settings-device-head">
+            <label for="select-speaker-device">Speaker</label>
+          </div>
+          <div class="settings-device-control">
+            <select id="select-speaker-device" class="org-select">
+              <option value="">System default</option>
+            </select>
+            <button id="btn-test-speaker" type="button" class="btn btn-primary btn-sm media-test-cta">Test</button>
+          </div>
+          <div class="settings-test-result">
+            <span id="speaker-test-status" class="settings-test-status"></span>
+          </div>
         </div>
       </div>
 
-      <div class="settings-separator"></div>
+      <div class="settings-card">
+        <p class="settings-group-title">Video</p>
+        <div class="settings-device-row">
+          <div class="settings-device-head">
+            <label for="select-camera-device">Camera</label>
+          </div>
+          <div class="settings-device-control">
+            <select id="select-camera-device" class="org-select">
+              <option value="">System default</option>
+            </select>
+            <button id="btn-preview-camera" type="button" class="btn btn-primary btn-sm media-test-cta">Preview</button>
+          </div>
+          <div class="settings-test-result">
+            <video id="camera-preview-video" class="camera-preview hidden" autoplay playsinline muted></video>
+          </div>
+        </div>
+      </div>
 
-      <!-- General (desktop only) -->
-      <div id="section-general" style="display:none">
-        <p class="settings-group-title">General</p>
-        <div class="settings-field" style="flex-direction:row;align-items:center">
+      <div class="settings-card">
+        <p class="settings-group-title">System</p>
+        <div class="settings-field">
+          <label>Theme</label>
+          <div class="theme-toggle" id="theme-toggle">
+            <button data-theme="dark">Dark</button>
+            <button data-theme="light">Light</button>
+            <button data-theme="system">System</button>
+          </div>
+        </div>
+        <!-- General (desktop only) -->
+        <div id="section-general" class="settings-field settings-inline-toggle hidden">
           <label for="toggle-launch-at-login" style="flex:1">Launch at login</label>
           <button id="toggle-launch-at-login" class="toggle-btn" role="switch" aria-checked="false">OFF</button>
         </div>
-        <div class="settings-separator"></div>
       </div>
 
-      <!-- Presence / Voxal account -->
-      <p class="settings-group-title">Voxal Account</p>
-      <p class="settings-desc">
-        Connect to a Voxal organisation to see channels and who's online.
-      </p>
-      <button id="btn-connect-voxal" class="btn btn-primary btn-connect-voxal">
-        🔗 Connect with Voxal
-      </button>
-      <details class="manual-token-details">
-        <summary>Use an API token manually</summary>
-        <div class="settings-field" style="margin-top:8px">
-          <label for="input-presence-token">API token</label>
-          <div class="input-clearable">
-            <input id="input-presence-token" type="password" placeholder="API token"
-                   autocomplete="off" />
-            <button class="input-clear" data-target="input-presence-token" aria-label="Clear">✕</button>
-          </div>
-        </div>
-      </details>
-      <div class="settings-field">
-        <label for="select-presence-org">Organisation</label>
-        <select id="select-presence-org" class="org-select" disabled>
-          <option value="">— enter API token first —</option>
-        </select>
-        <span id="org-load-status" class="org-load-status"></span>
-      </div>
-
-      <div class="settings-separator"></div>
-
-      <!-- Noise suppression -->
-      <p class="settings-group-title">Noise Suppression</p>
-      <p class="settings-desc">
-        Reduce background noise from your microphone. RNNoise uses ML-based suppression for best results.
-      </p>
-      <div class="settings-field">
-        <label for="select-noise-suppression">Mode</label>
-        <select id="select-noise-suppression" class="org-select">
-          <option value="rnnoise">RNNoise (ML-powered)</option>
-          <option value="browser">Browser built-in</option>
-          <option value="off">Off</option>
-        </select>
-      </div>
-
-      <div class="settings-separator"></div>
-
-      <!-- Media devices -->
-      <p class="settings-group-title">Media Devices</p>
-      <div class="settings-device-row">
-        <div class="settings-device-head">
-          <label for="select-mic-device">Microphone</label>
-        </div>
-        <div class="settings-device-control">
-          <select id="select-mic-device" class="org-select">
-            <option value="">System default</option>
-          </select>
-          <button id="btn-test-mic" type="button" class="btn btn-primary btn-sm media-test-cta">Test</button>
-        </div>
-        <div class="settings-test-result">
-          <span class="media-level hidden"><span id="mic-test-level-fill" class="media-level-fill"></span></span>
-          <audio id="mic-test-playback" class="mic-test-playback hidden" controls preload="none"></audio>
-        </div>
-      </div>
-      <div class="settings-device-row">
-        <div class="settings-device-head">
-          <label for="select-camera-device">Camera</label>
-        </div>
-        <div class="settings-device-control">
-          <select id="select-camera-device" class="org-select">
-            <option value="">System default</option>
-          </select>
-          <button id="btn-preview-camera" type="button" class="btn btn-primary btn-sm media-test-cta">Preview</button>
-        </div>
-        <div class="settings-test-result">
-          <video id="camera-preview-video" class="camera-preview hidden" autoplay playsinline muted></video>
-        </div>
-      </div>
-      <div class="settings-device-row">
-        <div class="settings-device-head">
-          <label for="select-speaker-device">Speaker</label>
-        </div>
-        <div class="settings-device-control">
-          <select id="select-speaker-device" class="org-select">
-            <option value="">System default</option>
-          </select>
-          <button id="btn-test-speaker" type="button" class="btn btn-primary btn-sm media-test-cta">Test</button>
-        </div>
-        <div class="settings-test-result">
-          <span id="speaker-test-status" class="settings-test-status"></span>
-        </div>
-      </div>
-
-      <div class="settings-separator"></div>
-
-      <!-- TURN — collapsed by default -->
-      <details class="turn-section" id="turn-details">
-        <summary>Advanced</summary>
-        <div class="turn-inner">
-          <p class="settings-desc">
-            Override TURN relay settings manually (only needed when the organisation
-            has no TURN config). Uses
-            <a href="https://metered.ca" target="_blank" rel="noopener">metered.ca</a>.
-          </p>
-          <div class="settings-field">
-            <label for="input-metered-app">TURN app name</label>
-            <div class="input-clearable">
-              <input id="input-metered-app" type="text" placeholder="yourapp"
-                     spellcheck="false" autocomplete="off" />
-              <button class="input-clear" data-target="input-metered-app" aria-label="Clear">✕</button>
+      <div class="settings-card">
+        <details class="turn-section" id="turn-details">
+          <summary>Advanced</summary>
+          <div class="turn-inner">
+            <p class="settings-warning">
+              These settings are intended for advanced troubleshooting and self-hosted deployments.
+            </p>
+            <div class="settings-field">
+              <label for="input-metered-app">TURN app name</label>
+              <div class="input-clearable">
+                <input id="input-metered-app" type="text" placeholder="yourapp"
+                       spellcheck="false" autocomplete="off" />
+                <button class="input-clear" data-target="input-metered-app" aria-label="Clear">✕</button>
+              </div>
+            </div>
+            <div class="settings-field">
+              <label for="input-metered-key">TURN API key</label>
+              <div class="input-clearable">
+                <input id="input-metered-key" type="password" placeholder="API key"
+                       autocomplete="off" />
+                <button class="input-clear" data-target="input-metered-key" aria-label="Clear">✕</button>
+              </div>
+            </div>
+            <div class="settings-test-row">
+              <button id="btn-test-turn" class="btn btn-ghost btn-sm">Test TURN</button>
+              <span id="turn-test-status" class="turn-test-status"></span>
+            </div>
+            <div class="settings-field" style="margin-top:12px">
+              <label for="input-service-url">Service URL</label>
+              <div class="input-clearable">
+                <input id="input-service-url" type="text" placeholder="https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session"
+                       spellcheck="false" autocomplete="off" />
+                <button class="input-clear" data-target="input-service-url" aria-label="Clear">✕</button>
+              </div>
+            </div>
+            <div class="settings-field settings-inline-toggle" style="margin-top:16px">
+              <label for="toggle-dev-mode" style="flex:1">Dev mode</label>
+              <button id="toggle-dev-mode" class="toggle-btn" role="switch" aria-checked="false"
+                      title="Show peer UUIDs, copy buttons, and Host/Deputy labels">OFF</button>
             </div>
           </div>
-          <div class="settings-field">
-            <label for="input-metered-key">TURN API key</label>
-            <div class="input-clearable">
-              <input id="input-metered-key" type="password" placeholder="API key"
-                     autocomplete="off" />
-              <button class="input-clear" data-target="input-metered-key" aria-label="Clear">✕</button>
-            </div>
-          </div>
-          <div class="settings-test-row">
-            <button id="btn-test-turn" class="btn btn-ghost btn-sm">Test TURN</button>
-            <span id="turn-test-status" class="turn-test-status"></span>
-          </div>
-          <div class="settings-field" style="margin-top:12px">
-            <label for="input-service-url">Service URL</label>
-            <div class="input-clearable">
-              <input id="input-service-url" type="text" placeholder="https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session"
-                     spellcheck="false" autocomplete="off" />
-              <button class="input-clear" data-target="input-service-url" aria-label="Clear">✕</button>
-            </div>
-          </div>
-          <div class="settings-field" style="margin-top:16px">
-            <label for="toggle-dev-mode" style="flex:1">Dev mode</label>
-            <button id="toggle-dev-mode" class="toggle-btn" role="switch" aria-checked="false"
-                    title="Show peer UUIDs, copy buttons, and Host/Deputy labels">OFF</button>
-          </div>
-          <p class="settings-desc" style="margin-top:4px">
-            Shows peer UUIDs, copy buttons, and Host / Deputy labels in the room.
-          </p>
-          <div class="settings-field" id="video-mode-setting" style="margin-top:12px; display:none">
-            <label for="toggle-video-mode" style="flex:1">Video mode (1:1)</label>
-            <button id="toggle-video-mode" class="toggle-btn" role="switch" aria-pressed="false">OFF</button>
-          </div>
-        </div>
-      </details>
+        </details>
+      </div>
 
       </div><!-- end .prefs-scrollable -->
 
       <!-- Footer — always visible, sticky at bottom -->
       <div class="prefs-footer">
-        <button id="btn-disconnect" class="btn btn-ghost btn-sm btn-danger">
-          Disconnect
-        </button>
+        <span class="settings-footer-meta">
+          <span id="about-version-desktop">v—</span> · <span id="about-build-date-desktop">Built —</span> ·
+          <a href="https://voxal.app" target="_blank" rel="noopener">voxal.app</a> ·
+          <a href="https://github.com/ErwannRobin/Voxal" target="_blank" rel="noopener">GitHub</a> ·
+          <a href="https://github.com/ErwannRobin/Voxal/issues/new" target="_blank" rel="noopener">Report issue</a>
+        </span>
         <button id="btn-done" class="btn btn-primary btn-sm" style="margin-left:auto">Close</button>
       </div>
     </div>
@@ -357,7 +345,44 @@
           btn.classList.toggle('active', btn.dataset.theme === (val || 'system'));
         });
       }
+      function initCollapsibleSettingsCards() {
+        document.querySelectorAll('.settings-card').forEach(function(card) {
+          if (card.dataset.collapsibleInit === '1') return;
+          if (card.querySelector(':scope > details.turn-section')) return;
+          var title = card.querySelector(':scope > .settings-group-title');
+          if (!title) return;
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'settings-card-toggle';
+          btn.textContent = title.textContent;
+          btn.setAttribute('aria-expanded', 'false');
+          title.replaceWith(btn);
+          card.classList.add('is-collapsed');
+          btn.addEventListener('click', function() {
+            var collapsed = card.classList.toggle('is-collapsed');
+            btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+          });
+          card.dataset.collapsibleInit = '1';
+        });
+      }
+      function syncNoiseSuppressionControls() {
+        var mode = localStorage.getItem(NOISE_SUPPRESSION_KEY) || 'rnnoise';
+        document.querySelectorAll('input[name="noise-suppression-mode"]').forEach(function(input) {
+          input.checked = (input.value === mode);
+        });
+      }
+      function initAboutSection() {
+        var versionEl = $id('about-version-desktop');
+        var dateEl = $id('about-build-date-desktop');
+        if (!versionEl || !dateEl) return;
+        versionEl.textContent = 'v' + VOXAL_VERSION;
+        var buildDate = new Date(VOXAL_BUILD_DATE).toLocaleDateString('en-GB', {
+          day: 'numeric', month: 'short', year: 'numeric'
+        });
+        dateEl.textContent = 'Built ' + buildDate;
+      }
       applyTheme(localStorage.getItem(THEME_KEY) || 'system');
+      initCollapsibleSettingsCards();
       $id('theme-toggle').addEventListener('click', function(e) {
         var btn = e.target.closest('button[data-theme]');
         if (!btn) return;
@@ -372,7 +397,8 @@
       $id('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
       $id('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
       $id('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
-      $id('select-noise-suppression').value = localStorage.getItem(NOISE_SUPPRESSION_KEY) || 'rnnoise';
+      syncNoiseSuppressionControls();
+      initAboutSection();
 
       function readStoredDeviceLabels() {
         try {
@@ -689,37 +715,22 @@
       }
 
       // --- Dev mode toggle ---
-      const VIDEO_MODE_KEY = 'video-mode-enabled';
+      localStorage.setItem('video-mode-enabled', 'true');
       (function() {
         var btn = $id('toggle-dev-mode');
-        var videoRow = $id('video-mode-setting');
-        var videoBtn = $id('toggle-video-mode');
         var details = document.querySelector('details.turn-section');
         function syncDev() {
           var on = localStorage.getItem(DEV_MODE_KEY) === 'true';
           btn.setAttribute('aria-checked', String(on));
           btn.classList.toggle('active', on);
           btn.textContent = on ? 'ON' : 'OFF';
-          videoRow.style.display = on ? '' : 'none';
           if (on && details) details.open = true;
         }
-        function syncVideo() {
-          var on = localStorage.getItem(VIDEO_MODE_KEY) === 'true';
-          videoBtn.setAttribute('aria-pressed', String(on));
-          videoBtn.classList.toggle('active', on);
-          videoBtn.textContent = on ? 'ON' : 'OFF';
-        }
         syncDev();
-        syncVideo();
         btn.addEventListener('click', function() {
           var on = localStorage.getItem(DEV_MODE_KEY) === 'true';
           localStorage.setItem(DEV_MODE_KEY, String(!on));
           syncDev();
-        });
-        videoBtn.addEventListener('click', function() {
-          var on = localStorage.getItem(VIDEO_MODE_KEY) === 'true';
-          localStorage.setItem(VIDEO_MODE_KEY, String(!on));
-          syncVideo();
         });
       })();
 
@@ -728,7 +739,7 @@
         if (!window.__TAURI__) return;
         var section = $id('section-general');
         var btn     = $id('toggle-launch-at-login');
-        section.style.display = '';
+        section.classList.remove('hidden');
 
         function syncBtn(enabled) {
           btn.setAttribute('aria-checked', String(enabled));
@@ -755,7 +766,10 @@
         $id('btn-disconnect').style.display = presenceToken() ? '' : 'none';
       }
       function updateConnectVisibility() {
-        $id('btn-connect-voxal').style.display = presenceToken() ? 'none' : '';
+        var connected = !!presenceToken();
+        $id('btn-connect-voxal').style.display = connected ? 'none' : '';
+        var orgSection = $id('account-org-section');
+        if (orgSection) orgSection.classList.toggle('hidden', !connected);
       }
       updateDisconnectVisibility(); updateConnectVisibility();
 
@@ -892,8 +906,11 @@
         if (val) localStorage.setItem(SERVICE_URL_KEY, val);
         else localStorage.removeItem(SERVICE_URL_KEY);
       });
-      $id('select-noise-suppression').addEventListener('change', function(e) {
-        localStorage.setItem(NOISE_SUPPRESSION_KEY, e.target.value);
+      document.querySelectorAll('input[name="noise-suppression-mode"]').forEach(function(input) {
+        input.addEventListener('change', function(e) {
+          if (!e.target.checked) return;
+          localStorage.setItem(NOISE_SUPPRESSION_KEY, e.target.value);
+        });
       });
       $id('select-mic-device').addEventListener('change', function(e) {
         if (e.target.value) localStorage.setItem(MIC_DEVICE_KEY, e.target.value);

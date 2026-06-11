@@ -518,7 +518,8 @@ let editingSelfPseudo = false;
 let _cancelJoin       = null; // set during joinRoom(), called by Cancel button
 
 // --- Video prototype (dev mode, 1:1) -----------------------------------------
-var videoModeEnabled  = localStorage.getItem(VIDEO_MODE_KEY) === 'true';
+localStorage.setItem(VIDEO_MODE_KEY, 'true');
+var videoModeEnabled  = true;
 var localVideoActive  = false;   // this peer is sharing their camera
 var localVideoStream  = null;    // MediaStream (video only)
 var localScreenActive = false;   // this peer is sharing their screen
@@ -2075,6 +2076,13 @@ function getNoiseSuppressionMode() {
   return localStorage.getItem(NOISE_SUPPRESSION_KEY) || 'rnnoise';
 }
 
+function syncNoiseSuppressionControls() {
+  var mode = getNoiseSuppressionMode();
+  document.querySelectorAll('input[name="noise-suppression-mode"]').forEach(function(input) {
+    input.checked = (input.value === mode);
+  });
+}
+
 function selectedMicDeviceId() {
   return localStorage.getItem(MIC_DEVICE_KEY) || '';
 }
@@ -2222,6 +2230,27 @@ async function applySpeakerSink(el) {
 function applySpeakerSinkToAllAudio() {
   document.querySelectorAll('audio[id^="audio-"]').forEach(function(el) {
     applySpeakerSink(el);
+  });
+}
+
+function initCollapsibleSettingsCards() {
+  document.querySelectorAll('.settings-card').forEach(function(card) {
+    if (card.dataset.collapsibleInit === '1') return;
+    if (card.querySelector(':scope > details.turn-section')) return;
+    var title = card.querySelector(':scope > .settings-group-title');
+    if (!title) return;
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'settings-card-toggle';
+    btn.textContent = title.textContent;
+    btn.setAttribute('aria-expanded', 'false');
+    title.replaceWith(btn);
+    card.classList.add('is-collapsed');
+    btn.addEventListener('click', function() {
+      var collapsed = card.classList.toggle('is-collapsed');
+      btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    });
+    card.dataset.collapsibleInit = '1';
   });
 }
 
@@ -3155,7 +3184,8 @@ function closeScreenViewer() {
 function resetVideoState() {
   stopVideoShare();
   stopScreenShare();
-  videoModeEnabled = localStorage.getItem(VIDEO_MODE_KEY) === 'true';
+  videoModeEnabled = true;
+  localStorage.setItem(VIDEO_MODE_KEY, 'true');
   localVideoActive = false;
   localVideoStream = null;
   localScreenActive = false;
@@ -3981,7 +4011,7 @@ function handleHostMessage(msg) {
 
     // Sync video mode state from host
     if (msg.videoModeEnabled !== undefined) {
-      videoModeEnabled = !!msg.videoModeEnabled;
+      videoModeEnabled = true;
       updateVideoModeUI();
     }
 
@@ -4022,8 +4052,7 @@ function handleHostMessage(msg) {
     _publishSecret = msg.secret || null;
     updateRoomHeader();
   } else if (msg.type === 'video-mode') {
-    videoModeEnabled = !!msg.enabled;
-    if (!videoModeEnabled) stopVideoShare();
+    videoModeEnabled = true;
     updateVideoModeUI();
   } else if (msg.type === 'video-offer') {
     markPeerVideoActive(msg.peerId, true);
@@ -4385,8 +4414,10 @@ window.addEventListener('DOMContentLoaded', function() {
     var connected = !!presenceToken();
     var btnMain = document.getElementById('btn-connect-voxal-home');
     var btnSettings = document.getElementById('btn-connect-voxal');
+    var orgSection = document.getElementById('account-org-section');
     if (btnMain)     btnMain.style.display     = connected ? 'none' : '';
     if (btnSettings) btnSettings.style.display = connected ? 'none' : '';
+    if (orgSection) orgSection.classList.toggle('hidden', !connected);
     updateHomeLoggedOutLayout();
   }
 
@@ -4396,6 +4427,7 @@ window.addEventListener('DOMContentLoaded', function() {
     if (row) row.style.display = presenceToken() ? '' : 'none';
   }
   updateDisconnectVisibility(); updateConnectVisibility();
+  initCollapsibleSettingsCards();
 
   // --- Theme toggle ---
   const THEME_KEY = 'theme';
@@ -4788,7 +4820,7 @@ window.addEventListener('DOMContentLoaded', function() {
     $('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
     $('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
     $('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
-    $('select-noise-suppression').value = getNoiseSuppressionMode();
+    syncNoiseSuppressionControls();
     refreshMediaDeviceSelectors();
     $('input-presence-token').value = presenceToken();
     // Restore saved TURN test result
@@ -4901,8 +4933,11 @@ window.addEventListener('DOMContentLoaded', function() {
     $('turn-test-status').textContent = '';
     updateTurnBadge();
   });
-  $('select-noise-suppression').addEventListener('change', function(e) {
-    localStorage.setItem(NOISE_SUPPRESSION_KEY, e.target.value);
+  document.querySelectorAll('input[name="noise-suppression-mode"]').forEach(function(input) {
+    input.addEventListener('change', function(e) {
+      if (!e.target.checked) return;
+      localStorage.setItem(NOISE_SUPPRESSION_KEY, e.target.value);
+    });
   });
   var micSelect = $('select-mic-device');
   if (micSelect) {
@@ -4929,6 +4964,7 @@ window.addEventListener('DOMContentLoaded', function() {
     });
   }
   refreshMediaDeviceSelectors();
+  syncNoiseSuppressionControls();
   if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
     navigator.mediaDevices.addEventListener('devicechange', refreshMediaDeviceSelectors);
   }
@@ -5062,24 +5098,9 @@ window.addEventListener('DOMContentLoaded', function() {
       return;
     }
     var relevantKeys = [PRESENCE_TOKEN_KEY, PRESENCE_ORG_KEY, METERED_APP_STORE_KEY,
-                          METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY, VIDEO_MODE_KEY,
+                          METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY,
                           SPEAKER_DEVICE_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
-    if (e.key === VIDEO_MODE_KEY) {
-      // Settings window toggled video mode — apply if we're host in a room
-      if (inRoom && isHost) {
-        var newState = e.newValue === 'true';
-        if (newState !== videoModeEnabled) {
-          videoModeEnabled = newState;
-          connections.forEach(function(c) {
-            if (c.data) c.data.send({ type: 'video-mode', enabled: videoModeEnabled });
-          });
-          if (!videoModeEnabled) stopVideoShare();
-          updateVideoModeUI();
-        }
-      }
-      return;
-    }
     if (e.key === DEV_MODE_KEY) {
       updateDevLogPanel();
       if (inRoom) {
@@ -5314,7 +5335,6 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-cancel-shortcut').addEventListener('click', stopRecordingShortcut);
 
   // Video prototype buttons
-  $('btn-video-mode').addEventListener('click', toggleVideoMode);
   $('btn-share-camera').addEventListener('click', function() {
     if (localVideoActive) stopVideoShare(); else startVideoShare();
   });
