@@ -4519,6 +4519,9 @@ window.addEventListener('DOMContentLoaded', function() {
     var _sn = $('shortcut-normal'); if (_sn) _sn.style.display = 'none';
     var _sr = $('shortcut-recording'); if (_sr) _sr.style.display = 'none';
     var _ss = $('shortcut-spacer'); if (_ss) _ss.style.display = 'none';
+    var _micSourceRow = $('settings-audio-mic-row'); if (_micSourceRow) _micSourceRow.style.display = 'none';
+    var _videoSection = $('settings-video-card'); if (_videoSection) _videoSection.style.display = 'none';
+    var _devPopoutBtn = $('btn-popout-dev-log'); if (_devPopoutBtn) _devPopoutBtn.style.display = 'none';
     $('ptt-hint').textContent = 'Hold to talk · double-tap for hands-free';
     $('btn-copy').title = 'Copy room code';
   }
