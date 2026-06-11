@@ -52,7 +52,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_B64: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_B64 }}
         run: |
           python - <<'PY'
-          import base64, os, re, sys
+          import base64, os, re
 
           key_b64 = os.getenv("TAURI_SIGNING_PRIVATE_KEY_B64", "").strip()
           key_raw = os.getenv("TAURI_SIGNING_PRIVATE_KEY", "")
@@ -68,18 +68,16 @@ jobs:
           if "\n" not in raw and "\\n" in raw:
             raw = raw.replace("\\n", "\n")
 
-          if raw.startswith("untrusted comment:") and "\n" not in raw:
-            m = re.match(r"^(untrusted comment:[^\n]*?)\s+([A-Za-z0-9+/=]+)$", raw)
-            if m:
-              raw = f"{m.group(1)}\n{m.group(2)}"
-
-          if not raw.startswith("untrusted comment:"):
-            raw = f"untrusted comment: minisign secret key\n{raw}"
-
-          lines = raw.split("\n")
-          if len(lines) >= 2:
-            lines[1] = re.sub(r"\s+", "", lines[1])
-            raw = "\n".join(lines)
+          payload = raw
+          if raw.startswith("untrusted comment:"):
+            if "\n" in raw:
+              payload = raw.split("\n", 1)[1]
+            else:
+              payload = re.sub(r"^untrusted comment:[^\n]*", "", raw)
+          payload = re.sub(r"[^A-Za-z0-9+/=]", "", payload)
+          if not payload:
+            raise SystemExit("Invalid updater key format: missing minisign private key payload.")
+          raw = f"untrusted comment: minisign secret key\n{payload}"
 
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
             f.write("TAURI_SIGNING_PRIVATE_KEY<<EOF\n")

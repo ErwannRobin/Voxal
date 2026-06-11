@@ -51,27 +51,23 @@ jobs:
 
           $raw = (Get-Content -Path $keyPath -Raw) -replace "`r", ""
           if ($raw -notmatch "`n" -and $raw.Contains('\n')) {
-            # Secret may contain escaped newlines copied as a single line.
             $raw = $raw -replace '\\n', "`n"
           }
           $raw = $raw.Trim()
 
-          if ($raw.StartsWith("untrusted comment:") -and $raw -notmatch "`n") {
-            # Secret may have header + key on one line; split before key material.
-            $raw = $raw -replace '^(untrusted comment:[^\r\n]*?)\s+([A-Za-z0-9+/=]+)$', '$1' + "`n" + '$2'
+          $payload = $raw
+          if ($raw.StartsWith("untrusted comment:")) {
+            if ($raw.Contains("`n")) {
+              $payload = $raw.Substring($raw.IndexOf("`n") + 1)
+            } else {
+              $payload = $raw -replace '^untrusted comment:[^\r\n]*', ''
+            }
           }
-
-          if (-not $raw.StartsWith("untrusted comment:")) {
-            # Accept key-body-only secrets by injecting the expected minisign header.
-            $raw = "untrusted comment: minisign secret key`n$raw"
+          $payload = ($payload -replace '[^A-Za-z0-9+/=]', '')
+          if (-not $payload) {
+            throw "Invalid updater key format: missing minisign private key payload."
           }
-
-          $lines = $raw -split "`n"
-          if ($lines.Count -ge 2) {
-            # Remove accidental spaces in key line (commonly introduced when copying secrets).
-            $lines[1] = ($lines[1] -replace '\s', '')
-            $raw = ($lines -join "`n")
-          }
+          $raw = "untrusted comment: minisign secret key`n$payload"
 
           "TAURI_SIGNING_PRIVATE_KEY<<EOF" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $raw | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
