@@ -1,0 +1,116 @@
+name: Release Linux build
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to upload assets to (e.g. v1.0.2)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev \
+            libssl-dev
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare Tauri updater signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_B64: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_B64 }}
+        run: |
+          python - <<'PY'
+          import base64, os, re, sys
+
+          key_b64 = os.getenv("TAURI_SIGNING_PRIVATE_KEY_B64", "").strip()
+          key_raw = os.getenv("TAURI_SIGNING_PRIVATE_KEY", "")
+
+          if key_b64:
+            raw = base64.b64decode(key_b64).decode("utf-8")
+          elif key_raw:
+            raw = key_raw
+          else:
+            raise SystemExit("Missing signing key secret. Set TAURI_SIGNING_PRIVATE_KEY or TAURI_SIGNING_PRIVATE_KEY_B64.")
+
+          raw = raw.replace("\r", "").strip()
+          if "\n" not in raw and "\\n" in raw:
+            raw = raw.replace("\\n", "\n")
+
+          if raw.startswith("untrusted comment:") and "\n" not in raw:
+            m = re.match(r"^(untrusted comment:[^\n]*?)\s+([A-Za-z0-9+/=]+)$", raw)
+            if m:
+              raw = f"{m.group(1)}\n{m.group(2)}"
+
+          if not raw.startswith("untrusted comment:"):
+            raw = f"untrusted comment: minisign secret key\n{raw}"
+
+          lines = raw.split("\n")
+          if len(lines) >= 2:
+            lines[1] = re.sub(r"\s+", "", lines[1])
+            raw = "\n".join(lines)
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
+            f.write("TAURI_SIGNING_PRIVATE_KEY<<EOF\n")
+            f.write(raw + "\n")
+            f.write("EOF\n")
+          PY
+
+      - name: Build Linux bundles
+        env:
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build
+
+      - name: Upload Linux assets to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          else
+            TAG="${INPUT_TAG}"
+          fi
+
+          mapfile -t ASSETS < <(find src-tauri/target/release/bundle \
+            \( -path "*/appimage/*" -o -path "*/deb/*" -o -path "*/rpm/*" \) \
+            -type f \
+            \( -name "*.AppImage" -o -name "*.AppImage.tar.gz" -o -name "*.sig" -o -name "*.deb" -o -name "*.rpm" \))
+
+          if [ "${#ASSETS[@]}" -eq 0 ]; then
+            echo "No Linux bundle assets found."
+            exit 1
+          fi
+
+          gh release upload "${TAG}" "${ASSETS[@]}" --clobber
