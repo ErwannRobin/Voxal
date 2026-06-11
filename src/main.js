@@ -2234,6 +2234,15 @@ function applySpeakerSinkToAllAudio() {
 }
 
 function initCollapsibleSettingsCards() {
+  function collapseOtherCards(openCard) {
+    document.querySelectorAll('.settings-card[data-collapsible-init="1"]').forEach(function(other) {
+      if (other === openCard) return;
+      var otherBtn = other.querySelector(':scope > .settings-card-toggle');
+      other.classList.add('is-collapsed');
+      if (otherBtn) otherBtn.setAttribute('aria-expanded', 'false');
+    });
+  }
+
   document.querySelectorAll('.settings-card').forEach(function(card) {
     if (card.dataset.collapsibleInit === '1') return;
     if (card.querySelector(':scope > details.turn-section')) return;
@@ -2247,11 +2256,36 @@ function initCollapsibleSettingsCards() {
     title.replaceWith(btn);
     card.classList.add('is-collapsed');
     btn.addEventListener('click', function() {
+      var wasCollapsed = card.classList.contains('is-collapsed');
+      if (wasCollapsed) {
+        collapseOtherCards(card);
+        var advancedDetails = document.getElementById('turn-details');
+        if (advancedDetails) advancedDetails.open = false;
+      }
       var collapsed = card.classList.toggle('is-collapsed');
       btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
     });
     card.dataset.collapsibleInit = '1';
   });
+
+  var advancedDetails = document.getElementById('turn-details');
+  if (advancedDetails && advancedDetails.dataset.singleOpenInit !== '1') {
+    advancedDetails.addEventListener('toggle', function() {
+      if (!advancedDetails.open) return;
+      collapseOtherCards(null);
+    });
+    advancedDetails.dataset.singleOpenInit = '1';
+  }
+}
+
+function collapseAllSettingsCards() {
+  document.querySelectorAll('.settings-card[data-collapsible-init="1"]').forEach(function(card) {
+    card.classList.add('is-collapsed');
+    var btn = card.querySelector(':scope > .settings-card-toggle');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  });
+  var advancedDetails = document.getElementById('turn-details');
+  if (advancedDetails) advancedDetails.open = false;
 }
 
 var _micTestStream = null;
@@ -4774,7 +4808,7 @@ window.addEventListener('DOMContentLoaded', function() {
     var buildDate = new Date(VOXAL_BUILD_DATE).toLocaleDateString('en-GB', {
       day: 'numeric', month: 'short', year: 'numeric'
     });
-    dateEl.textContent = 'Built ' + buildDate;
+    dateEl.textContent = buildDate;
 
     function setVersion(v) { versionEl.textContent = 'v' + v; }
 
@@ -4803,7 +4837,7 @@ window.addEventListener('DOMContentLoaded', function() {
         const win = new WebviewWindow('preferences', {
           url: 'settings.html',
           title: 'Voxal — Preferences',
-          width: 760,
+          width: 1040,
           height: 760,
           resizable: true,
           center: true,
@@ -4847,13 +4881,11 @@ window.addEventListener('DOMContentLoaded', function() {
       devBtn.setAttribute('aria-checked', String(devOn));
       devBtn.classList.toggle('active', devOn);
       devBtn.textContent = devOn ? 'ON' : 'OFF';
-      // Auto-open Advanced section if dev mode is on
-      var advDetails = devBtn.closest('details');
-      if (advDetails && devOn) advDetails.open = true;
     }
     updateVideoModeUI();
     stopMicTest();
     stopCameraPreview();
+    collapseAllSettingsCards();
     // Populate About section
     initAboutSection('about-version-modal', 'about-build-date-modal');
     $('modal-settings').classList.remove('hidden');
