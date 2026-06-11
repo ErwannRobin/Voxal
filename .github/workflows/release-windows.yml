@@ -67,9 +67,13 @@ jobs:
           if (-not $payload) {
             throw "Invalid updater key format: missing minisign private key payload."
           }
-          "TAURI_SIGNING_PRIVATE_KEY<<EOF" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          $payload | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "EOF" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          # Reconstruct the full minisign key file content and base64-encode it.
+          # Tauri CLI 2.x decode_key() expects TAURI_SIGNING_PRIVATE_KEY to be
+          # base64(full key file), NOT the raw plaintext key file.
+          $fullKey = "untrusted comment: minisign secret key`n$payload"
+          $encoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($fullKey))
+          "TAURI_SIGNING_PRIVATE_KEY=$encoded" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build Windows installers
         env:

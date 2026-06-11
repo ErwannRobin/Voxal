@@ -77,12 +77,15 @@ jobs:
           payload = re.sub(r"[^A-Za-z0-9+/=]", "", payload)
           if not payload:
             raise SystemExit("Invalid updater key format: missing minisign private key payload.")
-          raw = f"untrusted comment: minisign secret key\n{payload}"
+
+          # Reconstruct the full minisign key file content and base64-encode it.
+          # Tauri CLI 2.x decode_key() expects TAURI_SIGNING_PRIVATE_KEY to be
+          # base64(full key file), NOT the raw plaintext key file.
+          full_key = f"untrusted comment: minisign secret key\n{payload}"
+          encoded = base64.b64encode(full_key.encode("utf-8")).decode("utf-8")
 
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
-            f.write("TAURI_SIGNING_PRIVATE_KEY<<EOF\n")
-            f.write(raw + "\n")
-            f.write("EOF\n")
+            f.write(f"TAURI_SIGNING_PRIVATE_KEY={encoded}\n")
           PY
 
       - name: Build Linux bundles
