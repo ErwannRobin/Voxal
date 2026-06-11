@@ -322,6 +322,7 @@ async function postSession(channelName, peerId) {
     body: JSON.stringify({ org_id: presenceOrgId(), channel_name: channelName, peer_id: peerId }),
   });
   if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.json();
 }
 
 function deleteSession() {
@@ -752,6 +753,7 @@ function updateHomeLoggedOutLayout() {
 // Presence state
 let presenceData     = []; // last fetched [{channel,connected}]
 let activeChannel    = null; // channel name for the current presence session
+let activeChannelRoomId = null; // associated room code/id for current presence session (if provided)
 let presenceInterval = null;
 
 function updateRoomHeader() {
@@ -760,7 +762,16 @@ function updateRoomHeader() {
   var unpublishBtn = $('btn-unpublish-room');
   var shareBtn     = $('btn-share-room');
   if (!publishBtn || !unpublishBtn) return;
+  var hasExternallyManagedPublicId = !!(
+    activeChannelRoomId &&
+    roomCode &&
+    activeChannelRoomId !== roomCode &&
+    !_publishSecret
+  );
   if (!isHost) {
+    publishBtn.classList.add('hidden');
+    unpublishBtn.classList.add('hidden');
+  } else if (hasExternallyManagedPublicId) {
     publishBtn.classList.add('hidden');
     unpublishBtn.classList.add('hidden');
   } else if (_publishSecret) {
@@ -1221,6 +1232,25 @@ function copyTextToClipboard(text, toastMessage) {
   }
 }
 
+function shareInviteLink(url) {
+  if (!url) return;
+  if (!navigator.share) {
+    copyTextToClipboard(url, 'Invite link copied!');
+    return;
+  }
+  navigator.share({ title: 'Join my Voxal room', url: url }).catch(function(err) {
+    // AbortError is a user-cancelled share sheet; keep silent and avoid clipboard side effects.
+    if (err && err.name === 'AbortError') return;
+    // Common iframe/embed permission failures should gracefully fall back to copy.
+    if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) {
+      copyTextToClipboard(url, 'Invite link copied!');
+      return;
+    }
+    console.warn('[Share]', err);
+    copyTextToClipboard(url, 'Invite link copied!');
+  });
+}
+
 function roomInviteBaseUrl() {
   try {
     var current = new URL(window.location.href);
@@ -1243,8 +1273,48 @@ function roomInviteUrl(roomId) {
 }
 
 function roomDisplayCode() {
-  if (activeChannel && roomCode) return roomCode;
-  return _publishedRoomId || roomCode || activeChannel || '';
+  return _publishedRoomId || activeChannelRoomId || activeChannel || roomCode || '';
+}
+
+function roomIdFromPayload(obj) {
+  if (!obj || typeof obj !== 'object') return '';
+  var candidate = obj.room_id || obj.roomId || obj.room_code || obj.roomCode || '';
+  if (candidate === null || candidate === undefined) return '';
+  var text = String(candidate).trim();
+  return text || '';
+}
+
+function associatedRoomIdFromPresenceItem(item) {
+  if (!item) return '';
+  var channel = item.channel || {};
+  var fromChannel = roomIdFromPayload(channel);
+  if (!fromChannel && channel.id !== null && channel.id !== undefined && String(channel.id).trim()) {
+    fromChannel = String(channel.id).trim();
+  }
+  if (fromChannel) return fromChannel;
+  var connected = Array.isArray(item.connected) ? item.connected : [];
+  for (var i = 0; i < connected.length; i++) {
+    var candidate = roomIdFromPayload(connected[i] || {});
+    if (candidate) return candidate;
+  }
+  return '';
+}
+
+function associatedRoomIdFromSessionResponse(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+  var channelId = payload.channel && payload.channel.id !== null && payload.channel && payload.channel.id !== undefined
+    ? String(payload.channel.id).trim()
+    : '';
+  return (
+    roomIdFromPayload(payload) ||
+    roomIdFromPayload(payload.session) ||
+    roomIdFromPayload(payload.channel) ||
+    channelId ||
+    roomIdFromPayload(payload.channel && payload.channel.channel) ||
+    roomIdFromPayload(payload.presence) ||
+    roomIdFromPayload(payload.data) ||
+    ''
+  );
 }
 
 function consumeRoomInviteFromQuery() {
@@ -2021,13 +2091,13 @@ function updatePeerList() {
     nudgeText.textContent = 'Share your invite link to invite others';
     nudge.appendChild(nudgeText);
 
-    var inviteUrl = roomInviteUrl(roomCode);
+    var inviteUrl = roomInviteUrl(roomDisplayCode() || roomCode);
     if (navigator.share && IS_NATIVE_MOBILE) {
       var shareBtn = document.createElement('button');
       shareBtn.className = 'btn btn-secondary btn-sm';
       shareBtn.textContent = 'Share invite';
       shareBtn.addEventListener('click', function() {
-        if (inviteUrl) navigator.share({ title: 'Join my Voxal room', url: inviteUrl }).catch(function() {});
+        shareInviteLink(inviteUrl);
       });
       nudge.appendChild(shareBtn);
     } else {
@@ -3344,6 +3414,7 @@ function leaveRoom() {
   stopKeepAlive();
   localStorage.removeItem('active-room-code');
   if (activeChannel) { deleteSession(); activeChannel = null; }
+  activeChannelRoomId = null;
   Array.from(connections.keys()).forEach(removePeer);
   if (stream) stream.getTracks().forEach(function(t) { t.stop(); });
   if (peer) peer.destroy();
@@ -4207,12 +4278,17 @@ function handleHostMessage(msg) {
 async function joinRoom(code, onJoined) {
   code = normalizeRoomCode(code);
   if (!code) return;
+  var requestedCode = code;
   devLog('→ Joining room ' + code + '…');
   // Resolve public lobby identifier to PeerJS peer ID if applicable
   var resolved = await lookupRoom(code);
   if (resolved) {
     devLog('✓ Resolved lobby "' + code + '" → ' + resolved);
+    activeChannelRoomId = requestedCode;
     code = resolved;
+  } else if (UUID_RE.test(requestedCode)) {
+    // Direct peer-id join: keep UUID as display/share code unless a room id is later published.
+    activeChannelRoomId = '';
   }
   if (!stream) {
     devLog('→ Acquiring mic…');
@@ -4434,9 +4510,15 @@ async function selectOrgAndStartPolling() {
 async function joinChannel(item) {
   const connected    = item.connected || [];
   activeChannel      = item.channel.name;
+  activeChannelRoomId = associatedRoomIdFromPresenceItem(item);
   const postPresence = function(peerId) {
     postSession(activeChannel, peerId).catch(function(e) {
       console.warn('[Presence] session registration failed:', e.message);
+    }).then(function(data) {
+      var associated = associatedRoomIdFromSessionResponse(data);
+      if (!associated || associated === activeChannelRoomId) return;
+      activeChannelRoomId = associated;
+      updateRoomHeader();
     });
   };
   if (connected.length === 0) {
@@ -5279,8 +5361,24 @@ window.addEventListener('DOMContentLoaded', function() {
       } else if (msg.type === 'create') {
         if (_audioCtx.state === 'suspended') _audioCtx.resume();
         if (inRoom) leaveRoom();
-        showInviteLoading(activeChannel || '', 'Creating room…');
-        createRoom().catch(function(err) { iframeEmit({ type: 'error', message: err.message }); });
+        var iframeChannelName = typeof msg.channelName === 'string' ? msg.channelName.trim() : '';
+        if (iframeChannelName) activeChannel = iframeChannelName;
+        var iframeAssociatedRoomId = normalizeRoomCode(
+          String(msg.roomCode || msg.roomId || msg.channelId || '')
+        );
+        if (iframeAssociatedRoomId) activeChannelRoomId = iframeAssociatedRoomId;
+        showInviteLoading(roomDisplayCode() || activeChannel || '', 'Creating room…');
+        createRoom(function(peerId) {
+          if (!activeChannel || !presenceConfigured()) return;
+          postSession(activeChannel, peerId).catch(function(e) {
+            console.warn('[Presence] session registration failed:', e.message);
+          }).then(function(data) {
+            var associated = associatedRoomIdFromSessionResponse(data);
+            if (!associated || associated === activeChannelRoomId) return;
+            activeChannelRoomId = associated;
+            updateRoomHeader();
+          });
+        }).catch(function(err) { iframeEmit({ type: 'error', message: err.message }); });
       } else if (msg.type === 'leave') {
         if (inRoom) leaveRoom();
       }
@@ -5335,11 +5433,7 @@ window.addEventListener('DOMContentLoaded', function() {
     if (!roomId) return;
     var url = roomInviteUrl(roomId);
     if (!url) return;
-    if (navigator.share) {
-      navigator.share({ title: 'Join my Voxal room', url: url }).catch(function(e) { console.warn('[Share]', e); });
-    } else {
-      fallbackCopy(url); showCopyToast('Invite link copied!');
-    }
+    shareInviteLink(url);
   });
 
   // --- Rejoin bar ---
