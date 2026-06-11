@@ -842,6 +842,12 @@ function hasOpenDataConnection(peerId) {
   return !!(conn && conn.data && conn.data.open && !conn.data.closed);
 }
 
+function sendDataIfOpen(dataConn, msg) {
+  if (!dataConn || !dataConn.open || dataConn.closed) return false;
+  dataConn.send(msg);
+  return true;
+}
+
 function hostConnectedPeerIds() {
   return Array.from(connections.keys()).filter(function(peerId) {
     return hasOpenDataConnection(peerId);
@@ -946,7 +952,7 @@ function broadcastHostHeartbeat() {
     successorIds: successorIds
   };
   connections.forEach(function(conn) {
-    if (conn && conn.data) conn.data.send(msg);
+    if (conn && conn.data) sendDataIfOpen(conn.data, msg);
   });
 }
 
@@ -966,8 +972,8 @@ function stopPeerHeartbeat() {
 function sendPeerHeartbeat() {
   if (!inRoom || isHost || !roomCode) return;
   var hostConn = connections.get(roomCode);
-  if (!hostConn || !hostConn.data || hostConn.data.closed) return;
-  hostConn.data.send({ type: 'heartbeat', at: Date.now() });
+  if (!hostConn || !hostConn.data) return;
+  sendDataIfOpen(hostConn.data, { type: 'heartbeat', at: Date.now() });
 }
 
 function startPeerHeartbeat() {
@@ -1017,7 +1023,7 @@ function removeStalePeer(peerId, reason) {
   if (conn.data) conn.data.close();
   if (conn.media) conn.media.close();
   connections.forEach(function(other) {
-    if (other && other.data) other.data.send({ type: 'peer-left', peerId: peerId });
+    if (other && other.data) sendDataIfOpen(other.data, { type: 'peer-left', peerId: peerId });
   });
   broadcastHostPeerLists();
   playGoodbye();
@@ -3880,7 +3886,7 @@ function handleJoinerDataConnection(dataConn) {
 
       if (!dataConn._voxalExistingPeer) {
         connections.forEach(function(c, id) {
-          if (id !== joinerId && c.data) c.data.send({ type: 'peer-joined', peerId: joinerId, pseudo: pseudo });
+          if (id !== joinerId && c.data) sendDataIfOpen(c.data, { type: 'peer-joined', peerId: joinerId, pseudo: pseudo });
         });
         playCarillon();
       }
@@ -3911,7 +3917,7 @@ function handleJoinerDataConnection(dataConn) {
       // Tell other video-active peers to call the newcomer
       connections.forEach(function(c, id) {
         if (id !== joinerId && c.videoActive && c.data) {
-          c.data.send({ type: 'video-call-peer', peerId: joinerId });
+          sendDataIfOpen(c.data, { type: 'video-call-peer', peerId: joinerId });
         }
       });
 
@@ -3930,7 +3936,7 @@ function handleJoinerDataConnection(dataConn) {
       // Tell other screen-active peers to call the newcomer
       connections.forEach(function(c, id) {
         if (id !== joinerId && c.screenActive && c.data) {
-          c.data.send({ type: 'screen-call-peer', peerId: joinerId });
+          sendDataIfOpen(c.data, { type: 'screen-call-peer', peerId: joinerId });
         }
       });
 
@@ -3942,7 +3948,7 @@ function handleJoinerDataConnection(dataConn) {
     } else if (msg.type === 'talking') {
       updatePeerTalking(joinerId, msg.active);
       connections.forEach(function(c, id) {
-        if (id !== joinerId && c.data) c.data.send({ type: 'talking', peerId: joinerId, active: msg.active });
+        if (id !== joinerId && c.data) sendDataIfOpen(c.data, { type: 'talking', peerId: joinerId, active: msg.active });
       });
     } else if (msg.type === 'pseudo') {
       const pseudo = msg.pseudo || shortId(joinerId);
@@ -3950,29 +3956,29 @@ function handleJoinerDataConnection(dataConn) {
       connections.set(joinerId, Object.assign({}, existing, { pseudo: pseudo }));
       updatePeerList();
       connections.forEach(function(c, id) {
-        if (id !== joinerId && c.data) c.data.send({ type: 'peer-renamed', peerId: joinerId, pseudo: pseudo });
+        if (id !== joinerId && c.data) sendDataIfOpen(c.data, { type: 'peer-renamed', peerId: joinerId, pseudo: pseudo });
       });
     } else if (msg.type === 'video-offer') {
       // Relay to all other peers
       markPeerVideoActive(joinerId, true);
       connections.forEach(function(c, id) {
-        if (id !== joinerId && c.data) c.data.send({ type: 'video-offer', peerId: joinerId });
+        if (id !== joinerId && c.data) sendDataIfOpen(c.data, { type: 'video-offer', peerId: joinerId });
       });
     } else if (msg.type === 'video-stop') {
       // Relay to all other peers
       detachRemoteVideo(joinerId);
       connections.forEach(function(c, id) {
-        if (id !== joinerId && c.data) c.data.send({ type: 'video-stop', peerId: joinerId });
+        if (id !== joinerId && c.data) sendDataIfOpen(c.data, { type: 'video-stop', peerId: joinerId });
       });
     } else if (msg.type === 'screen-offer') {
       markPeerScreenActive(joinerId, true);
       connections.forEach(function(c, id) {
-        if (id !== joinerId && c.data) c.data.send({ type: 'screen-offer', peerId: joinerId });
+        if (id !== joinerId && c.data) sendDataIfOpen(c.data, { type: 'screen-offer', peerId: joinerId });
       });
     } else if (msg.type === 'screen-stop') {
       detachRemoteScreen(joinerId);
       connections.forEach(function(c, id) {
-        if (id !== joinerId && c.data) c.data.send({ type: 'screen-stop', peerId: joinerId });
+        if (id !== joinerId && c.data) sendDataIfOpen(c.data, { type: 'screen-stop', peerId: joinerId });
       });
     }
   });
@@ -3980,7 +3986,9 @@ function handleJoinerDataConnection(dataConn) {
   dataConn.on('close', function() {
     if (!isCurrentPeerDataConnection(joinerId, dataConn)) return;
     forgetPeer(joinerId);
-    connections.forEach(function(c) { if (c.data) c.data.send({ type: 'peer-left', peerId: joinerId }); });
+    connections.forEach(function(c) {
+      if (c.data) sendDataIfOpen(c.data, { type: 'peer-left', peerId: joinerId });
+    });
     playGoodbye();
     removePeer(joinerId);
     broadcastHostPeerLists();
