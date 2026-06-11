@@ -1,5 +1,7 @@
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+use tauri::{AppHandle, Emitter, State};
+#[cfg(target_os = "macos")]
+use tauri::{Manager, WindowEvent};
 use tauri::menu::{MenuItem, MenuBuilder, SubmenuBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_deep_link::DeepLinkExt;

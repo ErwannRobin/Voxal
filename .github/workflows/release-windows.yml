@@ -16,12 +16,14 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -32,9 +34,32 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Windows installers
+      - name: Prepare Tauri updater signing key
+        shell: pwsh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_B64: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_B64 }}
+        run: |
+          $keyPath = Join-Path $env:RUNNER_TEMP "tauri-updater.key"
+          if ($env:TAURI_SIGNING_PRIVATE_KEY_B64) {
+            [IO.File]::WriteAllBytes($keyPath, [Convert]::FromBase64String($env:TAURI_SIGNING_PRIVATE_KEY_B64))
+          } elseif ($env:TAURI_SIGNING_PRIVATE_KEY) {
+            [System.IO.File]::WriteAllText($keyPath, $env:TAURI_SIGNING_PRIVATE_KEY, [System.Text.UTF8Encoding]::new($false))
+          } else {
+            throw "Missing signing key secret. Set TAURI_SIGNING_PRIVATE_KEY or TAURI_SIGNING_PRIVATE_KEY_B64."
+          }
+
+          $raw = Get-Content -Path $keyPath -Raw
+          if (-not $raw.TrimStart().StartsWith("untrusted comment:")) {
+            throw "Invalid updater key format. Secret must contain the full minisign private key, including the 'untrusted comment:' header."
+          }
+
+          "TAURI_SIGNING_PRIVATE_KEY<<EOF" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $raw | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "EOF" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build Windows installers
+        env:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build
 
