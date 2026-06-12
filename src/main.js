@@ -706,6 +706,46 @@ async function lookupRoom(code) {
   }
 }
 
+function firstConnectedPeerId(item) {
+  var connected = (item && Array.isArray(item.connected)) ? item.connected : [];
+  var peerIds = connected
+    .map(function(c) { return c && c.peer_id ? String(c.peer_id).trim() : ''; })
+    .filter(Boolean)
+    .sort();
+  return peerIds[0] || null;
+}
+
+async function resolvePresenceChannelHost(code) {
+  if (!presenceConfigured() || !code) return null;
+  var target = String(code).trim().toLowerCase();
+  if (!target) return null;
+
+  function findFrom(list) {
+    if (!Array.isArray(list)) return null;
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i] || {};
+      var channel = item.channel || {};
+      var channelName = String(channel.name || '').trim();
+      if (!channelName || channelName.toLowerCase() !== target) continue;
+      var hostId = firstConnectedPeerId(item);
+      if (!hostId) return { channelName: channelName, hostId: null };
+      return { channelName: channelName, hostId: hostId };
+    }
+    return null;
+  }
+
+  var match = findFrom(presenceData);
+  if (match) return match;
+
+  try {
+    presenceData = await fetchPresence();
+  } catch (e) {
+    console.warn('[Presence] channel host resolution failed:', e.message);
+    return null;
+  }
+  return findFrom(presenceData);
+}
+
 let shortcutStr = localStorage.getItem('ptt-shortcut') || DEFAULT_SHORTCUT;
 
 function pseudoForHost() { return myPseudo || 'Host'; }
@@ -762,6 +802,7 @@ function updateRoomHeader() {
   var unpublishBtn = $('btn-unpublish-room');
   var shareBtn     = $('btn-share-room');
   if (!publishBtn || !unpublishBtn) return;
+  var hasChannelNameCode = !!(activeChannel && !activeChannelRoomId);
   var hasExternallyManagedPublicId = !!(
     activeChannelRoomId &&
     roomCode &&
@@ -769,6 +810,9 @@ function updateRoomHeader() {
     !_publishSecret
   );
   if (!isHost) {
+    publishBtn.classList.add('hidden');
+    unpublishBtn.classList.add('hidden');
+  } else if (hasChannelNameCode) {
     publishBtn.classList.add('hidden');
     unpublishBtn.classList.add('hidden');
   } else if (hasExternallyManagedPublicId) {
@@ -1286,11 +1330,7 @@ function roomIdFromPayload(obj) {
 
 function associatedRoomIdFromPresenceItem(item) {
   if (!item) return '';
-  var channel = item.channel || {};
-  var fromChannel = roomIdFromPayload(channel);
-  if (!fromChannel && channel.id !== null && channel.id !== undefined && String(channel.id).trim()) {
-    fromChannel = String(channel.id).trim();
-  }
+  var fromChannel = roomIdFromPayload(item.channel || {});
   if (fromChannel) return fromChannel;
   var connected = Array.isArray(item.connected) ? item.connected : [];
   for (var i = 0; i < connected.length; i++) {
@@ -1302,14 +1342,10 @@ function associatedRoomIdFromPresenceItem(item) {
 
 function associatedRoomIdFromSessionResponse(payload) {
   if (!payload || typeof payload !== 'object') return '';
-  var channelId = payload.channel && payload.channel.id !== null && payload.channel && payload.channel.id !== undefined
-    ? String(payload.channel.id).trim()
-    : '';
   return (
     roomIdFromPayload(payload) ||
     roomIdFromPayload(payload.session) ||
     roomIdFromPayload(payload.channel) ||
-    channelId ||
     roomIdFromPayload(payload.channel && payload.channel.channel) ||
     roomIdFromPayload(payload.presence) ||
     roomIdFromPayload(payload.data) ||
@@ -4286,6 +4322,16 @@ async function joinRoom(code, onJoined) {
     devLog('✓ Resolved lobby "' + code + '" → ' + resolved);
     activeChannelRoomId = requestedCode;
     code = resolved;
+  } else if (!UUID_RE.test(requestedCode)) {
+    var channelResolved = await resolvePresenceChannelHost(requestedCode);
+    if (channelResolved && channelResolved.hostId) {
+      devLog('✓ Resolved presence channel "' + requestedCode + '" → ' + channelResolved.hostId);
+      activeChannel = channelResolved.channelName || requestedCode;
+      activeChannelRoomId = '';
+      code = channelResolved.hostId;
+    } else if (channelResolved && !channelResolved.hostId) {
+      throw new Error('Channel "' + (channelResolved.channelName || requestedCode) + '" has no online peers to join.');
+    }
   } else if (UUID_RE.test(requestedCode)) {
     // Direct peer-id join: keep UUID as display/share code unless a room id is later published.
     activeChannelRoomId = '';
@@ -5364,7 +5410,7 @@ window.addEventListener('DOMContentLoaded', function() {
         var iframeChannelName = typeof msg.channelName === 'string' ? msg.channelName.trim() : '';
         if (iframeChannelName) activeChannel = iframeChannelName;
         var iframeAssociatedRoomId = normalizeRoomCode(
-          String(msg.roomCode || msg.roomId || msg.channelId || '')
+          String(msg.roomCode || msg.roomId || '')
         );
         if (iframeAssociatedRoomId) activeChannelRoomId = iframeAssociatedRoomId;
         showInviteLoading(roomDisplayCode() || activeChannel || '', 'Creating room…');
