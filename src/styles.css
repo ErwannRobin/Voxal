@@ -823,6 +823,10 @@ kbd {
   margin-top: 8px;
 }
 
+body.embed-hide-header #screen-room .room-header {
+  display: none;
+}
+
 body.embed-tiny #screen-room {
   position: relative;
   padding-top:    max(calc(env(safe-area-inset-top)    + 10px), 10px);

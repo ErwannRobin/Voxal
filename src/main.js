@@ -152,6 +152,19 @@ var IS_TINY_EMBED = (function() {
     return false;
   }
 })();
+var HIDE_EMBED_HEADER = (function() {
+  try {
+    var params = new URLSearchParams(window.location.search || '');
+    var raw = (
+      params.get('hideHeader') ||
+      params.get('noHeader') ||
+      ''
+    ).toLowerCase();
+    return raw === '1' || raw === 'true' || raw === 'yes';
+  } catch (_) {
+    return false;
+  }
+})();
 var FORCE_WEB_JOIN = (function() {
   try {
     var params = new URLSearchParams(window.location.search || '');
@@ -346,12 +359,33 @@ async function fetchOrgs() {
   return (await res.json()).organisations; // [{id,name,avatar_url,role}]
 }
 
-async function postSession(channelName, peerId) {
-  const res = await tauriFetch(presenceBase(), {
+async function postSession(channelName, peerId, extraFields) {
+  var payload = Object.assign({
+    org_id: presenceOrgId(),
+    channel_name: channelName,
+    peer_id: peerId
+  }, extraFields || {});
+
+  var res = await tauriFetch(presenceBase(), {
     method: 'POST',
     headers: { 'x-api-token': presenceToken(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ org_id: presenceOrgId(), channel_name: channelName, peer_id: peerId }),
+    body: JSON.stringify(payload),
   });
+
+  // Presence API compatibility fallback: if optional metadata is rejected, retry
+  // with the minimal legacy payload so channel registration still succeeds.
+  if (!res.ok && extraFields && Object.keys(extraFields).length) {
+    res = await tauriFetch(presenceBase(), {
+      method: 'POST',
+      headers: { 'x-api-token': presenceToken(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        org_id: presenceOrgId(),
+        channel_name: channelName,
+        peer_id: peerId
+      }),
+    });
+  }
+
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return res.json();
 }
@@ -585,6 +619,7 @@ var _publishedRoomId       = null;
 var _publishedShareUrl     = null;
 var _publishHeartbeatId    = null;
 var _publishDebounceId     = null;
+var _presenceDebounceId    = null;
 var _lastPublishAt         = 0;
 var PUBLISH_HEARTBEAT_MS   = 50 * 60 * 1000; // 50 min (TTL is 1h)
 var PUBLISH_DEBOUNCE_MS    = 10000;
@@ -652,8 +687,10 @@ function unpublishRoom() {
 function clearPublishState() {
   clearInterval(_publishHeartbeatId);
   clearTimeout(_publishDebounceId);
+  clearTimeout(_presenceDebounceId);
   _publishHeartbeatId = null;
   _publishDebounceId = null;
+  _presenceDebounceId = null;
   _lastPublishAt = 0;
   _publishSecret = null;
   _publishedRoomId = null;
@@ -681,6 +718,36 @@ function schedulePublishRefresh() {
   _publishDebounceId = setTimeout(function() {
     if (isHost && _publishSecret) publishRoom().catch(function() {});
   }, PUBLISH_DEBOUNCE_MS);
+}
+
+function hostPresencePeerCount() {
+  return 1 + hostConnectedPeerIds().length;
+}
+
+function syncPresenceChannelSession() {
+  if (!isHost || !inRoom || !peer || !activeChannel || !presenceConfigured()) return;
+  var roomId = roomDisplayCode() || roomCode || '';
+  postSession(activeChannel, peer.id, {
+    room_id: roomId,
+    peer_count: hostPresencePeerCount(),
+    deputy_peer_id: currentDeputyId() || null
+  }).then(function(data) {
+    var associated = associatedRoomIdFromSessionResponse(data);
+    if (!associated || associated === activeChannelRoomId) return;
+    activeChannelRoomId = associated;
+    updateRoomHeader();
+  }).catch(function(e) {
+    console.warn('[Presence] session refresh failed:', e.message);
+  });
+}
+
+function schedulePresenceRefresh() {
+  if (!isHost || !activeChannel || !presenceConfigured()) return;
+  clearTimeout(_presenceDebounceId);
+  _presenceDebounceId = setTimeout(function() {
+    _presenceDebounceId = null;
+    syncPresenceChannelSession();
+  }, 1200);
 }
 
 var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -3920,23 +3987,17 @@ function becomeHost() {
   saveRejoinSnapshot();
   updateRoomHeader();
   updatePeerList();
-  // Broadcast peer-list to any existing data connections
-  connections.forEach(function(c) {
-    if (c.data) {
-      c.data.send({
-        type: 'peer-list',
-        peers: buildHostPeerList(peer.id),
-        hostId: peer.id,
-        hostPseudo: pseudoForHost()
-      });
-    }
-  });
+  // Broadcast full authoritative state to existing peers.
+  broadcastHostPeerLists();
   // peer.on('connection') is already wired in joinRoom() and will route here
   // since isHost is now true
 
   // If the room was published as a public lobby, update the API with our new peer ID
   if (_publishedRoomId && _publishSecret) {
     publishRoom().catch(function(e) { console.warn('[migration] re-publish failed:', e.message); });
+  }
+  if (activeChannel) {
+    syncPresenceChannelSession();
   }
 }
 
@@ -4261,6 +4322,9 @@ function broadcastHostPeerLists() {
   if (_publishedRoomId) {
     broadcastRoomPublished();
     schedulePublishRefresh();
+  }
+  if (activeChannel) {
+    schedulePresenceRefresh();
   }
 }
 
@@ -4936,14 +5000,46 @@ async function joinChannel(item) {
     showInviteLoading(activeChannel || '', 'Creating room…');
     await createRoom(postPresence);
   } else {
-    const hostId = connected.map(function(c) { return c.peer_id; }).sort()[0];
-    await joinRoom(hostId, postPresence);
+    const candidateHostIds = Array.from(new Set(
+      connected
+        .map(function(c) { return c && c.peer_id ? String(c.peer_id).trim() : ''; })
+        .filter(Boolean)
+        .sort()
+    ));
+    var lastError = null;
+    var allUnavailable = true;
+    for (var i = 0; i < candidateHostIds.length; i++) {
+      var hostId = candidateHostIds[i];
+      try {
+        await joinRoom(hostId, postPresence);
+        return;
+      } catch (err) {
+        lastError = err;
+        if (peer && !peer.destroyed) { try { peer.destroy(); } catch (_) {} }
+        peer = null;
+        if (!isNonFatalPeerRuntimeError(err)) {
+          allUnavailable = false;
+          break;
+        }
+      }
+    }
+    if (allUnavailable) {
+      showInviteLoading(activeChannel || '', 'Creating room…');
+      await createRoom(postPresence);
+      return;
+    }
+    throw lastError || new Error('Could not join this channel.');
   }
 }
 
 // --- Bootstrap ---------------------------------------------------------------
 
 window.addEventListener('DOMContentLoaded', function() {
+  function applyEmbedHeaderMode() {
+    if (!_isIframe || !HIDE_EMBED_HEADER) return;
+    document.body.classList.add('embed-hide-header');
+  }
+
   function applyTinyEmbedMode() {
     if (!IS_TINY_EMBED) return;
     document.body.classList.add('embed-tiny');
@@ -4968,6 +5064,7 @@ window.addEventListener('DOMContentLoaded', function() {
     if (staleRight && staleRight.parentNode) staleRight.parentNode.removeChild(staleRight);
   }
 
+  applyEmbedHeaderMode();
   applyTinyEmbedMode();
 
   // Notify capacitor-updater that the bundle loaded successfully (enables auto-revert on crash)
