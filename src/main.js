@@ -779,22 +779,154 @@ async function resolvePresenceChannelHost(code) {
 
 let shortcutStr = localStorage.getItem('ptt-shortcut') || DEFAULT_SHORTCUT;
 
-function pseudoForHost() { return myPseudo || 'Host'; }
-function pseudoForPeer() { return myPseudo || 'Anonymous'; }
+var ANON_COLOR_CHOICES = [
+  { name: 'Crimson',  hex: '#ef4444' },
+  { name: 'Amber',    hex: '#f59e0b' },
+  { name: 'Emerald',  hex: '#22c55e' },
+  { name: 'Teal',     hex: '#14b8a6' },
+  { name: 'Azure',    hex: '#3b82f6' },
+  { name: 'Indigo',   hex: '#6366f1' },
+  { name: 'Violet',   hex: '#a855f7' },
+  { name: 'Rose',     hex: '#f43f5e' },
+];
+var ANON_ANIMAL_CHOICES = [
+  'Fox', 'Otter', 'Wolf', 'Falcon', 'Koala', 'Panda', 'Lynx', 'Tiger',
+  'Dolphin', 'Raven', 'Eagle', 'Orca', 'Badger', 'Hawk', 'Stag', 'Leopard'
+];
+var _anonymousProfile = null;
+
+function randomIndex(max) {
+  if (max <= 0) return 0;
+  try {
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+      var arr = new Uint32Array(1);
+      crypto.getRandomValues(arr);
+      return arr[0] % max;
+    }
+  } catch (_) {}
+  return Math.floor(Math.random() * max);
+}
+
+function ensureAnonymousProfile() {
+  if (_anonymousProfile) return _anonymousProfile;
+  var color = ANON_COLOR_CHOICES[randomIndex(ANON_COLOR_CHOICES.length)];
+  var animal = ANON_ANIMAL_CHOICES[randomIndex(ANON_ANIMAL_CHOICES.length)];
+  _anonymousProfile = {
+    pseudo: color.name + ' ' + animal,
+    pseudoColor: color.hex
+  };
+  return _anonymousProfile;
+}
+
+function selfPseudoProfile() {
+  var manualPseudo = (myPseudo || '').trim();
+  if (manualPseudo) return { pseudo: manualPseudo, pseudoColor: null, anonymous: false };
+  var anon = ensureAnonymousProfile();
+  return { pseudo: anon.pseudo, pseudoColor: anon.pseudoColor, anonymous: true };
+}
+
+function pseudoForHost() { return selfPseudoProfile().pseudo; }
+function pseudoForPeer() { return selfPseudoProfile().pseudo; }
+
+function pseudoColorForSelf() {
+  return selfPseudoProfile().pseudoColor || null;
+}
+
+function displayPseudoForSelf() {
+  return selfPseudoProfile().pseudo || 'You';
+}
+
+function normalizePseudoKey(name) {
+  return String(name || '').trim().toLowerCase();
+}
+
+function collectTakenPseudoKeys(excludedPeerId) {
+  var keys = new Set();
+  var selfId = peer && peer.id ? peer.id : null;
+  var selfPseudo = selfPseudoProfile().pseudo;
+  if (selfPseudo && selfId !== excludedPeerId) keys.add(normalizePseudoKey(selfPseudo));
+  connections.forEach(function(conn, peerId) {
+    if (peerId === excludedPeerId) return;
+    if (!conn || !conn.pseudo) return;
+    keys.add(normalizePseudoKey(conn.pseudo));
+  });
+  keys.delete('');
+  return keys;
+}
+
+function ensureUniquePseudoForRoom(basePseudo, excludedPeerId) {
+  var base = String(basePseudo || '').trim() || 'Anonymous';
+  var taken = collectTakenPseudoKeys(excludedPeerId);
+  var candidate = base;
+  var idx = 2;
+  while (taken.has(normalizePseudoKey(candidate))) {
+    candidate = base + ' ' + idx;
+    idx++;
+  }
+  return candidate;
+}
+
+function applyAssignedSelfProfile(pseudo, pseudoColor) {
+  var assignedPseudo = String(pseudo || '').trim();
+  if (!assignedPseudo) return;
+  var requestedManualPseudo = (myPseudo || '').trim();
+  if (requestedManualPseudo) {
+    if (assignedPseudo !== requestedManualPseudo) {
+      showCopyToast('Name already used in this room. You were renamed to "' + assignedPseudo + '".');
+      setMyPseudo(assignedPseudo, { silentAnnounce: true });
+    }
+    return;
+  }
+  var anon = ensureAnonymousProfile();
+  anon.pseudo = assignedPseudo;
+  if (pseudoColor) anon.pseudoColor = pseudoColor;
+  updatePeerList();
+}
+
+function canonicalizePeerProfile(peerId, requestedPseudo, requestedColor) {
+  var basePseudo = String(requestedPseudo || '').trim() || 'Anonymous';
+  var uniquePseudo = ensureUniquePseudoForRoom(basePseudo, peerId);
+  var color = String(requestedColor || '').trim() || null;
+  return { pseudo: uniquePseudo, pseudoColor: color };
+}
 
 function announcePseudoChange() {
   if (!inRoom || !peer) return;
   if (isHost) {
+    var hostProfile = selfPseudoProfile();
+    var uniqueHostPseudo = ensureUniquePseudoForRoom(hostProfile.pseudo, peer.id);
+    if (uniqueHostPseudo !== hostProfile.pseudo) {
+      if ((myPseudo || '').trim()) {
+        showCopyToast('Name already used in this room. You were renamed to "' + uniqueHostPseudo + '".');
+        setMyPseudo(uniqueHostPseudo, { silentAnnounce: true });
+      } else {
+        var anon = ensureAnonymousProfile();
+        anon.pseudo = uniqueHostPseudo;
+      }
+      hostProfile = selfPseudoProfile();
+    }
     connections.forEach(function(c) {
-      if (c.data) c.data.send({ type: 'peer-renamed', peerId: peer.id, pseudo: pseudoForHost() });
+      if (c.data) c.data.send({
+        type: 'peer-renamed',
+        peerId: peer.id,
+        pseudo: hostProfile.pseudo,
+        pseudoColor: hostProfile.pseudoColor || null
+      });
     });
+    updatePeerList();
     return;
   }
   const hostConn = connections.get(roomCode);
-  if (hostConn && hostConn.data) hostConn.data.send({ type: 'pseudo', pseudo: pseudoForPeer() });
+  var profile = selfPseudoProfile();
+  if (hostConn && hostConn.data) hostConn.data.send({
+    type: 'pseudo',
+    pseudo: profile.pseudo,
+    pseudoColor: profile.pseudoColor || null
+  });
 }
 
-function setMyPseudo(nextPseudo) {
+function setMyPseudo(nextPseudo, options) {
+  options = options || {};
   myPseudo = (nextPseudo || '').trim();
   sessionStorage.setItem(PSEUDO_SESSION_KEY, myPseudo);
   if (shouldPersistPseudoGlobally()) localStorage.setItem(PSEUDO_KEY, myPseudo);
@@ -806,7 +938,7 @@ function setMyPseudo(nextPseudo) {
   if (inviteInput && inviteInput.value !== myPseudo) inviteInput.value = myPseudo;
   if (inRoom) {
     updatePeerList();
-    announcePseudoChange();
+    if (!options.silentAnnounce) announcePseudoChange();
   }
   updateHomeLoggedOutLayout();
 }
@@ -1953,7 +2085,7 @@ function updatePeerList() {
   const showPeerUuids = isDevModeEnabled();
 
   if (IS_TINY_EMBED) {
-    var addTinyItem = function(id, label, self, talking) {
+    var addTinyItem = function(id, label, self, talking, labelColor) {
       var div = document.createElement('div');
       div.id = 'peer-item-' + id;
       div.className = 'peer-item peer-item-compact' + (self ? ' peer-self' : '') + (talking ? ' talking' : '');
@@ -1992,6 +2124,7 @@ function updatePeerList() {
         var txt = document.createElement('span');
         txt.className = 'peer-compact-label';
         txt.textContent = label;
+        if (labelColor) txt.style.color = labelColor;
         div.appendChild(txt);
         if (self) {
           var editBtn = document.createElement('button');
@@ -2011,21 +2144,33 @@ function updatePeerList() {
     };
 
     list.classList.add('tiny-peers-list');
-    var selfChip = addTinyItem('self', myPseudo || 'You', true, isTalking || freeHandMode);
+    var selfChip = addTinyItem('self', displayPseudoForSelf(), true, isTalking || freeHandMode, pseudoColorForSelf());
     if (selfChip) list.appendChild(selfChip);
     var othersWrap = document.createElement('div');
     othersWrap.className = 'tiny-peers-others';
     connections.forEach(function(conn, id) {
-      var peerChip = addTinyItem(id, conn.pseudo || shortId(id), false, conn.talking || false);
+      var peerChip = addTinyItem(id, conn.pseudo || shortId(id), false, conn.talking || false, conn.pseudoColor || null);
       if (peerChip) othersWrap.appendChild(peerChip);
     });
     list.appendChild(othersWrap);
 
     if (window._updateTinyPeersToggle) window._updateTinyPeersToggle();
     if (_isIframe && inRoom) {
-      var peers = [{ id: peer ? peer.id : 'self', pseudo: myPseudo || 'You', self: true, talking: isTalking || freeHandMode }];
+      var peers = [{
+        id: peer ? peer.id : 'self',
+        pseudo: displayPseudoForSelf(),
+        pseudoColor: pseudoColorForSelf(),
+        self: true,
+        talking: isTalking || freeHandMode
+      }];
       connections.forEach(function(conn, id) {
-        peers.push({ id: id, pseudo: conn.pseudo || shortId(id), self: false, talking: conn.talking || false });
+        peers.push({
+          id: id,
+          pseudo: conn.pseudo || shortId(id),
+          pseudoColor: conn.pseudoColor || null,
+          self: false,
+          talking: conn.talking || false
+        });
       });
       iframeEmit({ type: 'peers', peers: peers });
     }
@@ -2093,7 +2238,7 @@ function updatePeerList() {
     parent.appendChild(dot);
   };
 
-  const addItem = (id, label, self, talking, editable, actualPeerId) => {
+  const addItem = (id, label, self, talking, editable, actualPeerId, labelColor) => {
     const div = document.createElement('div');
     div.id = 'peer-item-' + id;
     div.className = 'peer-item' + (self ? ' peer-self' : '') + (talking ? ' talking' : '');
@@ -2118,7 +2263,10 @@ function updatePeerList() {
     if (!editable) {
       const nameWrap = document.createElement('span');
       nameWrap.className = 'peer-label-row';
-      nameWrap.textContent = label;
+      const nameEl = document.createElement('span');
+      nameEl.textContent = label;
+      if (labelColor) nameEl.style.color = labelColor;
+      nameWrap.appendChild(nameEl);
       appendPeerRole(nameWrap, actualPeerId);
       peerMain.appendChild(nameWrap);
       appendPeerUuid(peerMain, actualPeerId);
@@ -2209,7 +2357,8 @@ function updatePeerList() {
     }
 
     const name = document.createElement('span');
-    name.textContent = myPseudo || 'You';
+    name.textContent = displayPseudoForSelf();
+    if (labelColor) name.style.color = labelColor;
     nameWrap.appendChild(name);
     appendCameraLiveDot(nameWrap, videoLive, 'Your camera is live');
     appendScreenLiveDot(nameWrap, screenLive, 'Your screen is shared');
@@ -2231,8 +2380,16 @@ function updatePeerList() {
     list.appendChild(div);
   };
 
-  addItem('self', myPseudo || 'You', true, isTalking || freeHandMode, true, peer && peer.id);
-  connections.forEach((conn, id) => addItem(id, conn.pseudo || shortId(id), false, conn.talking || false, false, id));
+  addItem('self', displayPseudoForSelf(), true, isTalking || freeHandMode, true, peer && peer.id, pseudoColorForSelf());
+  connections.forEach((conn, id) => addItem(
+    id,
+    conn.pseudo || shortId(id),
+    false,
+    conn.talking || false,
+    false,
+    id,
+    conn.pseudoColor || null
+  ));
 
   // Invite nudge — shown when no other peers are in the room yet
   if (connections.size === 0 && !IS_TINY_EMBED) {
@@ -2266,9 +2423,21 @@ function updatePeerList() {
 
   // Notify the parent iframe of the current peer list
   if (_isIframe && inRoom) {
-    var peers = [{ id: peer ? peer.id : 'self', pseudo: myPseudo || 'You', self: true, talking: isTalking || freeHandMode }];
+    var peers = [{
+      id: peer ? peer.id : 'self',
+      pseudo: displayPseudoForSelf(),
+      pseudoColor: pseudoColorForSelf(),
+      self: true,
+      talking: isTalking || freeHandMode
+    }];
     connections.forEach(function(conn, id) {
-      peers.push({ id: id, pseudo: conn.pseudo || shortId(id), self: false, talking: conn.talking || false });
+      peers.push({
+        id: id,
+        pseudo: conn.pseudo || shortId(id),
+        pseudoColor: conn.pseudoColor || null,
+        self: false,
+        talking: conn.talking || false
+      });
     });
     iframeEmit({ type: 'peers', peers: peers });
   }
@@ -3614,7 +3783,7 @@ function ensurePlaceholdersForKnownPeers() {
   knownPeerIds.forEach(function(peerId) {
     if (!peerId || (peer && peer.id === peerId)) return;
     if (connections.has(peerId)) return;
-    connections.set(peerId, { data: null, media: null, pseudo: shortId(peerId), talking: false });
+    connections.set(peerId, { data: null, media: null, pseudo: shortId(peerId), pseudoColor: null, talking: false });
   });
 }
 
@@ -3781,7 +3950,7 @@ function buildHostPeerList(excludedPeerId) {
     .map(function(id) {
       const conn = connections.get(id);
       const pseudo = (conn && conn.pseudo ? String(conn.pseudo).trim() : '') || shortId(id);
-      var entry = { id: id, pseudo: pseudo };
+      var entry = { id: id, pseudo: pseudo, pseudoColor: conn && conn.pseudoColor ? conn.pseudoColor : null };
       if (conn && conn.videoActive) entry.videoActive = true;
       if (conn && conn.screenActive) entry.screenActive = true;
       return entry;
@@ -3825,11 +3994,20 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
     if (gen !== _hostConnGeneration) { hostData.close(); return; }
     opened = true;
     clearTimeout(timer);
-    hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
+    hostData.send({
+      type: 'hello',
+      pseudo: pseudoForPeer(),
+      pseudoColor: pseudoColorForSelf()
+    });
   });
 
   hostData.on('data', function(msg) {
     if (gen !== _hostConnGeneration) return;
+
+    if (msg && msg.type === 'pseudo-assigned') {
+      applyAssignedSelfProfile(msg.pseudo, msg.pseudoColor || null);
+      return;
+    }
 
     if (msg && msg.type === 'peer-list') {
       receivedPeerList = true;
@@ -3847,8 +4025,12 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
       localStorage.setItem('active-room-code', targetHostId);
       iframeEmit({ type: 'host-changed', roomCode: targetHostId, isSelf: false });
       updateRoomHeader();
-      var prev = connections.get(targetHostId) || { media: null, talking: false };
-      connections.set(targetHostId, Object.assign({}, prev, { data: hostData, pseudo: msg.hostPseudo || shortId(targetHostId) }));
+      var prev = connections.get(targetHostId) || { media: null, pseudoColor: null, talking: false };
+      connections.set(targetHostId, Object.assign({}, prev, {
+        data: hostData,
+        pseudo: msg.hostPseudo || shortId(targetHostId),
+        pseudoColor: msg.hostPseudoColor || null
+      }));
       console.log('[migration] Connected to new host ' + migrationPeerLabel(targetHostId) + '. Received peer-list.');
       handleHostMessage(msg);
       return;
@@ -3929,7 +4111,11 @@ function connectToHost(hostId, opts) {
     opened = true;
     clearTimeout(timer);
     devLog('✓ DC open → hello sent');
-    hostData.send({ type: 'hello', pseudo: pseudoForPeer() });
+    hostData.send({
+      type: 'hello',
+      pseudo: pseudoForPeer(),
+      pseudoColor: pseudoColorForSelf()
+    });
   });
 
   hostData.on('data', function(msg) {
@@ -3974,6 +4160,11 @@ function connectToHost(hostId, opts) {
       finishJoin(hostId, hostData);
       handleHostMessage(msg);
       if (onInitialJoinResolve) onInitialJoinResolve(peer.id);
+      return;
+    }
+
+    if (msg && msg.type === 'pseudo-assigned') {
+      applyAssignedSelfProfile(msg.pseudo, msg.pseudoColor || null);
       return;
     }
 
@@ -4022,7 +4213,7 @@ function handleIncomingCall(call) {
   call.answer(stream);
   call.on('stream', function(remote) {
     attachAudio(call.peer, remote);
-    const prev = connections.get(call.peer) || { data: null, pseudo: shortId(call.peer), talking: false };
+    const prev = connections.get(call.peer) || { data: null, pseudo: shortId(call.peer), pseudoColor: null, talking: false };
     connections.set(call.peer, Object.assign({}, prev, { media: call }));
     updatePeerList();
   });
@@ -4035,11 +4226,16 @@ function handleIncomingCall(call) {
 function sendHostPeerList(dataConn, excludedPeerId) {
   if (!dataConn) return;
   var successorIds = reconcileHostSuccessorIds();
+  var hostProfile = selfPseudoProfile();
+  var selfConn = excludedPeerId ? connections.get(excludedPeerId) : null;
   dataConn.send({
     type: 'peer-list',
     peers: buildHostPeerList(excludedPeerId),
     hostId: peer.id,
-    hostPseudo: pseudoForHost(),
+    hostPseudo: hostProfile.pseudo,
+    hostPseudoColor: hostProfile.pseudoColor || null,
+    selfPseudo: selfConn && selfConn.pseudo ? selfConn.pseudo : null,
+    selfPseudoColor: selfConn && selfConn.pseudoColor ? selfConn.pseudoColor : null,
     hostVideoActive: localVideoActive,
     hostScreenActive: localScreenActive,
     videoModeEnabled: videoModeEnabled,
@@ -4075,7 +4271,7 @@ function handleJoinerDataConnection(dataConn) {
     const previous = connections.get(joinerId);
     dataConn._voxalExistingPeer = !!previous;
     rememberPeer(joinerId);
-    const existing = previous || { media: null, pseudo: shortId(joinerId), talking: false };
+    const existing = previous || { media: null, pseudo: shortId(joinerId), pseudoColor: null, talking: false };
     connections.set(joinerId, Object.assign({}, existing, {
       data: dataConn,
       pseudo: existing.pseudo || shortId(joinerId),
@@ -4092,10 +4288,20 @@ function handleJoinerDataConnection(dataConn) {
     notePeerHeartbeat(joinerId, msg && msg.at ? msg.at : Date.now());
     if (msg.type === 'hello') {
       rememberPeer(joinerId);
-      const pseudo = msg.pseudo || shortId(joinerId);
-      const existing = connections.get(joinerId) || { data: dataConn, media: null, talking: false };
-      connections.set(joinerId, Object.assign({}, existing, { pseudo: pseudo }));
+      const requestedPseudo = msg.pseudo || shortId(joinerId);
+      const canonical = canonicalizePeerProfile(joinerId, requestedPseudo, msg.pseudoColor || null);
+      const pseudo = canonical.pseudo;
+      const existing = connections.get(joinerId) || { data: dataConn, media: null, pseudoColor: null, talking: false };
+      connections.set(joinerId, Object.assign({}, existing, {
+        pseudo: pseudo,
+        pseudoColor: canonical.pseudoColor
+      }));
 
+      sendDataIfOpen(dataConn, {
+        type: 'pseudo-assigned',
+        pseudo: pseudo,
+        pseudoColor: canonical.pseudoColor
+      });
       sendHostPeerList(dataConn, joinerId);
 
       // Inform joiner of the public lobby ID if the room is published
@@ -4111,7 +4317,12 @@ function handleJoinerDataConnection(dataConn) {
 
       if (!dataConn._voxalExistingPeer) {
         connections.forEach(function(c, id) {
-          if (id !== joinerId && c.data) sendDataIfOpen(c.data, { type: 'peer-joined', peerId: joinerId, pseudo: pseudo });
+          if (id !== joinerId && c.data) sendDataIfOpen(c.data, {
+            type: 'peer-joined',
+            peerId: joinerId,
+            pseudo: pseudo,
+            pseudoColor: canonical.pseudoColor
+          });
         });
         playCarillon();
       }
@@ -4176,12 +4387,27 @@ function handleJoinerDataConnection(dataConn) {
         if (id !== joinerId && c.data) sendDataIfOpen(c.data, { type: 'talking', peerId: joinerId, active: msg.active });
       });
     } else if (msg.type === 'pseudo') {
-      const pseudo = msg.pseudo || shortId(joinerId);
-      const existing = connections.get(joinerId) || { data: dataConn, media: null, talking: false };
-      connections.set(joinerId, Object.assign({}, existing, { pseudo: pseudo }));
+      const requestedPseudo = msg.pseudo || shortId(joinerId);
+      const canonical = canonicalizePeerProfile(joinerId, requestedPseudo, msg.pseudoColor || null);
+      const pseudo = canonical.pseudo;
+      const existing = connections.get(joinerId) || { data: dataConn, media: null, pseudoColor: null, talking: false };
+      connections.set(joinerId, Object.assign({}, existing, {
+        pseudo: pseudo,
+        pseudoColor: canonical.pseudoColor
+      }));
+      sendDataIfOpen(dataConn, {
+        type: 'pseudo-assigned',
+        pseudo: pseudo,
+        pseudoColor: canonical.pseudoColor
+      });
       updatePeerList();
       connections.forEach(function(c, id) {
-        if (id !== joinerId && c.data) sendDataIfOpen(c.data, { type: 'peer-renamed', peerId: joinerId, pseudo: pseudo });
+        if (id !== joinerId && c.data) sendDataIfOpen(c.data, {
+          type: 'peer-renamed',
+          peerId: joinerId,
+          pseudo: pseudo,
+          pseudoColor: canonical.pseudoColor
+        });
       });
     } else if (msg.type === 'video-offer') {
       // Relay to all other peers
@@ -4311,7 +4537,14 @@ function handleHostMessage(msg) {
   noteHostHeartbeat(msg && msg.at ? msg.at : Date.now());
   applyHostRoutingHints(msg);
   if (msg.type === 'heartbeat') return;
+  if (msg.type === 'pseudo-assigned') {
+    applyAssignedSelfProfile(msg.pseudo, msg.pseudoColor || null);
+    return;
+  }
   if (msg.type === 'peer-list') {
+    if (msg.selfPseudo) {
+      applyAssignedSelfProfile(msg.selfPseudo, msg.selfPseudoColor || null);
+    }
     const listedPeerIds = msg.peers.map(function(p) { return p.id; }).concat([roomCode]);
     const listedPeerSet = new Set(listedPeerIds);
 
@@ -4324,12 +4557,18 @@ function handleHostMessage(msg) {
       }
     });
 
-    const authoritativePeers = msg.peers.concat([{ id: roomCode, pseudo: msg.hostPseudo || shortId(roomCode), videoActive: !!msg.hostVideoActive, screenActive: !!msg.hostScreenActive }]);
+    const authoritativePeers = msg.peers.concat([{
+      id: roomCode,
+      pseudo: msg.hostPseudo || shortId(roomCode),
+      pseudoColor: msg.hostPseudoColor || null,
+      videoActive: !!msg.hostVideoActive,
+      screenActive: !!msg.hostScreenActive
+    }]);
     authoritativePeers.forEach(function(p) {
       const peerId = p.id;
       const pseudo = p.pseudo;
-      const prev = connections.get(peerId) || { data: null, talking: false };
-      var update = { pseudo: pseudo, media: prev.media || null };
+      const prev = connections.get(peerId) || { data: null, pseudoColor: null, talking: false };
+      var update = { pseudo: pseudo, pseudoColor: p.pseudoColor || null, media: prev.media || null };
       if (p.videoActive) update.videoActive = true;
       if (p.screenActive) update.screenActive = true;
       connections.set(peerId, Object.assign({}, prev, update));
@@ -4356,11 +4595,16 @@ function handleHostMessage(msg) {
 
   } else if (msg.type === 'peer-joined') {
     rememberPeer(msg.peerId);
-    if (!connections.has(msg.peerId)) {
-      connections.set(msg.peerId, { data: null, media: null, pseudo: msg.pseudo || shortId(msg.peerId), talking: false });
+    const wasKnown = connections.has(msg.peerId);
+    const existing = connections.get(msg.peerId) || { data: null, media: null, talking: false };
+    connections.set(msg.peerId, Object.assign({}, existing, {
+      pseudo: msg.pseudo || existing.pseudo || shortId(msg.peerId),
+      pseudoColor: msg.pseudoColor || existing.pseudoColor || null
+    }));
+    if (!wasKnown) {
       playCarillon();
-      updatePeerList();
     }
+    updatePeerList();
 
   } else if (msg.type === 'peer-left') {
     forgetPeer(msg.peerId);
@@ -4370,8 +4614,11 @@ function handleHostMessage(msg) {
   } else if (msg.type === 'talking') {
     updatePeerTalking(msg.peerId, msg.active);
   } else if (msg.type === 'peer-renamed') {
-    const existing = connections.get(msg.peerId) || { data: null, media: null, talking: false };
-    connections.set(msg.peerId, Object.assign({}, existing, { pseudo: msg.pseudo || shortId(msg.peerId) }));
+    const existing = connections.get(msg.peerId) || { data: null, media: null, pseudoColor: null, talking: false };
+    connections.set(msg.peerId, Object.assign({}, existing, {
+      pseudo: msg.pseudo || shortId(msg.peerId),
+      pseudoColor: msg.pseudoColor || null
+    }));
     updatePeerList();
   } else if (msg.type === 'room-published') {
     _publishedRoomId = msg.roomId || null;
@@ -4569,7 +4816,7 @@ function finishJoin(targetHostId, hostData) {
   clearRoomCodeInput();
   localStorage.setItem('active-room-code', targetHostId);
   rememberPeer(targetHostId);
-  connections.set(targetHostId, { data: hostData, media: null, pseudo: shortId(targetHostId), talking: false });
+  connections.set(targetHostId, { data: hostData, media: null, pseudo: shortId(targetHostId), pseudoColor: null, talking: false });
   updateRoomHeader();
   nativePTTJoin(targetHostId);
   startKeepAlive();
