@@ -416,6 +416,16 @@ body {
   margin-bottom: 16px;
 }
 
+.room-peers-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.room-peers-toggle {
+  display: none;
+  align-self: flex-start;
+}
+
 .peer-item {
   display: flex;
   flex-wrap: wrap;
@@ -781,6 +791,7 @@ kbd {
 /* ── Error ──────────────────────────────────────────────────────── */
 
 #screen-room {
+  position: relative;
   padding-top:    max(calc(env(safe-area-inset-top)    + 14px), 14px);
   padding-right:  max(calc(env(safe-area-inset-right)  + 18px), 18px);
   padding-bottom: max(calc(env(safe-area-inset-bottom) + 14px), 14px);
@@ -788,8 +799,201 @@ kbd {
   overflow: hidden;
 }
 
-/* Peers list grows to fill available space; PTT area stays at bottom */
+/* Peers list grows to fill available space; leave room for fixed bottom controls */
+#screen-room .room-peers-panel {
+  flex: 1;
+  min-height: 0;
+  padding-bottom: 220px;
+}
 #screen-room .peers-list { flex: 1; max-height: none; }
+
+#screen-room .room-bottom-bar {
+  position: absolute;
+  left: max(calc(env(safe-area-inset-left)   + 18px), 18px);
+  right: max(calc(env(safe-area-inset-right) + 18px), 18px);
+  bottom: max(calc(env(safe-area-inset-bottom) + 12px), 12px);
+  z-index: 20;
+}
+
+#screen-room .room-bottom-bar .ptt-area {
+  padding: 0;
+}
+
+#screen-room .room-bottom-bar .room-controls {
+  margin-top: 8px;
+}
+
+body.embed-tiny #screen-room {
+  position: relative;
+  padding-top:    max(calc(env(safe-area-inset-top)    + 10px), 10px);
+  padding-right:  max(calc(env(safe-area-inset-right)  + 12px), 12px);
+  padding-bottom: max(calc(env(safe-area-inset-bottom) + 10px), 10px);
+  padding-left:   max(calc(env(safe-area-inset-left)   + 12px), 12px);
+}
+
+body.embed-tiny #screen-room .room-header,
+body.embed-tiny #screen-room .room-controls {
+  display: none;
+}
+
+body.embed-tiny .room-peers-toggle { display: none !important; }
+
+body.embed-tiny #screen-room .room-peers-panel {
+  position: absolute;
+  top: max(calc(env(safe-area-inset-top) + 10px), 10px);
+  left: max(calc(env(safe-area-inset-left) + 12px), 12px);
+  right: calc(max(calc(env(safe-area-inset-right) + 10px), 10px) + 72px);
+  z-index: 30;
+  flex: 1 1 auto;
+  gap: 8px;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+body.embed-tiny #screen-room .peers-list {
+  display: flex;
+  position: static;
+  width: 100%;
+  flex: 0 1 auto;
+  min-width: 0;
+  flex-direction: row;
+  align-items: flex-start;
+  flex-wrap: nowrap;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  min-height: 0;
+  max-height: none;
+  margin-bottom: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  gap: 6px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+body.embed-tiny #screen-room .peers-list::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+body.embed-tiny #screen-room .tiny-peers-others {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  grid-template-rows: repeat(2, min-content);
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
+  align-content: start;
+  align-items: start;
+  gap: 6px;
+  max-height: 62px; /* 2 lines of compact chips */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
+}
+body.embed-tiny #screen-room .tiny-peers-others::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+body.embed-tiny #screen-room .peer-item-compact {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+
+body.embed-tiny #screen-room .peer-item-compact .peer-dot {
+  width: 7px;
+  height: 7px;
+}
+
+body.embed-tiny #screen-room .peer-item-compact .peer-compact-label {
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.embed-tiny #screen-room .peer-item-compact.peer-self {
+  white-space: nowrap;
+  border-color: var(--accent-dim);
+  padding: 6px 11px;
+  margin-right: 4px;
+}
+
+body.embed-tiny #screen-room .peer-item-compact.talking {
+  background: rgba(74, 222, 128, 0.2);
+  border-color: var(--green);
+  box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.55), inset 0 0 10px rgba(74, 222, 128, 0.25);
+  transform: none;
+}
+
+body.embed-tiny #screen-room .peer-item-compact.talking .peer-compact-label {
+  color: #d1fae5;
+  font-weight: 700;
+}
+
+body.embed-tiny #screen-room .peer-item-compact.talking .peer-dot {
+  width: 9px;
+  height: 9px;
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.95);
+  animation: dot-pulse 0.55s ease-in-out infinite;
+}
+
+body.embed-tiny #screen-room .peer-item-compact .peer-edit-btn {
+  margin-left: 2px;
+}
+
+body.embed-tiny #screen-room .peer-item-compact .peer-name-inline {
+  width: 110px;
+  max-width: 32vw;
+  font-size: 12px;
+  padding: 3px 6px;
+}
+
+body.embed-tiny #screen-invite-loading .invite-loading-panel {
+  width: min(340px, 100%);
+  gap: 8px;
+}
+
+body.embed-tiny #screen-invite-loading .brand-icon,
+body.embed-tiny #screen-invite-loading h2,
+body.embed-tiny #screen-invite-loading #invite-room-code,
+body.embed-tiny #screen-invite-loading #btn-cancel-invite-join {
+  display: none;
+}
+
+body.embed-tiny #screen-room .ptt-area {
+  position: absolute;
+  top: max(calc(env(safe-area-inset-top) + 6px), 6px);
+  right: max(calc(env(safe-area-inset-right) + 10px), 10px);
+  margin-top: 0;
+  padding: 0;
+  z-index: 20;
+}
+
+body.embed-tiny #screen-room .room-bottom-bar {
+  position: static;
+}
+
+body.embed-tiny #screen-room #ptt-hint,
+body.embed-tiny #screen-room #ptt-status,
+body.embed-tiny #screen-room #shortcut-recording {
+  display: none;
+}
+
+body.embed-tiny #screen-room .ptt-btn {
+  width: 64px;
+  height: 64px;
+  font-size: 24px;
+}
 
 #screen-error {
   align-items: center;

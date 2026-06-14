@@ -135,6 +135,37 @@ function loadInitialPseudo() {
 //   { source: 'voxal', type: 'host-changed', roomCode: '<peerId>', isSelf: true|false }
 
 var _isIframe = (function() { try { return window.self !== window.top; } catch(e) { return true; } })();
+var IS_TINY_EMBED = (function() {
+  try {
+    var params = new URLSearchParams(window.location.search || '');
+    var tinyParam = (params.get('tiny') || '').toLowerCase();
+    var compactParam = (params.get('compact') || '').toLowerCase();
+    return (
+      params.get('ui') === 'tiny' ||
+      params.get('embed') === 'tiny' ||
+      tinyParam === '1' ||
+      tinyParam === 'true' ||
+      compactParam === '1' ||
+      compactParam === 'true'
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+var FORCE_WEB_JOIN = (function() {
+  try {
+    var params = new URLSearchParams(window.location.search || '');
+    var raw = (
+      params.get('forceWeb') ||
+      params.get('webOnly') ||
+      params.get('web') ||
+      ''
+    ).toLowerCase();
+    return raw === '1' || raw === 'true' || raw === 'yes';
+  } catch (_) {
+    return false;
+  }
+})();
 
 function getAllowedParentOrigin() {
   try {
@@ -1205,6 +1236,7 @@ function showScreen(name) {
   document.getElementById('screen-' + name).classList.add('active');
   if (name === 'home') { startPresencePolling(); if (window._updateRejoinBar) window._updateRejoinBar(); }
   else                 stopPresencePolling();
+  if (window._updateTinyPeersToggle) window._updateTinyPeersToggle();
 }
 
 function showError(msg) {
@@ -1358,10 +1390,6 @@ function consumeRoomInviteFromQuery() {
     var current = new URL(window.location.href);
     var roomId = normalizeRoomCode(current.searchParams.get('room') || '');
     if (!roomId) return '';
-    current.searchParams.delete('room');
-    if (window.history && window.history.replaceState) {
-      window.history.replaceState({}, document.title, current.toString());
-    }
     return roomId;
   } catch (_) {
     return '';
@@ -1509,6 +1537,10 @@ function startInviteRoomJoin(rawRoomCode) {
 // If the page goes hidden the app launched → cancel the web join.
 // If 800 ms pass with the page still visible → fall back to browser join.
 function _tryNativeAppThenJoin(roomId) {
+  if (IS_TINY_EMBED || FORCE_WEB_JOIN) {
+    startInviteRoomJoin(roomId);
+    return;
+  }
   showInviteLoading(roomId, 'Opening Voxal…');
 
   var appLaunched = false;
@@ -1569,6 +1601,10 @@ function _tryNativeAppThenJoin(roomId) {
 }
 
 function showInviteLoading(roomLabel, statusText) {
+  if (IS_TINY_EMBED) {
+    roomLabel = '';
+    statusText = 'Connecting ...';
+  }
   var roomCodeEl = $('invite-room-code');
   if (roomCodeEl) roomCodeEl.textContent = roomLabel || '';
   var statusEl = $('invite-join-status');
@@ -1916,6 +1952,86 @@ function updatePeerList() {
   const deputyPeerId = roomCode ? currentDeputyId() : null;
   const showPeerUuids = isDevModeEnabled();
 
+  if (IS_TINY_EMBED) {
+    var addTinyItem = function(id, label, self, talking) {
+      var div = document.createElement('div');
+      div.id = 'peer-item-' + id;
+      div.className = 'peer-item peer-item-compact' + (self ? ' peer-self' : '') + (talking ? ' talking' : '');
+
+      var dot = document.createElement('span');
+      dot.className = 'peer-dot';
+      div.appendChild(dot);
+
+      if (self && editingSelfPseudo) {
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.maxLength = 20;
+        input.className = 'peer-name-inline';
+        input.placeholder = 'Your name…';
+        input.value = myPseudo;
+        input.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            e.stopPropagation();
+            editingSelfPseudo = false;
+            setMyPseudo(input.value);
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            editingSelfPseudo = false;
+            updatePeerList();
+          }
+        });
+        input.addEventListener('blur', function() {
+          editingSelfPseudo = false;
+          setMyPseudo(input.value);
+        });
+        div.appendChild(input);
+        setTimeout(function() { input.focus(); input.select(); }, 0);
+      } else {
+        var txt = document.createElement('span');
+        txt.className = 'peer-compact-label';
+        txt.textContent = label;
+        div.appendChild(txt);
+        if (self) {
+          var editBtn = document.createElement('button');
+          editBtn.className = 'btn-icon peer-edit-btn';
+          editBtn.title = 'Edit name';
+          editBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>';
+          editBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            editingSelfPseudo = true;
+            updatePeerList();
+          });
+          div.appendChild(editBtn);
+        }
+      }
+
+      return div;
+    };
+
+    list.classList.add('tiny-peers-list');
+    var selfChip = addTinyItem('self', myPseudo || 'You', true, isTalking || freeHandMode);
+    if (selfChip) list.appendChild(selfChip);
+    var othersWrap = document.createElement('div');
+    othersWrap.className = 'tiny-peers-others';
+    connections.forEach(function(conn, id) {
+      var peerChip = addTinyItem(id, conn.pseudo || shortId(id), false, conn.talking || false);
+      if (peerChip) othersWrap.appendChild(peerChip);
+    });
+    list.appendChild(othersWrap);
+
+    if (window._updateTinyPeersToggle) window._updateTinyPeersToggle();
+    if (_isIframe && inRoom) {
+      var peers = [{ id: peer ? peer.id : 'self', pseudo: myPseudo || 'You', self: true, talking: isTalking || freeHandMode }];
+      connections.forEach(function(conn, id) {
+        peers.push({ id: id, pseudo: conn.pseudo || shortId(id), self: false, talking: conn.talking || false });
+      });
+      iframeEmit({ type: 'peers', peers: peers });
+    }
+    return;
+  }
+
   const appendRole = function(parent, label) {
     const role = document.createElement('span');
     role.className = 'peer-role';
@@ -2119,7 +2235,7 @@ function updatePeerList() {
   connections.forEach((conn, id) => addItem(id, conn.pseudo || shortId(id), false, conn.talking || false, false, id));
 
   // Invite nudge — shown when no other peers are in the room yet
-  if (connections.size === 0) {
+  if (connections.size === 0 && !IS_TINY_EMBED) {
     var nudge = document.createElement('div');
     nudge.className = 'room-invite-nudge';
     var nudgeText = document.createElement('span');
@@ -2156,6 +2272,8 @@ function updatePeerList() {
     });
     iframeEmit({ type: 'peers', peers: peers });
   }
+
+  if (window._updateTinyPeersToggle) window._updateTinyPeersToggle();
 }
 
 function updatePeerTalking(peerId, active) {
@@ -4579,6 +4697,31 @@ async function joinChannel(item) {
 // --- Bootstrap ---------------------------------------------------------------
 
 window.addEventListener('DOMContentLoaded', function() {
+  function applyTinyEmbedMode() {
+    if (!IS_TINY_EMBED) return;
+    document.body.classList.add('embed-tiny');
+    var btn = $('btn-toggle-peers');
+    var pttBtn = $('ptt-btn');
+    var pttHint = $('ptt-hint');
+    if (pttBtn && pttHint) {
+      var helper = (pttHint.textContent || '').replace(/\s+/g, ' ').trim();
+      if (helper) {
+        pttBtn.title = helper;
+        pttBtn.setAttribute('aria-label', helper);
+      }
+    }
+    window._updateTinyPeersToggle = function() {
+      if (!IS_TINY_EMBED || !btn) return;
+      btn.classList.add('hidden');
+    };
+    window._updateTinyPeersToggle();
+    var staleLeft = $('btn-peers-left');
+    if (staleLeft && staleLeft.parentNode) staleLeft.parentNode.removeChild(staleLeft);
+    var staleRight = $('btn-peers-right');
+    if (staleRight && staleRight.parentNode) staleRight.parentNode.removeChild(staleRight);
+  }
+
+  applyTinyEmbedMode();
 
   // Notify capacitor-updater that the bundle loaded successfully (enables auto-revert on crash)
   if (IS_NATIVE_MOBILE && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorUpdater) {
@@ -4798,9 +4941,10 @@ window.addEventListener('DOMContentLoaded', function() {
   var invitedRoomCode = consumeRoomInviteFromQuery();
   if (invitedRoomCode) {
     // On native (Tauri/Capacitor) the deep-link is already being handled; join directly.
-    // On web: try opening the native app first, fall back to browser join after 800 ms.
+    // On tiny embeds (or force-web links), always stay on web and join directly.
+    // On regular web, try opening the native app first, then fall back.
     var isNative = window.__TAURI__ || (window.Capacitor && window.Capacitor.isNativePlatform());
-    if (isNative) {
+    if (isNative || IS_TINY_EMBED || FORCE_WEB_JOIN) {
       startInviteRoomJoin(invitedRoomCode);
     } else {
       _tryNativeAppThenJoin(invitedRoomCode);

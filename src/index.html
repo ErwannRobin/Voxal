@@ -382,35 +382,40 @@
         </div>
       </div>
 
-      <div id="peers-list" class="peers-list"></div>
-
-      <div class="ptt-area">
-        <button id="ptt-btn" class="ptt-btn">
-          <span class="ptt-icon">🎙️</span>
-        </button>
-        <p id="ptt-hint" class="ptt-hint">Hold <kbd id="shortcut-hint-kbd">Space</kbd><button id="btn-edit-shortcut" class="btn-icon shortcut-edit-inline" title="Change shortcut"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></button> anywhere to talk · x2 for hands-free<span id="shortcut-focused-note" class="shortcut-focused-note hidden"> · works when app is focused only</span></p>
-        <div id="shortcut-recording" class="shortcut-recording-bar hidden">
-          <span class="recording-hint">Press keys…</span>
-          <button id="btn-cancel-shortcut" class="btn-icon" title="Cancel">✕</button>
-        </div>
-        <p id="ptt-status" class="ptt-status"></p>
+      <div id="room-peers-panel" class="room-peers-panel">
+        <button id="btn-toggle-peers" class="btn btn-secondary btn-sm room-peers-toggle hidden" aria-expanded="false">Peers</button>
+        <div id="peers-list" class="peers-list"></div>
       </div>
 
-      <!-- Controls: hands-free + camera -->
-      <div class="room-controls">
-        <div class="ctrl-row">
-          <button id="btn-freehand" class="room-action-btn" aria-pressed="false" title="Toggle hands-free mode">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-            <span>Hands-free</span>
+      <div class="room-bottom-bar">
+        <div class="ptt-area">
+          <button id="ptt-btn" class="ptt-btn">
+            <span class="ptt-icon">🎙️</span>
           </button>
-          <button id="btn-share-camera" class="room-action-btn hidden" aria-pressed="false" title="Share your camera">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
-            <span>Camera</span>
-          </button>
-          <button id="btn-share-screen" class="room-action-btn hidden" aria-pressed="false" title="Share your screen">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-            <span>Screen</span>
-          </button>
+          <p id="ptt-hint" class="ptt-hint">Hold <kbd id="shortcut-hint-kbd">Space</kbd><button id="btn-edit-shortcut" class="btn-icon shortcut-edit-inline" title="Change shortcut"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></button> anywhere to talk · x2 for hands-free<span id="shortcut-focused-note" class="shortcut-focused-note hidden"> · works when app is focused only</span></p>
+          <div id="shortcut-recording" class="shortcut-recording-bar hidden">
+            <span class="recording-hint">Press keys…</span>
+            <button id="btn-cancel-shortcut" class="btn-icon" title="Cancel">✕</button>
+          </div>
+          <p id="ptt-status" class="ptt-status"></p>
+        </div>
+
+        <!-- Controls: hands-free + camera -->
+        <div class="room-controls">
+          <div class="ctrl-row">
+            <button id="btn-freehand" class="room-action-btn" aria-pressed="false" title="Toggle hands-free mode">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+              <span>Hands-free</span>
+            </button>
+            <button id="btn-share-camera" class="room-action-btn hidden" aria-pressed="false" title="Share your camera">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+              <span>Camera</span>
+            </button>
+            <button id="btn-share-screen" class="room-action-btn hidden" aria-pressed="false" title="Share your screen">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+              <span>Screen</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>
