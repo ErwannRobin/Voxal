@@ -12,6 +12,8 @@
 - 🔓 **Free-hand mode** — toggle always-on mic when you don't want to hold a key
 - 🔑 **Private rooms** — share a room code; only people with the code can join
 - 👤 **Pseudonyms** — pick a nickname that shows in the participant list
+- 🐾 **Anonymous personas** — unnamed users get a stable random `Color + Animal` display name and color
+- 🚫 **Unique names per room** — host canonicalizes names so duplicates cannot coexist
 - 🟢 **Talking indicator** — speaking participants are highlighted in real time
 - 🔔 **Audio cues** — synthesized sounds for PTT on/off, peer join, and peer leave
 - 📹 **Video & screen sharing** — optional camera and screen share per participant
@@ -20,6 +22,7 @@
 - 🍎 **iOS Dynamic Island PTT** — system-level push-to-talk button via `PushToTalkUI`
 - 🔄 **Auto-updater** — built-in update check on Tauri desktop (signed releases)
 - 🔗 **Optional presence** — connect a Voxal account to see org channels and online status
+- 🧩 **Embeddable iframe mode** — `postMessage` bridge + URL params for compact/tiny UI and embed-specific behavior
 - ☁️ **No mandatory server** — P2P audio via WebRTC; only the PeerJS free signaling tier is required
 
 ---
@@ -46,17 +49,26 @@ Signaling server     :  PeerJS public server (0.peerjs.com) — free tier, ~50 u
 
 | Message | Direction | Payload |
 |---|---|---|
-| `hello` | joiner → host | `{ pseudo }` |
-| `peer-list` | host → joiner | `{ peers:[{id,pseudo}], hostId, hostPseudo, deputyId, successorIds }` |
-| `peer-joined` | host → all | `{ peerId, pseudo }` |
+| `hello` | joiner → host | `{ pseudo, pseudoColor? }` |
+| `pseudo-assigned` | host → peer | `{ pseudo, pseudoColor? }` |
+| `peer-list` | host → joiner | `{ peers:[{id,pseudo,pseudoColor?}], hostId, hostPseudo, hostPseudoColor?, selfPseudo?, selfPseudoColor?, deputyId, successorIds }` |
+| `peer-joined` | host → all | `{ peerId, pseudo, pseudoColor? }` |
 | `peer-left` | host → all | `{ peerId }` |
-| `peer-renamed` | host → all | `{ peerId, pseudo }` |
+| `peer-renamed` | host → all | `{ peerId, pseudo, pseudoColor? }` |
 | `talking` | peer → host → all | `{ peerId, active }` |
 | `heartbeat` | host ↔ peers | `{ at, deputyId, successorIds }` |
 | `redirect` | peer → misdirected joiner | `{ hostId, hostPseudo }` |
-| `room-published` | host → all | `{ roomId }` |
+| `room-published` | host → all | `{ roomId, secret? }` |
 | `video-offer` | peer → host (relayed) | `{ peerId }` |
 | `video-stop` | peer → host (relayed) | `{ peerId }` |
+
+---
+
+## Daily updates log
+
+Detailed day-by-day change logs are tracked in dedicated files under `docs/updates/`.
+
+- [2026-06-15 updates](docs/updates/2026-06-15.md)
 
 ---
 
@@ -272,6 +284,21 @@ All sounds are synthesized via the Web Audio API — no audio files are bundled.
 Voxal can optionally connect to a presence backend to show org channels and online status. This is entirely opt-in — the app works fully without it.
 
 The default hosted instance is `https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session`. You can override the URL in Settings → Advanced to point at your own deployment, or leave the token field empty to use Voxal in pure peer-to-peer mode.
+
+When hosting a channel room, Voxal refreshes the channel session metadata (including peer count) as members join/leave. Channel joins also retry across all advertised connected peers, improving continuity after host migration/disconnect.
+
+---
+
+## Embedding / iframe URL parameters
+
+See `docs/iframe-embed.md` for full bridge usage. Common query parameters:
+
+| Parameter | Values | Effect |
+|---|---|---|
+| `ui=tiny` / `embed=tiny` | — | Enables tiny embed layout |
+| `tiny`, `compact` | `1`, `true` | Enables tiny embed layout |
+| `forceWeb`, `webOnly`, `web` | `1`, `true`, `yes` | Skips native-app redirection and stays on web |
+| `hideHeader`, `noHeader` | `1`, `true`, `yes` | Hides room header when running inside an iframe |
 
 ---
 

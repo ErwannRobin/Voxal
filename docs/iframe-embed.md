@@ -26,7 +26,7 @@ All Voxal-originated events carry `source: 'voxal'` so they are trivial to filte
 ```html
 <iframe
   id="voxal-frame"
-  src="https://voxal-ptt.vercel.app"
+  src="https://web.voxal.app?ui=tiny&hideHeader=true&forceWeb=true"
   allow="camera; microphone"
   style="width: 400px; height: 600px; border: none; border-radius: 12px;"
 ></iframe>
@@ -34,13 +34,23 @@ All Voxal-originated events carry `source: 'voxal'` so they are trivial to filte
 
 > **`allow="camera; microphone"` is required for video.** Cross-origin iframes do not inherit the parent page's camera or microphone permission — this attribute explicitly delegates both.
 
+### Useful embed URL parameters
+
+| Parameter | Values | Effect |
+|---|---|---|
+| `ui=tiny` / `embed=tiny` | — | Compact tiny embed layout |
+| `tiny`, `compact` | `1`, `true` | Compact tiny embed layout |
+| `hideHeader`, `noHeader` | `1`, `true`, `yes` | Hides room header (iframe only) |
+| `forceWeb`, `webOnly`, `web` | `1`, `true`, `yes` | Skip native-app redirection and stay on web |
+| `parentOrigin` | absolute `https://...` origin | Restricts outbound `postMessage` target origin |
+
 ---
 
 ## 2 — Send commands to Voxal
 
 ```js
 const frame = document.getElementById('voxal-frame').contentWindow;
-const VOXAL_ORIGIN = 'https://voxal-ptt.vercel.app'; // tighten to the actual origin
+const VOXAL_ORIGIN = 'https://web.voxal.app'; // tighten to the actual origin
 
 // Join an existing room (pass the room code / host peer ID)
 frame.postMessage({ type: 'join', roomCode: 'abc123' }, VOXAL_ORIGIN);
@@ -92,7 +102,7 @@ window.addEventListener('message', (e) => {
     case 'peers':
       // Fired on join and whenever someone joins / leaves / starts talking
       renderMemberList(e.data.peers);
-      // e.data.peers: Array<{ id: string, pseudo: string, self: boolean, talking: boolean }>
+      // e.data.peers: Array<{ id: string, pseudo: string, pseudoColor?: string, self: boolean, talking: boolean }>
       break;
 
     case 'error':
@@ -103,7 +113,7 @@ window.addEventListener('message', (e) => {
       // Fired once on load — safe to send the auth command now
       frame.contentWindow.postMessage(
         { type: 'auth', token: mySessionToken, orgId: myOrgId },
-        'https://voxal-ptt.vercel.app'
+        'https://web.voxal.app'
       );
       break;
   }
@@ -118,7 +128,7 @@ window.addEventListener('message', (e) => {
 | `joined`  | `roomCode: string`, `peerId: string`                                   | WebRTC connection established                 |
 | `left`    | —                                                                      | Room left (any reason)                        |
 | `talking` | `active: boolean`                                                      | Local user starts / stops transmitting        |
-| `peers`   | `peers: Array<{ id, pseudo, self, talking }>`                          | On join and on any peer-list change           |
+| `peers`   | `peers: Array<{ id, pseudo, pseudoColor?, self, talking }>`             | On join and on any peer-list change           |
 | `error`   | `message: string`                                                      | Microphone denied, PeerJS error, etc.         |
 
 ---
@@ -141,14 +151,14 @@ window.addEventListener('message', (e) => {
 
   <iframe
     id="voxal-frame"
-    src="https://voxal-ptt.vercel.app"
+    src="https://web.voxal.app"
     allow="camera; microphone"
     style="width:400px;height:600px;border:none;"
   ></iframe>
 
   <script>
     const ROOM_CODE   = 'your-room-code-here';
-    const VOXAL_ORIGIN = 'https://voxal-ptt.vercel.app';
+    const VOXAL_ORIGIN = 'https://web.voxal.app';
     const frame       = document.getElementById('voxal-frame');
     const status      = document.getElementById('status');
     const memberList  = document.getElementById('member-list');
