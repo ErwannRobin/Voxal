@@ -268,6 +268,12 @@ body {
   background: var(--bg-raised);
 }
 
+.invite-peer-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: -2px;
+}
+
 .invite-loading-status {
   display: inline-flex;
   align-items: center;
@@ -925,12 +931,18 @@ body.embed-tiny #screen-room .peer-item-compact .peer-mic-icon {
 
 body.embed-tiny #screen-room .peer-item-compact .peer-compact-label {
   font-size: 12px;
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
   line-height: 1.25;
   color: var(--text);
-  max-width: 64px;
+  max-width: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+body.embed-tiny #screen-room .tiny-peers-others.crowded .peer-item-compact .peer-compact-label {
+  max-width: 64px;
 }
 
 body.embed-tiny #screen-room .peer-item-compact.peer-self {
@@ -953,6 +965,35 @@ body.embed-tiny #screen-room .peer-item-compact.peer-self .peer-mic-icon {
   color: var(--accent-dim);
   font-size: 15px;
   line-height: 1;
+}
+
+body.embed-tiny #screen-room .peer-item-compact.peer-self .peer-mic-wrapper {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+}
+
+body.embed-tiny #screen-room .peer-item-compact.peer-self .peer-mic-spinner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(122, 122, 157, 0.3);
+  border-top-color: var(--accent-dim);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: none;
+}
+
+body.embed-tiny #screen-room .peer-item-compact.peer-self.acquiring-mic .peer-mic-icon {
+  display: none;
+}
+
+body.embed-tiny #screen-room .peer-item-compact.peer-self.acquiring-mic .peer-mic-spinner {
+  display: block;
 }
 
 body.embed-tiny #screen-room .peer-item-compact.peer-self .peer-compact-label {
@@ -983,19 +1024,26 @@ body.embed-tiny #screen-room .peer-item-compact.talking .peer-compact-label {
 }
 
 body.embed-tiny #screen-room .peer-item-compact .peer-name-inline {
-  /* matches the self chip label height */
+  /* matches the self chip label: 2 lines, same font weight & smoothing.
+     width spans the label + gap + pencil button so the chip keeps the
+     same total width as display mode */
+  width: 62px;
   height: 30px;
-  width: 38px;
   font-size: 12px;
   font-family: inherit;
-  font-weight: inherit;
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
   line-height: 1.25;
+  white-space: normal;
+  word-break: break-word;
+  text-align: left;
   color: inherit;
   background: transparent;
   border: none;
   outline: none;
   box-shadow: none;
   padding: 0;
+  margin: 0;
   resize: none;
   overflow: hidden;
 }
@@ -1022,9 +1070,19 @@ body.embed-tiny #screen-invite-loading .invite-loading-panel {
 
 body.embed-tiny #screen-invite-loading .brand-icon,
 body.embed-tiny #screen-invite-loading h2,
-body.embed-tiny #screen-invite-loading #invite-room-code,
-body.embed-tiny #screen-invite-loading #btn-cancel-invite-join {
+body.embed-tiny #screen-invite-loading #invite-room-code {
   display: none;
+}
+
+body.embed-tiny #screen-invite-loading .invite-peer-count {
+  display: block;
+}
+
+body.embed-tiny #screen-invite-loading #btn-cancel-invite-join {
+  display: inline-flex;
+  align-self: stretch;
+  justify-content: center;
+  margin-top: 4px;
 }
 
 body.embed-tiny #screen-room .ptt-area {

@@ -630,6 +630,10 @@ let myPseudo          = loadInitialPseudo();
 let editingSelfPseudo = false;
 let _cancelJoin       = null; // set during joinRoom()/createRoom(), called by Cancel button
 let _prevScreen       = null; // screen shown before invite-loading (null = page entry point)
+let _invitePendingRoomId = '';
+let _invitePendingPeerCount = null;
+let _micAcquirePromise = null;
+let _pendingTalkingStart = false;
 
 // --- Video prototype (dev mode, 1:1) -----------------------------------------
 localStorage.setItem(VIDEO_MODE_KEY, 'true');
@@ -847,6 +851,23 @@ async function lookupRoom(code) {
     return (data && data.room_id) || null;
   } catch (e) {
     devLog('✗ Lobby lookup failed: ' + e.message, 'error');
+    return null;
+  }
+}
+
+async function lookupRoomInfo(code) {
+  if (!code || UUID_RE.test(code)) return null;
+  try {
+    var res = await tauriFetch(ANONYMOUS_ROOMS_BASE + '/' + encodeURIComponent(code));
+    if (!res.ok) return null;
+    var data = await res.json();
+    var rawCount = data && (data.peer_count || data.peerCount || (data.room && data.room.peer_count));
+    var peerCount = parseInt(rawCount, 10);
+    return {
+      roomId: (data && data.room_id) || null,
+      peerCount: Number.isFinite(peerCount) ? peerCount : null
+    };
+  } catch (_) {
     return null;
   }
 }
@@ -1920,13 +1941,61 @@ function setInviteLoadingSpinnerVisible(visible) {
 function setInviteLoadingCtaMode(mode) {
   var btn = $('btn-cancel-invite-join');
   if (!btn) return;
+  btn.classList.toggle('hidden', false);
   if (mode === 'join-web') {
     btn.dataset.action = 'join-web';
     btn.textContent = 'Join on web';
     return;
   }
+  if (mode === 'connect') {
+    btn.dataset.action = 'connect';
+    btn.textContent = 'Connect';
+    return;
+  }
   btn.dataset.action = mode === 'cancel' ? 'cancel' : 'back';
   btn.textContent = mode === 'cancel' ? 'Cancel' : 'Back';
+}
+
+function setTinyInvitePeerCount(peerCount) {
+  _invitePendingPeerCount = Number.isFinite(peerCount) ? peerCount : null;
+  var peerEl = $('invite-peer-count');
+  if (!peerEl) return;
+  if (_invitePendingPeerCount === null) {
+    peerEl.textContent = '';
+    peerEl.classList.add('hidden');
+    return;
+  }
+  peerEl.textContent = _invitePendingPeerCount + ' peer' + (_invitePendingPeerCount !== 1 ? 's' : '') + ' connected';
+  peerEl.classList.remove('hidden');
+}
+
+function showTinyInviteConnect(roomId, peerCount) {
+  var normalized = normalizeRoomCode(roomId);
+  if (!normalized) return;
+  _invitePendingRoomId = normalized;
+  var roomCodeEl = $('invite-room-code');
+  if (roomCodeEl) roomCodeEl.textContent = '';
+  var statusEl = $('invite-join-status');
+  if (statusEl) statusEl.textContent = 'Tap Connect to join this room.';
+  setInviteLoadingSpinnerVisible(false);
+  setTinyInvitePeerCount(Number.isFinite(peerCount) ? peerCount : null);
+  setInviteLoadingCtaMode('connect');
+  showScreen('invite-loading');
+  lookupRoomInfo(normalized).then(function(info) {
+    if (!_invitePendingRoomId || _invitePendingRoomId !== normalized || !info) return;
+    if (info.roomId && info.roomId !== normalized && !Number.isFinite(peerCount)) {
+      _invitePendingRoomId = normalizeRoomCode(info.roomId) || normalized;
+    }
+    if (Number.isFinite(info.peerCount)) setTinyInvitePeerCount(info.peerCount);
+  }).catch(function() {});
+}
+
+function syncTinyPeerLabelCrowding(othersWrap) {
+  if (!othersWrap) return;
+  var items = othersWrap.querySelectorAll('.peer-item-compact');
+  var crowded = items.length > 4;
+  if (!crowded && othersWrap.scrollWidth > othersWrap.clientWidth) crowded = true;
+  othersWrap.classList.toggle('crowded', crowded);
 }
 
 function applyNewShortcut(newShortcut) {
@@ -2287,7 +2356,20 @@ function updatePeerList() {
         micIcon.className = 'peer-mic-icon';
         micIcon.setAttribute('aria-hidden', 'true');
         micIcon.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>';
-        div.appendChild(micIcon);
+        
+        // Wrap mic icon and add loading spinner for tiny mode
+        var micWrapper = document.createElement('div');
+        micWrapper.className = 'peer-mic-wrapper';
+        micWrapper.appendChild(micIcon);
+        
+        if (IS_TINY_EMBED) {
+          var spinner = document.createElement('div');
+          spinner.className = 'peer-mic-spinner';
+          spinner.setAttribute('aria-hidden', 'true');
+          micWrapper.appendChild(spinner);
+        }
+        
+        div.appendChild(micWrapper);
         div.addEventListener('pointerdown', function(e) {
           if (e.button !== undefined && e.button !== 0) return;
           if (editingSelfPseudo) return;
@@ -2315,8 +2397,8 @@ function updatePeerList() {
       }
 
       if (self && editingSelfPseudo) {
-        var input = document.createElement('input');
-        input.type = 'text';
+        var input = document.createElement('textarea');
+        input.rows = 2;
         input.maxLength = 20;
         input.className = 'peer-name-inline';
         input.placeholder = 'Your name…';
@@ -2328,7 +2410,7 @@ function updatePeerList() {
             e.preventDefault();
             e.stopPropagation();
             editingSelfPseudo = false;
-            setMyPseudo(input.value);
+            setMyPseudo(input.value.replace(/\s+/g, ' ').trim());
           } else if (e.key === 'Escape') {
             e.preventDefault();
             e.stopPropagation();
@@ -2338,7 +2420,7 @@ function updatePeerList() {
         });
         input.addEventListener('blur', function() {
           editingSelfPseudo = false;
-          setMyPseudo(input.value);
+          setMyPseudo(input.value.replace(/\s+/g, ' ').trim());
         });
         div.appendChild(input);
         setTimeout(function() { input.focus(); input.select(); }, 0);
@@ -2377,6 +2459,9 @@ function updatePeerList() {
       if (peerChip) othersWrap.appendChild(peerChip);
     });
     list.appendChild(othersWrap);
+    if (IS_TINY_EMBED) {
+      requestAnimationFrame(function() { syncTinyPeerLabelCrowding(othersWrap); });
+    }
 
     if (window._updateTinyPeersToggle) window._updateTinyPeersToggle();
     if (_isIframe && inRoom) {
@@ -3368,9 +3453,103 @@ function broadcastTalkingState(active) {
   }
 }
 
+function connectOutgoingAudioToPeers() {
+  if (!inRoom || !peer || !stream) return;
+  connections.forEach(function(conn, peerId) {
+    if (!peerId || peerId === peer.id) return;
+    if (conn && conn.audioMediaOut && !conn.audioMediaOut.closed) return;
+    var call = peer.call(peerId, stream);
+    if (!call) return;
+    call.on('stream', function(remote) {
+      attachAudio(peerId, remote);
+    });
+    call.on('close', function() {
+      var current = connections.get(peerId);
+      if (current && current.audioMediaOut === call) {
+        current.audioMediaOut = null;
+      }
+    });
+    call.on('error', function(err) { console.warn('[audio-call]', err); });
+    var current = connections.get(peerId) || conn;
+    connections.set(peerId, Object.assign({}, current, { audioMediaOut: call }));
+  });
+}
+
 function setTalking(active) {
-  if (!inRoom || !audioTrack || freeHandMode) return;
-  if (active === isTalking) return;
+  if (!inRoom || freeHandMode) return;
+  _pendingTalkingStart = !!active;
+  if (!active) {
+    if (!audioTrack) {
+      isTalking = false;
+      $('ptt-btn').classList.remove('active');
+      $('ptt-status').textContent = '';
+      updateSelfTalking(false);
+      iframeEmit({ type: 'talking', active: false });
+      releaseAudioFocus();
+      nativePTTStop();
+      return;
+    }
+    applyTalkingState(false);
+    return;
+  }
+  if (audioTrack) {
+    applyTalkingState(true);
+    return;
+  }
+  if (_micAcquirePromise) return;
+  $('ptt-status').textContent = '\u25cf Requesting microphone…';
+  
+  // Show spinner in tiny mode while acquiring mic
+  if (IS_TINY_EMBED) {
+    var selfChip = document.getElementById('peer-item-self');
+    if (selfChip) selfChip.classList.add('acquiring-mic');
+  }
+  
+  _micAcquirePromise = (async function() {
+    var micStream = await getMicStream();
+    if (!inRoom) {
+      micStream.getTracks().forEach(function(t) { t.stop(); });
+      return false;
+    }
+    stream = micStream;
+    audioTrack = stream.getAudioTracks()[0];
+    if (audioTrack) audioTrack.enabled = false;
+    connectOutgoingAudioToPeers();
+    return true;
+  })().then(function(ok) {
+    _micAcquirePromise = null;
+    
+    // Hide spinner in tiny mode
+    if (IS_TINY_EMBED) {
+      var selfChip = document.getElementById('peer-item-self');
+      if (selfChip) selfChip.classList.remove('acquiring-mic');
+    }
+    
+    if (!ok || !_pendingTalkingStart || !inRoom || freeHandMode) return false;
+    applyTalkingState(true);
+    return true;
+  }).catch(function(err) {
+    _micAcquirePromise = null;
+    _pendingTalkingStart = false;
+    $('ptt-status').textContent = '';
+    
+    // Hide spinner in tiny mode on error
+    if (IS_TINY_EMBED) {
+      var selfChip = document.getElementById('peer-item-self');
+      if (selfChip) selfChip.classList.remove('acquiring-mic');
+    }
+    
+    if (isMicDeniedError(err)) {
+      showMicDeniedError(function() { setTalking(true); });
+    } else {
+      showError(err.message);
+    }
+    return false;
+  });
+}
+
+function applyTalkingState(active) {
+  if (!audioTrack || active === isTalking) return;
   isTalking = active;
   playBlip(active);
   if (active) hapticLight();
@@ -3428,6 +3607,7 @@ function removePeer(peerId) {
   if (!conn) return;
   if (conn.data) conn.data.close();
   if (conn.media) conn.media.close();
+  if (conn.audioMediaOut) conn.audioMediaOut.close();
   connections.delete(peerId);
   detachAudio(peerId);
   updatePeerList();
@@ -4100,6 +4280,8 @@ function resetVideoState() {
 // --- End video prototype helpers ---------------------------------------------
 
 function leaveRoom() {
+  var returnTinyRoomId = IS_TINY_EMBED ? (_invitePendingRoomId || roomDisplayCode() || roomCode || '') : '';
+  var returnTinyPeerCount = IS_TINY_EMBED ? currentRoomPeerCount() : 0;
   saveRejoinSnapshot();
   resetVideoState();
   // If this host is the last participant in a published lobby, delete it from the API
@@ -4109,6 +4291,7 @@ function leaveRoom() {
     clearPublishState();
   }
   inRoom = false; freeHandMode = false; isTalking = false;
+  _pendingTalkingStart = false;
   connectingToHostId = null;
   ++_hostConnGeneration; // invalidate any pending retry timers
   _lastHostHeartbeatAt = 0;
@@ -4138,6 +4321,10 @@ function leaveRoom() {
   isHost = false; roomCode = '';
   document.querySelectorAll('audio[id^="audio-"]').forEach(function(el) { el.remove(); });
   iframeEmit({ type: 'left' });
+  if (IS_TINY_EMBED && returnTinyRoomId) {
+    showTinyInviteConnect(returnTinyRoomId, returnTinyPeerCount);
+    return;
+  }
   showScreen('home');
 }
 
@@ -4361,6 +4548,21 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
 
   var gen = ++_hostConnGeneration;
   var hostData = peer.connect(targetHostId, { reliable: true });
+  if (!hostData) {
+    // peer.connect() returns undefined when the peer is disconnected from the
+    // signaling broker. Try to reconnect to the broker, then retry / re-elect.
+    console.warn('[migration] peer.connect returned undefined (broker disconnected). Reconnecting…');
+    try { if (peer && !peer.destroyed && peer.disconnected) peer.reconnect(); } catch (_) {}
+    if (!inRoom) return;
+    if (retriesLeft > 0) {
+      setTimeout(function() { _attemptHostConnection(targetHostId, retriesLeft - 1); }, HOST_RETRY_DELAY);
+    } else {
+      _migrationExcluded.add(targetHostId);
+      _migrationCandidateId = null;
+      proceedWithHostElection();
+    }
+    return;
+  }
   var receivedPeerList = false;
   var opened = false;
   var handled = false;
@@ -4470,6 +4672,13 @@ function connectToHost(hostId, opts) {
 
   var gen = ++_hostConnGeneration;
   var hostData = peer.connect(hostId, { reliable: true });
+  if (!hostData) {
+    // peer.connect() returns undefined when disconnected from the broker.
+    console.warn('[initial] peer.connect returned undefined (broker disconnected). Reconnecting…');
+    try { if (peer && !peer.destroyed && peer.disconnected) peer.reconnect(); } catch (_) {}
+    if (onInitialJoinReject) onInitialJoinReject(new Error('Lost connection to the signaling server. Please try again.'));
+    return;
+  }
   var receivedPeerList = false;
   var redirected = false;
   var opened = false;
@@ -4598,7 +4807,7 @@ function handleIncomingCall(call) {
     handleIncomingScreenCall(call);
     return;
   }
-  call.answer(stream);
+  call.answer(stream || new MediaStream());
   call.on('stream', function(remote) {
     attachAudio(call.peer, remote);
     const prev = connections.get(call.peer) || { data: null, pseudo: shortId(call.peer), pseudoColor: null, talking: false };
@@ -4881,10 +5090,6 @@ async function createRoom(onJoined) {
     if (peer && !peer.destroyed) peer.destroy();
   };
 
-  stream = await getMicStream();
-  if (cancelled) throw new Error('Connection cancelled.');
-  audioTrack = stream.getAudioTracks()[0];
-  audioTrack.enabled = false;
   knownPeerIds.clear();
   _lastAuthoritativePeerIds = null;
   _authoritativeSuccessorIds = [];
@@ -4927,6 +5132,25 @@ async function createRoom(onJoined) {
       saveRejoinSnapshot();
       iframeEmit({ type: 'joined', roomCode: id, peerId: id });
       if (onJoined) onJoined(id);
+
+      // Auto-acquire mic in non-tiny mode (direct permission request on join).
+      // In tiny mode, delay mic permission until first speak.
+      if (!IS_TINY_EMBED && !stream) {
+        $('ptt-status').textContent = '\u25cf Requesting microphone…';
+        getMicStream().then(function(micStream) {
+          if (inRoom && !stream) {
+            stream = micStream;
+            audioTrack = stream.getAudioTracks()[0];
+            if (audioTrack) audioTrack.enabled = false;
+            $('ptt-status').textContent = '';
+            connectOutgoingAudioToPeers();
+          }
+        }).catch(function(err) {
+          $('ptt-status').textContent = '';
+          console.warn('[auto-mic] Failed to acquire mic: ' + err.message);
+        });
+      }
+
       settle(resolve, id);
     });
     peer.on('error', function(err) {
@@ -4989,16 +5213,10 @@ function handleHostMessage(msg) {
       updateVideoModeUI();
     }
 
-    authoritativePeers.forEach(function(p) {
-      const peerId = p.id;
-      const prev = connections.get(peerId) || { data: null, talking: false };
-      if (prev.media) return;
-
-      const call = peer.call(peerId, stream);
-      call.on('stream', function(remote) { attachAudio(peerId, remote); });
-      call.on('close',  function()       { clearPeerMedia(peerId); });
-      connections.set(peerId, Object.assign({}, connections.get(peerId), { media: call }));
-    });
+    // Establish outgoing audio to all peers. When joined muted (no mic yet)
+    // this is a no-op until the user first speaks; connectOutgoingAudioToPeers
+    // guards against a null stream and tracks calls via audioMediaOut.
+    connectOutgoingAudioToPeers();
     updatePeerList();
     saveRejoinSnapshot();
 
@@ -5121,19 +5339,6 @@ async function joinRoom(code, onJoined) {
     // Direct peer-id join: keep UUID as display/share code unless a room id is later published.
     activeChannelRoomId = '';
   }
-  if (!stream) {
-    devLog('→ Acquiring mic…');
-    try {
-      stream = await getMicStream();
-    } catch (e) {
-      devLog('✗ Mic error: ' + e.message, 'error');
-      throw e;
-    }
-    if (cancelled) throw new Error('Connection cancelled.');
-    audioTrack = stream.getAudioTracks()[0];
-    audioTrack.enabled = false;
-    devLog('✓ Mic OK');
-  }
   resetKnownPeers([code]);
   _lastAuthoritativePeerIds = null;
   _authoritativeSuccessorIds = [];
@@ -5251,6 +5456,24 @@ function finishJoin(targetHostId, hostData) {
   updateVideoModeUI();
   startStatsPolling();
   iframeEmit({ type: 'joined', roomCode: targetHostId, peerId: peer.id });
+
+  // Auto-acquire mic in non-tiny mode (direct permission request on join).
+  // In tiny mode, delay mic permission until first speak.
+  if (!IS_TINY_EMBED && !stream) {
+    $('ptt-status').textContent = '\u25cf Requesting microphone…';
+    getMicStream().then(function(micStream) {
+      if (inRoom && !stream) {
+        stream = micStream;
+        audioTrack = stream.getAudioTracks()[0];
+        if (audioTrack) audioTrack.enabled = false;
+        $('ptt-status').textContent = '';
+        connectOutgoingAudioToPeers();
+      }
+    }).catch(function(err) {
+      $('ptt-status').textContent = '';
+      console.warn('[auto-mic] Failed to acquire mic: ' + err.message);
+    });
+  }
 }
 
 // --- Presence UI ------------------------------------------------------------
@@ -5640,6 +5863,10 @@ window.addEventListener('DOMContentLoaded', function() {
   var cancelInviteJoinBtn = $('btn-cancel-invite-join');
   if (cancelInviteJoinBtn) {
     cancelInviteJoinBtn.addEventListener('click', function() {
+      if (cancelInviteJoinBtn.dataset.action === 'connect' && _invitePendingRoomId) {
+        startInviteRoomJoin(_invitePendingRoomId);
+        return;
+      }
       if (cancelInviteJoinBtn.dataset.action === 'join-web' && _inviteWebFallbackRoomId) {
         startInviteRoomJoin(_inviteWebFallbackRoomId);
         return;
@@ -5649,6 +5876,10 @@ window.addEventListener('DOMContentLoaded', function() {
         _cancelJoin = null;
       }
       _inviteWebFallbackRoomId = '';
+      if (IS_TINY_EMBED && _invitePendingRoomId) {
+        showTinyInviteConnect(_invitePendingRoomId, _invitePendingPeerCount);
+        return;
+      }
       setInviteLoadingCtaMode('back');
       showScreen('home');
     });
@@ -5657,10 +5888,12 @@ window.addEventListener('DOMContentLoaded', function() {
   var invitedRoomCode = consumeRoomInviteFromQuery();
   if (invitedRoomCode) {
     // On native (Tauri/Capacitor) the deep-link is already being handled; join directly.
-    // On tiny embeds (or force-web links), always stay on web and join directly.
+    // On tiny embeds, wait for an explicit connect tap instead of auto-joining.
     // On regular web, try opening the native app first, then fall back.
     var isNative = window.__TAURI__ || (window.Capacitor && window.Capacitor.isNativePlatform());
-    if (isNative || IS_TINY_EMBED || FORCE_WEB_JOIN) {
+    if (IS_TINY_EMBED) {
+      showTinyInviteConnect(invitedRoomCode);
+    } else if (isNative || FORCE_WEB_JOIN) {
       startInviteRoomJoin(invitedRoomCode);
     } else {
       _tryNativeAppThenJoin(invitedRoomCode);
@@ -5979,8 +6212,17 @@ window.addEventListener('DOMContentLoaded', function() {
     renderPresenceChannels([]);
     updateDisconnectVisibility(); updateConnectVisibility();
     // Stay in settings — navigate home in background
-    if (inRoom) leaveRoom();
-    showScreen('home');
+    var tinyRoomId = _invitePendingRoomId;
+    var tinyPeerCount = _invitePendingPeerCount;
+    if (inRoom) {
+      leaveRoom();
+      return;
+    }
+    if (IS_TINY_EMBED && tinyRoomId) {
+      showTinyInviteConnect(tinyRoomId, tinyPeerCount);
+      return;
+    }
+    if (!IS_TINY_EMBED) showScreen('home');
   }
 
   async function loadOrgs() {
