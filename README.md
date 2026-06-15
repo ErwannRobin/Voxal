@@ -6,7 +6,7 @@
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20iOS%20%7C%20Android%20%7C%20Web-4c8bf5)
 
 Instant push-to-talk voice rooms.
-No accounts. No installation. No server required.
+<br>No accounts. No installation. No server required.
 
 <details>
 <summary>Screenshots</summary>
@@ -51,6 +51,13 @@ No accounts. No installation. No server required.
  - **Screen sharing** - Optional per participant
  - **Dynamic Island PTT (iOS)** - Uses PushToTalkUI integration
 
+## What Makes Voxal Different?
+
+Voxal combines push-to-talk simplicity with peer-to-peer resilience across desktop, mobile and web.
+
+Most peer-to-peer voice applications stop working when the host disconnects.
+<br>Voxal automatically elects a successor and keeps the room alive without reconnecting participants ([deep dive](docs/host-migration.md)).
+
 ## Use Cases
 
 - Gaming communities
@@ -74,8 +81,6 @@ Room flow (high level):
 3. Peers open direct audio links to each other.
 4. If host disconnects, successor/deputy migration elects a new host without dropping active media links.
 
-For protocol messages, room lifecycle, stack details, and project layout, see [docs/architecture.md](docs/architecture.md).
-
 ## Documentation
 
 - [Architecture & protocol](docs/architecture.md)
@@ -88,7 +93,7 @@ For protocol messages, room lifecycle, stack details, and project layout, see [d
 
 ## Contributing
 
-Contributions are welcome. For local development:
+[Contributions](https://github.com/ErwannRobin/Voxal/blob/main/CONTRIBUTING.md) are welcome. For local development:
 
 ```bash
 git clone https://github.com/ErwannRobin/Voxal.git
@@ -105,8 +110,6 @@ If you modify files under `src/`, sync assets for mobile builds with `make cap-s
 | `make dev` | Starts the Tauri desktop app with hot reload |
 | `make run-web` | Serves the web app at `http://localhost:8080` |
 
-> macOS note: `voxal://` URL scheme registration requires a real app bundle once (`make build-debug`), then you can go back to `make dev`.
-
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).
