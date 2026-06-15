@@ -628,7 +628,8 @@ let freeHandMode      = false;
 let recordingShortcut = false;
 let myPseudo          = loadInitialPseudo();
 let editingSelfPseudo = false;
-let _cancelJoin       = null; // set during joinRoom(), called by Cancel button
+let _cancelJoin       = null; // set during joinRoom()/createRoom(), called by Cancel button
+let _prevScreen       = null; // screen shown before invite-loading (null = page entry point)
 
 // --- Video prototype (dev mode, 1:1) -----------------------------------------
 localStorage.setItem(VIDEO_MODE_KEY, 'true');
@@ -1475,6 +1476,8 @@ function nativePTTStop() {
 const $ = id => document.getElementById(id);
 
 function showScreen(name) {
+  var prev = document.querySelector('.screen.active');
+  if (prev && prev.id) _prevScreen = prev.id.replace(/^screen-/, '');
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById('screen-' + name).classList.add('active');
   if (name === 'home') { startPresencePolling(); if (window._updateRejoinBar) window._updateRejoinBar(); }
@@ -1819,7 +1822,10 @@ function startInviteRoomJoin(rawRoomCode) {
   if (!roomId) return;
   showInviteLoading(roomId, 'Connecting…');
   if (_audioCtx.state === 'suspended') _audioCtx.resume();
-  joinRoom(roomId).catch(function(err) { showError(err.message); });
+  joinRoom(roomId).catch(function(err) {
+    if (err && err.message === 'Connection cancelled.') return;
+    showError(err.message);
+  });
 }
 
 // On web: try to open the native Voxal app first (voxal:// scheme).
@@ -1900,7 +1906,7 @@ function showInviteLoading(roomLabel, statusText) {
   if (statusEl) statusEl.textContent = statusText || 'Connecting…';
   setInviteLoadingSpinnerVisible(true);
   _inviteWebFallbackRoomId = '';
-  setInviteLoadingCtaMode('back');
+  setInviteLoadingCtaMode(_prevScreen ? 'back' : 'cancel');
   showScreen('invite-loading');
 }
 
@@ -1919,8 +1925,8 @@ function setInviteLoadingCtaMode(mode) {
     btn.textContent = 'Join on web';
     return;
   }
-  btn.dataset.action = 'back';
-  btn.textContent = 'Back';
+  btn.dataset.action = mode === 'cancel' ? 'cancel' : 'back';
+  btn.textContent = mode === 'cancel' ? 'Cancel' : 'Back';
 }
 
 function applyNewShortcut(newShortcut) {
@@ -4476,6 +4482,7 @@ function connectToHost(hostId, opts) {
     // Handle peer-list (join success)
     if (msg && msg.type === 'peer-list') {
       receivedPeerList = true;
+      if (!peer || peer.destroyed) return; // cancelled mid-join
       devLog('✓ Joined! ' + (msg.peers ? msg.peers.length : 0) + ' peer(s) in room');
       finishJoin(hostId, hostData);
       handleHostMessage(msg);
@@ -4806,19 +4813,40 @@ function applyHostRoutingHints(msg) {
 }
 
 async function createRoom(onJoined) {
+  var cancelled = false;
+  _cancelJoin = function() {
+    cancelled = true;
+    _cancelJoin = null;
+    if (peer && !peer.destroyed) peer.destroy();
+  };
+
   stream = await getMicStream();
+  if (cancelled) throw new Error('Connection cancelled.');
   audioTrack = stream.getAudioTracks()[0];
   audioTrack.enabled = false;
   knownPeerIds.clear();
   _lastAuthoritativePeerIds = null;
   _authoritativeSuccessorIds = [];
   const iceServers = await fetchIceServers();
+  if (cancelled) throw new Error('Connection cancelled.');
   peer = new Peer({ config: { iceServers } });
   peer.on('connection', function(dataConn) { handleJoinerDataConnection(dataConn); });
   peer.on('call',       function(call)     { handleIncomingCall(call); });
   let settled = false;
+  function settle(fn, val) {
+    if (settled) return;
+    settled = true;
+    _cancelJoin = null;
+    fn(val);
+  }
   await new Promise(function(resolve, reject) {
+    _cancelJoin = function() {
+      devLog('→ Create cancelled');
+      peer.destroy();
+      settle(reject, new Error('Connection cancelled.'));
+    };
     peer.on('open', function(id) {
+      if (cancelled) { peer.destroy(); settle(reject, new Error('Connection cancelled.')); return; }
       isHost = true; roomCode = id; inRoom = true;
       roomState = ROOM_STATE_CONNECTED;
       stopHostHeartbeatMonitor();
@@ -4838,15 +4866,12 @@ async function createRoom(onJoined) {
       saveRejoinSnapshot();
       iframeEmit({ type: 'joined', roomCode: id, peerId: id });
       if (onJoined) onJoined(id);
-      if (!settled) {
-        settled = true;
-        resolve(id);
-      }
+      settle(resolve, id);
     });
     peer.on('error', function(err) {
       if (!settled) {
-        settled = true;
-        handlePeerRuntimeError(err, false, reject);
+        settle(reject, err);
+        handlePeerRuntimeError(err, false, function() {});
         return;
       }
       handlePeerRuntimeError(err, true, reject);
@@ -5002,16 +5027,27 @@ function handleHostMessage(msg) {
 async function joinRoom(code, onJoined) {
   code = normalizeRoomCode(code);
   if (!code) return;
+
+  // Set cancellation hook immediately so the button works during all awaits below.
+  var cancelled = false;
+  _cancelJoin = function() {
+    cancelled = true;
+    _cancelJoin = null;
+    if (peer && !peer.destroyed) peer.destroy();
+  };
+
   var requestedCode = code;
   devLog('→ Joining room ' + code + '…');
   // Resolve public lobby identifier to PeerJS peer ID if applicable
   var resolved = await lookupRoom(code);
+  if (cancelled) throw new Error('Connection cancelled.');
   if (resolved) {
     devLog('✓ Resolved lobby "' + code + '" → ' + resolved);
     activeChannelRoomId = requestedCode;
     code = resolved;
   } else if (!UUID_RE.test(requestedCode)) {
     var channelResolved = await resolvePresenceChannelHost(requestedCode);
+    if (cancelled) throw new Error('Connection cancelled.');
     if (channelResolved && channelResolved.hostId) {
       devLog('✓ Resolved presence channel "' + requestedCode + '" → ' + channelResolved.hostId);
       activeChannel = channelResolved.channelName || requestedCode;
@@ -5032,6 +5068,7 @@ async function joinRoom(code, onJoined) {
       devLog('✗ Mic error: ' + e.message, 'error');
       throw e;
     }
+    if (cancelled) throw new Error('Connection cancelled.');
     audioTrack = stream.getAudioTracks()[0];
     audioTrack.enabled = false;
     devLog('✓ Mic OK');
@@ -5040,6 +5077,7 @@ async function joinRoom(code, onJoined) {
   _lastAuthoritativePeerIds = null;
   _authoritativeSuccessorIds = [];
   const iceServers = await fetchIceServers();
+  if (cancelled) throw new Error('Connection cancelled.');
   devLog('✓ ICE: ' + iceServers.length + ' server(s)');
   devLog('→ Connecting to PeerJS broker…');
   peer = new Peer({ config: { iceServers } });
@@ -5069,14 +5107,16 @@ async function joinRoom(code, onJoined) {
       fn(val);
     }
 
-    // Expose a cancel handle so the UI can abort mid-attempt
+    // Override cancel hook now that we have a peer to destroy
     _cancelJoin = function() {
       devLog('→ Cancelled');
+      cancelled = true;
       peer.destroy();
       settle(reject, new Error('Connection cancelled.'));
     };
 
     peer.on('open', function() {
+      if (cancelled) { settle(reject, new Error('Connection cancelled.')); return; }
       devLog('✓ PeerJS open (' + peer.id + ') → connecting to host');
       if (onJoined) onJoined(peer.id); // register presence as soon as we have our peer_id
       roomState = ROOM_STATE_CONNECTING;
@@ -5183,7 +5223,10 @@ function renderPresenceChannels() {
       div.classList.add('loading');
       if (_audioCtx.state === 'suspended') _audioCtx.resume();
       lockHomeCTAs();
-      joinChannel(presenceData[idx]).catch(function(err) { showError(err.message); }).finally(function() { div.classList.remove('loading'); unlockHomeCTAs(); endHomeAction(); });
+      joinChannel(presenceData[idx]).catch(function(err) {
+        if (err && err.message === 'Connection cancelled.') return;
+        showError(err.message);
+      }).finally(function() { div.classList.remove('loading'); unlockHomeCTAs(); endHomeAction(); });
     }
     div.addEventListener('click', handleJoin);
     div.addEventListener('keydown', function(e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleJoin(); } });
