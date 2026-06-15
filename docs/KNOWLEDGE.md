@@ -218,7 +218,7 @@ All requests include `x-api-token: <token>` header.
 
 **Desktop (Tauri):**
 1. `connectWithVoxalAccount()` generates a random `state`, stores in `sessionStorage`
-2. Opens `https://voxal.lovable.app/connect?state=<state>` in the **system browser** via `window.__TAURI__.shell.open()`
+2. Opens `https://voxal.lovable.app/connect?state=<state>&caller=desktop&responseMode=deep-link` in the **system browser** via `window.__TAURI__.shell.open()`
 3. Listens once for `deep-link://new-url` Tauri event
 4. Service redirects browser to `voxal://auth?token=<token>&state=<state>`
 5. macOS routes `voxal://` to the registered app → Tauri fires `deep-link://new-url`
@@ -234,8 +234,9 @@ All requests include `x-api-token: <token>` header.
 **Web (browser):**
 1. Same state generation
 2. Opens popup: `window.open(connectUrl, 'voxal-auth', 'width=520,height=720')`
-3. Service cannot redirect to `voxal://` (no handler); instead sends `postMessage({ token, state })`
+3. Service can either send `postMessage({ token, state })` from the auth origin or redirect the popup back to `https://web.voxal.app/?token=…&state=…`
 4. `window.addEventListener('message')` in `main.js` validates origin + state, closes popup, calls `handleDeepLink()`
+5. `handleDeepLink()` also accepts `https://web.voxal.app/?token=…` and relays it back to the opener when a popup callback is used
 
 ### Important: voxal:// requires a real .app bundle
 

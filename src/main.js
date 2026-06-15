@@ -233,6 +233,12 @@ function handleDeepLink(urlStr) {
          url.hostname === 'web.voxal.app' ||
          url.hostname === 'localhost' ||
          url.hostname === '127.0.0.1')) {
+      const token = url.searchParams.get('token');
+      const state = url.searchParams.get('state');
+      if (token) {
+        handleAuthCallbackToken(token, state);
+        return;
+      }
       const roomId = url.searchParams.get('room');
       if (roomId) {
         if (_audioCtx.state === 'suspended') _audioCtx.resume();
@@ -283,16 +289,45 @@ function handleDeepLink(urlStr) {
   }
 }
 
+function handleAuthCallbackToken(token, state) {
+  if (!token) return;
+  const expected = sessionStorage.getItem('voxal-auth-state');
+  if (window.opener && !window.opener.closed) {
+    try {
+      window.opener.postMessage({ token: token, state: state || expected || '' }, window.location.origin);
+      window.close();
+      return;
+    } catch (e) {
+      console.warn('[Auth] Popup relay failed, applying locally:', e.message);
+    }
+  }
+  if (expected && state !== expected) { console.warn('[Auth] State mismatch — ignoring'); return; }
+  sessionStorage.removeItem('voxal-auth-state');
+
+  localStorage.setItem(PRESENCE_TOKEN_KEY, token);
+  const inp = document.getElementById('input-presence-token');
+  if (inp) inp.value = token;
+  if (typeof updateDisconnectVisibility === 'function') updateDisconnectVisibility();
+  if (typeof updateConnectVisibility === 'function') updateConnectVisibility();
+  selectOrgAndStartPolling();
+}
+
 async function connectWithVoxalAccount() {
   const state = generateState();
   sessionStorage.setItem('voxal-auth-state', state);
-  const connectUrl = voxalConnectUrl() + '/connect?state=' + state;
+  const connectUrl = new URL(voxalConnectUrl() + '/connect');
+  connectUrl.searchParams.set('state', state);
+  connectUrl.searchParams.set('caller', IS_TAURI_DESKTOP ? 'desktop' : 'web');
+  connectUrl.searchParams.set('responseMode', IS_TAURI_DESKTOP ? 'deep-link' : 'post-message');
+  if (!IS_TAURI_DESKTOP) {
+    connectUrl.searchParams.set('callbackOrigin', window.location.origin);
+  }
 
   if (window.__TAURI__) {
     // Desktop: open in system browser; deep link fires 'deep-link://new-url'
-    try { await window.__TAURI__.shell.open(connectUrl); } catch(e) {
+    try { await window.__TAURI__.shell.open(connectUrl.toString()); } catch(e) {
       // fallback: shell plugin may not be available yet
-      window.open(connectUrl, '_blank');
+      window.open(connectUrl.toString(), '_blank');
     }
     window.__TAURI__.event.once('deep-link://new-url', function(e) {
       var urls = Array.isArray(e.payload) ? e.payload : [e.payload];
@@ -300,12 +335,12 @@ async function connectWithVoxalAccount() {
     });
   } else if (window.Capacitor && window.Capacitor.isNativePlatform()) {
     // iOS: open in system browser; appUrlOpen fires when OS routes voxal:// back
-    window.open(connectUrl, '_system');
+    window.open(connectUrl.toString(), '_system');
   } else {
     // Web: popup + postMessage
-    var popup = window.open(connectUrl, 'voxal-auth', 'width=520,height=720,left=200,top=100');
+    var popup = window.open(connectUrl.toString(), 'voxal-auth', 'width=520,height=720,left=200,top=100');
     function onMessage(e) {
-      if (e.origin !== voxalConnectUrl()) return;
+      if (e.origin !== voxalConnectUrl() && e.origin !== window.location.origin) return;
       if (!e.data || !e.data.token) return;
       window.removeEventListener('message', onMessage);
       if (popup && !popup.closed) popup.close();
@@ -886,6 +921,8 @@ function ensureAnonymousProfile() {
 }
 
 function selfPseudoProfile() {
+  var presenceName = presenceDisplayNameForSelf();
+  if (presenceName) return { pseudo: presenceName, pseudoColor: null, anonymous: false, presence: true };
   var manualPseudo = (myPseudo || '').trim();
   if (manualPseudo) return { pseudo: manualPseudo, pseudoColor: null, anonymous: false };
   var anon = ensureAnonymousProfile();
@@ -1582,6 +1619,52 @@ function associatedRoomIdFromSessionResponse(payload) {
     roomIdFromPayload(payload.data) ||
     ''
   );
+}
+
+function activePresenceItem() {
+  if (!presenceConfigured() || !activeChannel) return null;
+  var channelName = String(activeChannel).trim().toLowerCase();
+  if (!channelName) return null;
+  var roomId = normalizeRoomCode(activeChannelRoomId || '').toLowerCase();
+  var fallback = null;
+  var list = Array.isArray(presenceData) ? presenceData : [];
+
+  for (var i = 0; i < list.length; i++) {
+    var item = list[i] || {};
+    var channel = item.channel || {};
+    var name = String(channel.name || '').trim().toLowerCase();
+    if (!name || name !== channelName) continue;
+
+    if (roomId) {
+      var associatedRoomId = normalizeRoomCode(associatedRoomIdFromPresenceItem(item) || roomIdFromPayload(channel)).toLowerCase();
+      if (associatedRoomId && associatedRoomId === roomId) return item;
+    }
+
+    if (!fallback) fallback = item;
+  }
+
+  return fallback;
+}
+
+function presenceDisplayNameForSelf() {
+  var item = activePresenceItem();
+  if (!item || !peer || !peer.id) return '';
+  var selfPeerId = String(peer.id).trim();
+  var connected = Array.isArray(item.connected) ? item.connected : [];
+  for (var i = 0; i < connected.length; i++) {
+    var entry = connected[i] || {};
+    if (String(entry.peer_id || '').trim() !== selfPeerId) continue;
+    return String(entry.display_name || '').trim();
+  }
+  return '';
+}
+
+function syncMyPseudoFromPresence() {
+  var presenceName = presenceDisplayNameForSelf();
+  if (!presenceName) return;
+  if ((myPseudo || '').trim() !== presenceName) {
+    setMyPseudo(presenceName, { silentAnnounce: true });
+  }
 }
 
 function consumeRoomInviteFromQuery() {
@@ -4935,6 +5018,7 @@ async function refreshPresence() {
   const list = $('channels-list');
   try {
     presenceData = await fetchPresence();
+    syncMyPseudoFromPresence();
     renderPresenceChannels();
   } catch (e) {
     list.innerHTML = '<p class="presence-error">' + e.message + '</p>';
@@ -4987,13 +5071,15 @@ async function joinChannel(item) {
   activeChannel      = item.channel.name;
   activeChannelRoomId = associatedRoomIdFromPresenceItem(item);
   const postPresence = function(peerId) {
-    postSession(activeChannel, peerId).catch(function(e) {
-      console.warn('[Presence] session registration failed:', e.message);
-    }).then(function(data) {
+    postSession(activeChannel, peerId).then(function(data) {
       var associated = associatedRoomIdFromSessionResponse(data);
-      if (!associated || associated === activeChannelRoomId) return;
-      activeChannelRoomId = associated;
-      updateRoomHeader();
+      if (associated && associated !== activeChannelRoomId) {
+        activeChannelRoomId = associated;
+        updateRoomHeader();
+      }
+      return refreshPresence();
+    }).catch(function(e) {
+      console.warn('[Presence] session registration failed:', e.message);
     });
   };
   if (connected.length === 0) {
@@ -5904,13 +5990,15 @@ window.addEventListener('DOMContentLoaded', function() {
         showInviteLoading(roomDisplayCode() || activeChannel || '', 'Creating room…');
         createRoom(function(peerId) {
           if (!activeChannel || !presenceConfigured()) return;
-          postSession(activeChannel, peerId).catch(function(e) {
-            console.warn('[Presence] session registration failed:', e.message);
-          }).then(function(data) {
+          postSession(activeChannel, peerId).then(function(data) {
             var associated = associatedRoomIdFromSessionResponse(data);
-            if (!associated || associated === activeChannelRoomId) return;
-            activeChannelRoomId = associated;
-            updateRoomHeader();
+            if (associated && associated !== activeChannelRoomId) {
+              activeChannelRoomId = associated;
+              updateRoomHeader();
+            }
+            return refreshPresence();
+          }).catch(function(e) {
+            console.warn('[Presence] session registration failed:', e.message);
           });
         }).catch(function(err) { iframeEmit({ type: 'error', message: err.message }); });
       } else if (msg.type === 'leave') {
