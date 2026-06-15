@@ -207,9 +207,9 @@ All calls go to `presenceBase()` which reads `localStorage['service-url']` with 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/orgs` | List organisations for the authenticated user |
-| `GET` | `/org/:orgId/presence` | Get all channels + connected peers for the org |
+| `GET` | `/org/:orgId/presence` | Get all channels + connected peers for the org (`peer_count`, `display_name`, `room_id`, `deputy_peer_id`) |
 | `GET` | `/org/:orgId/ice-servers` | Get TURN credentials for the org |
-| `POST` | `/` (presence base) | Register session: `{ channel_name, peer_id }` |
+| `POST` | `/` (presence base) | Register session: `{ org_id, channel_name, peer_id, room_id, peer_count, deputy_peer_id }` |
 | `DELETE` | `/` (presence base) | Delete current session (on leave) |
 
 All requests include `x-api-token: <token>` header.
@@ -253,7 +253,7 @@ When the user clicks a channel in the presence panel:
 1. `joinChannel(item)` sets `activeChannel = item.channel.name`
 2. If `connected.length === 0`: `createRoom(postPresence)` — user becomes host
 3. Otherwise: sort `connected` peers by `peer_id`, `joinRoom(connected[0].peer_id, postPresence)`
-4. `postPresence(myPeerId)` is called once the peer has its ID → `postSession(channelName, peerId)`
+4. `postPresence(myPeerId)` is called once the peer has its ID → `postSession(channelName, peerId, { room_id, peer_count, deputy_peer_id })`
 5. On leave: `deleteSession()` is called, `activeChannel = null`
 
 ---

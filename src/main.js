@@ -383,7 +383,7 @@ async function fetchPresence() {
     { headers: { 'x-api-token': presenceToken() } }
   );
   if (!res.ok) throw new Error('HTTP ' + res.status);
-  return (await res.json()).presence; // [{channel:{id,name}, connected:[{user_id,peer_id,display_name}]}]
+  return (await res.json()).presence; // [{channel:{id,name}, peer_count, connected:[{user_id,peer_id,display_name,room_id,peer_count,deputy_peer_id,updated_at}]}]
 }
 
 async function fetchOrgs() {
@@ -671,7 +671,7 @@ async function publishRoom() {
   }
   _lastPublishAt = now;
   var label = activeChannel || null;
-  var peerCount = connections.size;
+  var peerCount = currentRoomPeerCount() || (connections.size + 1);
   var headers = { 'Content-Type': 'application/json' };
   if (_publishSecret) headers['x-room-secret'] = _publishSecret;
   var res = await tauriFetch(ANONYMOUS_ROOMS_BASE, {
@@ -759,14 +759,25 @@ function hostPresencePeerCount() {
   return 1 + hostConnectedPeerIds().length;
 }
 
+function currentRoomPeerCount() {
+  return inRoom ? (1 + connections.size) : 0;
+}
+
+function currentPresenceRoomId() {
+  return activeChannelRoomId || _publishedRoomId || (roomCode || '');
+}
+
+function buildPresenceSessionPayload(peerId) {
+  return {
+    room_id: currentPresenceRoomId(),
+    peer_count: currentRoomPeerCount() || hostPresencePeerCount(),
+    deputy_peer_id: currentDeputyId() || null
+  };
+}
+
 function syncPresenceChannelSession() {
   if (!isHost || !inRoom || !peer || !activeChannel || !presenceConfigured()) return;
-  var roomId = roomDisplayCode() || roomCode || '';
-  postSession(activeChannel, peer.id, {
-    room_id: roomId,
-    peer_count: hostPresencePeerCount(),
-    deputy_peer_id: currentDeputyId() || null
-  }).then(function(data) {
+  postSession(activeChannel, peer.id, buildPresenceSessionPayload(peer.id)).then(function(data) {
     var associated = associatedRoomIdFromSessionResponse(data);
     if (!associated || associated === activeChannelRoomId) return;
     activeChannelRoomId = associated;
@@ -4989,6 +5000,8 @@ function renderPresenceChannels() {
     const ch        = item.channel;
     const connected = item.connected || [];
     const names     = connected.map(function(c) { return c.display_name || 'Anonymous'; }).join(', ');
+    const peerCountRaw = typeof item.peer_count === 'number' ? item.peer_count : parseInt(item.peer_count, 10);
+    const peerCount = Number.isFinite(peerCountRaw) ? peerCountRaw : connected.length;
     const div       = document.createElement('div');
     div.className   = 'channel-item';
     div.setAttribute('role', 'button');
@@ -4998,7 +5011,7 @@ function renderPresenceChannels() {
         '<span class="channel-name">' + ch.name + '</span>' +
         (names ? '<span class="channel-members">' + names + '</span>' : '') +
       '</div>' +
-      (connected.length ? '<span class="channel-count">' + connected.length + '</span>' : '') +
+      (peerCount ? '<span class="channel-count">' + peerCount + '</span>' : '') +
       '<span class="channel-join-icon">›</span>';
     function handleJoin() {
       if (div.classList.contains('loading') || !beginHomeAction()) return;
@@ -5071,7 +5084,7 @@ async function joinChannel(item) {
   activeChannel      = item.channel.name;
   activeChannelRoomId = associatedRoomIdFromPresenceItem(item);
   const postPresence = function(peerId) {
-    postSession(activeChannel, peerId).then(function(data) {
+    postSession(activeChannel, peerId, buildPresenceSessionPayload(peerId)).then(function(data) {
       var associated = associatedRoomIdFromSessionResponse(data);
       if (associated && associated !== activeChannelRoomId) {
         activeChannelRoomId = associated;
@@ -5083,7 +5096,7 @@ async function joinChannel(item) {
     });
   };
   if (connected.length === 0) {
-    showInviteLoading(activeChannel || '', 'Creating room…');
+    showInviteLoading(activeChannel || '', 'Connecting…');
     await createRoom(postPresence);
   } else {
     const candidateHostIds = Array.from(new Set(
@@ -5110,7 +5123,7 @@ async function joinChannel(item) {
       }
     }
     if (allUnavailable) {
-      showInviteLoading(activeChannel || '', 'Creating room…');
+      showInviteLoading(activeChannel || '', 'Connecting…');
       await createRoom(postPresence);
       return;
     }
@@ -5987,10 +6000,10 @@ window.addEventListener('DOMContentLoaded', function() {
           String(msg.roomCode || msg.roomId || '')
         );
         if (iframeAssociatedRoomId) activeChannelRoomId = iframeAssociatedRoomId;
-        showInviteLoading(roomDisplayCode() || activeChannel || '', 'Creating room…');
+        showInviteLoading(roomDisplayCode() || activeChannel || '', 'Connecting…');
         createRoom(function(peerId) {
           if (!activeChannel || !presenceConfigured()) return;
-          postSession(activeChannel, peerId).then(function(data) {
+          postSession(activeChannel, peerId, buildPresenceSessionPayload(peerId)).then(function(data) {
             var associated = associatedRoomIdFromSessionResponse(data);
             if (associated && associated !== activeChannelRoomId) {
               activeChannelRoomId = associated;
