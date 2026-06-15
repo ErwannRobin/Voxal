@@ -28,3 +28,7 @@ android/keystore.properties
 ios/App/CapApp-SPM/build/
 test-results
 
+# Chrome DevTools Automatic Workspace Folders — machine-specific, never commit
+.devtools-workspace-uuid
+src/.well-known/appspecific/com.chrome.devtools.json
+

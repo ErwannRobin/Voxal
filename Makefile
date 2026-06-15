@@ -87,6 +87,10 @@ build-debug:
 
 run-web:
 	@command -v npx >/dev/null 2>&1 || { echo "npx not found — install Node.js"; exit 1; }
+	@mkdir -p src/.well-known/appspecific
+	@[ -f .devtools-workspace-uuid ] || uuidgen > .devtools-workspace-uuid
+	@printf '{"workspace":{"root":"%s","uuid":"%s"}}\n' "$$(pwd)" "$$(cat .devtools-workspace-uuid)" \
+		> src/.well-known/appspecific/com.chrome.devtools.json
 	@echo "Serving web app on http://localhost:8080"
 	npx --yes serve src -l 8080
 
