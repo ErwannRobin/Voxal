@@ -1,11 +1,11 @@
 # Universal Links & AASA Setup
 
-Make `https://voxal.lovable.app/join?room=<uuid>` open the native iOS app directly
+Make `https://voxal.app/join?room=<uuid>` open the native iOS app directly
 (instead of sharing `voxal://` which isn't clickable in WhatsApp/iMessage).
 
 ---
 
-## 1. Host the AASA file on voxal.lovable.app
+## 1. Host the AASA file on voxal.app
 
 Create this file at the root of the Lovable project:
 
@@ -23,7 +23,7 @@ Create this file at the root of the Lovable project:
           {
             "/": "/join",
             "?": { "room": "?*" },
-            "comment": "Matches https://voxal.lovable.app/join?room=<anything>"
+            "comment": "Matches https://voxal.app/join?room=<anything>"
           }
         ]
       }
@@ -35,7 +35,7 @@ Create this file at the root of the Lovable project:
 Replace `<TEAM_ID>` with the Apple Developer Team ID (10-character string, e.g. `AB12CD34EF`).
 
 > Lovable serves files from `public/` at the root. Verify the file is reachable at:
-> `https://voxal.lovable.app/.well-known/apple-app-site-association`
+> `https://voxal.app/.well-known/apple-app-site-association`
 
 ---
 
@@ -45,14 +45,14 @@ In Xcode → Target **App** → **Signing & Capabilities** → **+ Capability** 
 
 Add entry:
 ```
-applinks:voxal.lovable.app
+applinks:voxal.app
 ```
 
 Or edit `ios/App/App/App.entitlements` directly:
 ```xml
 <key>com.apple.developer.associated-domains</key>
 <array>
-    <string>applinks:voxal.lovable.app</string>
+    <string>applinks:voxal.app</string>
 </array>
 ```
 
@@ -67,7 +67,7 @@ navigator.share({ title: 'Join my Voxal room', text: shareUrl })
 ```
 to:
 ```js
-var shareUrl = 'https://voxal.lovable.app/join?room=' + encodeURIComponent(text);
+var shareUrl = 'https://voxal.app/join?room=' + encodeURIComponent(text);
 navigator.share({ title: 'Join my Voxal room', url: shareUrl })
 ```
 
@@ -102,7 +102,7 @@ if (window._autoJoinRoom) {
 
 ---
 
-## 5. Add a `/join` route to voxal.lovable.app (optional)
+## 5. Add a `/join` route to voxal.app (optional)
 
 If the Lovable project uses a SPA router, add a `/join` route that:
 - On mobile with app installed → iOS intercepts the link before the page loads (Universal Link)
@@ -114,6 +114,6 @@ If the Lovable project uses a SPA router, add a `/join` route that:
 ## Testing
 
 1. Build & install via Xcode on a real device (Universal Links don't work in Simulator)
-2. Send `https://voxal.lovable.app/join?room=test-uuid` to yourself via iMessage
+2. Send `https://voxal.app/join?room=test-uuid` to yourself via iMessage
 3. Tap the link → should open Voxal app directly (not Safari)
 4. If it opens Safari instead: verify AASA file is reachable, Team ID is correct, and the entitlement is present in the signed build

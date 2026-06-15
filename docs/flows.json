@@ -45,7 +45,7 @@
     {
       "id": "voxal_connect",
       "name": "Voxal Connect",
-      "description": "voxal.lovable.app — OAuth-style auth frontend. Redirects back via voxal://auth?token=… or postMessage.",
+      "description": "voxal.app — OAuth-style auth frontend. Redirects back via voxal://auth?token=… or postMessage.",
       "color": "#f43f5e",
       "icon": "🔑"
     },
@@ -351,7 +351,7 @@
         {
           "from": "frontend",
           "to": "voxal_connect",
-          "label": "Open voxal.lovable.app/connect?state=…",
+          "label": "Open voxal.app/connect?state=…",
           "detail": "Tauri: shell.open() in system browser. Capacitor: window.open(_system). Web: popup window."
         },
         {

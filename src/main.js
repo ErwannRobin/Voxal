@@ -78,7 +78,7 @@ async function releaseAudioFocus() {
 
 const DEFAULT_PRESENCE_BASE     = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
 const ANONYMOUS_ROOMS_BASE      = 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/anonymous-rooms';
-const DEFAULT_VOXAL_CONNECT_URL = 'https://voxal.lovable.app';
+const DEFAULT_VOXAL_CONNECT_URL = 'https://voxal.app';
 // Canonical web URL — used for invite links on native (Tauri/iOS) and for Universal Links
 const VOXAL_WEB_URL             = 'https://web.voxal.app';
 const PRESENCE_TOKEN_KEY        = 'presence-api-token';

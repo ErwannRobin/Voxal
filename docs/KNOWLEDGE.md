@@ -35,7 +35,7 @@ Complete reference for the Voxal codebase. Covers architecture, data flows, plat
 
 A serverless, push-to-talk voice chat app. Users share a room code; audio is relayed peer-to-peer over WebRTC. There is no backend required for a basic call — only PeerJS signaling (which uses a free public server) is needed.
 
-Optional: a "Voxal Connect" service (`https://voxal.lovable.app`) adds named channels, organisations, managed TURN servers, and OAuth-style login. It is configured separately and the core PTT functionality works without it.
+Optional: a "Voxal Connect" service (`https://voxal.app`) adds named channels, organisations, managed TURN servers, and OAuth-style login. It is configured separately and the core PTT functionality works without it.
 
 Targets:
 - **macOS desktop** via Tauri 2
@@ -200,7 +200,7 @@ If not elected: `connectToNewHost(newHostId)` — opens a new DataConnection to 
 - Managed ICE/TURN server credentials per organisation
 - User identity (display names)
 
-All calls go to `presenceBase()` which reads `localStorage['service-url']` with fallback to `https://voxal.lovable.app`.
+All calls go to `presenceBase()` which reads `localStorage['service-url']` with fallback to `https://voxal.app`.
 
 ### API endpoints used
 
@@ -218,7 +218,7 @@ All requests include `x-api-token: <token>` header.
 
 **Desktop (Tauri):**
 1. `connectWithVoxalAccount()` generates a random `state`, stores in `sessionStorage`
-2. Opens `https://voxal.lovable.app/connect?state=<state>&caller=desktop&responseMode=deep-link` in the **system browser** via `window.__TAURI__.shell.open()`
+2. Opens `https://voxal.app/connect?state=<state>&caller=desktop&responseMode=deep-link` in the **system browser** via `window.__TAURI__.shell.open()`
 3. Listens once for `deep-link://new-url` Tauri event
 4. Service redirects browser to `voxal://auth?token=<token>&state=<state>`
 5. macOS routes `voxal://` to the registered app → Tauri fires `deep-link://new-url`
@@ -324,12 +324,12 @@ All mutable state is at module scope:
 | `ptt-shortcut` | — | `'Ctrl+Backquote'` | Keyboard shortcut string |
 | `presence-api-token` | `PRESENCE_TOKEN_KEY` | `''` | Auth token for Voxal Connect |
 | `presence-org-id` | `PRESENCE_ORG_KEY` | `''` | Selected organisation UUID |
-| `service-url` | `SERVICE_URL_KEY` | `'https://voxal.lovable.app'` | API base URL override |
+| `service-url` | `SERVICE_URL_KEY` | `'https://voxal.app'` | API base URL override |
 | `metered-app-name` | `METERED_APP_STORE_KEY` | `''` | metered.ca app name for TURN |
 | `metered-api-key` | `METERED_API_STORE_KEY` | `''` | metered.ca API key |
 | `metered-status` | `METERED_STATUS_STORE_KEY` | `null` | `'ok'` / `'error'` — TURN test result badge |
 | `theme` | `THEME_KEY` | `'system'` | `'dark'` / `'light'` / `'system'` |
-| `voxal-connect-url` | — | `'https://voxal.lovable.app'` | OAuth service URL override |
+| `voxal-connect-url` | — | `'https://voxal.app'` | OAuth service URL override |
 
 `sessionStorage` (not persisted across launches):
 - `voxal-auth-state` — CSRF state token during OAuth flow

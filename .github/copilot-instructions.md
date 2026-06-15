@@ -69,8 +69,8 @@ Every Tauri/Capacitor-specific feature must be guarded this way.
 
 ### Presence / auth
 - Optional. Requires a token + org ID stored in `localStorage`.
-- All API calls go through `presenceBase()` which reads `localStorage['service-url']` with fallback to `https://voxal.lovable.app`.
-- Auth flow: `connectWithVoxalAccount()` opens `https://voxal.lovable.app/connect?state=…` in the system browser. The service redirects back via `voxal://auth?token=…` (desktop) or `postMessage` (web).
+- All API calls go through `presenceBase()` which reads `localStorage['service-url']` with fallback to `https://voxal.app`.
+- Auth flow: `connectWithVoxalAccount()` opens `https://voxal.app/connect?state=…` in the system browser. The service redirects back via `voxal://auth?token=…` (desktop) or `postMessage` (web).
 - Deep link handled by `handleDeepLink()` — always validate the `state` parameter against `sessionStorage`.
 
 ---
