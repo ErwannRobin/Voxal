@@ -2,15 +2,19 @@ import { test, expect } from '@playwright/test';
 
 test('home screen renders key controls', async ({ page }) => {
   await page.goto('/');
-  await expect(page.locator('#input-pseudo')).toBeVisible();
   await expect(page.locator('#btn-create')).toBeVisible();
   await expect(page.locator('#btn-join')).toBeVisible();
+  await expect(page.locator('#btn-connect-voxal-home')).toBeVisible();
 });
 
 test('settings modal opens and closes', async ({ page }) => {
   await page.goto('/');
   await page.click('#btn-open-settings');
   await expect(page.locator('#modal-settings')).not.toHaveClass(/hidden/);
+  await expect(page.locator('#modal-settings .settings-card').first()).not.toHaveClass(/is-collapsed/);
+  await expect(page.locator('#modal-settings-sidebar')).toBeVisible();
+  const modalWidth = await page.locator('#modal-settings .modal-content').evaluate((el) => el.getBoundingClientRect().width);
+  expect(modalWidth).toBeGreaterThan(900);
   await page.click('#btn-close-settings');
   await expect(page.locator('#modal-settings')).toHaveClass(/hidden/);
 });

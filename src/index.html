@@ -63,14 +63,6 @@
         <p class="brand-sub">P2P push to talk communications</p>
       </div>
       <div class="home-actions">
-        <!-- pseudo-field moved to settings; shown here only until user sets a name -->
-        <div class="pseudo-field" id="pseudo-field-home">
-          <input id="input-pseudo" type="text" placeholder="Your name…" maxlength="20"
-                 spellcheck="false" autocomplete="off" />
-        </div>
-
-        <div id="divider-before-connect" class="divider"><span>or</span></div>
-
         <!-- Presence channels (shown when API token + org are configured) -->
         <div id="presence-panel" class="presence-panel hidden">
           <div class="presence-header">
@@ -153,8 +145,16 @@
           <button id="btn-close-settings" class="btn-icon" aria-label="Close">✕</button>
         </div>
         <div class="modal-body">
+          <nav id="modal-settings-sidebar" class="prefs-sidebar modal-settings-sidebar" aria-label="Settings sections">
+            <button type="button" class="prefs-nav-btn active" data-target="settings-profile">👤 Profile</button>
+            <button type="button" class="prefs-nav-btn" data-target="settings-audio">🎙 Audio</button>
+            <button type="button" class="prefs-nav-btn" data-target="settings-video">📹 Video</button>
+            <button type="button" class="prefs-nav-btn" data-target="settings-system">🖥 System</button>
+            <button type="button" class="prefs-nav-btn" data-target="settings-advanced">⚙️ Advanced</button>
+          </nav>
 
-          <div class="settings-card">
+          <div class="modal-settings-scrollable">
+          <div id="settings-profile" class="settings-card">
             <p class="settings-group-title">👤 Profile</p>
             <div class="settings-field">
               <label for="input-pseudo-settings">Display name</label>
@@ -190,7 +190,7 @@
             </div>
           </div>
 
-          <div class="settings-card">
+          <div id="settings-audio" class="settings-card">
             <p class="settings-group-title">🎙 Audio</p>
             <div id="settings-audio-mic-row" class="settings-device-row">
               <div class="settings-device-head">
@@ -241,7 +241,7 @@
             </div>
           </div>
 
-          <div id="settings-video-card" class="settings-card">
+          <div id="settings-video" class="settings-card">
             <p class="settings-group-title">📹 Video</p>
             <div class="settings-device-row">
               <div class="settings-device-head">
@@ -259,7 +259,7 @@
             </div>
           </div>
 
-          <div class="settings-card">
+          <div id="settings-system" class="settings-card">
             <p class="settings-group-title">🖥 System</p>
             <div class="settings-field">
               <label>Theme</label>
@@ -275,7 +275,7 @@
             </div>
           </div>
 
-          <div class="settings-card">
+          <div id="settings-advanced" class="settings-card">
             <details class="turn-section" id="turn-details">
               <summary>⚙️ Advanced</summary>
               <div class="turn-inner">
@@ -318,6 +318,8 @@
               </div>
             </details>
           </div>
+          </div>
+
         </div>
         <!-- Footer — always visible -->
         <div class="modal-footer">

@@ -1296,6 +1296,10 @@ input[type="password"]:focus { border-color: var(--accent); }
     border-left: none;
     border-right: none;
   }
+
+  .modal-settings-scrollable {
+    padding: 16px 20px;
+  }
 }
 
 .modal-header {
@@ -1316,8 +1320,71 @@ input[type="password"]:focus { border-color: var(--accent); }
   display: flex;
   flex-direction: column;
   gap: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.modal-settings-sidebar {
+  display: none;
+  flex: 0 0 190px;
+  border-right: 1px solid var(--border);
+  padding: 18px 10px;
+}
+
+.prefs-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.prefs-nav-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.prefs-nav-btn.active {
+  background: var(--bg-raised);
+  color: var(--text);
+}
+
+.modal-settings-scrollable {
+  flex: 1;
+  min-width: 0;
   overflow-y: auto;
   padding: 16px 20px;
+}
+
+.modal-sidebar-visible .settings-card-toggle { display: none; }
+.modal-sidebar-visible #turn-details > summary {
+  pointer-events: none;
+  cursor: default;
+}
+.modal-sidebar-visible #turn-details > summary::before { display: none; }
+.modal-sidebar-visible .settings-card.hidden-by-sidebar { display: none; }
+
+@media (min-width: 861px) {
+  .modal-content {
+    max-width: 1040px;
+    height: min(760px, calc(100vh - 80px));
+  }
+
+  .modal-body {
+    flex-direction: row;
+  }
+
+  .modal-settings-sidebar {
+    display: flex;
+  }
 }
 
 .modal-footer {
@@ -2041,8 +2108,8 @@ details.turn-section .turn-inner {
   /* Peers list can grow taller */
   .peers-list { max-height: 260px; }
 
-  /* Settings modal — slightly wider */
-  .modal-content { max-width: 400px; }
+  /* Settings modal — wider on roomy desktop viewports */
+  .modal-content { max-width: 1040px; }
 }
 
 @media (min-width: 640px) and (min-height: 700px) {

@@ -1060,11 +1060,7 @@ function setMyPseudo(nextPseudo, options) {
 
 function updateHomeLoggedOutLayout() {
   var connected = !!presenceToken();
-  var pseudoField = $('pseudo-field-home');
-  var beforeConnect = $('divider-before-connect');
   var afterConnect = $('divider-after-connect');
-  if (pseudoField) pseudoField.style.display = (!connected || !myPseudo) ? '' : 'none';
-  if (beforeConnect) beforeConnect.style.display = connected ? 'none' : '';
   if (afterConnect) afterConnect.style.display = connected ? 'none' : '';
 }
 
@@ -2905,6 +2901,175 @@ function collapseAllSettingsCards() {
   });
   var advancedDetails = document.getElementById('turn-details');
   if (advancedDetails) advancedDetails.open = false;
+}
+
+function expandSettingsProfileCard() {
+  var profileCard = document.querySelector('#modal-settings .settings-card[data-collapsible-init="1"]');
+  if (!profileCard) return;
+  profileCard.classList.remove('is-collapsed');
+  var btn = profileCard.querySelector(':scope > .settings-card-toggle');
+  if (btn) btn.setAttribute('aria-expanded', 'true');
+}
+
+var _modalSettingsSidebarInit = false;
+function initModalSettingsSidebar() {
+  var sidebar = document.getElementById('modal-settings-sidebar');
+  var scrollRoot = document.querySelector('#modal-settings .modal-settings-scrollable');
+  if (!sidebar || !scrollRoot) return;
+
+  var buttons = Array.from(sidebar.querySelectorAll('.prefs-nav-btn[data-target]'));
+  if (!buttons.length) return;
+
+  var cards = Array.from(scrollRoot.querySelectorAll('.settings-card[id]'));
+  var advancedDetails = document.getElementById('turn-details');
+  var mq = window.matchMedia('(min-width: 861px)');
+  var activeId = buttons[0].dataset.target || (cards[0] && cards[0].id) || '';
+  var lastAccordionExpandedId = activeId;
+  var wasSidebarVisible = mq.matches;
+
+  function setActive(id) {
+    buttons.forEach(function(btn) {
+      btn.classList.toggle('active', btn.dataset.target === id);
+    });
+  }
+
+  function getCardToggle(card) {
+    return card.querySelector(':scope > .settings-card-toggle');
+  }
+
+  function ensureCardToggle(card) {
+    var toggle = getCardToggle(card);
+    if (toggle) return toggle;
+    var title = card.querySelector(':scope > .settings-group-title');
+    if (!title) return null;
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'settings-card-toggle';
+    btn.textContent = title.textContent;
+    btn.setAttribute('aria-expanded', 'false');
+    title.replaceWith(btn);
+    return btn;
+  }
+
+  function setCardCollapsed(card, collapsed) {
+    card.classList.toggle('is-collapsed', !!collapsed);
+    var toggle = getCardToggle(card);
+    if (toggle) toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  }
+
+  function collapseNonAdvancedCards(exceptId) {
+    cards.forEach(function(card) {
+      if (card.id === 'settings-advanced') return;
+      setCardCollapsed(card, card.id !== exceptId);
+    });
+    if (exceptId) lastAccordionExpandedId = exceptId;
+  }
+
+  function bindAccordionIfNeeded() {
+    if (sidebar.dataset.accordionBound === '1') return;
+    cards.forEach(function(card) {
+      if (card.id === 'settings-advanced') return;
+      var toggle = ensureCardToggle(card);
+      if (!toggle) return;
+      toggle.addEventListener('click', function() {
+        var isOpen = !card.classList.contains('is-collapsed');
+        if (isOpen) {
+          setCardCollapsed(card, true);
+          activeId = '';
+          setActive(activeId);
+          return;
+        }
+        activeId = card.id;
+        setActive(activeId);
+        collapseNonAdvancedCards(activeId);
+        if (advancedDetails) advancedDetails.open = false;
+      });
+    });
+    if (advancedDetails) {
+      advancedDetails.addEventListener('toggle', function() {
+        if (mq.matches) return;
+        if (!advancedDetails.open) return;
+        activeId = 'settings-advanced';
+        lastAccordionExpandedId = activeId;
+        setActive(activeId);
+        collapseNonAdvancedCards('');
+      });
+    }
+    sidebar.dataset.accordionBound = '1';
+  }
+
+  function applyVisibility() {
+    document.body.classList.toggle('modal-sidebar-visible', mq.matches);
+    if (!mq.matches) {
+      bindAccordionIfNeeded();
+      cards.forEach(function(card) {
+        card.classList.remove('hidden-by-sidebar');
+        if (card.id !== 'settings-advanced') ensureCardToggle(card);
+      });
+      if (activeId === 'settings-advanced') {
+        collapseNonAdvancedCards('');
+        if (advancedDetails) advancedDetails.open = true;
+        lastAccordionExpandedId = activeId;
+      } else {
+        collapseNonAdvancedCards(activeId);
+        if (advancedDetails) advancedDetails.open = false;
+      }
+      wasSidebarVisible = false;
+      return;
+    }
+
+    if (!wasSidebarVisible) {
+      if (lastAccordionExpandedId) {
+        activeId = lastAccordionExpandedId;
+      } else {
+        var expanded = cards.find(function(card) {
+          return card.id !== 'settings-advanced' && !card.classList.contains('is-collapsed');
+        });
+        if (expanded) activeId = expanded.id;
+        else if (advancedDetails && advancedDetails.open) activeId = 'settings-advanced';
+      }
+    }
+
+    cards.forEach(function(card) {
+      setCardCollapsed(card, false);
+      card.classList.toggle('hidden-by-sidebar', card.id !== activeId);
+    });
+    setActive(activeId);
+    if (advancedDetails && activeId !== 'settings-advanced') advancedDetails.open = false;
+    wasSidebarVisible = true;
+  }
+
+  if (!_modalSettingsSidebarInit) {
+    buttons.forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var targetId = btn.dataset.target;
+        if (!targetId) return;
+        activeId = targetId;
+        setActive(activeId);
+        if (mq.matches) {
+          cards.forEach(function(card) {
+            setCardCollapsed(card, false);
+            card.classList.toggle('hidden-by-sidebar', card.id !== activeId);
+          });
+          if (advancedDetails) advancedDetails.open = (activeId === 'settings-advanced');
+        } else {
+          if (activeId === 'settings-advanced') {
+            if (advancedDetails) advancedDetails.open = true;
+            collapseNonAdvancedCards('');
+          } else {
+            collapseNonAdvancedCards(activeId);
+            if (advancedDetails) advancedDetails.open = false;
+          }
+        }
+      });
+    });
+
+    if (mq.addEventListener) mq.addEventListener('change', applyVisibility);
+    else if (mq.addListener) mq.addListener(applyVisibility);
+    _modalSettingsSidebarInit = true;
+  }
+
+  applyVisibility();
 }
 
 var _micTestStream = null;
@@ -5301,7 +5466,7 @@ window.addEventListener('DOMContentLoaded', function() {
     var _sr = $('shortcut-recording'); if (_sr) _sr.style.display = 'none';
     var _ss = $('shortcut-spacer'); if (_ss) _ss.style.display = 'none';
     var _micSourceRow = $('settings-audio-mic-row'); if (_micSourceRow) _micSourceRow.style.display = 'none';
-    var _videoSection = $('settings-video-card'); if (_videoSection) _videoSection.style.display = 'none';
+    var _videoSection = $('settings-video'); if (_videoSection) _videoSection.style.display = 'none';
     var _devPopoutBtn = $('btn-popout-dev-log'); if (_devPopoutBtn) _devPopoutBtn.style.display = 'none';
     $('ptt-hint').textContent = 'Hold to talk · double-tap for hands-free';
     $('btn-copy').title = 'Copy room code';
@@ -5677,6 +5842,8 @@ window.addEventListener('DOMContentLoaded', function() {
     stopMicTest();
     stopCameraPreview();
     collapseAllSettingsCards();
+    expandSettingsProfileCard();
+    initModalSettingsSidebar();
     // Populate About section
     initAboutSection('about-version-modal', 'about-build-date-modal');
     $('modal-settings').classList.remove('hidden');
