@@ -852,6 +852,7 @@ body.embed-tiny #screen-room .room-peers-panel {
   gap: 8px;
   margin-bottom: 0;
   padding-bottom: 0;
+  padding-left: 0;
 }
 
 body.embed-tiny #screen-room .peers-list {
@@ -902,7 +903,10 @@ body.embed-tiny #screen-room .peer-item-compact {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 0;
+  /* compact one-line peer chips by default */
+  height: 28px;
+  box-sizing: border-box;
   padding: 5px 9px;
   border-radius: 999px;
   border: 1px solid var(--border);
@@ -910,26 +914,61 @@ body.embed-tiny #screen-room .peer-item-compact {
   transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
 }
 
+/* dot is only useful in the full peer list — hide in tiny mode */
 body.embed-tiny #screen-room .peer-item-compact .peer-dot {
-  width: 7px;
-  height: 7px;
+  display: none;
+}
+
+body.embed-tiny #screen-room .peer-item-compact .peer-mic-icon {
+  display: none;
 }
 
 body.embed-tiny #screen-room .peer-item-compact .peer-compact-label {
   font-size: 12px;
-  line-height: 1;
+  line-height: 1.25;
   color: var(--text);
-  max-width: 120px;
+  max-width: 64px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 body.embed-tiny #screen-room .peer-item-compact.peer-self {
-  white-space: nowrap;
   border-color: var(--accent-dim);
-  padding: 6px 11px;
+  padding: 6px 9px;
   margin-right: 4px;
+  cursor: pointer; /* entire chip is the edit trigger */
+  height: 62px;
+  align-items: center;
+  gap: 6px;
+}
+
+body.embed-tiny #screen-room .peer-item-compact.peer-self .peer-mic-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-dim);
+  font-size: 15px;
+  line-height: 1;
+}
+
+body.embed-tiny #screen-room .peer-item-compact.peer-self .peer-compact-label {
+  max-width: 38px;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  text-overflow: clip;
+}
+
+body.embed-tiny #screen-room .peer-item-compact.peer-self .peer-edit-btn {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-left: 0;
+  padding: 2px;
 }
 
 body.embed-tiny #screen-room .peer-item-compact.talking {
@@ -941,25 +980,39 @@ body.embed-tiny #screen-room .peer-item-compact.talking {
 
 body.embed-tiny #screen-room .peer-item-compact.talking .peer-compact-label {
   color: #d1fae5;
-  font-weight: 700;
-}
-
-body.embed-tiny #screen-room .peer-item-compact.talking .peer-dot {
-  width: 9px;
-  height: 9px;
-  box-shadow: 0 0 8px rgba(74, 222, 128, 0.95);
-  animation: dot-pulse 0.55s ease-in-out infinite;
-}
-
-body.embed-tiny #screen-room .peer-item-compact .peer-edit-btn {
-  margin-left: 2px;
 }
 
 body.embed-tiny #screen-room .peer-item-compact .peer-name-inline {
-  width: 110px;
-  max-width: 32vw;
+  /* matches the self chip label height */
+  height: 30px;
+  width: 38px;
   font-size: 12px;
-  padding: 3px 6px;
+  font-family: inherit;
+  font-weight: inherit;
+  line-height: 1.25;
+  color: inherit;
+  background: transparent;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  padding: 0;
+  resize: none;
+  overflow: hidden;
+}
+
+.tiny-tooltip {
+  display: none;
+  position: fixed;
+  z-index: 9999;
+  background: var(--bg-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
 }
 
 body.embed-tiny #screen-invite-loading .invite-loading-panel {
@@ -975,16 +1028,26 @@ body.embed-tiny #screen-invite-loading #btn-cancel-invite-join {
 }
 
 body.embed-tiny #screen-room .ptt-area {
-  position: absolute;
-  top: max(calc(env(safe-area-inset-top) + 6px), 6px);
-  right: max(calc(env(safe-area-inset-right) + 10px), 10px);
-  margin-top: 0;
-  padding: 0;
-  z-index: 20;
+  display: none;
 }
 
 body.embed-tiny #screen-room .room-bottom-bar {
   position: static;
+}
+
+.tiny-leave-btn {
+  display: none;
+}
+
+body.embed-tiny #screen-room .tiny-leave-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  /* vertically center the ~32px icon within the 64px mic button */
+  top: calc(max(calc(env(safe-area-inset-top) + 6px), 6px) + 16px);
+  right: max(calc(env(safe-area-inset-right) + 10px), 10px);
+  z-index: 40;
 }
 
 body.embed-tiny #screen-room #ptt-hint,
@@ -993,11 +1056,7 @@ body.embed-tiny #screen-room #shortcut-recording {
   display: none;
 }
 
-body.embed-tiny #screen-room .ptt-btn {
-  width: 64px;
-  height: 64px;
-  font-size: 24px;
-}
+body.embed-tiny #screen-room .ptt-btn { display: none; }
 
 #screen-error {
   align-items: center;

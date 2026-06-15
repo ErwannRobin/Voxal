@@ -1950,6 +1950,7 @@ function shortId(id) {
 }
 
 function isDevModeEnabled() {
+  if (IS_TINY_EMBED) return false;
   return localStorage.getItem(DEV_MODE_KEY) === 'true';
 }
 
@@ -2248,14 +2249,70 @@ function updatePeerList() {
   const showPeerUuids = isDevModeEnabled();
 
   if (IS_TINY_EMBED) {
+    // Singleton tooltip shown on click/touch for all peer chips
+    var _tinyTooltipEl = null;
+    var _tinyTooltipTimer = null;
+    function showTinyTooltip(anchor, text) {
+      if (!_tinyTooltipEl) {
+        _tinyTooltipEl = document.createElement('div');
+        _tinyTooltipEl.className = 'tiny-tooltip';
+        document.body.appendChild(_tinyTooltipEl);
+        document.addEventListener('click', function() {
+          if (_tinyTooltipEl) _tinyTooltipEl.style.display = 'none';
+          clearTimeout(_tinyTooltipTimer);
+        });
+      }
+      clearTimeout(_tinyTooltipTimer);
+      _tinyTooltipEl.textContent = text;
+      _tinyTooltipEl.style.display = 'block';
+      // position above the chip, horizontally centered
+      var rect = anchor.getBoundingClientRect();
+      var x = rect.left + rect.width / 2;
+      var y = rect.top - 6;
+      _tinyTooltipEl.style.left = x + 'px';
+      _tinyTooltipEl.style.top = y + 'px';
+      _tinyTooltipEl.style.transform = 'translateX(-50%) translateY(-100%)';
+      _tinyTooltipTimer = setTimeout(function() {
+        if (_tinyTooltipEl) _tinyTooltipEl.style.display = 'none';
+      }, 2500);
+    }
+
     var addTinyItem = function(id, label, self, talking, labelColor) {
       var div = document.createElement('div');
       div.id = 'peer-item-' + id;
       div.className = 'peer-item peer-item-compact' + (self ? ' peer-self' : '') + (talking ? ' talking' : '');
 
-      var dot = document.createElement('span');
-      dot.className = 'peer-dot';
-      div.appendChild(dot);
+      if (self) {
+        var micIcon = document.createElement('span');
+        micIcon.className = 'peer-mic-icon';
+        micIcon.setAttribute('aria-hidden', 'true');
+        micIcon.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>';
+        div.appendChild(micIcon);
+        div.addEventListener('pointerdown', function(e) {
+          if (e.button !== undefined && e.button !== 0) return;
+          if (editingSelfPseudo) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setTalking(true);
+        });
+        div.addEventListener('pointerup', function(e) {
+          if (editingSelfPseudo) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setTalking(false);
+        });
+        div.addEventListener('pointercancel', function(e) {
+          if (editingSelfPseudo) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setTalking(false);
+        });
+      } else {
+        div.addEventListener('click', function(e) {
+          e.stopPropagation();
+          showTinyTooltip(div, label);
+        });
+      }
 
       if (self && editingSelfPseudo) {
         var input = document.createElement('input');
@@ -2264,6 +2321,8 @@ function updatePeerList() {
         input.className = 'peer-name-inline';
         input.placeholder = 'Your name…';
         input.value = myPseudo;
+        input.addEventListener('click', function(e) { e.stopPropagation(); });
+        input.addEventListener('pointerdown', function(e) { e.stopPropagation(); });
         input.addEventListener('keydown', function(e) {
           if (e.key === 'Enter') {
             e.preventDefault();
@@ -2287,6 +2346,7 @@ function updatePeerList() {
         var txt = document.createElement('span');
         txt.className = 'peer-compact-label';
         txt.textContent = label;
+        txt.title = label;
         if (labelColor) txt.style.color = labelColor;
         div.appendChild(txt);
         if (self) {
@@ -2294,6 +2354,7 @@ function updatePeerList() {
           editBtn.className = 'btn-icon peer-edit-btn';
           editBtn.title = 'Edit name';
           editBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>';
+          editBtn.addEventListener('pointerdown', function(e) { e.stopPropagation(); });
           editBtn.addEventListener('click', function(e) {
             e.stopPropagation();
             editingSelfPseudo = true;
@@ -6264,6 +6325,7 @@ window.addEventListener('DOMContentLoaded', function() {
     copyTextToClipboard(text, 'Room code copied!');
   });
   $('btn-leave').addEventListener('click', leaveRoom);
+  $('btn-leave-tiny').addEventListener('click', leaveRoom);
 
   $('btn-publish-room').addEventListener('click', function() {
     var btn = $('btn-publish-room');
