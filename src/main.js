@@ -5242,7 +5242,11 @@ async function refreshPresence() {
     syncMyPseudoFromPresence();
     renderPresenceChannels();
   } catch (e) {
-    list.innerHTML = '<p class="presence-error">' + e.message + '</p>';
+    list.textContent = '';
+    const err = document.createElement('p');
+    err.className = 'presence-error';
+    err.textContent = (e && e.message) ? e.message : String(e);
+    list.appendChild(err);
   }
 }
 
