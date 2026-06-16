@@ -56,12 +56,36 @@ jobs:
         run: npm ci
 
       # Ensure Android SDK and required platform/build-tools exist (before any Android sync/build)
-      - name: Set up Android SDK
-        uses: r0adkll/setup-android@v2
+      - name: Cache Android SDK
+        uses: actions/cache@v3
         with:
-          api-level: 33            # change to your project's compileSdkVersion if different
-          build-tools: 33.0.2      # pick compatible build-tools version
-          cache: true
+          path: $HOME/android-sdk
+          key: ${{ runner.os }}-android-sdk-33
+          restore-keys: |
+            ${{ runner.os }}-android-sdk-
+
+      - name: Set up Android SDK (manual)
+        run: |
+          set -euo pipefail
+
+          # create SDK location
+          mkdir -p "$HOME/android-sdk"
+
+          # download command-line tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O /tmp/cmdline-tools.zip
+          unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdline-tools
+          mkdir -p "$HOME/android-sdk/cmdline-tools"
+          mv /tmp/cmdline-tools/cmdline-tools "$HOME/android-sdk/cmdline-tools/latest"
+
+          # Persist env for subsequent steps
+          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
+
+          # Make sdkmanager available, accept licenses and install required packages
+          yes | "$HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$HOME/android-sdk" --licenses
+          "$HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$HOME/android-sdk" "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+        shell: bash
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
