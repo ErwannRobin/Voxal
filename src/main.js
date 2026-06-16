@@ -4617,9 +4617,21 @@ function becomeHost() {
   // peer.on('connection') is already wired in joinRoom() and will route here
   // since isHost is now true
 
-  // If the room was published as a public lobby, update the API with our new peer ID
+  // If the room was published as a public lobby, update the API with our new peer ID.
   if (_publishedRoomId && _publishSecret) {
+    // Original host flow: POST with secret updates voxal_room_code.
     publishRoom().catch(function(e) { console.warn('[migration] re-publish failed:', e.message); });
+  } else if (_publishedRoomId) {
+    // PATCH-claimed room (no secret) — register ourselves as the new host.
+    tauriFetch(ANONYMOUS_ROOMS_BASE + '/by-code/' + encodeURIComponent(_publishedRoomId), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ voxal_room_code: peer.id }),
+    }).then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        if (data && data.room_code) { _publishedRoomId = data.room_code; updateRoomHeader(); }
+      })
+      .catch(function(e) { console.warn('[migration] PATCH host failed:', e.message); });
   }
   if (activeChannel) {
     syncPresenceChannelSession();
