@@ -768,7 +768,7 @@ var PUBLISH_HEARTBEAT_MS   = 50 * 60 * 1000; // 50 min (TTL is 1h)
 var PUBLISH_DEBOUNCE_MS    = 10000;
 var PUBLISH_MIN_INTERVAL   = 30000; // never POST more often than every 30s
 
-async function publishRoom() {
+async function publishRoom(opts) {
   if (!isHost || !peer || !roomCode) return;
   var now = Date.now();
   var elapsed = now - _lastPublishAt;
@@ -781,10 +781,12 @@ async function publishRoom() {
   var peerCount = currentRoomPeerCount() || (connections.size + 1);
   var headers = { 'Content-Type': 'application/json' };
   if (_publishSecret) headers['x-room-secret'] = _publishSecret;
+  var postBody = { room_id: roomCode, peer_count: peerCount };
+  if (opts && opts.room_code) postBody.room_code = opts.room_code;
   var res = await tauriFetch(ANONYMOUS_ROOMS_BASE, {
     method: 'POST',
     headers: headers,
-    body: JSON.stringify({ room_id: roomCode, peer_count: peerCount }),
+    body: JSON.stringify(postBody),
   });
   if (!res.ok) {
     var body = null;
@@ -5783,22 +5785,47 @@ async function joinOrCreateByChannelName(channelName) {
     return;
   }
 
-  // No presence configured — use anonymous room lookup.
-  var hostId = await lookupRoom(normalizedName);
+  // No presence configured — use anonymous room service.
+  var lookupRes = null;
+  try { lookupRes = await tauriFetch(ANONYMOUS_ROOMS_BASE + '/' + encodeURIComponent(normalizedName)); }
+  catch (_) {}
   if (cancelled) throw new Error('Connection cancelled.');
 
-  if (hostId) {
-    // A host is registered in the anonymous room service — join them.
-    await joinRoom(hostId);
-    // Restore the named code in the room header (joinRoom clears it for UUID inputs).
-    activeChannelRoomId = normalizedName;
-    updateRoomHeader();
+  if (lookupRes && lookupRes.ok) {
+    var roomData = null;
+    try { roomData = await lookupRes.json(); } catch (_) {}
+    var hostId = (roomData && (roomData.room_id || roomData.voxal_room_code)) || null;
+
+    if (hostId) {
+      // Room exists with a live host — join them.
+      await joinRoom(hostId);
+      activeChannelRoomId = normalizedName;
+      updateRoomHeader();
+      return;
+    }
+
+    // Room exists but voxal_room_code is null — become the host and claim the slot.
+    var claimSlug = (roomData && roomData.room_code) || normalizedName;
+    await createRoom();
+    if (cancelled) return;
+    tauriFetch(ANONYMOUS_ROOMS_BASE + '/by-code/' + encodeURIComponent(claimSlug), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ voxal_room_code: roomCode }),
+    }).then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        _publishedRoomId = (data && data.room_code) || claimSlug;
+        updateRoomHeader();
+      })
+      .catch(function(e) { console.warn('[room] PATCH host failed:', e.message); });
     return;
   }
 
-  // No host anywhere — become the host; server returns a room_code slug.
+  // Room not found (404) — create it and POST with this slug to claim it.
   await createRoom();
-  publishRoom().catch(function(e) { console.warn('[publish] auto-publish failed:', e.message); });
+  publishRoom({ room_code: normalizedName }).catch(function(e) {
+    console.warn('[publish] auto-publish failed:', e.message);
+  });
 }
 
 // --- Bootstrap ---------------------------------------------------------------
