@@ -5795,17 +5795,25 @@ async function joinOrCreateByChannelName(channelName) {
     var roomData = null;
     try { roomData = await lookupRes.json(); } catch (_) {}
     var hostId = (roomData && (roomData.room_id || roomData.voxal_room_code)) || null;
+    var claimSlug = (roomData && roomData.room_code) || normalizedName;
 
     if (hostId) {
-      // Room exists with a live host — join them.
-      await joinRoom(hostId);
-      activeChannelRoomId = normalizedName;
-      updateRoomHeader();
-      return;
+      // Room has a registered host — try to join.
+      try {
+        await joinRoom(hostId);
+        activeChannelRoomId = normalizedName;
+        updateRoomHeader();
+        return;
+      } catch (joinErr) {
+        if (joinErr.message === 'Connection cancelled.') throw joinErr;
+        if (isMicDeniedError(joinErr)) throw joinErr;
+        // Stale host — fall through to claim the slot.
+        devLog('✗ Stale host for "' + claimSlug + '", claiming host slot…', 'warn');
+      }
+      if (cancelled) throw new Error('Connection cancelled.');
     }
 
-    // Room exists but voxal_room_code is null — become the host and claim the slot.
-    var claimSlug = (roomData && roomData.room_code) || normalizedName;
+    // No host or stale host — become the new host and claim the slot via PATCH.
     await createRoom();
     if (cancelled) return;
     tauriFetch(ANONYMOUS_ROOMS_BASE + '/by-code/' + encodeURIComponent(claimSlug), {
