@@ -40,96 +40,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Set up Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "21"
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      - name: Install npm dependencies
-        run: npm ci
-
-      # Ensure Android SDK and required platform/build-tools exist (before any Android sync/build)
-      - name: Cache Android SDK
-        uses: actions/cache@v4
-        with:
-          path: $HOME/android-sdk
-          key: ${{ runner.os }}-android-sdk-33
-          restore-keys: |
-            ${{ runner.os }}-android-sdk-
-
-      - name: Set up Android SDK (manual)
-        run: |
-          set -euo pipefail
-          set -x
-
-          export ANDROID_SDK_ROOT="$HOME/android-sdk"
-          export ANDROID_HOME="$ANDROID_SDK_ROOT"
-          mkdir -p "$ANDROID_SDK_ROOT"
-
-          # download command-line tools
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O /tmp/cmdline-tools.zip
-          unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdline-tools
-
-          # Prepare layout expected by sdkmanager: $ANDROID_SDK_ROOT/cmdline-tools/latest/...
-          rm -rf "$ANDROID_SDK_ROOT/cmdline-tools"
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-          mv /tmp/cmdline-tools/cmdline-tools "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-
-          # Ensure permissions so sdkmanager can write
-          chmod -R a+rwX "$ANDROID_SDK_ROOT"
-
-          # Persist env for subsequent steps
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
-
-          # Basic debug info
-          ls -la "$ANDROID_SDK_ROOT"
-          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --version || true
-
-          # Accept licenses non-interactively and install required packages
-          # Use a subshell around `yes` so its SIGPIPE exit (code 141) doesn't
-          # propagate as a pipeline failure under set -o pipefail.
-          ( yes || true ) | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --licenses || {
-            echo "License acceptance failed. Dumping sdkmanager --list output for debugging:"
-            "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --list || true
-            exit 1
-          }
-
-          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" \
-            "platform-tools" "platforms;android-33" "build-tools;33.0.2" "cmdline-tools;latest" || {
-              echo "sdkmanager package install failed. Listing SDK tree for debugging:"
-              if command -v tree >/dev/null 2>&1; then
-                tree -a "$ANDROID_SDK_ROOT" || true
-              else
-                ls -laR "$ANDROID_SDK_ROOT" || true
-              fi
-              "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --list || true
-              exit 1
-          }
-        shell: bash
-
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: java-kotlin
-          build-mode: manual
+          build-mode: none
           config-file: ./.github/codeql/codeql-config.yml
-
-      - name: Sync Capacitor Android project
-        run: npx cap sync android
-
-      - name: Build Android app for CodeQL extraction (verbose)
-        run: |
-          cd android
-          ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
