@@ -5444,7 +5444,11 @@ async function joinRoom(code, onJoined) {
       activeChannelRoomId = '';
       code = channelResolved.hostId;
     } else if (channelResolved && !channelResolved.hostId) {
-      throw new Error('Channel "' + (channelResolved.channelName || requestedCode) + '" has no online peers to join.');
+      // Channel found but empty — callers that go through joinOrCreateByChannelName
+      // never reach here; this path is only hit by direct joinRoom() calls.
+      activeChannel = channelResolved.channelName || requestedCode;
+      await createRoom(onJoined);
+      return;
     }
   } else if (UUID_RE.test(requestedCode)) {
     // Direct peer-id join: keep UUID as display/share code unless a room id is later published.
@@ -5738,6 +5742,31 @@ async function joinChannel(item) {
   }
 }
 
+// Join or create a presence channel by name (non-UUID flow).
+// Looks up the channel in presence data; if no host is online (or the channel
+// doesn't exist yet) it creates the room and hosts it under that channel name.
+async function joinOrCreateByChannelName(channelName) {
+  var normalizedName = String(channelName || '').trim();
+  if (!normalizedName || !presenceConfigured()) return;
+
+  var list = Array.isArray(presenceData) && presenceData.length ? presenceData : [];
+  if (!list.length) {
+    try { list = await fetchPresence(); } catch (_) { list = []; }
+  }
+
+  var target = normalizedName.toLowerCase();
+  var item = null;
+  for (var i = 0; i < list.length; i++) {
+    var li = list[i] || {};
+    var chName = String((li.channel || {}).name || '').trim();
+    if (chName.toLowerCase() === target) { item = li; break; }
+  }
+
+  if (!item) item = { channel: { name: normalizedName }, connected: [] };
+
+  await joinChannel(item);
+}
+
 // --- Bootstrap ---------------------------------------------------------------
 
 window.addEventListener('DOMContentLoaded', function() {
@@ -5939,7 +5968,12 @@ window.addEventListener('DOMContentLoaded', function() {
     btn.classList.add('btn-ghost');
     btn.classList.remove('btn-secondary');
     lockHomeCTAs();
-    joinRoom($('input-code').value.trim())
+    var rawCode = $('input-code').value.trim();
+    var joinCode = normalizeRoomCode(rawCode);
+    var joinPromise = (!UUID_RE.test(joinCode) && presenceConfigured())
+      ? joinOrCreateByChannelName(joinCode)
+      : joinRoom(rawCode);
+    joinPromise
       .catch(function(err) {
         if (err.message === 'Connection cancelled.') { showCopyToast('Connection cancelled'); return; }
         if (isMicDeniedError(err)) showMicDeniedError(function() { $('btn-join').click(); });
