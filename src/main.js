@@ -778,14 +778,14 @@ async function publishRoom() {
     return;
   }
   _lastPublishAt = now;
-  var label = activeChannel || null;
+  var name = activeChannel || null;
   var peerCount = currentRoomPeerCount() || (connections.size + 1);
   var headers = { 'Content-Type': 'application/json' };
   if (_publishSecret) headers['x-room-secret'] = _publishSecret;
   var res = await tauriFetch(ANONYMOUS_ROOMS_BASE, {
     method: 'POST',
     headers: headers,
-    body: JSON.stringify({ room_id: roomCode, label: label, peer_count: peerCount }),
+    body: JSON.stringify({ room_id: roomCode, name: name, peer_count: peerCount }),
   });
   if (!res.ok) {
     var body = null;
