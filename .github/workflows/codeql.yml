@@ -44,7 +44,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "17"
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -54,6 +54,14 @@ jobs:
 
       - name: Install npm dependencies
         run: npm ci
+
+      # Ensure Android SDK and required platform/build-tools exist (before any Android sync/build)
+      - name: Set up Android SDK
+        uses: r0adkll/setup-android@v2
+        with:
+          api-level: 33            # change to your project's compileSdkVersion if different
+          build-tools: 33.0.2      # pick compatible build-tools version
+          cache: true
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
@@ -65,10 +73,10 @@ jobs:
       - name: Sync Capacitor Android project
         run: npx cap sync android
 
-      - name: Build Android app for CodeQL extraction
+      - name: Build Android app for CodeQL extraction (verbose)
         run: |
           cd android
-          ./gradlew :app:assembleDebug --no-daemon
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace --info
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
