@@ -768,7 +768,7 @@ var PUBLISH_HEARTBEAT_MS   = 50 * 60 * 1000; // 50 min (TTL is 1h)
 var PUBLISH_DEBOUNCE_MS    = 10000;
 var PUBLISH_MIN_INTERVAL   = 30000; // never POST more often than every 30s
 
-async function publishRoom() {
+async function publishRoom(opts) {
   if (!isHost || !peer || !roomCode) return;
   var now = Date.now();
   var elapsed = now - _lastPublishAt;
@@ -778,14 +778,15 @@ async function publishRoom() {
     return;
   }
   _lastPublishAt = now;
-  var label = activeChannel || null;
   var peerCount = currentRoomPeerCount() || (connections.size + 1);
   var headers = { 'Content-Type': 'application/json' };
   if (_publishSecret) headers['x-room-secret'] = _publishSecret;
+  var postBody = { room_id: roomCode, peer_count: peerCount };
+  if (opts && opts.room_code) postBody.room_code = opts.room_code;
   var res = await tauriFetch(ANONYMOUS_ROOMS_BASE, {
     method: 'POST',
     headers: headers,
-    body: JSON.stringify({ room_id: roomCode, label: label, peer_count: peerCount }),
+    body: JSON.stringify(postBody),
   });
   if (!res.ok) {
     var body = null;
@@ -1719,7 +1720,7 @@ function roomInviteUrl(roomId) {
 }
 
 function roomDisplayCode() {
-  return _publishedRoomId || activeChannelRoomId || activeChannel || roomCode || '';
+  return activeChannelRoomId || activeChannel || _publishedRoomId || roomCode || '';
 }
 
 function roomIdFromPayload(obj) {
@@ -2171,12 +2172,19 @@ function saveRejoinSnapshot() {
   if (!inRoom || !peer || !roomCode) return;
   _rejoinDismissed = false;
   var peerIds = Array.from(knownPeerIds).filter(function(id) { return id !== (peer && peer.id); });
+  // Prefer activeChannel (presence), then activeChannelRoomId, then _publishedRoomId —
+  // whichever is a non-UUID named code worth re-resolving on rejoin.
+  var channelName = activeChannel
+    || (activeChannelRoomId && !UUID_RE.test(activeChannelRoomId) ? activeChannelRoomId : null)
+    || (_publishedRoomId   && !UUID_RE.test(_publishedRoomId)     ? _publishedRoomId   : null)
+    || null;
   var snapshot = {
-    hostId:    roomCode,
-    deputyId:  currentDeputyId() || null,
-    peerIds:   peerIds,
-    wasHost:   isHost,
-    savedAt:   Date.now()
+    hostId:      roomCode,
+    deputyId:    currentDeputyId() || null,
+    peerIds:     peerIds,
+    wasHost:     isHost,
+    channelName: channelName,
+    savedAt:     Date.now()
   };
   localStorage.setItem(REJOIN_SNAPSHOT_KEY, JSON.stringify(snapshot));
 }
@@ -4616,9 +4624,21 @@ function becomeHost() {
   // peer.on('connection') is already wired in joinRoom() and will route here
   // since isHost is now true
 
-  // If the room was published as a public lobby, update the API with our new peer ID
+  // If the room was published as a public lobby, update the API with our new peer ID.
   if (_publishedRoomId && _publishSecret) {
+    // Original host flow: POST with secret updates voxal_room_code.
     publishRoom().catch(function(e) { console.warn('[migration] re-publish failed:', e.message); });
+  } else if (_publishedRoomId) {
+    // PATCH-claimed room (no secret) — register ourselves as the new host.
+    tauriFetch(ANONYMOUS_ROOMS_BASE + '/by-code/' + encodeURIComponent(_publishedRoomId), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ voxal_room_code: peer.id }),
+    }).then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        if (data && data.room_code) { _publishedRoomId = data.room_code; updateRoomHeader(); }
+      })
+      .catch(function(e) { console.warn('[migration] PATCH host failed:', e.message); });
   }
   if (activeChannel) {
     syncPresenceChannelSession();
@@ -5444,12 +5464,25 @@ async function joinRoom(code, onJoined) {
       activeChannelRoomId = '';
       code = channelResolved.hostId;
     } else if (channelResolved && !channelResolved.hostId) {
-      throw new Error('Channel "' + (channelResolved.channelName || requestedCode) + '" has no online peers to join.');
+      // Channel found but empty — callers that go through joinOrCreateByChannelName
+      // never reach here; this path is only hit by direct joinRoom() calls.
+      activeChannel = channelResolved.channelName || requestedCode;
+      await createRoom(onJoined);
+      return;
     }
   } else if (UUID_RE.test(requestedCode)) {
     // Direct peer-id join: keep UUID as display/share code unless a room id is later published.
     activeChannelRoomId = '';
   }
+
+  // Safety net: if code is still non-UUID here, all resolution failed.
+  // Become the host rather than attempting to connect to a non-existent peer.
+  if (!UUID_RE.test(code)) {
+    await createRoom(onJoined);
+    publishRoom().catch(function(e) { console.warn('[publish] auto-publish failed:', e.message); });
+    return;
+  }
+
   resetKnownPeers([code]);
   _lastAuthoritativePeerIds = null;
   _authoritativeSuccessorIds = [];
@@ -5537,7 +5570,13 @@ async function attemptRejoin() {
     }
   }
 
-  // All candidates exhausted
+  // All UUID candidates exhausted — if the room had a named code, re-resolve it.
+  // This handles stale hosts: the API may already point at a new host (or we become one).
+  if (snapshot.channelName) {
+    await joinOrCreateByChannelName(snapshot.channelName);
+    return;
+  }
+
   if (stream) { stream.getTracks().forEach(function(t) { t.stop(); }); stream = null; audioTrack = null; }
   throw new Error('Could not reconnect — no peers from the previous room are available.');
 }
@@ -5736,6 +5775,90 @@ async function joinChannel(item) {
     }
     throw lastError || new Error('Could not join this channel.');
   }
+}
+
+// Join or create a room by non-UUID name.
+// With presence configured: delegates to joinChannel which handles host lookup
+// and presence session registration.
+// Without presence: falls back to the anonymous room service — joins an existing
+// host if one is registered, otherwise creates the room and publishes it.
+async function joinOrCreateByChannelName(channelName) {
+  var normalizedName = String(channelName || '').trim();
+  if (!normalizedName) return;
+
+  var cancelled = false;
+  _cancelJoin = function() {
+    cancelled = true;
+    _cancelJoin = null;
+    if (peer && !peer.destroyed) peer.destroy();
+  };
+
+  if (presenceConfigured()) {
+    var list = Array.isArray(presenceData) && presenceData.length ? presenceData : [];
+    if (!list.length) {
+      try { list = await fetchPresence(); } catch (_) { list = []; }
+    }
+    if (cancelled) throw new Error('Connection cancelled.');
+    var target = normalizedName.toLowerCase();
+    var item = null;
+    for (var i = 0; i < list.length; i++) {
+      var li = list[i] || {};
+      if (String((li.channel || {}).name || '').trim().toLowerCase() === target) { item = li; break; }
+    }
+    if (!item) item = { channel: { name: normalizedName }, connected: [] };
+    await joinChannel(item);
+    return;
+  }
+
+  // No presence configured — use anonymous room service.
+  var lookupRes = null;
+  try { lookupRes = await tauriFetch(ANONYMOUS_ROOMS_BASE + '/' + encodeURIComponent(normalizedName)); }
+  catch (_) {}
+  if (cancelled) throw new Error('Connection cancelled.');
+
+  if (lookupRes && lookupRes.ok) {
+    var roomData = null;
+    try { roomData = await lookupRes.json(); } catch (_) {}
+    var hostId = (roomData && (roomData.room_id || roomData.voxal_room_code)) || null;
+    var claimSlug = (roomData && roomData.room_code) || normalizedName;
+
+    if (hostId) {
+      // Room has a registered host — try to join.
+      try {
+        await joinRoom(hostId);
+        activeChannelRoomId = normalizedName;
+        updateRoomHeader();
+        return;
+      } catch (joinErr) {
+        if (joinErr.message === 'Connection cancelled.') throw joinErr;
+        if (isMicDeniedError(joinErr)) throw joinErr;
+        // Stale host — fall through to claim the slot.
+        devLog('✗ Stale host for "' + claimSlug + '", claiming host slot…', 'warn');
+      }
+      if (cancelled) throw new Error('Connection cancelled.');
+    }
+
+    // No host or stale host — become the new host and claim the slot via PATCH.
+    await createRoom();
+    if (cancelled) return;
+    tauriFetch(ANONYMOUS_ROOMS_BASE + '/by-code/' + encodeURIComponent(claimSlug), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ voxal_room_code: roomCode }),
+    }).then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        _publishedRoomId = (data && data.room_code) || claimSlug;
+        updateRoomHeader();
+      })
+      .catch(function(e) { console.warn('[room] PATCH host failed:', e.message); });
+    return;
+  }
+
+  // Room not found (404) — create it and POST with this slug to claim it.
+  await createRoom();
+  publishRoom({ room_code: normalizedName }).catch(function(e) {
+    console.warn('[publish] auto-publish failed:', e.message);
+  });
 }
 
 // --- Bootstrap ---------------------------------------------------------------
@@ -5939,7 +6062,12 @@ window.addEventListener('DOMContentLoaded', function() {
     btn.classList.add('btn-ghost');
     btn.classList.remove('btn-secondary');
     lockHomeCTAs();
-    joinRoom($('input-code').value.trim())
+    var rawCode = $('input-code').value.trim();
+    var joinCode = normalizeRoomCode(rawCode);
+    var joinPromise = !UUID_RE.test(joinCode)
+      ? joinOrCreateByChannelName(joinCode)
+      : joinRoom(rawCode);
+    joinPromise
       .catch(function(err) {
         if (err.message === 'Connection cancelled.') { showCopyToast('Connection cancelled'); return; }
         if (isMicDeniedError(err)) showMicDeniedError(function() { $('btn-join').click(); });
