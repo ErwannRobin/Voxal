@@ -10,7 +10,7 @@ updates:
         patterns:
           - "*"
         update-types:
-          - "minor"
+          - "version-update:semver-minor"
     labels:
       - "dependencies"
 
@@ -24,7 +24,7 @@ updates:
         patterns:
           - "*"
         update-types:
-          - "minor"
+          - "version-update:semver-minor"
     ignore:
       # Blocked by tauri -> gtk 0.18.x -> glib ^0.18. Revisit when tauri upgrades gtk-rs.
       - dependency-name: "glib"
@@ -43,6 +43,6 @@ updates:
         patterns:
           - "*"
         update-types:
-          - "minor"
+          - "version-update:semver-minor"
     labels:
       - "dependencies"
