@@ -6772,6 +6772,10 @@ window.addEventListener('DOMContentLoaded', function() {
         }).catch(function(err) { iframeEmit({ type: 'error', message: err.message }); });
       } else if (msg.type === 'leave') {
         if (inRoom) leaveRoom();
+      } else if (msg.type === 'key' && msg.source === 'voxal-parent') {
+        if (msg.code === 'Space' && !shouldIgnorePTTShortcuts()) {
+          if (msg.down) { setTalking(true); } else { setTalking(false); }
+        }
       }
     });
     // Signal readiness so the parent knows it's safe to send the auth command
