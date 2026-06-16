@@ -778,14 +778,13 @@ async function publishRoom() {
     return;
   }
   _lastPublishAt = now;
-  var name = activeChannel || null;
   var peerCount = currentRoomPeerCount() || (connections.size + 1);
   var headers = { 'Content-Type': 'application/json' };
   if (_publishSecret) headers['x-room-secret'] = _publishSecret;
   var res = await tauriFetch(ANONYMOUS_ROOMS_BASE, {
     method: 'POST',
     headers: headers,
-    body: JSON.stringify({ room_id: roomCode, name: name, peer_count: peerCount }),
+    body: JSON.stringify({ room_id: roomCode, peer_count: peerCount }),
   });
   if (!res.ok) {
     var body = null;
@@ -5458,8 +5457,6 @@ async function joinRoom(code, onJoined) {
   // Safety net: if code is still non-UUID here, all resolution failed.
   // Become the host rather than attempting to connect to a non-existent peer.
   if (!UUID_RE.test(code)) {
-    activeChannel = activeChannel || requestedCode;
-    activeChannelRoomId = activeChannelRoomId || requestedCode;
     await createRoom(onJoined);
     publishRoom().catch(function(e) { console.warn('[publish] auto-publish failed:', e.message); });
     return;
@@ -5799,9 +5796,7 @@ async function joinOrCreateByChannelName(channelName) {
     return;
   }
 
-  // No host anywhere — become the host and publish under this name.
-  activeChannel = normalizedName;
-  activeChannelRoomId = normalizedName;
+  // No host anywhere — become the host; server returns a room_code slug.
   await createRoom();
   publishRoom().catch(function(e) { console.warn('[publish] auto-publish failed:', e.message); });
 }
