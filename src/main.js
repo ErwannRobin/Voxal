@@ -5459,6 +5459,7 @@ async function joinRoom(code, onJoined) {
   // Become the host rather than attempting to connect to a non-existent peer.
   if (!UUID_RE.test(code)) {
     activeChannel = activeChannel || requestedCode;
+    activeChannelRoomId = activeChannelRoomId || requestedCode;
     await createRoom(onJoined);
     publishRoom().catch(function(e) { console.warn('[publish] auto-publish failed:', e.message); });
     return;
@@ -5800,6 +5801,7 @@ async function joinOrCreateByChannelName(channelName) {
 
   // No host anywhere — become the host and publish under this name.
   activeChannel = normalizedName;
+  activeChannelRoomId = normalizedName;
   await createRoom();
   publishRoom().catch(function(e) { console.warn('[publish] auto-publish failed:', e.message); });
 }
