@@ -57,7 +57,7 @@ jobs:
 
       # Ensure Android SDK and required platform/build-tools exist (before any Android sync/build)
       - name: Cache Android SDK
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: $HOME/android-sdk
           key: ${{ runner.os }}-android-sdk-33
@@ -95,7 +95,9 @@ jobs:
           "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --version || true
 
           # Accept licenses non-interactively and install required packages
-          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --licenses || {
+          # Use a subshell around `yes` so its SIGPIPE exit (code 141) doesn't
+          # propagate as a pipeline failure under set -o pipefail.
+          ( yes || true ) | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --licenses || {
             echo "License acceptance failed. Dumping sdkmanager --list output for debugging:"
             "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --list || true
             exit 1
