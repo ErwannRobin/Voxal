@@ -2172,12 +2172,19 @@ function saveRejoinSnapshot() {
   if (!inRoom || !peer || !roomCode) return;
   _rejoinDismissed = false;
   var peerIds = Array.from(knownPeerIds).filter(function(id) { return id !== (peer && peer.id); });
+  // Prefer activeChannel (presence), then activeChannelRoomId, then _publishedRoomId —
+  // whichever is a non-UUID named code worth re-resolving on rejoin.
+  var channelName = activeChannel
+    || (activeChannelRoomId && !UUID_RE.test(activeChannelRoomId) ? activeChannelRoomId : null)
+    || (_publishedRoomId   && !UUID_RE.test(_publishedRoomId)     ? _publishedRoomId   : null)
+    || null;
   var snapshot = {
-    hostId:    roomCode,
-    deputyId:  currentDeputyId() || null,
-    peerIds:   peerIds,
-    wasHost:   isHost,
-    savedAt:   Date.now()
+    hostId:      roomCode,
+    deputyId:    currentDeputyId() || null,
+    peerIds:     peerIds,
+    wasHost:     isHost,
+    channelName: channelName,
+    savedAt:     Date.now()
   };
   localStorage.setItem(REJOIN_SNAPSHOT_KEY, JSON.stringify(snapshot));
 }
@@ -5563,7 +5570,13 @@ async function attemptRejoin() {
     }
   }
 
-  // All candidates exhausted
+  // All UUID candidates exhausted — if the room had a named code, re-resolve it.
+  // This handles stale hosts: the API may already point at a new host (or we become one).
+  if (snapshot.channelName) {
+    await joinOrCreateByChannelName(snapshot.channelName);
+    return;
+  }
+
   if (stream) { stream.getTracks().forEach(function(t) { t.stop(); }); stream = null; audioTrack = null; }
   throw new Error('Could not reconnect — no peers from the previous room are available.');
 }
