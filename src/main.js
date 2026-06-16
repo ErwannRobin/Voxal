@@ -653,6 +653,109 @@ var _devLogChannel = null;       // BroadcastChannel to the detached devlog wind
 var _statsIntervalId  = null;
 var _statsTimerIntervalId = null;
 
+// --- FPS overlay (dev mode) ---
+var _videoFpsIntervalId  = null;  // polling timer for video viewer FPS
+var _screenFpsIntervalId = null;  // polling timer for screen viewer FPS
+
+/**
+ * Start measuring and displaying FPS for a <video> element.
+ * Returns an interval ID that the caller must store and clear later.
+ *
+ * Strategy: prefer requestVideoFrameCallback (frame-accurate); fall back
+ * to getVideoPlaybackQuality (totalVideoFrames delta); last resort is a
+ * simple "frames decoded" diff from the HTMLVideoElement.
+ */
+function _startFpsOverlay(videoElId, overlayElId) {
+  if (!isDevModeEnabled()) return null;
+  var overlayEl = document.getElementById(overlayElId);
+  if (overlayEl) overlayEl.classList.remove('hidden');
+
+  var vid = document.getElementById(videoElId);
+  if (!vid) return null;
+
+  // Helper: resolve resolution from multiple sources
+  function resolveRes(v) {
+    var w = v.videoWidth, h = v.videoHeight;
+    if (w && h) return w + '\u00d7' + h;
+    // Fallback: read from the MediaStreamTrack settings
+    var stream = v.srcObject;
+    if (stream) {
+      var tracks = stream.getVideoTracks();
+      if (tracks.length) {
+        var s = tracks[0].getSettings();
+        if (s.width && s.height) return s.width + '\u00d7' + s.height;
+      }
+    }
+    return '';
+  }
+
+  // -- requestVideoFrameCallback path (Chrome 83+, Edge, Safari 15.4+) --
+  if (typeof vid.requestVideoFrameCallback === 'function') {
+    var rvfcFrames = 0;
+    var rvfcLast   = performance.now();
+    var rvfcHandle = null;
+    var rvfcRes    = '';  // last resolution captured from metadata
+
+    function onFrame(now, metadata) {
+      rvfcFrames++;
+      if (metadata && metadata.width && metadata.height) {
+        rvfcRes = metadata.width + '\u00d7' + metadata.height;
+      }
+      rvfcHandle = vid.requestVideoFrameCallback(onFrame);
+    }
+    rvfcHandle = vid.requestVideoFrameCallback(onFrame);
+
+    var id = setInterval(function() {
+      var overlay = document.getElementById(overlayElId);
+      var v = document.getElementById(videoElId);
+      if (!overlay) return;
+      var now = performance.now();
+      var dt  = (now - rvfcLast) / 1000;
+      var fps = dt > 0 ? Math.round(rvfcFrames / dt) : 0;
+      var res = rvfcRes || (v ? resolveRes(v) : '');
+      overlay.textContent = fps + ' fps' + (res ? '  ' + res : '');
+      rvfcFrames = 0;
+      rvfcLast   = now;
+    }, 1000);
+
+    // Stash cancel handle so we can clean up the rVFC callback
+    id._rvfcCancel = function() {
+      if (rvfcHandle != null) vid.cancelVideoFrameCallback(rvfcHandle);
+    };
+    return id;
+  }
+
+  // -- getVideoPlaybackQuality fallback (older browsers) --
+  var prevFrames = 0;
+  if (vid.getVideoPlaybackQuality) {
+    prevFrames = vid.getVideoPlaybackQuality().totalVideoFrames || 0;
+  }
+
+  return setInterval(function() {
+    var overlay = document.getElementById(overlayElId);
+    var v = document.getElementById(videoElId);
+    if (!overlay || !v) return;
+    var frames = 0;
+    if (v.getVideoPlaybackQuality) {
+      frames = v.getVideoPlaybackQuality().totalVideoFrames || 0;
+    }
+    var fps = frames - prevFrames;
+    prevFrames = frames;
+    var res = resolveRes(v);
+    overlay.textContent = fps + ' fps' + (res ? '  ' + res : '');
+  }, 1000);
+}
+
+function _stopFpsOverlay(intervalId, overlayElId) {
+  if (intervalId) {
+    if (intervalId._rvfcCancel) intervalId._rvfcCancel();
+    clearInterval(intervalId);
+  }
+  var overlay = document.getElementById(overlayElId);
+  if (overlay) { overlay.classList.add('hidden'); overlay.textContent = ''; }
+  return null;
+}
+
 // --- Anonymous room publish ---
 var _publishSecret         = null;
 var _publishedRoomId       = null;
@@ -3975,6 +4078,8 @@ function openVideoViewer(peerId) {
   var title = document.getElementById('video-viewer-title');
   if (title) title.textContent = '📹 ' + (conn.pseudo || 'Camera');
   panel.classList.remove('hidden');
+  _videoFpsIntervalId = _stopFpsOverlay(_videoFpsIntervalId, 'video-viewer-fps');
+  _videoFpsIntervalId = _startFpsOverlay('video-viewer-element', 'video-viewer-fps');
   if (!IS_NATIVE_MOBILE && /Mobi|Android/i.test(navigator.userAgent)) {
     if (panel.requestFullscreen) panel.requestFullscreen().catch(function() {});
   }
@@ -3998,6 +4103,8 @@ function openScreenViewer(peerId) {
   var title = document.getElementById('screen-viewer-title');
   if (title) title.textContent = '🖥 ' + (conn.pseudo || 'Screen');
   panel.classList.remove('hidden');
+  _screenFpsIntervalId = _stopFpsOverlay(_screenFpsIntervalId, 'screen-viewer-fps');
+  _screenFpsIntervalId = _startFpsOverlay('screen-viewer-element', 'screen-viewer-fps');
   if (!IS_NATIVE_MOBILE && /Mobi|Android/i.test(navigator.userAgent)) {
     if (panel.requestFullscreen) panel.requestFullscreen().catch(function() {});
   }
@@ -4216,6 +4323,7 @@ window._voxalVideoPopIn = function() {
 };
 
 function closeVideoViewer() {
+  _videoFpsIntervalId = _stopFpsOverlay(_videoFpsIntervalId, 'video-viewer-fps');
   var panel = document.getElementById('video-viewer-panel');
   var vid   = document.getElementById('video-viewer-element');
   if (panel) panel.classList.add('hidden');
@@ -4234,6 +4342,7 @@ function closeVideoViewer() {
 }
 
 function closeScreenViewer() {
+  _screenFpsIntervalId = _stopFpsOverlay(_screenFpsIntervalId, 'screen-viewer-fps');
   var panel = document.getElementById('screen-viewer-panel');
   var vid   = document.getElementById('screen-viewer-element');
   if (panel) panel.classList.add('hidden');
@@ -4247,6 +4356,8 @@ function closeScreenViewer() {
 }
 
 function resetVideoState() {
+  _videoFpsIntervalId  = _stopFpsOverlay(_videoFpsIntervalId, 'video-viewer-fps');
+  _screenFpsIntervalId = _stopFpsOverlay(_screenFpsIntervalId, 'screen-viewer-fps');
   stopVideoShare();
   stopScreenShare();
   videoModeEnabled = true;

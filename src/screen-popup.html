@@ -6,10 +6,20 @@
   <style>
     body { margin: 0; background: #000; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; font-family: system-ui; }
     video { width: 100%; height: 100%; object-fit: contain; }
+    .fps-overlay {
+      position: fixed; bottom: 8px; right: 8px;
+      background: rgba(0,0,0,0.55); color: #0f0;
+      font-family: 'SF Mono','Menlo','Consolas',monospace;
+      font-size: 11px; line-height: 1; padding: 3px 6px;
+      border-radius: 4px; pointer-events: none; z-index: 10;
+      backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+      display: none;
+    }
   </style>
 </head>
 <body>
   <video id="v" autoplay playsinline></video>
+  <span id="fps-overlay" class="fps-overlay"></span>
   <script>
     var v = document.getElementById('v');
     var pc = null;
@@ -23,6 +33,7 @@
           pc.ontrack = function(e) {
             v.srcObject = e.streams[0] || new MediaStream([e.track]);
             v.play().catch(function() {});
+            startFpsOverlay();
           };
           await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
           var answer = await pc.createAnswer();
@@ -52,6 +63,46 @@
         if (pc) pc.close();
       }
     });
+
+    // --- FPS + resolution overlay (dev mode only) ---
+    function startFpsOverlay() {
+      try { if (localStorage.getItem('dev-mode') !== 'true') return; } catch(_) { return; }
+      var overlay = document.getElementById('fps-overlay');
+      if (!overlay) return;
+      overlay.style.display = '';
+
+      function resolveRes() {
+        if (v.videoWidth && v.videoHeight) return v.videoWidth + '\u00d7' + v.videoHeight;
+        var s = v.srcObject;
+        if (s) { var t = s.getVideoTracks(); if (t.length) { var st = t[0].getSettings(); if (st.width && st.height) return st.width + '\u00d7' + st.height; } }
+        return '';
+      }
+
+      if (typeof v.requestVideoFrameCallback === 'function') {
+        var frames = 0, last = performance.now(), res = '';
+        function onFrame(now, meta) {
+          frames++;
+          if (meta && meta.width && meta.height) res = meta.width + '\u00d7' + meta.height;
+          v.requestVideoFrameCallback(onFrame);
+        }
+        v.requestVideoFrameCallback(onFrame);
+        setInterval(function() {
+          var dt = (performance.now() - last) / 1000;
+          var fps = dt > 0 ? Math.round(frames / dt) : 0;
+          var r = res || resolveRes();
+          overlay.textContent = fps + ' fps' + (r ? '  ' + r : '');
+          frames = 0; last = performance.now();
+        }, 1000);
+      } else {
+        var prev = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames || 0 : 0;
+        setInterval(function() {
+          var cur = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames || 0 : 0;
+          var fps = cur - prev; prev = cur;
+          var r = resolveRes();
+          overlay.textContent = fps + ' fps' + (r ? '  ' + r : '');
+        }, 1000);
+      }
+    }
   </script>
 </body>
 </html>

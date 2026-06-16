@@ -2091,6 +2091,7 @@ details.turn-section .turn-inner {
   bottom: 80px;
   right: 20px;
   width: 320px;
+  height: 260px;
   background: var(--bg-card, #1a1a2e);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -2100,6 +2101,8 @@ details.turn-section .turn-inner {
   resize: both;
   min-width: 200px;
   min-height: 150px;
+  display: flex;
+  flex-direction: column;
 }
 .platform-mobile .video-viewer-panel {
   width: 60vw;
@@ -2130,6 +2133,7 @@ details.turn-section .turn-inner {
   cursor: move;
   user-select: none;
   -webkit-user-select: none;
+  flex-shrink: 0;
 }
 .video-viewer-title {
   font-size: 12px;
@@ -2155,10 +2159,32 @@ details.turn-section .turn-inner {
 }
 
 .video-viewer-panel video {
+  flex: 1;
+  min-height: 0;
   width: 100%;
   display: block;
   background: #000;
+  object-fit: contain;
 }
+
+/* FPS overlay badge (dev mode only) */
+.video-fps-overlay {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #0f0;
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 2;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+.video-fps-overlay.hidden { display: none; }
 
 /* Fullscreen overlay (mobile/web) */
 .video-viewer-panel:fullscreen {
