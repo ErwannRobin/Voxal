@@ -129,7 +129,9 @@ jobs:
       - name: Build Android app for CodeQL extraction (verbose)
         run: |
           cd android
-          ./gradlew :app:assembleDebug --no-daemon --stacktrace --info
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace \
+            -Dorg.gradle.java.installations.auto-download=false \
+            -Dorg.gradle.java.installations.fromEnv=JAVA_HOME
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
