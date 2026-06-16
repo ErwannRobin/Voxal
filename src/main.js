@@ -1719,7 +1719,7 @@ function roomInviteUrl(roomId) {
 }
 
 function roomDisplayCode() {
-  return _publishedRoomId || activeChannelRoomId || activeChannel || roomCode || '';
+  return activeChannelRoomId || activeChannel || _publishedRoomId || roomCode || '';
 }
 
 function roomIdFromPayload(obj) {
