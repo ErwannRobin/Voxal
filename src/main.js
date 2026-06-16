@@ -5454,6 +5454,16 @@ async function joinRoom(code, onJoined) {
     // Direct peer-id join: keep UUID as display/share code unless a room id is later published.
     activeChannelRoomId = '';
   }
+
+  // Safety net: if code is still non-UUID here, all resolution failed.
+  // Become the host rather than attempting to connect to a non-existent peer.
+  if (!UUID_RE.test(code)) {
+    activeChannel = activeChannel || requestedCode;
+    await createRoom(onJoined);
+    publishRoom().catch(function(e) { console.warn('[publish] auto-publish failed:', e.message); });
+    return;
+  }
+
   resetKnownPeers([code]);
   _lastAuthoritativePeerIds = null;
   _authoritativeSuccessorIds = [];
@@ -5742,29 +5752,56 @@ async function joinChannel(item) {
   }
 }
 
-// Join or create a presence channel by name (non-UUID flow).
-// Looks up the channel in presence data; if no host is online (or the channel
-// doesn't exist yet) it creates the room and hosts it under that channel name.
+// Join or create a room by non-UUID name.
+// With presence configured: delegates to joinChannel which handles host lookup
+// and presence session registration.
+// Without presence: falls back to the anonymous room service — joins an existing
+// host if one is registered, otherwise creates the room and publishes it.
 async function joinOrCreateByChannelName(channelName) {
   var normalizedName = String(channelName || '').trim();
-  if (!normalizedName || !presenceConfigured()) return;
+  if (!normalizedName) return;
 
-  var list = Array.isArray(presenceData) && presenceData.length ? presenceData : [];
-  if (!list.length) {
-    try { list = await fetchPresence(); } catch (_) { list = []; }
+  var cancelled = false;
+  _cancelJoin = function() {
+    cancelled = true;
+    _cancelJoin = null;
+    if (peer && !peer.destroyed) peer.destroy();
+  };
+
+  if (presenceConfigured()) {
+    var list = Array.isArray(presenceData) && presenceData.length ? presenceData : [];
+    if (!list.length) {
+      try { list = await fetchPresence(); } catch (_) { list = []; }
+    }
+    if (cancelled) throw new Error('Connection cancelled.');
+    var target = normalizedName.toLowerCase();
+    var item = null;
+    for (var i = 0; i < list.length; i++) {
+      var li = list[i] || {};
+      if (String((li.channel || {}).name || '').trim().toLowerCase() === target) { item = li; break; }
+    }
+    if (!item) item = { channel: { name: normalizedName }, connected: [] };
+    await joinChannel(item);
+    return;
   }
 
-  var target = normalizedName.toLowerCase();
-  var item = null;
-  for (var i = 0; i < list.length; i++) {
-    var li = list[i] || {};
-    var chName = String((li.channel || {}).name || '').trim();
-    if (chName.toLowerCase() === target) { item = li; break; }
+  // No presence configured — use anonymous room lookup.
+  var hostId = await lookupRoom(normalizedName);
+  if (cancelled) throw new Error('Connection cancelled.');
+
+  if (hostId) {
+    // A host is registered in the anonymous room service — join them.
+    await joinRoom(hostId);
+    // Restore the named code in the room header (joinRoom clears it for UUID inputs).
+    activeChannelRoomId = normalizedName;
+    updateRoomHeader();
+    return;
   }
 
-  if (!item) item = { channel: { name: normalizedName }, connected: [] };
-
-  await joinChannel(item);
+  // No host anywhere — become the host and publish under this name.
+  activeChannel = normalizedName;
+  await createRoom();
+  publishRoom().catch(function(e) { console.warn('[publish] auto-publish failed:', e.message); });
 }
 
 // --- Bootstrap ---------------------------------------------------------------
@@ -5970,7 +6007,7 @@ window.addEventListener('DOMContentLoaded', function() {
     lockHomeCTAs();
     var rawCode = $('input-code').value.trim();
     var joinCode = normalizeRoomCode(rawCode);
-    var joinPromise = (!UUID_RE.test(joinCode) && presenceConfigured())
+    var joinPromise = !UUID_RE.test(joinCode)
       ? joinOrCreateByChannelName(joinCode)
       : joinRoom(rawCode);
     joinPromise
