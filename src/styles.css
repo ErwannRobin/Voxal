@@ -833,6 +833,50 @@ body.embed-hide-header #screen-room .room-header {
   display: none;
 }
 
+/* ── Tiny embed: connect/home screen (418×128 iframe) ─────────────── */
+
+body.embed-tiny #screen-home {
+  min-height: unset;
+  padding: 12px 16px;
+  justify-content: center;
+}
+
+body.embed-tiny #screen-home .screen-topbar,
+body.embed-tiny #screen-home .brand,
+body.embed-tiny #screen-home #presence-panel,
+body.embed-tiny #screen-home #btn-connect-voxal-home,
+body.embed-tiny #screen-home #divider-after-connect,
+body.embed-tiny #screen-home .divider,
+body.embed-tiny #screen-home #rejoin-bar,
+body.embed-tiny #screen-home #dev-log-panel {
+  display: none !important;
+}
+
+body.embed-tiny #screen-home .home-actions {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+body.embed-tiny #screen-home #btn-create {
+  flex: 0 0 auto;
+  width: auto;
+  white-space: nowrap;
+}
+
+body.embed-tiny #screen-home .join-row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+body.embed-tiny #screen-home input[type="text"] {
+  background: var(--bg);
+  border-color: var(--accent);
+}
+
+/* ── Tiny embed: room screen ──────────────────────────────────────── */
+
 body.embed-tiny #screen-room {
   position: relative;
   padding-top:    max(calc(env(safe-area-inset-top)    + 10px), 10px);
@@ -1063,26 +1107,50 @@ body.embed-tiny #screen-room .peer-item-compact .peer-name-inline {
   box-shadow: 0 4px 12px rgba(0,0,0,0.4);
 }
 
+body.embed-tiny #screen-invite-loading {
+  padding: 12px 16px;
+  justify-content: center;
+}
+
 body.embed-tiny #screen-invite-loading .invite-loading-panel {
-  width: min(340px, 100%);
+  width: 100%;
+  flex-direction: row;
+  align-items: center;
   gap: 8px;
+  padding: 0;
+  border: none;
+  background: transparent;
 }
 
 body.embed-tiny #screen-invite-loading .brand-icon,
 body.embed-tiny #screen-invite-loading h2,
-body.embed-tiny #screen-invite-loading #invite-room-code {
+body.embed-tiny #screen-invite-loading #invite-room-code,
+body.embed-tiny #screen-invite-loading .invite-peer-count {
   display: none;
 }
 
-body.embed-tiny #screen-invite-loading .invite-peer-count {
-  display: block;
+body.embed-tiny #screen-invite-loading .invite-loading-status {
+  display: none;
+}
+
+body.embed-tiny #screen-invite-loading .invite-pseudo-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  margin-top: 0;
+}
+
+body.embed-tiny #screen-invite-loading input[type="text"] {
+  background: var(--bg);
+  border-color: var(--accent);
 }
 
 body.embed-tiny #screen-invite-loading #btn-cancel-invite-join {
   display: inline-flex;
-  align-self: stretch;
+  align-self: center;
   justify-content: center;
-  margin-top: 4px;
+  margin-top: 0;
+  flex: 0 0 auto;
 }
 
 body.embed-tiny #screen-room .ptt-area {
