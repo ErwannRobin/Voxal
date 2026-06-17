@@ -907,7 +907,7 @@ body.embed-tiny #screen-room .room-peers-panel {
 
 /* ── Tiny embed: responsive room breakpoints ──────────────────────── */
 
-/* Compact (72–199 px): hide other-peer chips, show only the self chip */
+/* Compact (101–199 px): hide other-peer chips, show only the self chip */
 body.embed-tiny.tiny-compact #screen-room .tiny-peers-others {
   display: none;
 }

@@ -5900,8 +5900,8 @@ window.addEventListener('DOMContentLoaded', function() {
 
     function updateTinyRoomBreakpoint() {
       var w = document.body.offsetWidth;
-      document.body.classList.toggle('tiny-micro',   w < 72);
-      document.body.classList.toggle('tiny-compact', w >= 72 && w < 200);
+      document.body.classList.toggle('tiny-micro',   w <= 100);
+      document.body.classList.toggle('tiny-compact', w > 100 && w < 200);
     }
     new ResizeObserver(updateTinyRoomBreakpoint).observe(document.body);
     updateTinyRoomBreakpoint();
@@ -6141,11 +6141,13 @@ window.addEventListener('DOMContentLoaded', function() {
   var invitedRoomCode = consumeRoomInviteFromQuery();
   if (invitedRoomCode) {
     // On native (Tauri/Capacitor) the deep-link is already being handled; join directly.
-    // On tiny embeds, auto-join if a name is already set; otherwise prompt for one first.
+    // On tiny embeds, auto-join if a name is already set or the iframe is in micro mode
+    // (≤ 100 px — too small for the name-entry screen; a random name will be used).
     // On regular web, try opening the native app first, then fall back.
     var isNative = window.__TAURI__ || (window.Capacitor && window.Capacitor.isNativePlatform());
     if (IS_TINY_EMBED) {
-      if ((myPseudo || '').trim()) {
+      var isMicro = document.body.classList.contains('tiny-micro');
+      if ((myPseudo || '').trim() || isMicro) {
         startInviteRoomJoin(invitedRoomCode);
       } else {
         showTinyInviteConnect(invitedRoomCode);
