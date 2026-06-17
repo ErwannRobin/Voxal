@@ -1947,7 +1947,10 @@ function startInviteRoomJoin(rawRoomCode) {
   if (!roomId) return;
   showInviteLoading(roomId, 'Connecting…');
   if (_audioCtx.state === 'suspended') _audioCtx.resume();
-  joinRoom(roomId).catch(function(err) {
+  var joinPromise = !UUID_RE.test(roomId)
+    ? joinOrCreateByChannelName(roomId)
+    : joinRoom(roomId);
+  joinPromise.catch(function(err) {
     if (err && err.message === 'Connection cancelled.') return;
     showError(err.message);
   });
@@ -2087,9 +2090,8 @@ function showTinyInviteConnect(roomId, peerCount) {
   showScreen('invite-loading');
   lookupRoomInfo(normalized).then(function(info) {
     if (!_invitePendingRoomId || _invitePendingRoomId !== normalized || !info) return;
-    if (info.roomId && info.roomId !== normalized && !Number.isFinite(peerCount)) {
-      _invitePendingRoomId = normalizeRoomCode(info.roomId) || normalized;
-    }
+    // Don't replace a named code with its UUID — stale-host recovery in
+    // joinOrCreateByChannelName needs the original slug.
     if (Number.isFinite(info.peerCount)) setTinyInvitePeerCount(info.peerCount);
   }).catch(function() {});
 }
