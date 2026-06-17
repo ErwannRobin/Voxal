@@ -2026,7 +2026,9 @@ function _tryNativeAppThenJoin(roomId) {
 function showInviteLoading(roomLabel, statusText) {
   if (IS_TINY_EMBED) {
     roomLabel = '';
-    statusText = 'Connecting ...';
+    statusText = 'Connecting …';
+    var tinyScreen = $('screen-invite-loading');
+    if (tinyScreen) tinyScreen.classList.add('tiny-connecting');
   }
   var roomCodeEl = $('invite-room-code');
   if (roomCodeEl) roomCodeEl.textContent = roomLabel || '';
@@ -2080,6 +2082,8 @@ function showTinyInviteConnect(roomId, peerCount) {
   var normalized = normalizeRoomCode(roomId);
   if (!normalized) return;
   _invitePendingRoomId = normalized;
+  var tinyScreen = $('screen-invite-loading');
+  if (tinyScreen) tinyScreen.classList.remove('tiny-connecting');
   var roomCodeEl = $('invite-room-code');
   if (roomCodeEl) roomCodeEl.textContent = '';
   var statusEl = $('invite-join-status');

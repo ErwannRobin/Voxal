@@ -1133,6 +1133,16 @@ body.embed-tiny #screen-invite-loading .invite-loading-status {
   display: none;
 }
 
+body.embed-tiny #screen-invite-loading.tiny-connecting .invite-loading-status {
+  display: inline-flex;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+body.embed-tiny #screen-invite-loading.tiny-connecting .invite-pseudo-field {
+  display: none;
+}
+
 body.embed-tiny #screen-invite-loading .invite-pseudo-field {
   flex: 1 1 auto;
   min-width: 0;
