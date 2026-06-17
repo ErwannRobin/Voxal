@@ -1165,16 +1165,6 @@ body.embed-tiny #screen-room .room-bottom-bar {
   display: none;
 }
 
-body.embed-tiny #screen-room .tiny-leave-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  position: absolute;
-  /* vertically center the ~32px icon within the 64px mic button */
-  top: calc(max(calc(env(safe-area-inset-top) + 6px), 6px) + 16px);
-  right: max(calc(env(safe-area-inset-right) + 10px), 10px);
-  z-index: 40;
-}
 
 body.embed-tiny #screen-room #ptt-hint,
 body.embed-tiny #screen-room #ptt-status,

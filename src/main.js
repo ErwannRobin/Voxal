@@ -6129,11 +6129,15 @@ window.addEventListener('DOMContentLoaded', function() {
   var invitedRoomCode = consumeRoomInviteFromQuery();
   if (invitedRoomCode) {
     // On native (Tauri/Capacitor) the deep-link is already being handled; join directly.
-    // On tiny embeds, wait for an explicit connect tap instead of auto-joining.
+    // On tiny embeds, auto-join if a name is already set; otherwise prompt for one first.
     // On regular web, try opening the native app first, then fall back.
     var isNative = window.__TAURI__ || (window.Capacitor && window.Capacitor.isNativePlatform());
     if (IS_TINY_EMBED) {
-      showTinyInviteConnect(invitedRoomCode);
+      if ((myPseudo || '').trim()) {
+        startInviteRoomJoin(invitedRoomCode);
+      } else {
+        showTinyInviteConnect(invitedRoomCode);
+      }
     } else if (isNative || FORCE_WEB_JOIN) {
       startInviteRoomJoin(invitedRoomCode);
     } else {
