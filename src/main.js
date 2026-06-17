@@ -2034,7 +2034,7 @@ function showInviteLoading(roomLabel, statusText) {
   if (statusEl) statusEl.textContent = statusText || 'Connecting…';
   setInviteLoadingSpinnerVisible(true);
   _inviteWebFallbackRoomId = '';
-  setInviteLoadingCtaMode(_prevScreen ? 'back' : 'cancel');
+  setInviteLoadingCtaMode((!IS_TINY_EMBED && _prevScreen) ? 'back' : 'cancel');
   showScreen('invite-loading');
 }
 
