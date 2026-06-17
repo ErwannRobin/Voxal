@@ -1231,6 +1231,10 @@ body.embed-tiny.tiny-micro #screen-invite-loading .invite-loading-status {
   flex: 0 0 auto;
 }
 
+body.embed-tiny.tiny-micro #screen-invite-loading #invite-join-status {
+  display: none;
+}
+
 body.embed-tiny #screen-room .ptt-area {
   display: none;
 }
