@@ -896,13 +896,37 @@ body.embed-tiny #screen-room .room-peers-panel {
   position: absolute;
   top: max(calc(env(safe-area-inset-top) + 10px), 10px);
   left: max(calc(env(safe-area-inset-left) + 12px), 12px);
-  right: calc(max(calc(env(safe-area-inset-right) + 10px), 10px) + 72px);
+  right: max(calc(env(safe-area-inset-right) + 12px), 12px);
   z-index: 30;
   flex: 1 1 auto;
   gap: 8px;
   margin-bottom: 0;
   padding-bottom: 0;
   padding-left: 0;
+}
+
+/* ── Tiny embed: responsive room breakpoints ──────────────────────── */
+
+/* Compact (72–199 px): hide other-peer chips, show only the self chip */
+body.embed-tiny.tiny-compact #screen-room .tiny-peers-others {
+  display: none;
+}
+
+/* Micro (< 72 px): hide others + self chip text/edit, show only the mic icon */
+body.embed-tiny.tiny-micro #screen-room .tiny-peers-others {
+  display: none;
+}
+
+body.embed-tiny.tiny-micro #screen-room .peer-item-compact.peer-self {
+  padding: 6px;
+  height: auto;
+  gap: 0;
+  margin-right: 0;
+}
+
+body.embed-tiny.tiny-micro #screen-room .peer-item-compact.peer-self .peer-compact-label,
+body.embed-tiny.tiny-micro #screen-room .peer-item-compact.peer-self .peer-edit-btn {
+  display: none;
 }
 
 body.embed-tiny #screen-room .peers-list {

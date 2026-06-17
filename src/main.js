@@ -5897,6 +5897,14 @@ window.addEventListener('DOMContentLoaded', function() {
     if (staleLeft && staleLeft.parentNode) staleLeft.parentNode.removeChild(staleLeft);
     var staleRight = $('btn-peers-right');
     if (staleRight && staleRight.parentNode) staleRight.parentNode.removeChild(staleRight);
+
+    function updateTinyRoomBreakpoint() {
+      var w = document.body.offsetWidth;
+      document.body.classList.toggle('tiny-micro',   w < 72);
+      document.body.classList.toggle('tiny-compact', w >= 72 && w < 200);
+    }
+    new ResizeObserver(updateTinyRoomBreakpoint).observe(document.body);
+    updateTinyRoomBreakpoint();
   }
 
   applyEmbedHeaderMode();
