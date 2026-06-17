@@ -912,20 +912,50 @@ body.embed-tiny.tiny-compact #screen-room .tiny-peers-others {
   display: none;
 }
 
-/* Micro (< 72 px): hide others + self chip text/edit, show only the mic icon */
+/* Micro (≤ 100 px): fill the entire iframe with a large 🎙️ emoji */
 body.embed-tiny.tiny-micro #screen-room .tiny-peers-others {
   display: none;
 }
 
-body.embed-tiny.tiny-micro #screen-room .peer-item-compact.peer-self {
-  padding: 6px;
-  height: auto;
-  gap: 0;
-  margin-right: 0;
+body.embed-tiny.tiny-micro #screen-room .room-peers-panel {
+  top: 0; left: 0; right: 0; bottom: 0;
 }
 
+body.embed-tiny.tiny-micro #screen-room .peer-item-compact.peer-self {
+  position: absolute;
+  inset: 0;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  height: 100%;
+  gap: 0;
+  margin: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+body.embed-tiny.tiny-micro #screen-room .peer-item-compact.peer-self .peer-mic-wrapper,
+body.embed-tiny.tiny-micro #screen-room .peer-item-compact.peer-self .peer-mic-icon {
+  width: auto;
+  height: auto;
+}
+
+body.embed-tiny.tiny-micro #screen-room .peer-item-compact.peer-self .peer-mic-icon svg,
 body.embed-tiny.tiny-micro #screen-room .peer-item-compact.peer-self .peer-compact-label,
-body.embed-tiny.tiny-micro #screen-room .peer-item-compact.peer-self .peer-edit-btn {
+body.embed-tiny.tiny-micro #screen-room .peer-item-compact.peer-self .peer-edit-btn,
+body.embed-tiny.tiny-micro #screen-room .peer-item-compact.peer-self .peer-mic-spinner {
+  display: none;
+}
+
+body.embed-tiny.tiny-micro #screen-room .ptt-emoji {
+  display: block;
+  font-size: min(70vw, 70vh);
+  line-height: 1;
+}
+
+/* Hide the emoji span in non-micro tiny mode */
+body.embed-tiny #screen-room .ptt-emoji {
   display: none;
 }
 
