@@ -1124,7 +1124,77 @@ function applyAssignedSelfProfile(pseudo, pseudoColor) {
   updatePeerList();
 }
 
+// An anonymous profile is the "<Color> <Animal>" pattern produced by
+// ensureAnonymousProfile: a known color hex plus a two-word pseudo whose words
+// are a known color name and a known animal. Manual names carry no color.
+function isAnonymousProfile(pseudo, color) {
+  if (!color) return false;
+  var hex = String(color).trim().toLowerCase();
+  var colorMatch = ANON_COLOR_CHOICES.some(function(c) { return c.hex.toLowerCase() === hex; });
+  if (!colorMatch) return false;
+  var parts = String(pseudo || '').trim().split(/\s+/);
+  if (parts.length !== 2) return false;
+  var nameOk = ANON_COLOR_CHOICES.some(function(c) { return c.name.toLowerCase() === parts[0].toLowerCase(); });
+  var animalOk = ANON_ANIMAL_CHOICES.some(function(a) { return a.toLowerCase() === parts[1].toLowerCase(); });
+  return nameOk && animalOk;
+}
+
+// Collect the color names and animals already in use by anonymous peers in the
+// room (self included), so a new joiner can be given a distinct pair.
+function collectTakenAnonTraits(excludedPeerId) {
+  var colors = new Set();
+  var animals = new Set();
+  function add(pseudo, color) {
+    if (!isAnonymousProfile(pseudo, color)) return;
+    var parts = String(pseudo).trim().split(/\s+/);
+    colors.add(parts[0].toLowerCase());
+    animals.add(parts[1].toLowerCase());
+  }
+  var selfId = peer && peer.id ? peer.id : null;
+  var selfProfile = selfPseudoProfile();
+  if (selfId !== excludedPeerId && selfProfile.anonymous) add(selfProfile.pseudo, selfProfile.pseudoColor);
+  connections.forEach(function(conn, pid) {
+    if (pid === excludedPeerId || !conn) return;
+    add(conn.pseudo, conn.pseudoColor);
+  });
+  return { colors: colors, animals: animals };
+}
+
+// Assign a "<Color> <Animal>" profile that avoids reusing a color or animal
+// already present in the room. Keeps the requested trait when it is still free;
+// otherwise picks a random unused one. When a category is exhausted (more peers
+// than choices) it falls back to reuse — full-pseudo dedup catches collisions.
+function assignUniqueAnonProfile(requestedPseudo, excludedPeerId) {
+  var taken = collectTakenAnonTraits(excludedPeerId);
+  var parts = String(requestedPseudo).trim().split(/\s+/);
+  var reqColorName = parts[0].toLowerCase();
+  var reqAnimal = parts[1];
+
+  var color = ANON_COLOR_CHOICES.filter(function(c) { return c.name.toLowerCase() === reqColorName; })[0];
+  if (!color || taken.colors.has(reqColorName)) {
+    var freeColors = ANON_COLOR_CHOICES.filter(function(c) { return !taken.colors.has(c.name.toLowerCase()); });
+    if (freeColors.length) color = freeColors[randomIndex(freeColors.length)];
+    else if (!color) color = ANON_COLOR_CHOICES[randomIndex(ANON_COLOR_CHOICES.length)];
+  }
+
+  var animal = reqAnimal;
+  var animalKnown = ANON_ANIMAL_CHOICES.some(function(a) { return a.toLowerCase() === reqAnimal.toLowerCase(); });
+  if (!animalKnown || taken.animals.has(reqAnimal.toLowerCase())) {
+    var freeAnimals = ANON_ANIMAL_CHOICES.filter(function(a) { return !taken.animals.has(a.toLowerCase()); });
+    if (freeAnimals.length) animal = freeAnimals[randomIndex(freeAnimals.length)];
+    else if (!animalKnown) animal = ANON_ANIMAL_CHOICES[randomIndex(ANON_ANIMAL_CHOICES.length)];
+  }
+
+  return { pseudo: color.name + ' ' + animal, pseudoColor: color.hex };
+}
+
 function canonicalizePeerProfile(peerId, requestedPseudo, requestedColor) {
+  if (isAnonymousProfile(requestedPseudo, requestedColor)) {
+    var anon = assignUniqueAnonProfile(requestedPseudo, peerId);
+    // Defensive: if every color+animal combination is taken, dedup the full name.
+    anon.pseudo = ensureUniquePseudoForRoom(anon.pseudo, peerId);
+    return anon;
+  }
   var basePseudo = String(requestedPseudo || '').trim() || 'Anonymous';
   var uniquePseudo = ensureUniquePseudoForRoom(basePseudo, peerId);
   var color = String(requestedColor || '').trim() || null;
