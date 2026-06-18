@@ -2487,6 +2487,10 @@ function updatePeerList() {
         }
         
         div.appendChild(micWrapper);
+        var acquiringLabel = document.createElement('span');
+        acquiringLabel.className = 'acquiring-mic-label';
+        acquiringLabel.textContent = 'Acquiring mic…';
+        div.appendChild(acquiringLabel);
         div.addEventListener('pointerdown', function(e) {
           if (e.button !== undefined && e.button !== 0) return;
           if (editingSelfPseudo) return;

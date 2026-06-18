@@ -1094,6 +1094,27 @@ body.embed-tiny #screen-room .peer-item-compact.peer-self.acquiring-mic .peer-mi
   display: block;
 }
 
+body.embed-tiny #screen-room .acquiring-mic-label {
+  display: none;
+}
+
+body.embed-tiny #screen-room .peer-item-compact.peer-self.acquiring-mic .acquiring-mic-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+body.embed-tiny #screen-room .peer-item-compact.peer-self.acquiring-mic .peer-compact-label,
+body.embed-tiny #screen-room .peer-item-compact.peer-self.acquiring-mic .peer-edit-btn {
+  display: none;
+}
+
+/* Micro has no room for text — keep label hidden */
+body.embed-tiny.tiny-micro #screen-room .acquiring-mic-label {
+  display: none !important;
+}
+
 body.embed-tiny #screen-room .peer-item-compact.peer-self .peer-compact-label {
   max-width: 38px;
   white-space: normal;
@@ -1215,27 +1236,6 @@ body.embed-tiny #screen-invite-loading #btn-cancel-invite-join {
   justify-content: center;
   margin-top: 0;
   flex: 0 0 auto;
-}
-
-/* Compact: "Try it now" label + Connect button (connect mode only) */
-.tiny-cta-label {
-  display: none;
-}
-
-body.embed-tiny.tiny-compact #screen-invite-loading:not(.tiny-connecting) .tiny-cta-label {
-  display: block;
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-body.embed-tiny.tiny-compact #screen-invite-loading:not(.tiny-connecting) .invite-pseudo-field {
-  display: none;
 }
 
 /* Micro: no cancel button, loading indicator centered */
