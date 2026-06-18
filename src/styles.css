@@ -931,14 +931,22 @@ body.embed-tiny.tiny-micro #screen-room .room-peers-panel {
   top: 0; left: 0; right: 0; bottom: 0;
 }
 
+body.embed-tiny.tiny-micro #screen-room .peers-list {
+  flex: 1 1 auto;
+  height: 100%;
+  overflow: visible;
+  align-items: center;
+  justify-content: center;
+}
+
 body.embed-tiny.tiny-micro #screen-room .peer-item-compact.peer-self {
-  position: absolute;
-  inset: 0;
+  position: static;
+  inset: unset;
   border-radius: 0;
   border: none;
   background: transparent;
   padding: 0;
-  height: 100%;
+  height: auto;
   gap: 0;
   margin: 0;
   align-items: center;
