@@ -1225,6 +1225,15 @@ body.embed-tiny #screen-invite-loading .invite-pseudo-field {
   margin-top: 0;
 }
 
+body.embed-tiny.tiny-compact #screen-invite-loading .invite-pseudo-field {
+  display: none;
+}
+
+body.embed-tiny.tiny-compact #screen-invite-loading #btn-cancel-invite-join {
+  flex: 1 1 auto;
+  width: 100%;
+}
+
 body.embed-tiny #screen-invite-loading input[type="text"] {
   background: var(--bg);
   border-color: var(--accent);
