@@ -1183,8 +1183,11 @@ body.embed-tiny #screen-room .peer-item-compact .peer-name-inline {
 }
 
 body.embed-tiny #screen-invite-loading {
+  height: 100dvh;
   padding: 12px 16px;
   justify-content: center;
+  align-items: center;
+  overflow: hidden;
 }
 
 body.embed-tiny #screen-invite-loading .invite-loading-panel {
