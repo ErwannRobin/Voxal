@@ -833,6 +833,20 @@ body.embed-hide-header #screen-room .room-header {
   display: none;
 }
 
+/* ── Tiny embed: global layout foundation ─────────────────────────── */
+/* Use position:absolute on all active screens so centering works
+   regardless of dvh/flex quirks inside the iframe */
+body.embed-tiny {
+  position: relative;
+  overflow: hidden;
+}
+
+body.embed-tiny .screen.active {
+  position: absolute;
+  inset: 0;
+  height: auto; /* override .screen { height: 100dvh } */
+}
+
 /* ── Tiny embed: connect/home screen (418×128 iframe) ─────────────── */
 
 body.embed-tiny #screen-home {
@@ -878,7 +892,6 @@ body.embed-tiny #screen-home input[type="text"] {
 /* ── Tiny embed: room screen ──────────────────────────────────────── */
 
 body.embed-tiny #screen-room {
-  position: relative;
   padding-top:    max(calc(env(safe-area-inset-top)    + 10px), 10px);
   padding-right:  max(calc(env(safe-area-inset-right)  + 12px), 12px);
   padding-bottom: max(calc(env(safe-area-inset-bottom) + 10px), 10px);
@@ -1183,7 +1196,6 @@ body.embed-tiny #screen-room .peer-item-compact .peer-name-inline {
 }
 
 body.embed-tiny #screen-invite-loading {
-  height: 100dvh;
   padding: 12px 16px;
   justify-content: center;
   align-items: center;
