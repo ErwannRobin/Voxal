@@ -834,22 +834,29 @@ body.embed-hide-header #screen-room .room-header {
 }
 
 /* ── Tiny embed: global layout foundation ─────────────────────────── */
-/* Use position:absolute so screens cover the iframe viewport directly,
-   bypassing dvh/flex quirks. Avoids the Safari iOS bug where
-   position:fixed inside an iframe is mispositioned when the parent page
-   has an active CSS transform on an ancestor of the iframe element. */
+/* Safari iOS resolves vh/vw/dvh against the parent page's viewport when
+   any ancestor of the <iframe> element has an active CSS transform
+   (the voxal.app widget uses slide-in animations). We work around this
+   by setting --embed-h / --embed-w from window.innerHeight/Width in JS
+   and using those variables everywhere instead of viewport units.
+   Screens fill the body via height:100%; body is pinned to --embed-h. */
 html.embed-tiny-root {
   overflow: hidden;
 }
+body.embed-tiny {
+  height: var(--embed-h, 100vh);
+  overflow: hidden;
+}
 body.embed-tiny .screen.active {
-  position: absolute;
-  inset: 0;
-  height: auto; /* let inset determine height, not the 100dvh from .screen */
+  /* height:100% resolves against body which is pinned to window.innerHeight */
+  position: relative;
+  height: 100%;
 }
 
 /* ── Tiny embed: connect/home screen (418×128 iframe) ─────────────── */
 
 body.embed-tiny #screen-home {
+  height: 100%; /* override #screen-home { height: auto } */
   min-height: unset;
   padding: 12px 16px;
   justify-content: center;
@@ -892,12 +899,6 @@ body.embed-tiny #screen-home input[type="text"] {
 /* ── Tiny embed: room screen ──────────────────────────────────────── */
 
 body.embed-tiny #screen-room {
-  /* Override #screen-room { position: relative } — that ID rule has lower
-     specificity (0,1,0,0) than this rule (0,1,2,1) so it can't be
-     overridden by the generic .screen.active rule. */
-  position: absolute;
-  inset: 0;
-  height: auto;
   padding-top:    max(calc(env(safe-area-inset-top)    + 10px), 10px);
   padding-right:  max(calc(env(safe-area-inset-right)  + 12px), 12px);
   padding-bottom: max(calc(env(safe-area-inset-bottom) + 10px), 10px);
@@ -977,7 +978,9 @@ body.embed-tiny.tiny-micro #screen-room .peer-item-compact.peer-self .peer-mic-s
 
 body.embed-tiny.tiny-micro #screen-room .ptt-emoji {
   display: block;
-  font-size: min(70vw, 70vh);
+  /* Use --embed-w/h set by JS to avoid Safari iOS bug where vw/vh inside
+     an iframe resolve against the parent page's viewport, not the iframe's */
+  font-size: min(calc(var(--embed-w, 100vw) * 0.7), calc(var(--embed-h, 100vh) * 0.7));
   line-height: 1;
 }
 

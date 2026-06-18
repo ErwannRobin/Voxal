@@ -152,6 +152,21 @@ var IS_TINY_EMBED = (function() {
     return false;
   }
 })();
+// Set --embed-h / --embed-w as early as possible so CSS can use them instead
+// of vh/vw, which resolve against the parent page's viewport on Safari iOS
+// when an ancestor of the iframe element has an active CSS transform.
+if (IS_TINY_EMBED) {
+  (function syncEmbedVars() {
+    var r = document.documentElement;
+    r.style.setProperty('--embed-h', window.innerHeight + 'px');
+    r.style.setProperty('--embed-w', window.innerWidth + 'px');
+  })();
+  window.addEventListener('resize', function() {
+    var r = document.documentElement;
+    r.style.setProperty('--embed-h', window.innerHeight + 'px');
+    r.style.setProperty('--embed-w', window.innerWidth + 'px');
+  });
+}
 var HIDE_EMBED_HEADER = (function() {
   try {
     var params = new URLSearchParams(window.location.search || '');
