@@ -1653,8 +1653,12 @@ function fallbackCopy(text) {
 // iOS PushToTalk framework bridge (iOS 16+, no-op elsewhere)
 const PTT = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PTTPlugin;
 
-function nativePTTJoin(roomName) {
-  if (PTT) PTT.join({ roomName }).catch(function(e) { console.warn('[PTT join]', e); });
+function nativePTTJoin() {
+  if (!PTT) return;
+  // Name shown in the iOS system Push-to-Talk UI (Lock Screen / Dynamic Island).
+  // Use the friendly channel name when joining a named channel, else "Voxal".
+  var roomName = activeChannel ? String(activeChannel) : 'Voxal';
+  PTT.join({ roomName: roomName }).catch(function(e) { console.warn('[PTT join]', e); });
 }
 function nativePTTLeave() {
   if (PTT) PTT.leave().catch(function(e) { console.warn('[PTT leave]', e); });
@@ -5387,7 +5391,7 @@ async function createRoom(onJoined) {
       startHostHeartbeat();
       localStorage.setItem('active-room-code', id);
       updateRoomHeader();
-      nativePTTJoin(id);
+      nativePTTJoin();
       startKeepAlive();
       requestAudioFocus(); // Keep foreground service running while in room
       showScreen('room');
@@ -5732,7 +5736,7 @@ function finishJoin(targetHostId, hostData) {
   rememberPeer(targetHostId);
   connections.set(targetHostId, { data: hostData, media: null, pseudo: shortId(targetHostId), pseudoColor: null, talking: false });
   updateRoomHeader();
-  nativePTTJoin(targetHostId);
+  nativePTTJoin();
   startKeepAlive();
   requestAudioFocus(); // Keep foreground service running while in room
   showScreen('room');
@@ -7323,6 +7327,8 @@ window.addEventListener('DOMContentLoaded', function() {
   if (PTT) {
     PTT.addListener('ptt-press',   function() { setTalking(true);  });
     PTT.addListener('ptt-release', function() { setTalking(false); });
+    // User tapped "Leave" in the system PTT UI (Lock Screen / Dynamic Island).
+    PTT.addListener('ptt-left',    function() { if (inRoom) leaveRoom(); });
     PTT.addListener('ptt-error',   function(e) { console.warn('[PTT]', e.message); });
   }
 

@@ -55,4 +55,22 @@ See [universal-links-aasa.md](./universal-links-aasa.md) for full setup instruct
 
 ---
 
+## 🎙️ iOS Lock-Screen Push-to-Talk — verify on device
+
+**Goal:** Talk into a Voxal room from the Lock Screen / Dynamic Island via Apple's PushToTalk framework.
+
+**Status:** ✅ Implemented (compiles clean; needs on-device verification)
+- `ios/App/App/PTTPlugin.swift` rewritten against the real SDK: all required `PTChannelManagerDelegate` methods, correct `didActivate`/`didDeactivate` Swift names, `didBeginTransmittingFrom`/`didEndTransmittingFrom` → `ptt-press`/`ptt-release` (ignoring `.developerRequest` echo), `.fullDuplex` transmission mode, async-init race guarded with a 5s cap, system "Leave" button → `ptt-left` → `leaveRoom()`.
+- `PTTPlugin.swift` was **missing from `project.pbxproj`** (never compiled / `Plugins.PTTPlugin` was `undefined`) — now registered in PBXBuildFile / PBXFileReference / App group / Sources phase.
+- JS: `nativePTTJoin()` now shows the friendly channel name (`activeChannel`) in the system UI; `ptt-left` listener leaves the room.
+- Verified: `xcodebuild -sdk iphonesimulator … CODE_SIGNING_ALLOWED=NO` → **BUILD SUCCEEDED**.
+
+**Needs a real device (simulator can't run PushToTalk):**
+- System PTT UI appears on room join; Lock-Screen Talk button transmits to peers.
+- Receiving still works after a transmit (confirm `didDeactivate`'s `setActive(false)` doesn't kill WebRTC playback — if it does, drop that call).
+- Background JS stays alive (keep-alive oscillator) long enough to handle button events.
+- Requires the `com.apple.developer.push-to-talk` entitlement in the provisioning profile.
+
+---
+
 _Add new items above this line._
