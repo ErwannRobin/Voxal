@@ -5884,6 +5884,7 @@ window.addEventListener('DOMContentLoaded', function() {
   function applyTinyEmbedMode() {
     if (!IS_TINY_EMBED) return;
     document.body.classList.add('embed-tiny');
+    document.documentElement.classList.add('embed-tiny-root');
     var btn = $('btn-toggle-peers');
     var pttBtn = $('ptt-btn');
     var pttHint = $('ptt-hint');

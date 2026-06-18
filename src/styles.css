@@ -834,14 +834,17 @@ body.embed-hide-header #screen-room .room-header {
 }
 
 /* ── Tiny embed: global layout foundation ─────────────────────────── */
-/* Use position:fixed so screens cover the iframe viewport directly,
-   bypassing dvh/flex quirks and CSS transforms on the parent page */
+/* Use position:absolute so screens cover the iframe viewport directly,
+   bypassing dvh/flex quirks. Avoids the Safari iOS bug where
+   position:fixed inside an iframe is mispositioned when the parent page
+   has an active CSS transform on an ancestor of the iframe element. */
+html.embed-tiny-root {
+  overflow: hidden;
+}
 body.embed-tiny .screen.active {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%; /* 100% of viewport for fixed elements */
+  position: absolute;
+  inset: 0;
+  height: auto; /* let inset determine height, not the 100dvh from .screen */
 }
 
 /* ── Tiny embed: connect/home screen (418×128 iframe) ─────────────── */
@@ -889,6 +892,12 @@ body.embed-tiny #screen-home input[type="text"] {
 /* ── Tiny embed: room screen ──────────────────────────────────────── */
 
 body.embed-tiny #screen-room {
+  /* Override #screen-room { position: relative } — that ID rule has lower
+     specificity (0,1,0,0) than this rule (0,1,2,1) so it can't be
+     overridden by the generic .screen.active rule. */
+  position: absolute;
+  inset: 0;
+  height: auto;
   padding-top:    max(calc(env(safe-area-inset-top)    + 10px), 10px);
   padding-right:  max(calc(env(safe-area-inset-right)  + 12px), 12px);
   padding-bottom: max(calc(env(safe-area-inset-bottom) + 10px), 10px);
