@@ -2585,17 +2585,26 @@ function updatePeerList() {
     }
 
     // ── Compact mode extras ────────────────────────────────────────────
-    // Peer count badge — sibling of self chip in the list (hidden via CSS
-    // in full-tiny and micro modes)
-    var countBadge = document.createElement('span');
-    countBadge.className = 'tiny-peer-count';
+    // Peer count — persistent element in the panel (not the list, which is
+    // rebuilt on every call). Shows "X peers connected" below the chip row.
+    var tinyCountEl = $('tiny-peer-count');
+    if (!tinyCountEl) {
+      tinyCountEl = document.createElement('div');
+      tinyCountEl.id = 'tiny-peer-count';
+      tinyCountEl.className = 'tiny-peer-count';
+      var _panelForCount = $('room-peers-panel');
+      if (_panelForCount) {
+        // Insert before status element if it already exists
+        var _beforeStatus = $('tiny-compact-status');
+        if (_beforeStatus) _panelForCount.insertBefore(tinyCountEl, _beforeStatus);
+        else _panelForCount.appendChild(tinyCountEl);
+      }
+    }
     var totalPeers = 1 + connections.size;
-    countBadge.textContent = totalPeers > 1 ? String(totalPeers) : '';
-    list.appendChild(countBadge);
+    tinyCountEl.textContent = totalPeers > 1 ? totalPeers + ' peers connected' : '';
 
-    // Current-speaker status line (visible via CSS only in tiny-compact mode).
-    // Hides after a short delay when the speaker stops so it doesn't vanish
-    // too abruptly. Timer persists across updatePeerList calls via the element.
+    // Current-speaker status — delegate to the standalone function so that
+    // updatePeerTalking() can also call it directly for instant updates.
     var tinyStatusEl = $('tiny-compact-status');
     if (!tinyStatusEl) {
       tinyStatusEl = document.createElement('div');
@@ -2605,22 +2614,7 @@ function updatePeerList() {
       var _panel = $('room-peers-panel');
       if (_panel) _panel.appendChild(tinyStatusEl);
     }
-    var _currentSpeaker = '';
-    connections.forEach(function(conn, id) {
-      if (!_currentSpeaker && conn.talking) {
-        _currentSpeaker = conn.pseudo || shortId(id);
-      }
-    });
-    if (_currentSpeaker) {
-      clearTimeout(tinyStatusEl._hideTimer);
-      tinyStatusEl._hideTimer = null;
-      tinyStatusEl.textContent = _currentSpeaker;
-    } else {
-      clearTimeout(tinyStatusEl._hideTimer);
-      tinyStatusEl._hideTimer = setTimeout(function() {
-        tinyStatusEl.textContent = '';
-      }, 1500);
-    }
+    updateTinyCompactStatus();
 
     if (window._updateTinyPeersToggle) window._updateTinyPeersToggle();
     if (_isIframe && inRoom) {
@@ -2913,11 +2907,34 @@ function updatePeerList() {
   if (window._updateTinyPeersToggle) window._updateTinyPeersToggle();
 }
 
+function updateTinyCompactStatus() {
+  if (!IS_TINY_EMBED) return;
+  var statusEl = $('tiny-compact-status');
+  if (!statusEl) return;
+  var speaker = '';
+  connections.forEach(function(conn, id) {
+    if (!speaker && conn.talking) {
+      speaker = conn.pseudo || shortId(id);
+    }
+  });
+  if (speaker) {
+    clearTimeout(statusEl._hideTimer);
+    statusEl._hideTimer = null;
+    statusEl.textContent = speaker;
+  } else {
+    clearTimeout(statusEl._hideTimer);
+    statusEl._hideTimer = setTimeout(function() {
+      statusEl.textContent = '';
+    }, 1500);
+  }
+}
+
 function updatePeerTalking(peerId, active) {
   const conn = connections.get(peerId);
   if (conn) conn.talking = active;
   const el = document.getElementById('peer-item-' + peerId);
   if (el) el.classList.toggle('talking', active);
+  updateTinyCompactStatus();
 }
 
 function updateSelfTalking(active) {
