@@ -1183,7 +1183,9 @@ body.embed-tiny #screen-room .peer-item-compact .peer-name-inline {
 }
 
 body.embed-tiny #screen-invite-loading {
-  height: 100dvh;
+  position: fixed;
+  inset: 0;
+  height: auto;
   padding: 12px 16px;
   justify-content: center;
   align-items: center;
