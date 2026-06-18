@@ -5815,12 +5815,14 @@ async function joinOrCreateByChannelName(channelName) {
       var li = list[i] || {};
       if (String((li.channel || {}).name || '').trim().toLowerCase() === target) { item = li; break; }
     }
-    if (!item) item = { channel: { name: normalizedName }, connected: [] };
-    await joinChannel(item);
-    return;
+    if (item) {
+      await joinChannel(item);
+      return;
+    }
+    // Channel not in org's presence list — fall through to anonymous-rooms path.
   }
 
-  // No presence configured — use anonymous room service.
+  // No presence configured, or channel not found in org — use anonymous room service.
   var lookupRes = null;
   try { lookupRes = await tauriFetch(ANONYMOUS_ROOMS_BASE + '/' + encodeURIComponent(normalizedName)); }
   catch (_) {}
