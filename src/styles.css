@@ -922,6 +922,47 @@ body.embed-tiny.tiny-compact #screen-room .tiny-peers-others {
   display: none;
 }
 
+/* Compact: peer count badge next to self chip label */
+body.embed-tiny #screen-room .tiny-peer-count {
+  display: none;
+}
+body.embed-tiny.tiny-compact #screen-room .peer-item-compact.peer-self .tiny-peer-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--accent-dim);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 0 4px;
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+body.embed-tiny.tiny-compact #screen-room .peer-item-compact.peer-self .tiny-peer-count:empty {
+  display: none;
+}
+
+/* Compact: name of the currently speaking peer, shown below the chip */
+body.embed-tiny #screen-room .tiny-compact-status {
+  display: none;
+}
+body.embed-tiny.tiny-compact #screen-room .tiny-compact-status {
+  display: block;
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  min-height: 1em;
+}
+body.embed-tiny.tiny-compact #screen-room .tiny-compact-status:empty {
+  display: none;
+}
+
 /* Micro (≤ 100 px): fill the entire iframe with a large 🎙️ emoji */
 body.embed-tiny.tiny-micro #screen-room .tiny-peers-others {
   display: none;

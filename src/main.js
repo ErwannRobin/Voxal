@@ -2584,6 +2584,34 @@ function updatePeerList() {
       requestAnimationFrame(function() { syncTinyPeerLabelCrowding(othersWrap); });
     }
 
+    // ── Compact mode extras ────────────────────────────────────────────
+    // Peer count badge (visible via CSS only in tiny-compact mode)
+    if (selfChip) {
+      var countBadge = document.createElement('span');
+      countBadge.className = 'tiny-peer-count';
+      var totalPeers = 1 + connections.size;
+      countBadge.textContent = totalPeers > 1 ? String(totalPeers) : '';
+      selfChip.appendChild(countBadge);
+    }
+
+    // Current-speaker status line (visible via CSS only in tiny-compact mode)
+    var tinyStatusEl = $('tiny-compact-status');
+    if (!tinyStatusEl) {
+      tinyStatusEl = document.createElement('div');
+      tinyStatusEl.id = 'tiny-compact-status';
+      tinyStatusEl.className = 'tiny-compact-status';
+      tinyStatusEl.setAttribute('aria-live', 'polite');
+      var _panel = $('room-peers-panel');
+      if (_panel) _panel.appendChild(tinyStatusEl);
+    }
+    var _currentSpeaker = '';
+    connections.forEach(function(conn, id) {
+      if (!_currentSpeaker && conn.talking) {
+        _currentSpeaker = conn.pseudo || shortId(id);
+      }
+    });
+    tinyStatusEl.textContent = _currentSpeaker;
+
     if (window._updateTinyPeersToggle) window._updateTinyPeersToggle();
     if (_isIframe && inRoom) {
       var peers = [{
