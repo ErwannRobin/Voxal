@@ -1246,13 +1246,11 @@ body.embed-tiny #screen-invite-loading .invite-loading-panel {
 body.embed-tiny #screen-invite-loading .brand-icon,
 body.embed-tiny #screen-invite-loading h2,
 body.embed-tiny #screen-invite-loading #invite-room-code,
-body.embed-tiny #screen-invite-loading .invite-peer-count {
-  display: none;
-}
-
+body.embed-tiny #screen-invite-loading .invite-peer-count,
 body.embed-tiny #screen-invite-loading .invite-loading-status {
   display: none;
 }
+
 
 body.embed-tiny #screen-invite-loading.tiny-connecting .invite-loading-status {
   display: inline-flex;
