@@ -2585,16 +2585,17 @@ function updatePeerList() {
     }
 
     // ── Compact mode extras ────────────────────────────────────────────
-    // Peer count badge (visible via CSS only in tiny-compact mode)
-    if (selfChip) {
-      var countBadge = document.createElement('span');
-      countBadge.className = 'tiny-peer-count';
-      var totalPeers = 1 + connections.size;
-      countBadge.textContent = totalPeers > 1 ? String(totalPeers) : '';
-      selfChip.appendChild(countBadge);
-    }
+    // Peer count badge — sibling of self chip in the list (hidden via CSS
+    // in full-tiny and micro modes)
+    var countBadge = document.createElement('span');
+    countBadge.className = 'tiny-peer-count';
+    var totalPeers = 1 + connections.size;
+    countBadge.textContent = totalPeers > 1 ? String(totalPeers) : '';
+    list.appendChild(countBadge);
 
-    // Current-speaker status line (visible via CSS only in tiny-compact mode)
+    // Current-speaker status line (visible via CSS only in tiny-compact mode).
+    // Hides after a short delay when the speaker stops so it doesn't vanish
+    // too abruptly. Timer persists across updatePeerList calls via the element.
     var tinyStatusEl = $('tiny-compact-status');
     if (!tinyStatusEl) {
       tinyStatusEl = document.createElement('div');
@@ -2610,7 +2611,16 @@ function updatePeerList() {
         _currentSpeaker = conn.pseudo || shortId(id);
       }
     });
-    tinyStatusEl.textContent = _currentSpeaker;
+    if (_currentSpeaker) {
+      clearTimeout(tinyStatusEl._hideTimer);
+      tinyStatusEl._hideTimer = null;
+      tinyStatusEl.textContent = _currentSpeaker;
+    } else {
+      clearTimeout(tinyStatusEl._hideTimer);
+      tinyStatusEl._hideTimer = setTimeout(function() {
+        tinyStatusEl.textContent = '';
+      }, 1500);
+    }
 
     if (window._updateTinyPeersToggle) window._updateTinyPeersToggle();
     if (_isIframe && inRoom) {

@@ -922,14 +922,15 @@ body.embed-tiny.tiny-compact #screen-room .tiny-peers-others {
   display: none;
 }
 
-/* Compact: peer count badge next to self chip label */
+/* Compact: peer count badge — sibling of self chip in the peers-list row */
 body.embed-tiny #screen-room .tiny-peer-count {
   display: none;
 }
-body.embed-tiny.tiny-compact #screen-room .peer-item-compact.peer-self .tiny-peer-count {
+body.embed-tiny.tiny-compact #screen-room .peers-list > .tiny-peer-count {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  align-self: center;
   min-width: 16px;
   height: 16px;
   border-radius: 999px;
@@ -939,9 +940,8 @@ body.embed-tiny.tiny-compact #screen-room .peer-item-compact.peer-self .tiny-pee
   font-weight: 600;
   padding: 0 4px;
   flex-shrink: 0;
-  margin-left: 2px;
 }
-body.embed-tiny.tiny-compact #screen-room .peer-item-compact.peer-self .tiny-peer-count:empty {
+body.embed-tiny.tiny-compact #screen-room .peers-list > .tiny-peer-count:empty {
   display: none;
 }
 
