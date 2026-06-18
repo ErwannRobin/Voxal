@@ -922,21 +922,20 @@ body.embed-tiny.tiny-compact #screen-room .tiny-peers-others {
   display: none;
 }
 
-/* Compact: peer count ("X peers connected") below the chip row */
+/* Compact: peer count — sibling in the peers-list, to the right of the self chip */
 body.embed-tiny #screen-room .tiny-peer-count {
   display: none;
 }
-body.embed-tiny.tiny-compact #screen-room .room-peers-panel > .tiny-peer-count {
+body.embed-tiny.tiny-compact #screen-room .peers-list {
+  align-items: center;
+}
+body.embed-tiny.tiny-compact #screen-room .peers-list > .tiny-peer-count {
   display: block;
   font-size: 10px;
+  line-height: 1.3;
   color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
-}
-body.embed-tiny.tiny-compact #screen-room .room-peers-panel > .tiny-peer-count:empty {
-  display: none;
+  white-space: normal;
+  flex-shrink: 0;
 }
 
 /* Compact: name of the currently speaking peer, shown below the chip */

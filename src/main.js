@@ -2585,26 +2585,17 @@ function updatePeerList() {
     }
 
     // ── Compact mode extras ────────────────────────────────────────────
-    // Peer count — persistent element in the panel (not the list, which is
-    // rebuilt on every call). Shows "X peers connected" below the chip row.
-    var tinyCountEl = $('tiny-peer-count');
-    if (!tinyCountEl) {
-      tinyCountEl = document.createElement('div');
-      tinyCountEl.id = 'tiny-peer-count';
+    // Peer count — appended to the list as a flex sibling right of the self chip.
+    // List is rebuilt each call so we create fresh every time.
+    if (connections.size > 0) {
+      var tinyCountEl = document.createElement('div');
       tinyCountEl.className = 'tiny-peer-count';
-      var _panelForCount = $('room-peers-panel');
-      if (_panelForCount) {
-        // Insert before status element if it already exists
-        var _beforeStatus = $('tiny-compact-status');
-        if (_beforeStatus) _panelForCount.insertBefore(tinyCountEl, _beforeStatus);
-        else _panelForCount.appendChild(tinyCountEl);
-      }
+      var _peerWord = connections.size === 1 ? 'peer' : 'peers';
+      tinyCountEl.innerHTML = connections.size + ' ' + _peerWord + '<br>connected';
+      list.appendChild(tinyCountEl);
     }
-    var totalPeers = 1 + connections.size;
-    tinyCountEl.textContent = totalPeers > 1 ? totalPeers + ' peers connected' : '';
 
-    // Current-speaker status — delegate to the standalone function so that
-    // updatePeerTalking() can also call it directly for instant updates.
+    // Current-speaker status — persistent in the panel (below the chip row).
     var tinyStatusEl = $('tiny-compact-status');
     if (!tinyStatusEl) {
       tinyStatusEl = document.createElement('div');
@@ -2912,15 +2903,24 @@ function updateTinyCompactStatus() {
   var statusEl = $('tiny-compact-status');
   if (!statusEl) return;
   var speaker = '';
-  connections.forEach(function(conn, id) {
-    if (!speaker && conn.talking) {
-      speaker = conn.pseudo || shortId(id);
-    }
-  });
+  // DOM .talking class is set synchronously and is the authoritative source
+  var talkingChip = document.querySelector('#peers-list .peer-item-compact.talking:not(.peer-self)');
+  if (talkingChip) {
+    var labelEl = talkingChip.querySelector('.peer-compact-label');
+    speaker = labelEl ? labelEl.textContent.trim() : '';
+  }
+  // Fallback: check connection map
+  if (!speaker) {
+    connections.forEach(function(conn, id) {
+      if (!speaker && conn.talking) {
+        speaker = conn.pseudo || shortId(id);
+      }
+    });
+  }
   if (speaker) {
     clearTimeout(statusEl._hideTimer);
     statusEl._hideTimer = null;
-    statusEl.textContent = speaker;
+    statusEl.textContent = speaker + ' is speaking';
   } else {
     clearTimeout(statusEl._hideTimer);
     statusEl._hideTimer = setTimeout(function() {
