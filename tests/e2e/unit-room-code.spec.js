@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { callFn } from './_helpers.js';
 
 const UUID = '12345678-1234-1234-1234-123456789abc';

@@ -16,6 +16,9 @@ make check        # Rust type-check without building (fast feedback, no tests)
 make test         # Full suite: Rust type-check + Rust unit tests + Playwright E2E
 make test-rust    # Rust unit tests only
 make test-e2e     # Playwright E2E only (auto-starts dev server)
+make coverage     # Rust + E2E coverage reports (see below)
+make coverage-rust # Rust coverage via cargo-llvm-cov → src-tauri/target/llvm-cov/html/
+make coverage-e2e # main.js V8 coverage via Playwright+monocart → coverage/index.html
 make build-debug  # macOS debug bundle — registers voxal:// URL scheme
 make build        # Release build
 make cap-sync     # Sync src/ assets to ios/ and android/ after any src/ change
@@ -27,7 +30,9 @@ make release      # Bump version, build signed release, publish GitHub Release
 
 **macOS URL scheme:** `make dev` cannot register `voxal://` (needs a real `.app` bundle). Run `make build-debug` once, open the `.app`, then return to `make dev`. The registration persists.
 
-**E2E tests** use Playwright against `http://127.0.0.1:8080` (config: `playwright.config.js`, tests in `tests/e2e/`).
+**E2E tests** use Playwright against `http://127.0.0.1:8080` (config: `playwright.config.js`, tests in `tests/e2e/`). Specs import `test`/`expect` from `tests/e2e/fixtures.js` (not `@playwright/test` directly) so coverage can be layered in transparently.
+
+**Coverage:** `make coverage-e2e` sets `COVERAGE=1`, which turns on the monocart V8 collector wired into `tests/e2e/fixtures.js`; the report (HTML + lcov, scoped to `main.js`) is written to `coverage/` by `tests/e2e/coverage-teardown.js`. Normal test runs never load the coverage dependency. `make coverage-rust` needs a one-time `cargo install cargo-llvm-cov` + `rustup component add llvm-tools-preview` (the target prints these if missing).
 
 ## Architecture
 

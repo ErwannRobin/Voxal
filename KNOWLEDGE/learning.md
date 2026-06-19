@@ -82,6 +82,9 @@ Copilot should read this file at the start of every session.
 - **Playwright only collects `*.spec.js` / `*.test.js`** (default `testMatch`), so shared helpers named `_helpers.js` are safely ignored and never run as an empty test file.
 - **The theme toggle and most settings controls live inside the settings modal's sidebar sections** (`#settings-system`, etc.), hidden until their `.prefs-nav-btn[data-target=…]` is clicked. UI tests must navigate the sidebar first.
 - **Host-migration / election invariants are now regression-covered** in `tests/e2e/unit-host-election.spec.js` (split-brain guard: election follows the authoritative snapshot + successor chain, never the live `connections` roster). Add a case here whenever a new migration edge case is fixed.
+- **Coverage (`make coverage-e2e`)** uses `monocart-coverage-reports` + Playwright's Chromium V8 coverage, gated behind `COVERAGE=1` so normal runs have zero overhead and never import the dep (dynamic `import()` inside the auto fixture). **`entryFilter` must be set on the `CoverageReport` instance that calls `.add()`** (per-test), not only on the `.generate()` instance in global teardown — otherwise vendored entries (peerjs) are cached and still appear. Both share `tests/e2e/coverage-options.js`. main.js sits ~21% because most of it is side-effectful WebRTC/DOM glue the in-browser unit tests don't drive; the pure logic is the well-covered part.
+- **`npm install` of any dev dep can bump `@playwright/test`** within the `^1.61.0` range, and a newer Playwright expects a newer Chromium build (e.g. 1223 → 1228). Symptom: `browserType.launch: Executable doesn't exist at …chromium_headless_shell-<n>…`. Fix: `npx playwright install chromium chromium-headless-shell`.
+- **`make coverage-rust`** needs a one-time `rustup component add llvm-tools-preview` + `cargo install cargo-llvm-cov`; the target preflights and prints the install commands if the subcommand is missing.
 
 ## Sync rule
 

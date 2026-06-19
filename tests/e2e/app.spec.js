@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 
 test('home screen renders key controls', async ({ page }) => {
   await page.goto('/');

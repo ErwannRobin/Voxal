@@ -1,5 +1,5 @@
 .PHONY: help run run-web dev debug build build-debug build-signed build-web install clean lint check test \
-        test-rust test-e2e \
+        test-rust test-e2e coverage coverage-rust coverage-e2e \
         cap-sync cap-ios cap-android build-android docs release
 
 # Default target
@@ -25,6 +25,9 @@ help:
 	@echo "  test         Run all test suites (check + Rust tests + Playwright)"
 	@echo "  test-rust    Run Rust unit tests"
 	@echo "  test-e2e     Run Playwright E2E tests"
+	@echo "  coverage     Generate Rust + E2E coverage reports"
+	@echo "  coverage-rust Generate Rust coverage report (cargo-llvm-cov)"
+	@echo "  coverage-e2e Generate E2E JS coverage report (Playwright + monocart)"
 	@echo "  clean        Remove build artifacts"
 	@echo ""
 
@@ -250,6 +253,35 @@ test-rust:
 
 test-e2e:
 	npm run test:e2e
+
+# ── Coverage ──────────────────────────────────────────────────────────────────
+
+coverage: coverage-rust coverage-e2e
+	@echo ""
+	@echo "→ Coverage reports generated:"
+	@echo "    Rust : src-tauri/target/llvm-cov/html/index.html"
+	@echo "    E2E  : coverage/index.html"
+
+# Rust line/region coverage via cargo-llvm-cov.
+coverage-rust:
+	@if ! cargo llvm-cov --version >/dev/null 2>&1; then \
+		echo "✗ cargo-llvm-cov is not installed. Install it once with:"; \
+		echo ""; \
+		echo "    rustup component add llvm-tools-preview"; \
+		echo "    cargo install cargo-llvm-cov"; \
+		echo ""; \
+		exit 1; \
+	fi
+	cd src-tauri && cargo llvm-cov --no-report && \
+		cargo llvm-cov report --html && \
+		cargo llvm-cov report --lcov --output-path target/llvm-cov/lcov.info
+	@echo "→ Rust coverage: src-tauri/target/llvm-cov/html/index.html (lcov: src-tauri/target/llvm-cov/lcov.info)"
+
+# Frontend (main.js) V8 coverage collected through Playwright (COVERAGE=1 turns
+# on the monocart collector wired into tests/e2e/fixtures.js).
+coverage-e2e:
+	COVERAGE=1 npm run test:e2e
+	@echo "→ E2E coverage: coverage/index.html (lcov: coverage/lcov.info)"
 
 clean:
 	cd src-tauri && cargo clean

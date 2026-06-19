@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { seedRoom, callFn } from './_helpers.js';
 
 // The authoritative peer-list the host broadcasts (and the shortId fallback it
