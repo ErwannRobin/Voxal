@@ -76,6 +76,13 @@ Copilot should read this file at the start of every session.
 - **The PTT framework cannot be exercised in the iOS Simulator** (no PTT hardware/entitlement runtime). `xcodebuild -sdk iphonesimulator … CODE_SIGNING_ALLOWED=NO` verifies the Swift *compiles* against the SDK, but Lock-Screen transmit, receive-after-transmit (does `didDeactivate`'s `setActive(false)` kill WebRTC playback?), and the system UI appearing on join all need a real device.
 - **New Capacitor Swift plugin files** added as `.swift` files inside `ios/App/App/` must be manually registered in `project.pbxproj` (PBXBuildFile, PBXFileReference, PBXGroup, and PBXSourcesBuildPhase). The file existing on disk is not enough — if not in the project file, it is never compiled and `window.Capacitor.Plugins.PluginName` will be `undefined` at runtime.
 
+## Testing
+
+- **`main.js` is a flat (non-module) classic script**, so every top-level `function` declaration becomes a property of `window` and the `var`/`let` state (`peer`, `isHost`, `inRoom`, `roomCode`, `knownPeerIds`, `connections`, `_authoritativeSuccessorIds`, `_lastAuthoritativePeerIds`, `myPseudo`, `_anonymousProfile`, …) lives in the page's global scope. This means Playwright can **unit-test the pure logic in-browser** via `page.evaluate` — call `window.fnName(...)` and seed/read globals directly — with no bundler, no module refactor, and no live PeerJS/WebRTC. Used for host-election, successor-chain, room-code, pseudo-dedup, and peer-list logic. Helper: `tests/e2e/_helpers.js` (`seedRoom` / `callFn`). Assign to `let` globals (`peer = {...}`) and mutate `const` collections (`connections.set(...)`, `knownPeerIds.add(...)`); each test gets a fresh page so globals reset on `page.goto('/')`.
+- **Playwright only collects `*.spec.js` / `*.test.js`** (default `testMatch`), so shared helpers named `_helpers.js` are safely ignored and never run as an empty test file.
+- **The theme toggle and most settings controls live inside the settings modal's sidebar sections** (`#settings-system`, etc.), hidden until their `.prefs-nav-btn[data-target=…]` is clicked. UI tests must navigate the sidebar first.
+- **Host-migration / election invariants are now regression-covered** in `tests/e2e/unit-host-election.spec.js` (split-brain guard: election follows the authoritative snapshot + successor chain, never the live `connections` roster). Add a case here whenever a new migration edge case is fixed.
+
 ## Sync rule
 
 Every change to `src/` MUST be mirrored to:

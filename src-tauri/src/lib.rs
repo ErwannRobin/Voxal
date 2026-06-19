@@ -238,4 +238,20 @@ mod tests {
         let err = parse_presence_response_text("not-json-response").unwrap_err();
         assert!(err.starts_with("Non-JSON response:"));
     }
+
+    #[test]
+    fn parse_presence_response_truncates_long_non_json_preview_to_120_chars() {
+        // A long HTML-ish body (e.g. a proxy error page) must not be echoed in full.
+        let body = "x".repeat(500);
+        let err = parse_presence_response_text(&body).unwrap_err();
+        let preview = err.trim_start_matches("Non-JSON response: ");
+        assert_eq!(preview.chars().count(), 120);
+    }
+
+    #[test]
+    fn parse_presence_response_parses_json_array() {
+        let parsed = parse_presence_response_text("[{\"a\":1},{\"a\":2}]").unwrap();
+        assert!(parsed.is_array());
+        assert_eq!(parsed.as_array().unwrap().len(), 2);
+    }
 }
