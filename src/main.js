@@ -3250,69 +3250,6 @@ function applySpeakerSinkToAllAudio() {
   });
 }
 
-function initCollapsibleSettingsCards() {
-  function collapseOtherCards(openCard) {
-    document.querySelectorAll('.settings-card[data-collapsible-init="1"]').forEach(function(other) {
-      if (other === openCard) return;
-      var otherBtn = other.querySelector(':scope > .settings-card-toggle');
-      other.classList.add('is-collapsed');
-      if (otherBtn) otherBtn.setAttribute('aria-expanded', 'false');
-    });
-  }
-
-  document.querySelectorAll('.settings-card').forEach(function(card) {
-    if (card.dataset.collapsibleInit === '1') return;
-    if (card.querySelector(':scope > details.turn-section')) return;
-    var title = card.querySelector(':scope > .settings-group-title');
-    if (!title) return;
-    var btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'settings-card-toggle';
-    btn.textContent = title.textContent;
-    btn.setAttribute('aria-expanded', 'false');
-    title.replaceWith(btn);
-    card.classList.add('is-collapsed');
-    btn.addEventListener('click', function() {
-      var wasCollapsed = card.classList.contains('is-collapsed');
-      if (wasCollapsed) {
-        collapseOtherCards(card);
-        var advancedDetails = document.getElementById('turn-details');
-        if (advancedDetails) advancedDetails.open = false;
-      }
-      var collapsed = card.classList.toggle('is-collapsed');
-      btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-    });
-    card.dataset.collapsibleInit = '1';
-  });
-
-  var advancedDetails = document.getElementById('turn-details');
-  if (advancedDetails && advancedDetails.dataset.singleOpenInit !== '1') {
-    advancedDetails.addEventListener('toggle', function() {
-      if (!advancedDetails.open) return;
-      collapseOtherCards(null);
-    });
-    advancedDetails.dataset.singleOpenInit = '1';
-  }
-}
-
-function collapseAllSettingsCards() {
-  document.querySelectorAll('.settings-card[data-collapsible-init="1"]').forEach(function(card) {
-    card.classList.add('is-collapsed');
-    var btn = card.querySelector(':scope > .settings-card-toggle');
-    if (btn) btn.setAttribute('aria-expanded', 'false');
-  });
-  var advancedDetails = document.getElementById('turn-details');
-  if (advancedDetails) advancedDetails.open = false;
-}
-
-function expandSettingsProfileCard() {
-  var profileCard = document.querySelector('#modal-settings .settings-card[data-collapsible-init="1"]');
-  if (!profileCard) return;
-  profileCard.classList.remove('is-collapsed');
-  var btn = profileCard.querySelector(':scope > .settings-card-toggle');
-  if (btn) btn.setAttribute('aria-expanded', 'true');
-}
-
 var _modalSettingsSidebarInit = false;
 function initModalSettingsSidebar() {
   var sidebar = document.getElementById('modal-settings-sidebar');
@@ -6123,7 +6060,6 @@ window.addEventListener('DOMContentLoaded', function() {
     if (row) row.style.display = presenceToken() ? '' : 'none';
   }
   updateDisconnectVisibility(); updateConnectVisibility();
-  initCollapsibleSettingsCards();
 
   // --- Theme toggle ---
   const THEME_KEY = 'theme';
@@ -6578,8 +6514,6 @@ window.addEventListener('DOMContentLoaded', function() {
     updateVideoModeUI();
     stopMicTest();
     stopCameraPreview();
-    collapseAllSettingsCards();
-    expandSettingsProfileCard();
     initModalSettingsSidebar();
     // Populate About section
     initAboutSection('about-version-modal', 'about-build-date-modal');

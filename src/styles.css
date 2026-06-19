@@ -1674,17 +1674,16 @@ input[type="password"]:focus { border-color: var(--accent); }
   padding: 0;
 }
 
+.prefs-sidebar {
+  flex-direction: column;
+  gap: 6px;
+}
+
 .modal-settings-sidebar {
   display: none;
   flex: 0 0 190px;
   border-right: 1px solid var(--border);
   padding: 18px 10px;
-}
-
-.prefs-sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 
 .prefs-nav-btn {
