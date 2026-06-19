@@ -5982,6 +5982,8 @@ async function joinOrCreateByChannelName(channelName) {
     // No host or stale host — become the new host and claim the slot via PATCH.
     await createRoom();
     if (cancelled) return;
+    activeChannelRoomId = claimSlug;
+    updateRoomHeader();
     tauriFetch(ANONYMOUS_ROOMS_BASE + '/by-code/' + encodeURIComponent(claimSlug), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
