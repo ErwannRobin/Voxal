@@ -2132,7 +2132,7 @@ function setInviteLoadingCtaMode(mode) {
   }
   if (mode === 'connect') {
     btn.dataset.action = 'connect';
-    btn.textContent = 'Connect';
+    btn.textContent = 'Start';
     return;
   }
   btn.dataset.action = mode === 'cancel' ? 'cancel' : 'back';
@@ -2161,7 +2161,7 @@ function showTinyInviteConnect(roomId, peerCount) {
   var roomCodeEl = $('invite-room-code');
   if (roomCodeEl) roomCodeEl.textContent = '';
   var statusEl = $('invite-join-status');
-  if (statusEl) statusEl.textContent = 'Tap Connect to join this room.';
+  if (statusEl) statusEl.textContent = 'Tap Start to join this room.';
   setInviteLoadingSpinnerVisible(false);
   setTinyInvitePeerCount(Number.isFinite(peerCount) ? peerCount : null);
   setInviteLoadingCtaMode('connect');
