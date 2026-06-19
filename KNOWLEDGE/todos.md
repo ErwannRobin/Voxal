@@ -84,29 +84,20 @@ The plugin degrades gracefully meanwhile (PTChannelManager init throws →
 
 ---
 
-## 🐛 Fix multi-survivor host-migration split-brain (found by mesh harness)
+## ✅ Fixed multi-survivor host-migration split-brain (found by mesh harness)
 
-**Goal:** When a host disappears and 2+ peers survive, exactly one new host
-should emerge. Today the room can split into two hosts that never reconcile.
+When a host vanished and 2+ peers survived, the room could split into two hosts.
+Fixed via two changes in `main.js`:
+1. A host tearing down its own Peer no longer broadcasts `peer-left`/a shrunken
+   `peer-list` during the close cascade — the broadcast is deferred one tick and
+   skipped once `peer.destroyed`/`!inRoom` (it read `false` inside the close
+   handler, hence the defer). Stops survivors' successor chain being poisoned.
+2. Survivors are more patient reaching the elected deputy before self-promoting
+   (`HOST_MAX_RETRIES` 3→8, `HOST_RETRY_DELAY` 2000→1500), so they outlast the
+   deputy's promotion window (~7s heartbeat timeout + `becomeHost`).
 
-**Root cause:** the elected deputy calls `becomeHost()` and immediately
-broadcasts an authoritative `peer-list`/`successorIds` built only from its open
-**data** connections. In the star topology survivors hold no data link to each
-other (and, in a silent room, no media link either — audio is lazy), so that
-list is **empty** and resets the other survivor's `_authoritativeSuccessorIds` /
-`_lastAuthoritativePeerIds` while it is still mid-election → it elects itself too.
-
-**Reproduction:** `tests/e2e/mesh.spec.js` → the two `test.fixme(
-'multi-survivor host migration must not split-brain — …')` cases (crash /
-heartbeat-timeout path = flaky; simultaneous graceful close = fails ~always).
-Remove `.fixme` once fixed.
-
-**Candidate fix:** on `becomeHost()`, keep placeholders for `knownPeerIds`
-instead of broadcasting an empty roster until the migration settle window has
-reattached data channels (cf. `startMigrationSettle` /
-`ensurePlaceholdersForKnownPeers`), AND/OR have a peer ignore an empty
-authoritative `peer-list` while `roomState === 'migrating'`. Verify by removing
-`.fixme` and running `make test-mesh`.
+Regression-guarded by the two un-skipped `multi-survivor host migration does not
+split-brain — …` cases in `tests/e2e/mesh.spec.js` (crash + graceful kill paths).
 
 ---
 
@@ -124,10 +115,10 @@ authoritative `peer-list` while `roomState === 'migrating'`. Verify by removing
   90s timeout); the `unit` project `grepInvert`s `@mesh` so the fast suite is
   untouched. `make coverage-e2e` runs both projects so the mesh glue lands in
   the report.
-- **Green scenarios:** 3-peer formation (one host, agreed deputy); rename
+- **Scenarios (all green):** 3-peer formation (one host, agreed deputy); rename
   propagation (both directions); audio mesh after speaking; single-survivor
-  crash migration; new peer joins a migrated room.
-- **Documented `fixme`:** multi-survivor migration split-brain (see the fix
-  item above).
+  crash migration; new peer joins a migrated room; multi-survivor migration
+  (crash + graceful kill paths) — the latter two regression-guard the split-brain
+  fix above.
 
 _Add new items above this line._
