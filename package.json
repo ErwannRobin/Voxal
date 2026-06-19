@@ -10,7 +10,8 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.61.0",
-    "@tauri-apps/cli": "^2"
+    "@tauri-apps/cli": "^2",
+    "monocart-coverage-reports": "^2.12.12"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.0",

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { seedRoom, callFn } from './_helpers.js';
 
 // Pseudo de-duplication and anonymous-profile assignment: the logic that keeps

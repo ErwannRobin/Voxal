@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 
 // DOM / interaction flows that don't require a live PeerJS connection.
 

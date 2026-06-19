@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { seedRoom, callFn } from './_helpers.js';
 
 // Host migration is the most-iterated, most-fragile subsystem in main.js
