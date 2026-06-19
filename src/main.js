@@ -98,6 +98,16 @@ function presenceToken()      { return localStorage.getItem(PRESENCE_TOKEN_KEY) 
 function presenceOrgId()      { return localStorage.getItem(PRESENCE_ORG_KEY)   || ''; }
 function presenceConfigured() { return !!(presenceToken() && presenceOrgId()); }
 
+// Optional PeerJS broker override (host/port/path/key/secure). Defaults to {} so
+// production uses the PeerJS cloud broker unchanged. Used by the E2E mesh harness
+// to point peers at a local PeerServer (localStorage['peerjs-server']).
+function peerServerOptions() {
+  try {
+    var raw = localStorage.getItem('peerjs-server');
+    return raw ? JSON.parse(raw) : {};
+  } catch (_) { return {}; }
+}
+
 function shouldPersistPseudoGlobally() {
   return !!window.__TAURI__ || !!window.Capacitor?.isNativePlatform?.();
 }
@@ -5302,7 +5312,7 @@ async function createRoom(onJoined) {
   _authoritativeSuccessorIds = [];
   const iceServers = await fetchIceServers();
   if (cancelled) throw new Error('Connection cancelled.');
-  peer = new Peer({ config: { iceServers } });
+  peer = new Peer(Object.assign({ config: { iceServers } }, peerServerOptions()));
   peer.on('connection', function(dataConn) { handleJoinerDataConnection(dataConn); });
   peer.on('call',       function(call)     { handleIncomingCall(call); });
   let settled = false;
@@ -5566,7 +5576,7 @@ async function joinRoom(code, onJoined) {
   if (cancelled) throw new Error('Connection cancelled.');
   devLog('✓ ICE: ' + iceServers.length + ' server(s)');
   devLog('→ Connecting to PeerJS broker…');
-  peer = new Peer({ config: { iceServers } });
+  peer = new Peer(Object.assign({ config: { iceServers } }, peerServerOptions()));
   // Accept incoming connections in case this peer becomes host after migration
   peer.on('connection', function(dataConn) {
     if (shouldAcceptJoinerDataConnection(dataConn.peer)) {

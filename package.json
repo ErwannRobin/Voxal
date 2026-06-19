@@ -6,12 +6,14 @@
     "tauri": "tauri",
     "test": "npm run test:rust && npm run test:e2e",
     "test:rust": "cd src-tauri && cargo test",
-    "test:e2e": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test"
+    "test:e2e": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test --project=unit",
+    "test:mesh": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test --project=mesh"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.0",
     "@tauri-apps/cli": "^2",
-    "monocart-coverage-reports": "^2.12.12"
+    "monocart-coverage-reports": "^2.12.12",
+    "peer": "^1.0.2"
   },
   "dependencies": {
     "@capacitor/android": "^8.4.0",

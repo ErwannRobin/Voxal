@@ -1,5 +1,5 @@
 .PHONY: help run run-web dev debug build build-debug build-signed build-web install clean lint check test \
-        test-rust test-e2e coverage coverage-rust coverage-e2e \
+        test-rust test-e2e test-mesh coverage coverage-rust coverage-e2e \
         cap-sync cap-ios cap-android build-android docs release
 
 # Default target
@@ -24,7 +24,8 @@ help:
 	@echo "  check        Run Rust type-check (no binary)"
 	@echo "  test         Run all test suites (check + Rust tests + Playwright)"
 	@echo "  test-rust    Run Rust unit tests"
-	@echo "  test-e2e     Run Playwright E2E tests"
+	@echo "  test-e2e     Run fast Playwright E2E tests (unit project)"
+	@echo "  test-mesh    Run multi-peer WebRTC E2E tests (mesh project)"
 	@echo "  coverage     Generate Rust + E2E coverage reports"
 	@echo "  coverage-rust Generate Rust coverage report (cargo-llvm-cov)"
 	@echo "  coverage-e2e Generate E2E JS coverage report (Playwright + monocart)"
@@ -254,6 +255,9 @@ test-rust:
 test-e2e:
 	npm run test:e2e
 
+test-mesh:
+	npm run test:mesh
+
 # ── Coverage ──────────────────────────────────────────────────────────────────
 
 coverage: coverage-rust coverage-e2e
@@ -278,9 +282,10 @@ coverage-rust:
 	@echo "→ Rust coverage: src-tauri/target/llvm-cov/html/index.html (lcov: src-tauri/target/llvm-cov/lcov.info)"
 
 # Frontend (main.js) V8 coverage collected through Playwright (COVERAGE=1 turns
-# on the monocart collector wired into tests/e2e/fixtures.js).
+# on the monocart collector wired into the fixtures). Runs both the unit and
+# mesh projects so the multi-peer/migration glue is included in the report.
 coverage-e2e:
-	COVERAGE=1 npm run test:e2e
+	COVERAGE=1 NODE_OPTIONS=--disable-warning=DEP0205 npx playwright test
 	@echo "→ E2E coverage: coverage/index.html (lcov: coverage/lcov.info)"
 
 clean:

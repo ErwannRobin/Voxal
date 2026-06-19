@@ -15,7 +15,8 @@ make run-web      # Serve src/ on http://localhost:8080 (web-only testing)
 make check        # Rust type-check without building (fast feedback, no tests)
 make test         # Full suite: Rust type-check + Rust unit tests + Playwright E2E
 make test-rust    # Rust unit tests only
-make test-e2e     # Playwright E2E only (auto-starts dev server)
+make test-e2e     # Fast Playwright E2E (unit project: pure-logic + UI flows)
+make test-mesh    # Multi-peer WebRTC E2E (mesh project: real PeerJS + migration)
 make coverage     # Rust + E2E coverage reports (see below)
 make coverage-rust # Rust coverage via cargo-llvm-cov → src-tauri/target/llvm-cov/html/
 make coverage-e2e # main.js V8 coverage via Playwright+monocart → coverage/index.html
@@ -30,7 +31,9 @@ make release      # Bump version, build signed release, publish GitHub Release
 
 **macOS URL scheme:** `make dev` cannot register `voxal://` (needs a real `.app` bundle). Run `make build-debug` once, open the `.app`, then return to `make dev`. The registration persists.
 
-**E2E tests** use Playwright against `http://127.0.0.1:8080` (config: `playwright.config.js`, tests in `tests/e2e/`). Specs import `test`/`expect` from `tests/e2e/fixtures.js` (not `@playwright/test` directly) so coverage can be layered in transparently.
+**E2E tests** use Playwright against `http://127.0.0.1:8080` (config: `playwright.config.js`, tests in `tests/e2e/`). Two projects: `unit` (fast, deterministic — pure-logic + UI flows; excludes `@mesh`) and `mesh` (multi-peer; only `@mesh`). Specs import `test`/`expect` from `tests/e2e/fixtures.js` (not `@playwright/test` directly) so coverage can be layered in transparently.
+
+**Mesh tests** (`tests/e2e/mesh.spec.js`, tagged `@mesh`) spin up a real local PeerServer (the `peer` dev dep) and drive N isolated Chromium contexts through real PeerJS signaling + WebRTC — covering room formation, rename propagation, audio mesh, and host migration. They use Chromium fake-media flags + `--disable-features=WebRtcHideLocalIpsWithMdns` (loopback ICE) and run with `retries: 2`. The app points PeerJS at the local broker via `localStorage['peerjs-server']` (read by `peerServerOptions()` in `main.js`; defaults to `{}` = cloud broker in production). Kept out of `make test`/`make test-e2e` so the fast suite stays flake-free.
 
 **Coverage:** `make coverage-e2e` sets `COVERAGE=1`, which turns on the monocart V8 collector wired into `tests/e2e/fixtures.js`; the report (HTML + lcov, scoped to `main.js`) is written to `coverage/` by `tests/e2e/coverage-teardown.js`. Normal test runs never load the coverage dependency. `make coverage-rust` needs a one-time `cargo install cargo-llvm-cov` + `rustup component add llvm-tools-preview` (the target prints these if missing).
 

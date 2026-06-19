@@ -7,29 +7,15 @@
 // Chromium V8 coverage is captured and cached by monocart-coverage-reports;
 // the report is generated in the global teardown (tests/e2e/coverage-teardown.js).
 import { test as base, expect } from '@playwright/test';
-
-const COVERAGE = !!process.env.COVERAGE;
+import { startCoverage, addCoverage } from './coverage-util.js';
 
 export const test = base.extend({
-  // Auto fixture: wraps every test to collect coverage when enabled.
+  // Auto fixture: wraps every test to collect coverage for the default page.
   _coverage: [
-    async ({ page, browserName }, use) => {
-      const collect = COVERAGE && browserName === 'chromium' && !!page.coverage;
-      if (collect) {
-        // resetOnNavigation:false keeps coverage across the test's page.goto('/').
-        await page.coverage.startJSCoverage({ resetOnNavigation: false });
-      }
-
+    async ({ page }, use) => {
+      await startCoverage(page);
       await use();
-
-      if (collect) {
-        const coverage = await page.coverage.stopJSCoverage();
-        // Dynamic import so a checkout without the dev dependency can still run
-        // the normal (non-coverage) test suite.
-        const { CoverageReport } = await import('monocart-coverage-reports');
-        const { coverageOptions } = await import('./coverage-options.js');
-        await new CoverageReport(coverageOptions).add(coverage);
-      }
+      await addCoverage(page);
     },
     { auto: true },
   ],
