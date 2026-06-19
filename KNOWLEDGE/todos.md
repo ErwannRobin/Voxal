@@ -65,6 +65,17 @@ See [universal-links-aasa.md](./universal-links-aasa.md) for full setup instruct
 - JS: `nativePTTJoin()` now shows the friendly channel name (`activeChannel`) in the system UI; `ptt-left` listener leaves the room.
 - Verified: `xcodebuild -sdk iphonesimulator … CODE_SIGNING_ALLOWED=NO` → **BUILD SUCCEEDED**.
 
+**⚠️ Blocked on a paid Apple Developer Program membership ($99/yr).** Free
+"personal team" signing cannot grant the `com.apple.developer.push-to-talk`
+or `com.apple.developer.associated-domains` capabilities ("Personal
+development teams … do not support the Associated Domains and Push to Talk
+capabilities") — this also means Universal Links never actually worked on a
+personal team. `CODE_SIGN_ENTITLEMENTS` was therefore left unset so on-device
+builds keep working; re-add `CODE_SIGN_ENTITLEMENTS = App/App.entitlements`
+(or add the capability via Xcode → Signing & Capabilities) once enrolled.
+The plugin degrades gracefully meanwhile (PTChannelManager init throws →
+`join()` returns `supported:false` → in-app PTT fallback).
+
 **Needs a real device (simulator can't run PushToTalk):**
 - System PTT UI appears on room join; Lock-Screen Talk button transmits to peers.
 - Receiving still works after a transmit (confirm `didDeactivate`'s `setActive(false)` doesn't kill WebRTC playback — if it does, drop that call).
