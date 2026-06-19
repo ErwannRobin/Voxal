@@ -123,27 +123,18 @@ test.describe('mesh @mesh', () => {
     }
   });
 
-  // KNOWN ISSUE — reproduced by this harness. When a host dies and 2+ peers
-  // survive, migration can split-brain (two hosts that never reconcile). Root
-  // cause: the elected deputy calls becomeHost() and immediately broadcasts an
-  // authoritative peer-list/successorIds built only from its open *data*
-  // connections. In the star topology survivors have no data link to each other
-  // (and, in a silent room, no media link either — audio is lazy), so that list
-  // is empty and RESETS the other survivor's authoritative successor chain while
-  // it is still mid-election → it elects itself too.
-  //   - Graceful simultaneous close (tab closed without leaveRoom): fails ~always.
-  //   - Crash / heartbeat-timeout: races — the connectToNewHost retry usually but
-  //     not reliably lets the deputy stabilise first, so it is flaky, not safe.
-  // Likely fix: a freshly-promoted host should keep placeholders for knownPeerIds
-  // (cf. startMigrationSettle/ensurePlaceholdersForKnownPeers) instead of
-  // broadcasting an empty roster, and/or a peer should ignore an empty
-  // authoritative peer-list while roomState === 'migrating'. Both kill paths are
-  // exercised below; remove `.fixme` once migration no longer splits.
+  // Regression guard for a host-migration split-brain this harness found and we
+  // fixed: when a host disappeared and 2+ peers survived, a dying host could
+  // broadcast a shrunken peer-list/successorIds during its own connection
+  // teardown, poisoning a survivor's successor chain so it elected itself too
+  // (two hosts). The fix defers the host's peer-left broadcast one tick and skips
+  // it once `peer.destroyed` is set, so survivors migrate from the last healthy
+  // chain. Both host-loss paths are exercised.
   for (const variant of [
     { name: 'crash (heartbeat timeout)', kill: killPeer },
     { name: 'simultaneous graceful close', kill: killPeerGraceful },
   ]) {
-    test.fixme(`multi-survivor host migration must not split-brain — ${variant.name}`, async ({ makePeer }) => {
+    test(`multi-survivor host migration does not split-brain — ${variant.name}`, async ({ makePeer }) => {
       const host = await makePeer({ pseudo: 'Hostie' });
       const code = await createRoom(host);
       const a = await makePeer({ pseudo: 'Alice' });
@@ -155,13 +146,19 @@ test.describe('mesh @mesh', () => {
 
       await variant.kill(host);
 
-      // Eventually exactly one host, one shared room code, roster of 2 on both.
+      // Wait for the room to CONVERGE (one combined poll, so we assert the final
+      // settled state rather than catching a transient mid-migration window):
+      // exactly one host, a single shared room code, and a 2-peer roster on both.
+      // A true split-brain (two permanent hosts) never satisfies this and fails.
       await expect
-        .poll(async () => (await Promise.all([a, b].map(getState))).filter((s) => s.isHost).length, POLL)
-        .toBe(1);
-      for (const p of [a, b]) await expect.poll(() => rosterCount(p), POLL).toBe(2);
-      const survivors = await Promise.all([a, b].map(getState));
-      expect(new Set(survivors.map((s) => s.roomCode)).size).toBe(1);
+        .poll(async () => {
+          const [sa, sb] = await Promise.all([a, b].map(getState));
+          const hosts = [sa, sb].filter((s) => s.isHost).length;
+          const codes = new Set([sa, sb].map((s) => s.roomCode)).size;
+          const rosters = await Promise.all([a, b].map(rosterCount));
+          return hosts === 1 && codes === 1 && rosters.every((n) => n === 2);
+        }, POLL)
+        .toBe(true);
     });
   }
 });

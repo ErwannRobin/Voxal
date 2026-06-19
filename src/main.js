@@ -4536,8 +4536,14 @@ function leaveRoom() {
 // --- Host migration ----------------------------------------------------------
 
 var HOST_CONNECT_TIMEOUT    = 8000; // per-attempt timeout
-var HOST_RETRY_DELAY        = 2000; // delay between retries
-var HOST_MAX_RETRIES        = 3;    // retries before re-electing
+var HOST_RETRY_DELAY        = 1500; // delay between retries
+// Retries before giving up on the elected new host and re-electing. This budget
+// must outlast how long the elected deputy can take to actually assume the host
+// role after the old host vanishes — worst case the heartbeat timeout
+// (HOST_HEARTBEAT_TIMEOUT_MS, ~7s) plus becomeHost(). Until the deputy is host
+// it redirects/closes our connection, so too small a budget makes a survivor
+// abandon the rightful deputy and self-promote → split-brain. ~8 × 1.5s ≈ 12s.
+var HOST_MAX_RETRIES        = 8;    // retries before re-electing
 var MIGRATION_SETTLE_MS     = 8000; // grace period for peers to reconnect to new host
 var _migrationSettleTimer   = null;
 
@@ -5253,13 +5259,26 @@ function handleJoinerDataConnection(dataConn) {
 
   dataConn.on('close', function() {
     if (!isCurrentPeerDataConnection(joinerId, dataConn)) return;
-    forgetPeer(joinerId);
-    connections.forEach(function(c) {
-      if (c.data) sendDataIfOpen(c.data, { type: 'peer-left', peerId: joinerId });
-    });
-    playGoodbye();
-    removePeer(joinerId);
-    broadcastHostPeerLists();
+    // Defer the peer-left / roster broadcast by one tick. If our own Peer is
+    // being torn down, ALL our connections close in a synchronous cascade and
+    // `peer.destroyed` only flips true once that cascade finishes — so checking
+    // it inside the close handler is too early (it reads false). On the next
+    // tick a self-destroying host sees destroyed=true and skips: it must NOT
+    // broadcast a shrunken peer-list/successor chain to the survivors on its way
+    // out, or it poisons their migration election (dropping peers whose host
+    // link merely collapsed alongside ours) and causes split-brain. A genuine
+    // single peer-leave passes this check and broadcasts as before.
+    setTimeout(function() {
+      if (!peer || peer.destroyed || !inRoom || !isHost) return;
+      if (!isCurrentPeerDataConnection(joinerId, dataConn)) return; // peer reconnected meanwhile
+      forgetPeer(joinerId);
+      connections.forEach(function(c) {
+        if (c.data) sendDataIfOpen(c.data, { type: 'peer-left', peerId: joinerId });
+      });
+      playGoodbye();
+      removePeer(joinerId);
+      broadcastHostPeerLists();
+    }, 0);
   });
 
   dataConn.on('error', function(err) { console.warn('[data]', err); });
