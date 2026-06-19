@@ -84,4 +84,50 @@ The plugin degrades gracefully meanwhile (PTChannelManager init throws →
 
 ---
 
+## 🐛 Fix multi-survivor host-migration split-brain (found by mesh harness)
+
+**Goal:** When a host disappears and 2+ peers survive, exactly one new host
+should emerge. Today the room can split into two hosts that never reconcile.
+
+**Root cause:** the elected deputy calls `becomeHost()` and immediately
+broadcasts an authoritative `peer-list`/`successorIds` built only from its open
+**data** connections. In the star topology survivors hold no data link to each
+other (and, in a silent room, no media link either — audio is lazy), so that
+list is **empty** and resets the other survivor's `_authoritativeSuccessorIds` /
+`_lastAuthoritativePeerIds` while it is still mid-election → it elects itself too.
+
+**Reproduction:** `tests/e2e/mesh.spec.js` → the two `test.fixme(
+'multi-survivor host migration must not split-brain — …')` cases (crash /
+heartbeat-timeout path = flaky; simultaneous graceful close = fails ~always).
+Remove `.fixme` once fixed.
+
+**Candidate fix:** on `becomeHost()`, keep placeholders for `knownPeerIds`
+instead of broadcasting an empty roster until the migration settle window has
+reattached data channels (cf. `startMigrationSettle` /
+`ensurePlaceholdersForKnownPeers`), AND/OR have a peer ignore an empty
+authoritative `peer-list` while `roomState === 'migrating'`. Verify by removing
+`.fixme` and running `make test-mesh`.
+
+---
+
+## 🕸️ Multi-peer E2E harness (real PeerJS + WebRTC + host migration)
+
+**Status:** ✅ Implemented — `tests/e2e/mesh.spec.js` (tag `@mesh`), run with
+`make test-mesh`.
+
+- Local PeerServer (`peer` dev dep) per worker (`generateClientId` → UUIDs);
+  each peer is its own browser context pointed at the broker via
+  `localStorage['peerjs-server']` (read by `peerServerOptions()` in `main.js`,
+  defaults to `{}` = cloud broker in prod).
+- Chromium fake-media flags + `--disable-features=WebRtcHideLocalIpsWithMdns`
+  (loopback ICE) in a dedicated `mesh` Playwright project (`retries: 2`,
+  90s timeout); the `unit` project `grepInvert`s `@mesh` so the fast suite is
+  untouched. `make coverage-e2e` runs both projects so the mesh glue lands in
+  the report.
+- **Green scenarios:** 3-peer formation (one host, agreed deputy); rename
+  propagation (both directions); audio mesh after speaking; single-survivor
+  crash migration; new peer joins a migrated room.
+- **Documented `fixme`:** multi-survivor migration split-brain (see the fix
+  item above).
+
 _Add new items above this line._
