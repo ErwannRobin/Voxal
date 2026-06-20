@@ -16,7 +16,11 @@ import {
 // exercise the connection / mesh / host-migration glue in main.js that the
 // pure-logic unit tests can't reach. Tagged @mesh so the fast suite skips them.
 
-const POLL = { timeout: 25_000, intervals: [200, 400, 800] };
+// Generous timeout: real WebRTC + heartbeat-timeout host-loss detection (~7s)
+// and multi-hop migration (e.g. host+deputy failing together) can take ~20s to
+// converge. expect.poll resolves as soon as the condition holds, so this only
+// adds headroom for slow/CI runs — it does not slow the common case.
+const POLL = { timeout: 45_000, intervals: [200, 400, 800] };
 
 test.describe('mesh @mesh', () => {
   test('three peers converge on one host and a shared roster', async ({ makePeer }) => {
@@ -161,4 +165,38 @@ test.describe('mesh @mesh', () => {
         .toBe(true);
     });
   }
+
+  test('host and deputy crashing together converges on the next successor', async ({ makePeer }) => {
+    const host = await makePeer({ pseudo: 'Hostie' });
+    const code = await createRoom(host);
+    const a = await makePeer({ pseudo: 'Alice' });
+    const b = await makePeer({ pseudo: 'Bob' });
+    const c = await makePeer({ pseudo: 'Carol' });
+    await joinRoom(a, code);
+    await joinRoom(b, code);
+    await joinRoom(c, code);
+    for (const p of [host, a, b, c]) await expect.poll(() => rosterCount(p), POLL).toBe(4);
+
+    // Identify the agreed deputy and kill BOTH the host and the deputy at once.
+    // Survivors first elect the (now dead) deputy; the broker reports it
+    // unavailable, so they fast-fail and walk the successor chain to the next one.
+    const deputyId = await waitForSharedDeputy(expect, [a, b, c], POLL);
+    const byId = {};
+    for (const p of [a, b, c]) byId[(await getState(p)).peerId] = p;
+    const deputyPage = byId[deputyId];
+    const survivors = [a, b, c].filter((p) => p !== deputyPage);
+
+    await Promise.all([killPeer(host), killPeer(deputyPage)]);
+
+    // The two remaining peers converge on exactly one host, one room code, roster 2.
+    await expect
+      .poll(async () => {
+        const states = await Promise.all(survivors.map(getState));
+        const hosts = states.filter((s) => s.isHost).length;
+        const codes = new Set(states.map((s) => s.roomCode)).size;
+        const rosters = await Promise.all(survivors.map(rosterCount));
+        return hosts === 1 && codes === 1 && rosters.every((n) => n === 2);
+      }, POLL)
+      .toBe(true);
+  });
 });

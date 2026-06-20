@@ -1904,6 +1904,14 @@ function isNonFatalPeerRuntimeError(err) {
   return type === 'peer-unavailable' || /Could not connect to peer\b/.test(message);
 }
 
+// PeerJS reports an unreachable peer as a 'peer-unavailable' error whose message
+// is "Could not connect to peer <id>". Extract that id (or null).
+function unavailablePeerIdFromError(err) {
+  var message = (err && (err.message || String(err))) || '';
+  var m = message.match(/Could not connect to peer\s+([^\s]+)/i);
+  return m ? m[1] : null;
+}
+
 function friendlyPeerError(err) {
   var type = err && (err.type || '');
   var message = err && (err.message || String(err));
@@ -1923,6 +1931,19 @@ function handlePeerRuntimeError(err, settled, reject) {
     return true;
   }
   if (inRoom && isNonFatalPeerRuntimeError(err)) {
+    // Fast-fail a dead migration target. If the broker says the host we are
+    // currently migrating to is unavailable, it is gone (not merely slow to
+    // promote), so skip the connect-retry budget: exclude it and re-elect the
+    // next successor immediately. This keeps host+deputy (or deeper) simultaneous
+    // failure fast while still being patient with a deputy that is just slow.
+    if (roomState === ROOM_STATE_MIGRATING && _migrationCandidateId) {
+      var unreachableId = unavailablePeerIdFromError(err);
+      if (unreachableId && unreachableId === _migrationCandidateId) {
+        console.warn('[migration] Broker reports elected host ' +
+          migrationPeerLabel(_migrationCandidateId) + ' unavailable; re-electing next successor.');
+        initiateHostMigration(_migrationCandidateId);
+      }
+    }
     console.warn('[peer-runtime]', err);
     return true;
   }

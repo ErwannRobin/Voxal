@@ -95,9 +95,16 @@ Fixed via two changes in `main.js`:
 2. Survivors are more patient reaching the elected deputy before self-promoting
    (`HOST_MAX_RETRIES` 3→8, `HOST_RETRY_DELAY` 2000→1500), so they outlast the
    deputy's promotion window (~7s heartbeat timeout + `becomeHost`).
+3. **Host + deputy (or deeper) failing together**: the ordered successor chain
+   already walks to the next successor via `_migrationExcluded`, but the wider
+   retry budget made a *dead* deputy slow to skip. `handlePeerRuntimeError` now
+   fast-fails on `peer-unavailable` for the current `_migrationCandidateId`
+   (broker says it's gone) → `initiateHostMigration(id)` re-elects immediately,
+   while a slow-but-alive deputy still gets the full budget.
 
-Regression-guarded by the two un-skipped `multi-survivor host migration does not
-split-brain — …` cases in `tests/e2e/mesh.spec.js` (crash + graceful kill paths).
+Regression-guarded in `tests/e2e/mesh.spec.js`: the two `multi-survivor host
+migration does not split-brain — …` cases (crash + graceful) and `host and
+deputy crashing together converges on the next successor`.
 
 ---
 
@@ -118,7 +125,7 @@ split-brain — …` cases in `tests/e2e/mesh.spec.js` (crash + graceful kill pa
 - **Scenarios (all green):** 3-peer formation (one host, agreed deputy); rename
   propagation (both directions); audio mesh after speaking; single-survivor
   crash migration; new peer joins a migrated room; multi-survivor migration
-  (crash + graceful kill paths) — the latter two regression-guard the split-brain
-  fix above.
+  (crash + graceful kill paths); host + deputy crashing together → walks the
+  successor chain. The migration cases regression-guard the split-brain fix above.
 
 _Add new items above this line._
