@@ -3001,6 +3001,34 @@ function updatePeerList() {
   }
 
   if (window._updateTinyPeersToggle) window._updateTinyPeersToggle();
+  updateRoomSizeWarning();
+}
+
+// Voxal audio is a full WebRTC mesh, so connections grow ~O(n²) and a single
+// speaker uploads one stream per listener. Warn as a room gets large: a soft
+// notice at ROOM_SOFT_WARN_PEERS, a stronger one at ROOM_HARD_WARN_PEERS. These
+// are advisory only — joining is never blocked.
+var ROOM_SOFT_WARN_PEERS = 8;
+var ROOM_HARD_WARN_PEERS = 12;
+
+function updateRoomSizeWarning() {
+  var el = document.getElementById('room-size-warning');
+  if (!el) return;
+  // Count what the user actually sees in the roster (self + others).
+  var count = document.querySelectorAll('#peers-list .peer-item').length;
+  if (IS_TINY_EMBED || !inRoom || count < ROOM_SOFT_WARN_PEERS) {
+    el.classList.add('hidden');
+    el.classList.remove('hard');
+    return;
+  }
+  if (count >= ROOM_HARD_WARN_PEERS) {
+    el.textContent = '⚠ ' + count + ' people connected. Voxal is peer-to-peer — at this size audio may break up or drop. Consider splitting into smaller rooms.';
+    el.classList.add('hard');
+  } else {
+    el.textContent = '⚠ ' + count + ' people connected. Audio may start to degrade beyond ' + ROOM_HARD_WARN_PEERS + ' on a peer-to-peer mesh.';
+    el.classList.remove('hard');
+  }
+  el.classList.remove('hidden');
 }
 
 function updateTinyCompactStatus() {
@@ -4865,11 +4893,11 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
         pseudoColor: msg.hostPseudoColor || null
       }));
       console.log('[migration] Connected to new host ' + migrationPeerLabel(targetHostId) + '. Received peer-list.');
-      handleHostMessage(msg);
+      safeHandleHostMessage(msg);
       return;
     }
 
-    if (receivedPeerList) handleHostMessage(msg);
+    if (receivedPeerList) safeHandleHostMessage(msg);
   });
 
   hostData.on('close', function() {
@@ -4999,7 +5027,7 @@ function connectToHost(hostId, opts) {
       if (!peer || peer.destroyed) return; // cancelled mid-join
       devLog('✓ Joined! ' + (msg.peers ? msg.peers.length : 0) + ' peer(s) in room');
       finishJoin(hostId, hostData);
-      handleHostMessage(msg);
+      safeHandleHostMessage(msg);
       if (onInitialJoinResolve) onInitialJoinResolve(peer.id);
       return;
     }
@@ -5010,7 +5038,7 @@ function connectToHost(hostId, opts) {
     }
 
     // Pass other messages to host handler (after peer-list received)
-    if (receivedPeerList) handleHostMessage(msg);
+    if (receivedPeerList) safeHandleHostMessage(msg);
   });
 
   hostData.on('close', function() {
@@ -5129,7 +5157,8 @@ function handleJoinerDataConnection(dataConn) {
 
   dataConn.on('data', function(msg) {
     if (!isCurrentPeerDataConnection(joinerId, dataConn)) return;
-    notePeerHeartbeat(joinerId, msg && msg.at ? msg.at : Date.now());
+    if (!msg || typeof msg !== 'object') return; // ignore malformed packets
+    notePeerHeartbeat(joinerId, msg.at ? msg.at : Date.now());
     if (msg.type === 'hello') {
       rememberPeer(joinerId);
       const requestedPseudo = msg.pseudo || shortId(joinerId);
@@ -5423,8 +5452,20 @@ async function createRoom(onJoined) {
 
 // --- Non-host logic ----------------------------------------------------------
 
+// Defensive wrapper around handleHostMessage. In a P2P room any peer drives the
+// data channel, so a malformed or hostile message must never throw out of a data
+// handler and disrupt the room — at worst we drop that one packet.
+function safeHandleHostMessage(msg) {
+  try {
+    handleHostMessage(msg);
+  } catch (e) {
+    console.warn('[host-msg] dropped malformed "' + (msg && msg.type) + '" message:', e);
+  }
+}
+
 function handleHostMessage(msg) {
-  noteHostHeartbeat(msg && msg.at ? msg.at : Date.now());
+  if (!msg || typeof msg !== 'object') return;
+  noteHostHeartbeat(msg.at ? msg.at : Date.now());
   applyHostRoutingHints(msg);
   if (msg.type === 'heartbeat') return;
   if (msg.type === 'pseudo-assigned') {
@@ -5435,7 +5476,7 @@ function handleHostMessage(msg) {
     if (msg.selfPseudo) {
       applyAssignedSelfProfile(msg.selfPseudo, msg.selfPseudoColor || null);
     }
-    const listedPeerIds = msg.peers.map(function(p) { return p.id; }).concat([roomCode]);
+    const listedPeerIds = (msg.peers || []).map(function(p) { return p.id; }).concat([roomCode]);
     const listedPeerSet = new Set(listedPeerIds);
 
     resetAuthoritativePeerIds(listedPeerIds);
@@ -5447,7 +5488,7 @@ function handleHostMessage(msg) {
       }
     });
 
-    const authoritativePeers = msg.peers.concat([{
+    const authoritativePeers = (msg.peers || []).concat([{
       id: roomCode,
       pseudo: msg.hostPseudo || shortId(roomCode),
       pseudoColor: msg.hostPseudoColor || null,

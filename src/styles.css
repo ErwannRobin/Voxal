@@ -337,6 +337,30 @@ body {
   transform: translateX(-50%) translateY(0);
 }
 
+/* Advisory banner shown as a room grows large (mesh degrades ~O(n²)). */
+.room-size-warning {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  font-weight: 500;
+  color: #fbbf24; /* amber-400 — readable on the default dark theme */
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+.room-size-warning.hard {
+  color: #f87171; /* red-400 */
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.45);
+}
+html[data-theme="light"] .room-size-warning { color: #b45309; }
+html[data-theme="light"] .room-size-warning.hard { color: #b91c1c; }
+@media (prefers-color-scheme: light) {
+  html[data-theme="system"] .room-size-warning { color: #b45309; }
+  html[data-theme="system"] .room-size-warning.hard { color: #b91c1c; }
+}
+
 .room-meta {
   display: flex;
   align-items: center;
