@@ -443,14 +443,49 @@ function deleteSession() {
   }).catch(function(e) { console.warn('[Presence] deleteSession:', e.message); });
 }
 
-const FALLBACK_ICE = [
+const FALLBACK_STUN = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
 ];
 
+// Best-effort free TURN relay for peers behind symmetric NAT / strict firewalls
+// when no org or metered.ca TURN is configured. STUN can't traverse those — only
+// a TURN relay can — and TCP/443 + TLS (turns:) are the transports that slip past
+// corporate firewalls (UDP/3478 is commonly blocked). A TURN relay only forwards
+// encrypted DTLS-SRTP, so it never has access to the audio.
+//
+// These are the public Open Relay credentials: shared, rate-limited and NOT
+// guaranteed (Open Relay has been moving toward per-account API keys, so verify
+// before relying on them). Point this at your own coturn / a metered.ca free tier
+// without a rebuild by setting localStorage['turn-fallback'] to a JSON array of
+// RTCIceServer objects — or to '[]' to disable the relay fallback entirely.
+const DEFAULT_FALLBACK_TURN = [
+  { urls: 'turn:openrelay.metered.ca:80',                 username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443',                username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443?transport=tcp',  username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turns:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+];
+
+function fallbackTurnServers() {
+  var raw = localStorage.getItem('turn-fallback');
+  if (raw === null) return DEFAULT_FALLBACK_TURN;
+  try {
+    var parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : DEFAULT_FALLBACK_TURN;
+  } catch (_) {
+    return DEFAULT_FALLBACK_TURN;
+  }
+}
+
+// Public STUN plus the best-effort free TURN relay — used when no org/metered
+// TURN is configured so that peers behind firewalls can still connect.
+function fallbackIceServers() {
+  return FALLBACK_STUN.concat(fallbackTurnServers());
+}
+
 // 1. Try org TURN (backend-managed, short-lived credentials — preferred)
 // 2. Try locally configured metered.ca credentials (manual fallback)
-// 3. Fall back to public STUN
+// 3. Fall back to public STUN + best-effort free TURN relay
 async function fetchIceServers() {
   // --- 1. Org ICE servers from Voxal backend ---
   if (presenceConfigured()) {
@@ -510,9 +545,11 @@ async function fetchIceServers() {
     }
   }
 
-  // --- 3. STUN-only fallback ---
-  devLog('[ICE] Using STUN-only fallback', 'warn');
-  return FALLBACK_ICE;
+  // --- 3. Public STUN + best-effort free TURN relay ---
+  var fb = fallbackIceServers();
+  var relays = fb.filter(function(s) { return /^turns?:/.test(s.urls); }).length;
+  devLog('[ICE] Using public fallback: ' + fb.length + ' server(s), ' + relays + ' relay(s)', 'warn');
+  return fb;
 }
 
 // --- State -------------------------------------------------------------------
