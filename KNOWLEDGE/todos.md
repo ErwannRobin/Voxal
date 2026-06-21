@@ -128,4 +128,19 @@ deputy crashing together converges on the next successor`.
   (crash + graceful kill paths); host + deputy crashing together → walks the
   successor chain. The migration cases regression-guard the split-brain fix above.
 
+## 📈 Scaling to large audiences (deferred — only if needed)
+
+A full WebRTC mesh can't do one→many broadcast: a single speaker uploads one
+Opus stream per listener, which caps practical room size regardless of how many
+peers are "only listening". For now we just **warn** (`updateRoomSizeWarning`,
+soft at 8 / hard at 12 — no hard cap). If large town-hall/audience rooms become a
+real goal, the path is:
+- an **optional SFU/relay** (server forwards one upload to many) — the only thing
+  that actually scales one→many; conflicts with the "no server" default, so make
+  it opt-in;
+- an **explicit listen-only role** (skip mic permission, a speaker-aware cap, an
+  "audience" roster) — modest UX wins but does NOT remove the speaker fan-out.
+Decided **not** to build either now; the mesh + size warning is enough for the
+small-room product.
+
 _Add new items above this line._
