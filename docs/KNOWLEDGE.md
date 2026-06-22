@@ -90,9 +90,14 @@ push2talk/
 | `make cap-sync` | `npx cap sync` — sync web assets to iOS & Android |
 | `make cap-ios` | `cap-sync` then `npx cap open ios` (Xcode) |
 | `make cap-android` | `cap-sync` then `npx cap open android` (Android Studio) |
+| `make test` | `make check` + Rust unit tests + fast Playwright E2E (unit project) |
+| `make test-rust` | Rust unit tests (`cargo test`) |
+| `make test-e2e` | Fast Playwright E2E — pure-logic + UI flows (unit project) |
+| `make test-mesh` | Multi-peer WebRTC E2E (mesh project: real PeerJS + host migration) |
+| `make coverage` | Rust + E2E coverage reports (`coverage-rust` + `coverage-e2e`) |
 | `make clean` | `cargo clean` + remove `dist/` |
 
-There are **no automated tests**. `make check` is the only validation step.
+**Tests:** Rust unit tests live in `src-tauri/src/lib.rs`; Playwright E2E in `tests/e2e/` (config `playwright.config.js`). Two Playwright projects: `unit` (fast, deterministic — pure-logic + UI; excludes the `@mesh` tag) and `mesh` (real multi-peer PeerJS+WebRTC via a local broker; `@mesh` only, kept out of `make test`). Coverage uses `cargo-llvm-cov` (Rust) and `monocart-coverage-reports` (E2E, gated behind `COVERAGE=1`).
 
 ---
 
@@ -260,11 +265,12 @@ When the user clicks a channel in the presence panel:
 
 ## ICE / TURN Resolution
 
-Three-tier fallback, tried in order on each room join/create:
+`fetchIceServers()` returns the first source that yields servers, tried in order on each room join/create. Full reference: [docs/turn-and-ice.md](turn-and-ice.md).
 
+0. **Embed-provided** — ICE servers pushed by the embedding page via `postMessage {type:'config', iceServers}` (`_iframeIceServers`, in-memory, highest precedence). Origin-gated.
 1. **Org TURN** — `GET /org/:orgId/ice-servers` with 5s timeout. Used if org has TURN configured. Returns `null` if not configured (falls through, not an error).
 2. **Local metered.ca** — reads `localStorage['metered-app-name']` + `localStorage['metered-api-key']`, fetches from `https://<app>.metered.live/api/v1/turn/credentials?apiKey=<key>`.
-3. **STUN fallback** — `stun:stun.l.google.com:19302` + `stun:stun1.l.google.com:19302`
+3. **STUN + free TURN fallback** — `FALLBACK_STUN` (`stun:stun.l.google.com:19302` + `stun1`) plus `fallbackTurnServers()`: a best-effort public TURN relay (`DEFAULT_FALLBACK_TURN`), overridable via `localStorage['turn-fallback']` (JSON `RTCIceServer[]`, or `[]` to disable). STUN alone can't traverse symmetric NAT / strict firewalls — only a TURN relay can, over TCP/443 + TLS (`turns:`). Surfaced in Settings → Advanced → Fallback relay (Automatic / Off / Custom).
 
 ---
 
@@ -306,7 +312,7 @@ All mutable state is at module scope:
 | `freeHandMode` | `boolean` | Whether always-on mic mode is enabled |
 | `recordingShortcut` | `boolean` | Whether shortcut-capture mode is active |
 | `myPseudo` | `string` | Local user's display name |
-| `shortcutStr` | `string` | PTT keyboard shortcut (e.g. `Ctrl+Backquote`) |
+| `shortcutStr` | `string` | PTT keyboard shortcut (e.g. `Shift+Space`) |
 | `connections` | `Map<string, ConnObj>` | All peer connections |
 | `presenceData` | `array` | Last fetched `[{channel, connected}]` |
 | `activeChannel` | `string \| null` | Channel name for current presence session |
@@ -321,13 +327,15 @@ All mutable state is at module scope:
 | Key | Constant | Default | Description |
 |---|---|---|---|
 | `pseudo` | — | `''` | Display name |
-| `ptt-shortcut` | — | `'Ctrl+Backquote'` | Keyboard shortcut string |
+| `ptt-shortcut` | — | `'Shift+Space'` (`'Space'` on plain web) | Keyboard shortcut string |
 | `presence-api-token` | `PRESENCE_TOKEN_KEY` | `''` | Auth token for Voxal Connect |
 | `presence-org-id` | `PRESENCE_ORG_KEY` | `''` | Selected organisation UUID |
 | `service-url` | `SERVICE_URL_KEY` | `'https://voxal.app'` | API base URL override |
 | `metered-app-name` | `METERED_APP_STORE_KEY` | `''` | metered.ca app name for TURN |
 | `metered-api-key` | `METERED_API_STORE_KEY` | `''` | metered.ca API key |
 | `metered-status` | `METERED_STATUS_STORE_KEY` | `null` | `'ok'` / `'error'` — TURN test result badge |
+| `turn-fallback` | `TURN_FALLBACK_KEY` | unset | Fallback relay override: JSON `RTCIceServer[]`, or `'[]'` to disable |
+| `peerjs-server` | — | unset | PeerJS broker override (`peerServerOptions()`); test / self-host only |
 | `theme` | `THEME_KEY` | `'system'` | `'dark'` / `'light'` / `'system'` |
 | `voxal-connect-url` | — | `'https://voxal.app'` | OAuth service URL override |
 
@@ -391,7 +399,7 @@ Located in `src-tauri/src/lib.rs`.
 | `open-preferences` | "Voxal → Preferences…" menu item clicked |
 
 ### Default shortcut
-`Ctrl+Backquote` (backtick `` ` ``). Defined as `DEFAULT_SHORTCUT` constant in both `lib.rs` and `main.js`.
+`Shift+Space` (`Space` on plain web). Defined as `DEFAULT_SHORTCUT` constant in both `lib.rs` and `main.js`.
 
 ### Capabilities (`default.json`)
 Both windows (`"main"` and `"preferences"`) share one capability file. Permissions include `core:default`, `core:webview:allow-create-webview-window`, window management, global shortcut, `shell:allow-open`, and `deep-link:default`.
@@ -469,7 +477,7 @@ Stored in `localStorage['theme']`. Applied via `data-theme` attribute on `<html>
 ## Keyboard Shortcuts
 
 ### PTT shortcut (configurable)
-- Default: `Ctrl+Backquote`
+- Default: `Shift+Space` (`Space` on plain web)
 - Stored in `localStorage['ptt-shortcut']`
 - Format: `Modifier+KeyCode` (e.g. `Ctrl+KeyA`, `Alt+Space`)
 - `shortcutFromEvent(e)` builds the string from a `KeyboardEvent`

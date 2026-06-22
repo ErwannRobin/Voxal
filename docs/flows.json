@@ -52,7 +52,7 @@
     {
       "id": "turn",
       "name": "TURN / ICE Servers",
-      "description": "metered.ca (or org-configured) relay servers. Fallback: STUN-only. Credentials fetched at room creation/join.",
+      "description": "Embed-config / org / metered.ca relay servers, falling back to public STUN + a best-effort free TURN relay. Credentials fetched at room creation/join.",
       "color": "#eab308",
       "icon": "🌐"
     },
@@ -102,7 +102,7 @@
           "from": "frontend",
           "to": "turn",
           "label": "fetchIceServers()",
-          "detail": "Tries: 1) Org ICE servers from Presence API, 2) local metered.ca credentials, 3) STUN-only fallback"
+          "detail": "Tries: 0) embed postMessage 'config' ICE servers, 1) org ICE servers from Presence API, 2) local metered.ca credentials, 3) public STUN + free TURN relay fallback (localStorage['turn-fallback'] override)"
         },
         {
           "from": "frontend",
@@ -510,7 +510,7 @@
     {
       "id": "ice-turn-setup",
       "name": "ICE / TURN Setup",
-      "description": "Three-tier fallback for fetching relay server credentials",
+      "description": "Layered fallback for fetching relay server credentials (embed config → org → metered.ca → STUN + free relay)",
       "steps": [
         {
           "from": "frontend",
@@ -539,8 +539,8 @@
         {
           "from": "frontend",
           "to": "frontend",
-          "label": "3. STUN-only fallback",
-          "detail": "If both TURN sources fail, uses Google STUN servers. Works for simple NATs but fails behind symmetric NAT."
+          "label": "3. STUN + free TURN relay fallback",
+          "detail": "If no org/metered TURN, uses Google STUN plus a best-effort free public TURN relay (overridable via localStorage['turn-fallback'] / Settings → Advanced → Fallback relay). STUN alone fails behind symmetric NAT / firewalls; the relay (TCP/443 + TLS) traverses them."
         },
         {
           "from": "frontend",

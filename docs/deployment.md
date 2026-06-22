@@ -25,7 +25,7 @@ If enabled, the app uses the configured service URL in Settings → Advanced (`s
 For production-grade deployments:
 
 1. Run your own PeerJS signaling server.
-2. Configure TURN credentials for strict NAT/firewall networks.
+2. Configure TURN credentials for strict NAT/firewall networks — see [TURN & ICE configuration](turn-and-ice.md).
 3. Host the static web app over HTTPS with the required security headers.
 4. Configure deep-link domain files (`.well-known`) for mobile app links.
 5. Optionally run a presence backend and point Voxal to your API base URL.
