@@ -89,6 +89,7 @@ Room flow (high level):
 - [Mobile build and fork guide (iOS/Android)](docs/mobile.md)
 - [Release workflow and signing](docs/release.md)
 - [iframe embed parameters and bridge](docs/iframe-embed.md)
+- [TURN & ICE configuration](docs/turn-and-ice.md)
 - [Recent daily updates](docs/updates/2026-06-15.md)
 
 ## Contributing
