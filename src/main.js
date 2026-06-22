@@ -777,6 +777,8 @@ let isTalking         = false;
 let freeHandMode      = false;
 let recordingShortcut = false;
 let myPseudo          = loadInitialPseudo();
+let _preRenameMyPseudo       = null; // original myPseudo before a room-forced rename
+let _preRenameAnonPseudo     = null; // original anon.pseudo before a room-forced rename
 let editingSelfPseudo = false;
 let _cancelJoin       = null; // set during joinRoom()/createRoom(), called by Cancel button
 let _prevScreen       = null; // screen shown before invite-loading (null = page entry point)
@@ -1264,12 +1266,17 @@ function applyAssignedSelfProfile(pseudo, pseudoColor) {
   if (requestedManualPseudo) {
     if (assignedPseudo !== requestedManualPseudo) {
       showCopyToast('Name already used in this room. You were renamed to "' + assignedPseudo + '".');
+      // Save original so we can restore it when leaving this room.
+      if (_preRenameMyPseudo === null) _preRenameMyPseudo = requestedManualPseudo;
       setMyPseudo(assignedPseudo, { silentAnnounce: true });
     }
     return;
   }
   var anon = ensureAnonymousProfile();
-  anon.pseudo = assignedPseudo;
+  if (assignedPseudo !== anon.pseudo) {
+    if (_preRenameAnonPseudo === null) _preRenameAnonPseudo = anon.pseudo;
+    anon.pseudo = assignedPseudo;
+  }
   if (pseudoColor) anon.pseudoColor = pseudoColor;
   updatePeerList();
 }
@@ -1359,9 +1366,11 @@ function announcePseudoChange() {
     if (uniqueHostPseudo !== hostProfile.pseudo) {
       if ((myPseudo || '').trim()) {
         showCopyToast('Name already used in this room. You were renamed to "' + uniqueHostPseudo + '".');
+        if (_preRenameMyPseudo === null) _preRenameMyPseudo = (myPseudo || '').trim();
         setMyPseudo(uniqueHostPseudo, { silentAnnounce: true });
       } else {
         var anon = ensureAnonymousProfile();
+        if (_preRenameAnonPseudo === null) _preRenameAnonPseudo = anon.pseudo;
         anon.pseudo = uniqueHostPseudo;
       }
       hostProfile = selfPseudoProfile();
@@ -1391,6 +1400,8 @@ function setMyPseudo(nextPseudo, options) {
   myPseudo = (nextPseudo || '').trim();
   sessionStorage.setItem(PSEUDO_SESSION_KEY, myPseudo);
   if (shouldPersistPseudoGlobally()) localStorage.setItem(PSEUDO_KEY, myPseudo);
+  // A voluntary name change supersedes any room-forced rename.
+  if (!options.silentAnnounce) _preRenameMyPseudo = null;
   const homeInput = $('input-pseudo');
   const settingsInput = $('input-pseudo-settings');
   const inviteInput = $('input-pseudo-invite');
@@ -4686,6 +4697,15 @@ function leaveRoom() {
   }
   inRoom = false; freeHandMode = false; isTalking = false;
   _pendingTalkingStart = false;
+  // Restore the name to what it was before any room-forced rename.
+  if (_preRenameMyPseudo !== null) {
+    setMyPseudo(_preRenameMyPseudo, { silentAnnounce: true });
+    _preRenameMyPseudo = null;
+  }
+  if (_preRenameAnonPseudo !== null && _anonymousProfile) {
+    _anonymousProfile.pseudo = _preRenameAnonPseudo;
+    _preRenameAnonPseudo = null;
+  }
   connectingToHostId = null;
   ++_hostConnGeneration; // invalidate any pending retry timers
   _lastHostHeartbeatAt = 0;
