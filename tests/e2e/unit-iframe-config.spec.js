@@ -89,4 +89,14 @@ test.describe('iframe config: origin-gated postMessage channel', () => {
     const urls = await frame.evaluate(async () => (await fetchIceServers()).map((s) => s.urls));
     expect(urls.some((u) => u.includes('evil.example'))).toBe(false);
   });
+
+  test('a declared parentOrigin also gates other commands (auth rejected)', async ({ page }) => {
+    const { frame, name } = await embed(page, '?parentOrigin=https://not-the-parent.example');
+    await page.evaluate((name) => {
+      document.querySelector(`iframe[name="${name}"]`).contentWindow.postMessage({ type: 'auth', token: 'INJECTED' }, '*');
+    }, name);
+    await page.waitForTimeout(300);
+    const token = await frame.evaluate(() => localStorage.getItem('presence-api-token'));
+    expect(token).not.toBe('INJECTED');
+  });
 });

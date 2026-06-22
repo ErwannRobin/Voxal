@@ -217,6 +217,20 @@ function iframeEmit(msg) {
   window.parent.postMessage(Object.assign({ source: 'voxal' }, msg), targetOrigin);
 }
 
+// Should we trust an inbound postMessage from the embedding page? Backward
+// compatible: if the embed did NOT declare ?parentOrigin we allow any origin
+// (legacy behavior). If it DID, every command must come from that origin — so an
+// embed can lock itself down by passing ?parentOrigin=https://its.site.
+function isTrustedParentMessage(e) {
+  try {
+    if (!new URLSearchParams(window.location.search || '').get('parentOrigin')) return true;
+  } catch (_) {
+    return true;
+  }
+  var allowed = getAllowedParentOrigin();
+  return !!allowed && e.origin === allowed;
+}
+
 // --- OAuth-style deep link auth ---------------------------------------------
 
 function generateState() {
@@ -7041,6 +7055,12 @@ window.addEventListener('DOMContentLoaded', function() {
     window.addEventListener('message', function(e) {
       var msg = e.data;
       if (!msg || typeof msg !== 'object') return;
+      // When the embed has declared its origin (?parentOrigin), reject commands
+      // from anywhere else. No-op for embeds that don't declare one (legacy).
+      if (!isTrustedParentMessage(e)) {
+        console.warn('[iframe] Ignoring "' + msg.type + '" from disallowed origin: ' + e.origin);
+        return;
+      }
       if (msg.type === 'auth' && msg.token) {
         // Portal passes its session token (and optionally orgId) so the user
         // doesn't have to go through the OAuth popup while already logged in.
