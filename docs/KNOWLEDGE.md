@@ -138,8 +138,8 @@ The **room code is the host's PeerJS peer ID**. When someone creates a room, Pee
 
 | Message type | Direction | Payload |
 |---|---|---|
-| `hello` | joiner → host | `{ pseudo: string }` |
-| `peer-list` | host → joiner | `{ peers: [{id, pseudo}], hostId, hostPseudo }` |
+| `hello` | joiner → host | `{ pseudo, pseudoColor?, protocolVersion, appVersion }` |
+| `peer-list` | host → joiner | `{ peers: [{id, pseudo, protocolVersion?, appVersion?}], hostId, hostPseudo, deputyId, successorIds, protocolVersion, appVersion }` |
 | `peer-joined` | host → all existing peers | `{ peerId, pseudo }` |
 | `peer-left` | host → all | `{ peerId }` |
 | `talking` | any peer → host → relayed to all | `{ peerId, active: bool }` |

@@ -5,9 +5,12 @@
  *   Audio     : full mesh (every peer ↔ every peer via MediaConnection / Opus)
  *
  * Data protocol:
- *   hello        { pseudo }                       joiner -> host on connect
- *   peer-list    { peers:[{id,pseudo}],            host -> joiner (reply to hello)
- *                  hostId, hostPseudo, deputyId, successorIds }
+ *   hello        { pseudo, protocolVersion,        joiner -> host on connect
+ *                  appVersion }
+ *   peer-list    { peers:[{id,pseudo,              host -> joiner (reply to hello)
+ *                  protocolVersion,appVersion}],
+ *                  hostId, hostPseudo, deputyId, successorIds,
+ *                  protocolVersion, appVersion }
  *   peer-joined  { peerId, pseudo }               host -> all existing peers
  *   peer-left    { peerId }                       host -> all
  *   talking      { peerId, active }               non-host -> host (relayed to all)
@@ -34,6 +37,14 @@
  */
 
 // --- TURN / ICE servers (metered.ca) ----------------------------------------
+
+// Wire-protocol version exchanged in the `hello` / `peer-list` handshake. Bump
+// ONLY when the data protocol between peers changes in a way that matters for
+// interop. It is independent of VOXAL_VERSION (the app's display version): many
+// app releases can share the same protocol version. Used for skew detection, not
+// (yet) to gate behavior — keep protocol changes additive/tolerant so mixed
+// rooms keep working.
+const PROTOCOL_VERSION = 1;
 
 const METERED_APP_STORE_KEY    = 'metered-app-name';
 const METERED_API_STORE_KEY    = 'metered-api-key';
@@ -4915,6 +4926,52 @@ function becomeHost() {
   }
 }
 
+// --- Protocol version / skew detection ---------------------------------------
+
+// The `hello` a joiner sends to a host (and re-sends to a new host on migration).
+function helloMessage() {
+  return {
+    type: 'hello',
+    pseudo: pseudoForPeer(),
+    pseudoColor: pseudoColorForSelf(),
+    protocolVersion: PROTOCOL_VERSION,
+    appVersion: VOXAL_VERSION
+  };
+}
+
+var _sawNewerProtocol = false;
+var _versionWarned = new Set(); // dedupe skew warnings (peer-list repeats often)
+
+// Record a remote peer's advertised protocol/app version and warn on skew. A
+// missing protocolVersion means a peer from before versioning (treated as 0).
+// If anyone is on a NEWER protocol than us, we're the outdated one → hint once.
+function noteRemoteVersion(label, remoteProtocol, remoteApp, peerId) {
+  var remote = parseInt(remoteProtocol, 10);
+  if (!isFinite(remote)) remote = 0;
+  if (peerId) {
+    var conn = connections.get(peerId);
+    if (conn) connections.set(peerId, Object.assign({}, conn, { protocolVersion: remote, appVersion: remoteApp || null }));
+  }
+  if (remote !== PROTOCOL_VERSION) {
+    var key = (peerId || label) + ':' + remote;
+    if (!_versionWarned.has(key)) {
+      _versionWarned.add(key);
+      console.warn('[version] ' + (label || 'peer') + ' on protocol v' + remote +
+        ' (app ' + (remoteApp || '?') + ') — local is protocol v' + PROTOCOL_VERSION + ' (app ' + VOXAL_VERSION + ')');
+    }
+  }
+  if (remote > PROTOCOL_VERSION && !_sawNewerProtocol) {
+    _sawNewerProtocol = true;
+    maybeShowOutdatedHint();
+  }
+}
+
+// One-time, non-blocking nudge when a peer is on a newer protocol. Desktop/mobile
+// auto-update (Tauri updater / Capgo OTA) on next launch; this mainly helps web.
+function maybeShowOutdatedHint() {
+  try { showCopyToast('A newer version of Voxal is available — refresh to update.'); } catch (_) {}
+}
+
 function buildHostPeerList(excludedPeerId) {
   // During the migration settle window, include all known peers so non-host peers
   // don't see a blank roster while reconnecting. After the settle, use only peers
@@ -4928,6 +4985,8 @@ function buildHostPeerList(excludedPeerId) {
       var entry = { id: id, pseudo: pseudo, pseudoColor: conn && conn.pseudoColor ? conn.pseudoColor : null };
       if (conn && conn.videoActive) entry.videoActive = true;
       if (conn && conn.screenActive) entry.screenActive = true;
+      if (conn && conn.protocolVersion != null) entry.protocolVersion = conn.protocolVersion;
+      if (conn && conn.appVersion) entry.appVersion = conn.appVersion;
       return entry;
     });
 }
@@ -4984,11 +5043,7 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
     if (gen !== _hostConnGeneration) { hostData.close(); return; }
     opened = true;
     clearTimeout(timer);
-    hostData.send({
-      type: 'hello',
-      pseudo: pseudoForPeer(),
-      pseudoColor: pseudoColorForSelf()
-    });
+    hostData.send(helloMessage());
   });
 
   hostData.on('data', function(msg) {
@@ -5108,11 +5163,7 @@ function connectToHost(hostId, opts) {
     opened = true;
     clearTimeout(timer);
     devLog('✓ DC open → hello sent');
-    hostData.send({
-      type: 'hello',
-      pseudo: pseudoForPeer(),
-      pseudoColor: pseudoColorForSelf()
-    });
+    hostData.send(helloMessage());
   });
 
   hostData.on('data', function(msg) {
@@ -5238,7 +5289,9 @@ function sendHostPeerList(dataConn, excludedPeerId) {
     hostScreenActive: localScreenActive,
     videoModeEnabled: videoModeEnabled,
     deputyId: successorIds[0] || null,
-    successorIds: successorIds
+    successorIds: successorIds,
+    protocolVersion: PROTOCOL_VERSION,
+    appVersion: VOXAL_VERSION
   });
   dataConn.send({
     type: 'heartbeat',
@@ -5298,6 +5351,7 @@ function handleJoinerDataConnection(dataConn) {
         pseudo: pseudo,
         pseudoColor: canonical.pseudoColor
       }));
+      noteRemoteVersion('joiner ' + shortId(joinerId), msg.protocolVersion, msg.appVersion, joinerId);
 
       sendDataIfOpen(dataConn, {
         type: 'pseudo-assigned',
@@ -5622,7 +5676,9 @@ function handleHostMessage(msg) {
       pseudo: msg.hostPseudo || shortId(roomCode),
       pseudoColor: msg.hostPseudoColor || null,
       videoActive: !!msg.hostVideoActive,
-      screenActive: !!msg.hostScreenActive
+      screenActive: !!msg.hostScreenActive,
+      protocolVersion: msg.protocolVersion,
+      appVersion: msg.appVersion
     }]);
     authoritativePeers.forEach(function(p) {
       const peerId = p.id;
@@ -5632,6 +5688,7 @@ function handleHostMessage(msg) {
       if (p.videoActive) update.videoActive = true;
       if (p.screenActive) update.screenActive = true;
       connections.set(peerId, Object.assign({}, prev, update));
+      noteRemoteVersion((peerId === roomCode ? 'host ' : 'peer ') + shortId(peerId), p.protocolVersion, p.appVersion, peerId);
     });
 
     // Sync video mode state from host

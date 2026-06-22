@@ -26,9 +26,9 @@ For a detailed breakdown of election, retries, settle windows, and split-brain s
 
 | Message | Direction | Payload |
 |---|---|---|
-| `hello` | joiner → host | `{ pseudo, pseudoColor? }` |
+| `hello` | joiner → host | `{ pseudo, pseudoColor?, protocolVersion, appVersion }` |
 | `pseudo-assigned` | host → peer | `{ pseudo, pseudoColor? }` |
-| `peer-list` | host → peer | `{ peers, hostId, deputyId, successorIds, ... }` |
+| `peer-list` | host → peer | `{ peers, hostId, deputyId, successorIds, protocolVersion, appVersion, ... }` |
 | `peer-joined` | host → all | `{ peerId, pseudo, pseudoColor? }` |
 | `peer-left` | host → all | `{ peerId }` |
 | `peer-renamed` | host → all | `{ peerId, pseudo, pseudoColor? }` |
@@ -38,6 +38,21 @@ For a detailed breakdown of election, retries, settle windows, and split-brain s
 | `room-published` | host → all | `{ roomId, secret? }` |
 | `video-offer` | peer → host (relay) | `{ peerId }` |
 | `video-stop` | peer → host (relay) | `{ peerId }` |
+
+## Protocol versioning & updates
+
+The `hello` and `peer-list` messages carry a `protocolVersion` (integer, bump on
+wire-protocol changes — currently `1`) and `appVersion` (display string). Peers
+record each other's versions and warn on skew; if any peer is on a *newer*
+protocol, the client shows a one-time "refresh to update" hint.
+
+Because the protocol lives entirely in `src/` (the web bundle the native shells
+load), version skew is expected during rollout and is handled by keeping changes
+**additive and tolerant** (default missing fields, ignore unknown ones) rather
+than forcing everyone to upgrade at once. Updates reach users automatically: web
+always loads the latest; desktop via the Tauri updater; native mobile via Capgo
+OTA (`autoUpdate`), so protocol/JS changes ship without an App/Play Store review
+— only native-shell changes need a store release.
 
 ## Stack
 
