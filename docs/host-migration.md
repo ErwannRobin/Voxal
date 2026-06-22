@@ -62,17 +62,31 @@ Peers trigger migration when host heartbeat timeout is exceeded.
 When connecting to an elected host candidate:
 
 - Per-attempt timeout: `8000ms`
-- Retry delay: `2000ms`
-- Max retries: `3`
+- Retry delay: `1500ms`
+- Max retries: `8`
 
-If retries are exhausted, candidate is excluded and election proceeds with the next successor.
+If retries are exhausted, the candidate is excluded and election proceeds with the next successor.
+
+The budget is deliberately generous (~12s) so a survivor does not abandon the
+rightful deputy while it is merely *slow to promote* — until the deputy actually
+runs `becomeHost()` (worst case after the ~7s heartbeat timeout) it
+redirects/closes incoming connections, and too small a budget would make a
+survivor give up and self-promote → split-brain.
+
+**Fast-fail for a genuinely dead candidate:** if the signaling broker reports the
+current candidate as `peer-unavailable`, it is gone (not just slow), so migration
+skips the remaining retries and re-elects the next successor immediately
+(`unavailablePeerIdFromError` → `initiateHostMigration`). This keeps host + deputy
+(or deeper) simultaneous failure fast while still being patient with a live-but-slow deputy.
 
 ## Split-brain protections
 
 - Successor chain comes from host-authoritative messages.
-- Host always rebroadcasts fresh `peer-list` to propagate current successor chain.
+- A *healthy* host rebroadcasts a fresh `peer-list` to propagate the current successor chain.
+- **A *dying* host must not poison survivors.** When a host's own Peer is torn down, PeerJS closes its connections in a synchronous cascade; the joiner-`close` handler defers its `peer-left` / shrunken `peer-list` broadcast one tick and skips it once `peer.destroyed`/`!inRoom`. Otherwise the cascade would broadcast a roster that drops peers whose link merely collapsed alongside the host's, resetting a survivor's successor chain mid-election (the classic two-host split).
 - Connection attempt generation (`_hostConnGeneration`) invalidates stale callbacks/timers.
 - Migration path excludes failed candidates to prevent election loops.
+- Multi-survivor migration is regression-tested end-to-end (real PeerJS + WebRTC) in `tests/e2e/mesh.spec.js` — including host + deputy crashing together.
 
 ## Audio continuity guarantees
 

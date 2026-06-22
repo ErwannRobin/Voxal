@@ -18,6 +18,7 @@ make release VERSION=1.2.0
 - `src-tauri/tauri.conf.json`
 - `src-tauri/Cargo.toml`
 - `src/version.js` (with build date update)
+- `android/app/build.gradle` (also increments `versionCode`)
 
 ## CI release builds
 

@@ -25,8 +25,16 @@ make cap-android
 - Talking indicators and pseudonyms
 - Audio cues + haptics
 - Optional video/screen features
-- Deep links
-- iOS Dynamic Island Push-to-Talk integration
+- Deep links (custom scheme `voxal://` works everywhere; HTTPS Universal/App Links — see below)
+- iOS Dynamic Island / Lock-Screen Push-to-Talk integration *(see requirements below)*
+
+> **iOS Push-to-Talk & Universal Links require a paid Apple Developer Program
+> membership.** The PushToTalk and Associated Domains capabilities cannot be
+> granted to a free "personal team", so on a personal team the system PTT UI and
+> HTTPS Universal Links do not work and `CODE_SIGN_ENTITLEMENTS` is left unset.
+> The PTT plugin degrades gracefully to the in-app PTT fallback. These paths are
+> implemented and compile clean but are **unverified on a real device** pending
+> enrollment. The `voxal://` custom-scheme deep links work regardless.
 
 ## Differences vs desktop
 

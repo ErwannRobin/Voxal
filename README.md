@@ -48,8 +48,8 @@ Instant push-to-talk voice rooms.
 ### Experimental features
 
  - **Video sharing** - Optional per participant
- - **Screen sharing** - Optional per participant
- - **Dynamic Island PTT (iOS)** - Uses PushToTalkUI integration
+ - **Screen sharing** - Optional per participant (desktop/web; not on native mobile)
+ - **Dynamic Island PTT (iOS)** - PushToTalkUI integration; requires a paid Apple Developer membership and is unverified on-device ([details](docs/mobile.md))
 
 ## What Makes Voxal Different?
 
