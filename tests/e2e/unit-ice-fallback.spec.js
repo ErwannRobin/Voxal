@@ -48,3 +48,51 @@ test('malformed turn-fallback JSON falls back to the default relay', async ({ pa
   const urls = await iceUrls(page);
   expect(urls.some((u) => u.startsWith('turn:') || u.startsWith('turns:'))).toBe(true);
 });
+
+test.describe('advanced settings: fallback TURN field', () => {
+  test('turnFallbackStatus reflects the input', async ({ page }) => {
+    const r = await page.evaluate(() => ({
+      empty: turnFallbackStatus(''),
+      disabled: turnFallbackStatus('[]'),
+      valid: turnFallbackStatus('[{"urls":"turn:x"}]'),
+      notArray: turnFallbackStatus('{"urls":"turn:x"}'),
+      invalid: turnFallbackStatus('nope{'),
+    }));
+    expect(r.empty).toMatch(/default/i);
+    expect(r.disabled).toMatch(/disabled/i);
+    expect(r.valid).toMatch(/1 custom/i);
+    expect(r.notArray).toMatch(/array/i);
+    expect(r.invalid).toMatch(/invalid/i);
+  });
+
+  test('the field loads the saved override when settings open', async ({ page }) => {
+    await page.evaluate(() => localStorage.setItem('turn-fallback', '[]'));
+    await page.click('#btn-open-settings');
+    await expect(page.locator('#input-turn-fallback')).toHaveValue('[]');
+    await expect(page.locator('#turn-fallback-status')).toHaveText(/disabled/i);
+  });
+
+  test('editing the field saves to localStorage and updates the status', async ({ page }) => {
+    await page.click('#btn-open-settings');
+    await page.evaluate(() => {
+      const el = document.getElementById('input-turn-fallback');
+      el.value = '[{"urls":"turn:my.coturn:443?transport=tcp","username":"u","credential":"p"}]';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const stored = await page.evaluate(() => localStorage.getItem('turn-fallback'));
+    expect(stored).toContain('my.coturn');
+    await expect(page.locator('#turn-fallback-status')).toHaveText(/1 custom relay/i);
+  });
+
+  test('clearing the field removes the override (back to default)', async ({ page }) => {
+    await page.evaluate(() => localStorage.setItem('turn-fallback', '[]'));
+    await page.click('#btn-open-settings');
+    await page.evaluate(() => {
+      const el = document.getElementById('input-turn-fallback');
+      el.value = '';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(await page.evaluate(() => localStorage.getItem('turn-fallback'))).toBe(null);
+    await expect(page.locator('#turn-fallback-status')).toHaveText(/default/i);
+  });
+});

@@ -1554,6 +1554,26 @@ input[type="password"]::placeholder { color: var(--text-muted); }
 input[type="text"]:focus,
 input[type="password"]:focus { border-color: var(--accent); }
 
+.settings-textarea {
+  user-select: text;
+  -webkit-user-select: text;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 8px 10px;
+  outline: none;
+  resize: vertical;
+  transition: border-color 0.15s;
+}
+.settings-textarea:focus { border-color: var(--accent); }
+.settings-textarea::placeholder { color: var(--text-muted); }
+
 /* ── Topbar (gear / settings trigger) ───────────────────────────── */
 
 .screen-topbar {
