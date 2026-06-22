@@ -40,6 +40,7 @@ const METERED_API_STORE_KEY    = 'metered-api-key';
 const METERED_STATUS_STORE_KEY  = 'metered-status';  // 'ok' | 'error' | null
 const METERED_COUNT_STORE_KEY   = 'metered-count';   // number of servers when ok
 const METERED_SERVERS_STORE_KEY = 'metered-servers'; // JSON array of ICE server objects
+const TURN_FALLBACK_KEY         = 'turn-fallback';   // JSON RTCIceServer[] override for the free relay fallback ('[]' disables)
 
 const NOISE_SUPPRESSION_KEY = 'noise-suppression'; // 'rnnoise' | 'browser' | 'off'
 const MIC_DEVICE_KEY        = 'mic-device-id';
@@ -467,13 +468,27 @@ const DEFAULT_FALLBACK_TURN = [
 ];
 
 function fallbackTurnServers() {
-  var raw = localStorage.getItem('turn-fallback');
+  var raw = localStorage.getItem(TURN_FALLBACK_KEY);
   if (raw === null) return DEFAULT_FALLBACK_TURN;
   try {
     var parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : DEFAULT_FALLBACK_TURN;
   } catch (_) {
     return DEFAULT_FALLBACK_TURN;
+  }
+}
+
+// Human-readable status for the advanced "Fallback TURN servers" settings field.
+function turnFallbackStatus(raw) {
+  var v = (raw || '').trim();
+  if (!v) return 'Using the default public relay.';
+  if (v === '[]') return 'Relay fallback disabled (STUN only).';
+  try {
+    var parsed = JSON.parse(v);
+    if (!Array.isArray(parsed)) return '⚠ Must be a JSON array — default relay will be used.';
+    return '✓ ' + parsed.length + ' custom relay server(s).';
+  } catch (_) {
+    return '⚠ Invalid JSON — default relay will be used.';
   }
 }
 
@@ -6611,6 +6626,8 @@ window.addEventListener('DOMContentLoaded', function() {
     $('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
     $('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
     $('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
+    $('input-turn-fallback').value  = localStorage.getItem(TURN_FALLBACK_KEY) || '';
+    $('turn-fallback-status').textContent = turnFallbackStatus($('input-turn-fallback').value);
     syncNoiseSuppressionControls();
     refreshMediaDeviceSelectors();
     $('input-presence-token').value = presenceToken();
@@ -6730,6 +6747,12 @@ window.addEventListener('DOMContentLoaded', function() {
     localStorage.removeItem(METERED_STATUS_STORE_KEY);
     $('turn-test-status').textContent = '';
     updateTurnBadge();
+  });
+  $('input-turn-fallback').addEventListener('input', function(e) {
+    var val = e.target.value.trim();
+    if (val) localStorage.setItem(TURN_FALLBACK_KEY, val);
+    else localStorage.removeItem(TURN_FALLBACK_KEY);
+    $('turn-fallback-status').textContent = turnFallbackStatus(val);
   });
   document.querySelectorAll('input[name="noise-suppression-mode"]').forEach(function(input) {
     input.addEventListener('change', function(e) {

@@ -307,6 +307,12 @@
               <span id="turn-test-status" class="turn-test-status"></span>
             </div>
             <div class="settings-field" style="margin-top:12px">
+              <label for="input-turn-fallback">Fallback TURN servers (JSON)</label>
+              <textarea id="input-turn-fallback" class="settings-textarea" rows="3" spellcheck="false" autocomplete="off"
+                        placeholder='Blank = default public relay · [] = disable · or [{"urls":"turn:host:443?transport=tcp","username":"u","credential":"p"}]'></textarea>
+              <span id="turn-fallback-status" class="turn-test-status"></span>
+            </div>
+            <div class="settings-field" style="margin-top:12px">
               <label for="input-service-url">Service URL</label>
               <div class="input-clearable">
                 <input id="input-service-url" type="text" placeholder="https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session"
@@ -348,8 +354,22 @@
       const METERED_STATUS_STORE_KEY = 'metered-status';
       const METERED_COUNT_STORE_KEY  = 'metered-count';
       const METERED_SERVERS_STORE_KEY = 'metered-servers';
+      const TURN_FALLBACK_KEY       = 'turn-fallback';
       const SERVICE_URL_KEY         = 'service-url';
       const DEV_MODE_KEY            = 'dev-mode';
+
+      function turnFallbackStatus(raw) {
+        var v = (raw || '').trim();
+        if (!v) return 'Using the default public relay.';
+        if (v === '[]') return 'Relay fallback disabled (STUN only).';
+        try {
+          var parsed = JSON.parse(v);
+          if (!Array.isArray(parsed)) return '⚠ Must be a JSON array — default relay will be used.';
+          return '✓ ' + parsed.length + ' custom relay server(s).';
+        } catch (_) {
+          return '⚠ Invalid JSON — default relay will be used.';
+        }
+      }
       const NOISE_SUPPRESSION_KEY   = 'noise-suppression';
       const MIC_DEVICE_KEY          = 'mic-device-id';
       const CAMERA_DEVICE_KEY       = 'camera-device-id';
@@ -567,6 +587,8 @@
       $id('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
       $id('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
       $id('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
+      $id('input-turn-fallback').value  = localStorage.getItem(TURN_FALLBACK_KEY) || '';
+      $id('turn-fallback-status').textContent = turnFallbackStatus($id('input-turn-fallback').value);
       syncNoiseSuppressionControls();
       initAboutSection();
 
@@ -1075,6 +1097,12 @@
         var val = e.target.value.trim();
         if (val) localStorage.setItem(SERVICE_URL_KEY, val);
         else localStorage.removeItem(SERVICE_URL_KEY);
+      });
+      $id('input-turn-fallback').addEventListener('input', function(e) {
+        var val = e.target.value.trim();
+        if (val) localStorage.setItem(TURN_FALLBACK_KEY, val);
+        else localStorage.removeItem(TURN_FALLBACK_KEY);
+        $id('turn-fallback-status').textContent = turnFallbackStatus(val);
       });
       document.querySelectorAll('input[name="noise-suppression-mode"]').forEach(function(input) {
         input.addEventListener('change', function(e) {

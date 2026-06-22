@@ -304,6 +304,12 @@
                   <span id="turn-test-status" class="turn-test-status"></span>
                 </div>
                 <div class="settings-field" style="margin-top:12px">
+                  <label for="input-turn-fallback">Fallback TURN servers (JSON)</label>
+                  <textarea id="input-turn-fallback" class="settings-textarea" rows="3" spellcheck="false" autocomplete="off"
+                            placeholder='Blank = default public relay · [] = disable · or [{"urls":"turn:host:443?transport=tcp","username":"u","credential":"p"}]'></textarea>
+                  <span id="turn-fallback-status" class="turn-test-status"></span>
+                </div>
+                <div class="settings-field" style="margin-top:12px">
                   <label for="input-service-url">Service URL</label>
                   <div class="input-clearable">
                     <input id="input-service-url" type="text" placeholder="https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session"
