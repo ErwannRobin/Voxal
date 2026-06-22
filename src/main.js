@@ -478,18 +478,56 @@ function fallbackTurnServers() {
   }
 }
 
-// Human-readable status for the advanced "Fallback TURN servers" settings field.
-function turnFallbackStatus(raw) {
-  var v = (raw || '').trim();
-  if (!v) return 'Using the default public relay.';
-  if (v === '[]') return 'Relay fallback disabled (STUN only).';
-  try {
-    var parsed = JSON.parse(v);
-    if (!Array.isArray(parsed)) return '⚠ Must be a JSON array — default relay will be used.';
-    return '✓ ' + parsed.length + ' custom relay server(s).';
-  } catch (_) {
-    return '⚠ Invalid JSON — default relay will be used.';
+// Map the stored turn-fallback value to the friendly relay-mode UI:
+//   absent            → 'auto'   (default public relay)
+//   '[]' / empty array → 'off'    (direct / STUN only)
+//   array of servers   → 'custom' (first server populates the URL/user/pass fields)
+function relayStateFromStorage() {
+  var raw = localStorage.getItem(TURN_FALLBACK_KEY);
+  var empty = { mode: 'auto', url: '', username: '', credential: '' };
+  if (raw === null) return empty;
+  var parsed;
+  try { parsed = JSON.parse(raw); } catch (_) { return empty; }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    return { mode: 'off', url: '', username: '', credential: '' };
   }
+  var first = parsed[0] || {};
+  return { mode: 'custom', url: first.urls || '', username: first.username || '', credential: first.credential || '' };
+}
+
+// Persist the relay choice from the advanced settings controls.
+function relayStateToStorage(mode, url, username, credential) {
+  if (mode === 'auto') { localStorage.removeItem(TURN_FALLBACK_KEY); return; }
+  if (mode === 'off')  { localStorage.setItem(TURN_FALLBACK_KEY, '[]'); return; }
+  var trimmedUrl = (url || '').trim();
+  if (!trimmedUrl) { localStorage.setItem(TURN_FALLBACK_KEY, '[]'); return; } // custom but nothing entered yet
+  var server = { urls: trimmedUrl };
+  var u = (username || '').trim(); if (u) server.username = u;
+  var p = (credential || '').trim(); if (p) server.credential = p;
+  localStorage.setItem(TURN_FALLBACK_KEY, JSON.stringify([server]));
+}
+
+// Populate the advanced "Fallback relay" controls from storage.
+function loadRelayControls() {
+  var st = relayStateFromStorage();
+  document.querySelectorAll('input[name="relay-mode"]').forEach(function(r) { r.checked = (r.value === st.mode); });
+  if ($('input-relay-url'))  $('input-relay-url').value  = st.url;
+  if ($('input-relay-user')) $('input-relay-user').value = st.username;
+  if ($('input-relay-pass')) $('input-relay-pass').value = st.credential;
+  var custom = $('relay-custom'); if (custom) custom.classList.toggle('hidden', st.mode !== 'custom');
+}
+
+// Persist the advanced "Fallback relay" controls to storage (on any change).
+function syncRelayFromControls() {
+  var checked = document.querySelector('input[name="relay-mode"]:checked');
+  var mode = checked ? checked.value : 'auto';
+  var custom = $('relay-custom'); if (custom) custom.classList.toggle('hidden', mode !== 'custom');
+  relayStateToStorage(
+    mode,
+    $('input-relay-url')  ? $('input-relay-url').value  : '',
+    $('input-relay-user') ? $('input-relay-user').value : '',
+    $('input-relay-pass') ? $('input-relay-pass').value : ''
+  );
 }
 
 // Public STUN plus the best-effort free TURN relay — used when no org/metered
@@ -6626,8 +6664,7 @@ window.addEventListener('DOMContentLoaded', function() {
     $('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
     $('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
     $('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
-    $('input-turn-fallback').value  = localStorage.getItem(TURN_FALLBACK_KEY) || '';
-    $('turn-fallback-status').textContent = turnFallbackStatus($('input-turn-fallback').value);
+    loadRelayControls();
     syncNoiseSuppressionControls();
     refreshMediaDeviceSelectors();
     $('input-presence-token').value = presenceToken();
@@ -6748,11 +6785,12 @@ window.addEventListener('DOMContentLoaded', function() {
     $('turn-test-status').textContent = '';
     updateTurnBadge();
   });
-  $('input-turn-fallback').addEventListener('input', function(e) {
-    var val = e.target.value.trim();
-    if (val) localStorage.setItem(TURN_FALLBACK_KEY, val);
-    else localStorage.removeItem(TURN_FALLBACK_KEY);
-    $('turn-fallback-status').textContent = turnFallbackStatus(val);
+  document.querySelectorAll('input[name="relay-mode"]').forEach(function(r) {
+    r.addEventListener('change', syncRelayFromControls);
+  });
+  ['input-relay-url', 'input-relay-user', 'input-relay-pass'].forEach(function(id) {
+    var el = $(id);
+    if (el) el.addEventListener('input', syncRelayFromControls);
   });
   document.querySelectorAll('input[name="noise-suppression-mode"]').forEach(function(input) {
     input.addEventListener('change', function(e) {

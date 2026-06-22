@@ -284,10 +284,18 @@
           <summary>⚙️ Advanced</summary>
           <div class="turn-inner">
             <p class="settings-warning">
-              These settings are intended for advanced troubleshooting and self-hosted deployments.
+              Advanced troubleshooting &amp; self-hosted deployments.
+            </p>
+
+            <p class="settings-sublabel">TURN relay credentials</p>
+            <p class="settings-hint">
+              A TURN server relays your audio when a firewall blocks a direct
+              peer-to-peer connection. Get a free pair from
+              <a href="https://www.metered.ca/" target="_blank" rel="noopener">metered.ca</a>
+              → TURN Server (an app-name subdomain and an API key).
             </p>
             <div class="settings-field">
-              <label for="input-metered-app">TURN app name</label>
+              <label for="input-metered-app">metered.ca app name</label>
               <div class="input-clearable">
                 <input id="input-metered-app" type="text" placeholder="yourapp"
                        spellcheck="false" autocomplete="off" />
@@ -295,7 +303,7 @@
               </div>
             </div>
             <div class="settings-field">
-              <label for="input-metered-key">TURN API key</label>
+              <label for="input-metered-key">metered.ca API key</label>
               <div class="input-clearable">
                 <input id="input-metered-key" type="password" placeholder="API key"
                        autocomplete="off" />
@@ -306,11 +314,44 @@
               <button id="btn-test-turn" class="btn btn-ghost btn-sm">Test TURN</button>
               <span id="turn-test-status" class="turn-test-status"></span>
             </div>
-            <div class="settings-field" style="margin-top:12px">
-              <label for="input-turn-fallback">Fallback TURN servers (JSON)</label>
-              <textarea id="input-turn-fallback" class="settings-textarea" rows="3" spellcheck="false" autocomplete="off"
-                        placeholder='Blank = default public relay · [] = disable · or [{"urls":"turn:host:443?transport=tcp","username":"u","credential":"p"}]'></textarea>
-              <span id="turn-fallback-status" class="turn-test-status"></span>
+            <p class="settings-sublabel" style="margin-top:16px">Fallback relay</p>
+            <p class="settings-hint">Used only when no credentials are set above, so peers behind strict firewalls can still connect.</p>
+            <div class="relay-modes">
+              <label class="relay-opt">
+                <input type="radio" name="relay-mode" value="auto" />
+                <span>Automatic — free public relay <em>(recommended)</em></span>
+              </label>
+              <label class="relay-opt">
+                <input type="radio" name="relay-mode" value="off" />
+                <span>Off — direct connection only</span>
+              </label>
+              <label class="relay-opt">
+                <input type="radio" name="relay-mode" value="custom" />
+                <span>Custom relay server</span>
+              </label>
+            </div>
+            <div id="relay-custom" class="relay-custom hidden">
+              <div class="settings-field">
+                <label for="input-relay-url">Server URL</label>
+                <div class="input-clearable">
+                  <input id="input-relay-url" type="text" placeholder="turn:turn.example.com:443?transport=tcp" spellcheck="false" autocomplete="off" />
+                  <button class="input-clear" data-target="input-relay-url" aria-label="Clear">✕</button>
+                </div>
+              </div>
+              <div class="settings-field">
+                <label for="input-relay-user">Username</label>
+                <div class="input-clearable">
+                  <input id="input-relay-user" type="text" autocomplete="off" />
+                  <button class="input-clear" data-target="input-relay-user" aria-label="Clear">✕</button>
+                </div>
+              </div>
+              <div class="settings-field">
+                <label for="input-relay-pass">Password</label>
+                <div class="input-clearable">
+                  <input id="input-relay-pass" type="password" autocomplete="off" />
+                  <button class="input-clear" data-target="input-relay-pass" aria-label="Clear">✕</button>
+                </div>
+              </div>
             </div>
             <div class="settings-field" style="margin-top:12px">
               <label for="input-service-url">Service URL</label>
@@ -358,17 +399,38 @@
       const SERVICE_URL_KEY         = 'service-url';
       const DEV_MODE_KEY            = 'dev-mode';
 
-      function turnFallbackStatus(raw) {
-        var v = (raw || '').trim();
-        if (!v) return 'Using the default public relay.';
-        if (v === '[]') return 'Relay fallback disabled (STUN only).';
-        try {
-          var parsed = JSON.parse(v);
-          if (!Array.isArray(parsed)) return '⚠ Must be a JSON array — default relay will be used.';
-          return '✓ ' + parsed.length + ' custom relay server(s).';
-        } catch (_) {
-          return '⚠ Invalid JSON — default relay will be used.';
+      function relayStateFromStorage() {
+        var raw = localStorage.getItem(TURN_FALLBACK_KEY);
+        var empty = { mode: 'auto', url: '', username: '', credential: '' };
+        if (raw === null) return empty;
+        var parsed;
+        try { parsed = JSON.parse(raw); } catch (_) { return empty; }
+        if (!Array.isArray(parsed) || parsed.length === 0) {
+          return { mode: 'off', url: '', username: '', credential: '' };
         }
+        var first = parsed[0] || {};
+        return { mode: 'custom', url: first.urls || '', username: first.username || '', credential: first.credential || '' };
+      }
+      function loadRelayControls() {
+        var st = relayStateFromStorage();
+        document.querySelectorAll('input[name="relay-mode"]').forEach(function(r) { r.checked = (r.value === st.mode); });
+        if ($id('input-relay-url'))  $id('input-relay-url').value  = st.url;
+        if ($id('input-relay-user')) $id('input-relay-user').value = st.username;
+        if ($id('input-relay-pass')) $id('input-relay-pass').value = st.credential;
+        var custom = $id('relay-custom'); if (custom) custom.classList.toggle('hidden', st.mode !== 'custom');
+      }
+      function syncRelayFromControls() {
+        var checked = document.querySelector('input[name="relay-mode"]:checked');
+        var mode = checked ? checked.value : 'auto';
+        var custom = $id('relay-custom'); if (custom) custom.classList.toggle('hidden', mode !== 'custom');
+        if (mode === 'auto') { localStorage.removeItem(TURN_FALLBACK_KEY); return; }
+        if (mode === 'off')  { localStorage.setItem(TURN_FALLBACK_KEY, '[]'); return; }
+        var url = ($id('input-relay-url').value || '').trim();
+        if (!url) { localStorage.setItem(TURN_FALLBACK_KEY, '[]'); return; }
+        var server = { urls: url };
+        var u = ($id('input-relay-user').value || '').trim(); if (u) server.username = u;
+        var p = ($id('input-relay-pass').value || '').trim(); if (p) server.credential = p;
+        localStorage.setItem(TURN_FALLBACK_KEY, JSON.stringify([server]));
       }
       const NOISE_SUPPRESSION_KEY   = 'noise-suppression';
       const MIC_DEVICE_KEY          = 'mic-device-id';
@@ -587,8 +649,7 @@
       $id('input-service-url').value    = localStorage.getItem(SERVICE_URL_KEY) || 'https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session';
       $id('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
       $id('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
-      $id('input-turn-fallback').value  = localStorage.getItem(TURN_FALLBACK_KEY) || '';
-      $id('turn-fallback-status').textContent = turnFallbackStatus($id('input-turn-fallback').value);
+      loadRelayControls();
       syncNoiseSuppressionControls();
       initAboutSection();
 
@@ -1098,11 +1159,12 @@
         if (val) localStorage.setItem(SERVICE_URL_KEY, val);
         else localStorage.removeItem(SERVICE_URL_KEY);
       });
-      $id('input-turn-fallback').addEventListener('input', function(e) {
-        var val = e.target.value.trim();
-        if (val) localStorage.setItem(TURN_FALLBACK_KEY, val);
-        else localStorage.removeItem(TURN_FALLBACK_KEY);
-        $id('turn-fallback-status').textContent = turnFallbackStatus(val);
+      document.querySelectorAll('input[name="relay-mode"]').forEach(function(r) {
+        r.addEventListener('change', syncRelayFromControls);
+      });
+      ['input-relay-url', 'input-relay-user', 'input-relay-pass'].forEach(function(id) {
+        var el = $id(id);
+        if (el) el.addEventListener('input', syncRelayFromControls);
       });
       document.querySelectorAll('input[name="noise-suppression-mode"]').forEach(function(input) {
         input.addEventListener('change', function(e) {
