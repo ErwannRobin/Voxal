@@ -536,10 +536,35 @@ function fallbackIceServers() {
   return FALLBACK_STUN.concat(fallbackTurnServers());
 }
 
+// ICE servers pushed in by the embedding page via postMessage {type:'config'}.
+// When set, they take precedence over every other source — the embedder is
+// telling us exactly which STUN/TURN servers to use. Kept in memory only (not
+// persisted): the parent re-sends on each load, and the creds never touch
+// localStorage. Validated + applied by applyIframeConfig().
+var _iframeIceServers = null;
+
+function applyIframeConfig(msg) {
+  if (!msg || !Array.isArray(msg.iceServers)) return;
+  var servers = msg.iceServers.filter(function(s) {
+    return s && typeof s === 'object' && (typeof s.urls === 'string' || Array.isArray(s.urls));
+  });
+  _iframeIceServers = servers.length ? servers : null; // empty array clears the override
+  var n = _iframeIceServers ? _iframeIceServers.length : 0;
+  devLog('[ICE] Applied ' + n + ' ICE server(s) from the embedding page');
+  iframeEmit({ type: 'config-applied', iceServers: n });
+}
+
+// 0. Iframe-provided ICE servers (postMessage 'config') — highest precedence
 // 1. Try org TURN (backend-managed, short-lived credentials — preferred)
 // 2. Try locally configured metered.ca credentials (manual fallback)
 // 3. Fall back to public STUN + best-effort free TURN relay
 async function fetchIceServers() {
+  // --- 0. ICE servers supplied by the embedding page ---
+  if (_iframeIceServers && _iframeIceServers.length) {
+    devLog('[ICE] Using ' + _iframeIceServers.length + ' embed-provided server(s)');
+    return _iframeIceServers.slice();
+  }
+
   // --- 1. Org ICE servers from Voxal backend ---
   if (presenceConfigured()) {
     devLog('[ICE] Trying org servers…');
@@ -7056,6 +7081,16 @@ window.addEventListener('DOMContentLoaded', function() {
         if (msg.code === 'Space' && !shouldIgnorePTTShortcuts()) {
           if (msg.down) { setTalking(true); } else { setTalking(false); }
         }
+      } else if (msg.type === 'config') {
+        // ICE servers (incl. TURN credentials) supplied by the embedding page.
+        // Origin-validated because it carries credentials: the embed must declare
+        // its origin via ?parentOrigin=... and the message must come from it.
+        var allowedOrigin = getAllowedParentOrigin();
+        if (!allowedOrigin || e.origin !== allowedOrigin) {
+          console.warn('[iframe] Ignoring config from disallowed origin: ' + e.origin);
+          return;
+        }
+        applyIframeConfig(msg);
       }
     });
     // Signal readiness so the parent knows it's safe to send the auth command
