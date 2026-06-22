@@ -1554,25 +1554,45 @@ input[type="password"]::placeholder { color: var(--text-muted); }
 input[type="text"]:focus,
 input[type="password"]:focus { border-color: var(--accent); }
 
-.settings-textarea {
-  user-select: text;
-  -webkit-user-select: text;
-  width: 100%;
-  box-sizing: border-box;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+/* Advanced settings: sub-section label + helper hint + relay mode picker */
+.settings-sublabel {
+  margin: 0 0 4px;
   font-size: 12px;
-  line-height: 1.45;
-  padding: 8px 10px;
-  outline: none;
-  resize: vertical;
-  transition: border-color 0.15s;
+  font-weight: 600;
+  color: var(--text);
 }
-.settings-textarea:focus { border-color: var(--accent); }
-.settings-textarea::placeholder { color: var(--text-muted); }
+.settings-hint {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.settings-hint a { color: var(--accent); text-decoration: none; }
+.settings-hint a:hover { text-decoration: underline; }
+
+.relay-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.relay-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.relay-opt input[type="radio"] { flex: none; accent-color: var(--accent); }
+.relay-opt em { color: var(--text-muted); font-style: normal; }
+.relay-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+}
 
 /* ── Topbar (gear / settings trigger) ───────────────────────────── */
 

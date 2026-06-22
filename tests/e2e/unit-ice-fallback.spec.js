@@ -49,50 +49,60 @@ test('malformed turn-fallback JSON falls back to the default relay', async ({ pa
   expect(urls.some((u) => u.startsWith('turn:') || u.startsWith('turns:'))).toBe(true);
 });
 
-test.describe('advanced settings: fallback TURN field', () => {
-  test('turnFallbackStatus reflects the input', async ({ page }) => {
-    const r = await page.evaluate(() => ({
-      empty: turnFallbackStatus(''),
-      disabled: turnFallbackStatus('[]'),
-      valid: turnFallbackStatus('[{"urls":"turn:x"}]'),
-      notArray: turnFallbackStatus('{"urls":"turn:x"}'),
-      invalid: turnFallbackStatus('nope{'),
-    }));
-    expect(r.empty).toMatch(/default/i);
-    expect(r.disabled).toMatch(/disabled/i);
-    expect(r.valid).toMatch(/1 custom/i);
-    expect(r.notArray).toMatch(/array/i);
-    expect(r.invalid).toMatch(/invalid/i);
-  });
-
-  test('the field loads the saved override when settings open', async ({ page }) => {
-    await page.evaluate(() => localStorage.setItem('turn-fallback', '[]'));
-    await page.click('#btn-open-settings');
-    await expect(page.locator('#input-turn-fallback')).toHaveValue('[]');
-    await expect(page.locator('#turn-fallback-status')).toHaveText(/disabled/i);
-  });
-
-  test('editing the field saves to localStorage and updates the status', async ({ page }) => {
-    await page.click('#btn-open-settings');
-    await page.evaluate(() => {
-      const el = document.getElementById('input-turn-fallback');
-      el.value = '[{"urls":"turn:my.coturn:443?transport=tcp","username":"u","credential":"p"}]';
-      el.dispatchEvent(new Event('input', { bubbles: true }));
+test.describe('advanced settings: fallback relay control', () => {
+  test('relayStateFromStorage maps the stored value to a UI mode', async ({ page }) => {
+    const r = await page.evaluate(() => {
+      const out = {};
+      localStorage.removeItem('turn-fallback'); out.auto = relayStateFromStorage().mode;
+      localStorage.setItem('turn-fallback', '[]'); out.off = relayStateFromStorage().mode;
+      localStorage.setItem('turn-fallback', JSON.stringify([{ urls: 'turn:h:443?transport=tcp', username: 'u', credential: 'p' }]));
+      const c = relayStateFromStorage();
+      out.custom = c.mode; out.url = c.url; out.user = c.username; out.pass = c.credential;
+      localStorage.setItem('turn-fallback', 'bad{'); out.bad = relayStateFromStorage().mode;
+      return out;
     });
-    const stored = await page.evaluate(() => localStorage.getItem('turn-fallback'));
-    expect(stored).toContain('my.coturn');
-    await expect(page.locator('#turn-fallback-status')).toHaveText(/1 custom relay/i);
+    expect(r).toMatchObject({ auto: 'auto', off: 'off', custom: 'custom', bad: 'auto', url: 'turn:h:443?transport=tcp', user: 'u', pass: 'p' });
   });
 
-  test('clearing the field removes the override (back to default)', async ({ page }) => {
-    await page.evaluate(() => localStorage.setItem('turn-fallback', '[]'));
-    await page.click('#btn-open-settings');
+  test('loadRelayControls reflects a saved custom server in the DOM', async ({ page }) => {
     await page.evaluate(() => {
-      const el = document.getElementById('input-turn-fallback');
-      el.value = '';
-      el.dispatchEvent(new Event('input', { bubbles: true }));
+      localStorage.setItem('turn-fallback', JSON.stringify([{ urls: 'turn:my.coturn:443?transport=tcp', username: 'alice', credential: 'secret' }]));
+      loadRelayControls();
     });
-    expect(await page.evaluate(() => localStorage.getItem('turn-fallback'))).toBe(null);
-    await expect(page.locator('#turn-fallback-status')).toHaveText(/default/i);
+    expect(await page.locator('input[name="relay-mode"][value="custom"]').isChecked()).toBe(true);
+    await expect(page.locator('#input-relay-url')).toHaveValue('turn:my.coturn:443?transport=tcp');
+    await expect(page.locator('#input-relay-user')).toHaveValue('alice');
+    await expect(page.locator('#relay-custom')).not.toHaveClass(/hidden/);
+  });
+
+  test('selecting "Off" stores []', async ({ page }) => {
+    const stored = await page.evaluate(() => {
+      document.querySelector('input[name="relay-mode"][value="off"]').checked = true;
+      syncRelayFromControls();
+      return localStorage.getItem('turn-fallback');
+    });
+    expect(stored).toBe('[]');
+  });
+
+  test('custom server fields persist to turn-fallback', async ({ page }) => {
+    const stored = await page.evaluate(() => {
+      document.querySelector('input[name="relay-mode"][value="custom"]').checked = true;
+      document.getElementById('input-relay-url').value = 'turn:relay.example:443?transport=tcp';
+      document.getElementById('input-relay-user').value = 'bob';
+      document.getElementById('input-relay-pass').value = 'pw';
+      syncRelayFromControls();
+      return JSON.parse(localStorage.getItem('turn-fallback'));
+    });
+    expect(stored).toEqual([{ urls: 'turn:relay.example:443?transport=tcp', username: 'bob', credential: 'pw' }]);
+  });
+
+  test('selecting "Automatic" clears the override', async ({ page }) => {
+    const stored = await page.evaluate(() => {
+      localStorage.setItem('turn-fallback', '[]');
+      document.querySelector('input[name="relay-mode"][value="auto"]').checked = true;
+      syncRelayFromControls();
+      return localStorage.getItem('turn-fallback');
+    });
+    expect(stored).toBe(null);
   });
 });
