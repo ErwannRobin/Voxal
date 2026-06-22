@@ -104,8 +104,10 @@ Always call `getMicStream()`, not `navigator.mediaDevices.getUserMedia` directly
 | `presence-api-token` | `PRESENCE_TOKEN_KEY` | Auth token |
 | `presence-org-id` | `PRESENCE_ORG_KEY` | Selected org |
 | `service-url` | `SERVICE_URL_KEY` | API base URL override |
-| `metered-app-name` | `METERED_APP_STORE_KEY` | TURN app name |
-| `metered-api-key` | `METERED_API_STORE_KEY` | TURN API key |
+| `metered-app-name` | `METERED_APP_STORE_KEY` | metered.ca TURN app name |
+| `metered-api-key` | `METERED_API_STORE_KEY` | metered.ca TURN API key |
+| `turn-fallback` | `TURN_FALLBACK_KEY` | Fallback relay override: JSON `RTCIceServer[]`, or `[]` to disable (Settings → Advanced → Fallback relay) |
+| `peerjs-server` | — | PeerJS broker override (`peerServerOptions()`); test/self-host only |
 | `theme` | `THEME_KEY` | `dark` / `light` / `system` |
 
 ### Theme

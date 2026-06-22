@@ -42,7 +42,7 @@ All Voxal-originated events carry `source: 'voxal'` so they are trivial to filte
 | `tiny`, `compact` | `1`, `true` | Compact tiny embed layout |
 | `hideHeader`, `noHeader` | `1`, `true`, `yes` | Hides room header (iframe only) |
 | `forceWeb`, `webOnly`, `web` | `1`, `true`, `yes` | Skip native-app redirection and stay on web |
-| `parentOrigin` | absolute `https://...` origin | Restricts outbound `postMessage` target origin |
+| `parentOrigin` | absolute `https://...` origin | Locks the bridge to your origin: outbound events are sent only to it, **and inbound commands from any other origin are rejected** (see [Security](#security)). Strongly recommended. |
 
 ---
 
@@ -68,10 +68,12 @@ frame.postMessage({ type: 'leave' }, VOXAL_ORIGIN);
 
 | `type`   | Extra fields                          | Description                                          |
 |----------|---------------------------------------|------------------------------------------------------|
-| `auth`   | `token: string`, `orgId?: string`     | Pass the user's session token — skips the OAuth flow |
+| `auth`   | `token: string`, `orgId?: string`     | Pass the user's session token — skips the OAuth flow. Also makes Voxal use the org's backend-managed TURN. |
 | `join`   | `roomCode: string`                    | Join an existing room by its code (host peer ID)     |
-| `create` | —                                     | Create a new room; Voxal becomes the host            |
+| `create` | `channelName?: string`, `roomCode?: string` | Create a new room; Voxal becomes the host. Optionally label it with a presence channel name. |
 | `leave`  | —                                     | Leave the current room and return to the home UI     |
+| `key`    | `source: 'voxal-parent'`, `code: 'Space'`, `down: boolean` | Drive push-to-talk from the parent page's own key handler (`down:true` = start, `false` = stop). `source` must be `'voxal-parent'`. |
+| `config` | `iceServers: RTCIceServer[]`          | Supply your own STUN/TURN servers (see [Providing TURN](#4--providing-your-own-turn-relay)). **Requires `parentOrigin`.** |
 
 ---
 
@@ -122,14 +124,63 @@ window.addEventListener('message', (e) => {
 
 ### Event reference
 
-| `type`    | Fields                                                                 | When                                          |
-|-----------|------------------------------------------------------------------------|-----------------------------------------------|
-| `ready`   | —                                                                      | iframe finished loading, ready to receive commands |
-| `joined`  | `roomCode: string`, `peerId: string`                                   | WebRTC connection established                 |
-| `left`    | —                                                                      | Room left (any reason)                        |
-| `talking` | `active: boolean`                                                      | Local user starts / stops transmitting        |
-| `peers`   | `peers: Array<{ id, pseudo, pseudoColor?, self, talking }>`             | On join and on any peer-list change           |
-| `error`   | `message: string`                                                      | Microphone denied, PeerJS error, etc.         |
+| `type`         | Fields                                                            | When                                          |
+|----------------|-------------------------------------------------------------------|-----------------------------------------------|
+| `ready`        | —                                                                 | iframe finished loading, ready to receive commands |
+| `joined`       | `roomCode: string`, `peerId: string`                              | WebRTC connection established                 |
+| `left`         | —                                                                 | Room left (any reason)                        |
+| `talking`      | `active: boolean`                                                 | Local user starts / stops transmitting        |
+| `peers`        | `peers: Array<{ id, pseudo, pseudoColor?, self, talking }>`       | On join and on any peer-list change           |
+| `host-changed` | `roomCode: string`, `isSelf: boolean`                             | Host migration: a new host took over (`isSelf:true` = this peer became host). `roomCode` may change. |
+| `config-applied` | `iceServers: number`                                            | Acknowledges a `config` command — number of ICE servers accepted |
+| `error`        | `message: string`                                                 | Microphone denied, PeerJS error, etc.         |
+
+---
+
+## 4 — Providing your own TURN relay
+
+A direct peer-to-peer connection fails behind symmetric NAT or strict/corporate
+firewalls; those need a **TURN relay**. A cross-origin embedder can't write the
+iframe's `localStorage`, so there are two ways to give an embed real TURN:
+
+**Option A — your own STUN/TURN servers, via `config`** (no Voxal account needed):
+
+```js
+const VOXAL_ORIGIN = 'https://web.voxal.app';
+
+window.addEventListener('message', (e) => {
+  if (e.data?.source === 'voxal' && e.data.type === 'ready') {
+    frame.contentWindow.postMessage({
+      type: 'config',
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'turns:turn.your-company.com:443?transport=tcp',
+          username: 'user', credential: 'pass' }
+      ]
+    }, VOXAL_ORIGIN);
+  }
+});
+```
+
+- These take **precedence over every other source** — you're stating exactly which servers to use, so include STUN entries too if you want direct connections.
+- They are held **in memory only** (never written to `localStorage`), so re-send on each load. An empty `iceServers: []` clears the override.
+- Use `turns:` (TLS) and `:443?transport=tcp` for the entries that must punch through firewalls — UDP/3478 is commonly blocked.
+- **Requires `?parentOrigin=https://your.site` on the iframe `src`** — the message is rejected from any other origin because it carries credentials. Send it after the `ready` event. Voxal replies with `config-applied`.
+
+**Option B — a Voxal presence account, via `auth`:** posting `{ type: 'auth', token, orgId }` makes Voxal fetch your org's backend-managed (short-lived) TURN credentials automatically.
+
+> A TURN relay only forwards **encrypted** DTLS-SRTP — it can't decrypt the audio, so using one doesn't change Voxal's "no server hears your voice" property.
+
+Standalone (non-embedded) users configure the same thing under **Settings → Advanced → Fallback relay** (Automatic / Off / Custom). See [TURN & ICE configuration](turn-and-ice.md) for the full precedence order and self-hosting a coturn relay.
+
+---
+
+## Security
+
+- **Set `?parentOrigin=https://your.site`.** When present, Voxal **rejects every inbound command** (`auth`, `join`, `create`, `key`, `config`) whose `MessageEvent.origin` isn't that origin, and only emits outbound events to it. Without it, inbound commands are accepted from any origin (legacy/back-compat) — so always set it in production.
+- **`config` is always strict:** it is rejected cross-origin even if you forget `parentOrigin`, because it carries credentials. In practice this means `config` only works when `parentOrigin` is set.
+- **Always post with an explicit target origin** (`frame.postMessage(msg, 'https://web.voxal.app')`), never `'*'`, so your commands/tokens aren't leaked to a hijacked frame.
+- **Filter inbound events by `source: 'voxal'`** and ideally check `e.origin` on your side too.
 
 ---
 
@@ -212,5 +263,5 @@ window.addEventListener('message', (e) => {
 - **Room codes** are PeerJS peer IDs (UUIDs). They are created by Voxal when a user clicks "Create room". You can obtain one from the `joined` event (`e.data.roomCode`) and store it in your presence database so others can join later.
 - **Microphone permission** is requested by Voxal the first time the user joins a room. The browser will prompt the user; no action is needed on the portal side.
 - **Camera permission** must be delegated by the embedding page with `allow="camera"` (or `allow="camera; microphone"`). If Voxal is nested inside another iframe, every ancestor iframe must also allow camera access.
-- **No same-origin restriction** — the bridge uses `*` as the target origin when emitting events outward. To harden security you can restrict inbound commands by checking `e.origin` against your portal's origin inside Voxal's message listener.
-- **No authentication passthrough** — the iframe loads Voxal independently. If you want the embedded Voxal to be pre-logged-in with a presence account, pass the token via `postMessage` after the frame loads, or use a URL hash/query parameter that Voxal reads on startup.
+- **Origin gating is opt-in via `parentOrigin`** — see [Security](#security). Set it in production to lock the bridge to your origin in both directions; without it, the bridge stays permissive for backward compatibility.
+- **Authentication passthrough** — the iframe loads Voxal independently. To pre-log-in with a presence account, send `{ type: 'auth', token, orgId }` via `postMessage` after the `ready` event (this also enables the org's managed TURN).
