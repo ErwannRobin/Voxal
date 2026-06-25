@@ -10,7 +10,7 @@
     "test:mesh": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test --project=mesh"
   },
   "devDependencies": {
-    "@playwright/test": "^1.61.0",
+    "@playwright/test": "^1.61.1",
     "@tauri-apps/cli": "^2",
     "monocart-coverage-reports": "^2.12.12",
     "peer": "^1.0.2"
@@ -18,7 +18,7 @@
   "dependencies": {
     "@capacitor/android": "^8.4.1",
     "@capacitor/app": "^8.1.0",
-    "@capacitor/cli": "^8.4.0",
+    "@capacitor/cli": "^8.4.1",
     "@capacitor/core": "^8.4.1",
     "@capacitor/haptics": "^8.0.2",
     "@capacitor/ios": "^8.4.1",
