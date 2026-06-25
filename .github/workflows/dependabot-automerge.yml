@@ -1,0 +1,55 @@
+name: Dependabot auto-merge
+
+on:
+  workflow_run:
+    workflows: ["Tests"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    # Only act when Tests passed and the triggering actor was Dependabot
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]'
+    steps:
+      - name: Merge minor/patch Dependabot PR
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const headSha = context.payload.workflow_run.head_sha;
+
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+            });
+            const pr = prs.find(p => p.head.sha === headSha);
+            if (!pr) {
+              console.log('No open PR for SHA', headSha);
+              return;
+            }
+
+            // Skip major version bumps (e.g. "from 1.x to 2.x")
+            const match = pr.title.match(/from (\S+) to (\S+)/i);
+            if (match) {
+              const fromMajor = parseInt(match[1].split('.')[0], 10);
+              const toMajor   = parseInt(match[2].split('.')[0], 10);
+              if (toMajor > fromMajor) {
+                console.log('Skipping major update:', pr.title);
+                return;
+              }
+            }
+
+            console.log(`Merging PR #${pr.number}: ${pr.title}`);
+            await github.rest.pulls.merge({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              merge_method: 'merge',
+            });
