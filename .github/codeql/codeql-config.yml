@@ -9,3 +9,11 @@ paths-ignore:
   - android/capacitor-cordova-android-plugins/**
   - node_modules/**
   - node_modules/@capgo/capacitor-updater/android/**
+
+query-filters:
+  # Data-flow paths for this rule span through Capacitor runtime code and
+  # consistently exceed GitHub's 100 related-locations storage limit. All
+  # previous findings were in third-party Capacitor code and have been
+  # dismissed. Exclude to avoid the storage-limit warning.
+  - exclude:
+      id: java/error-message-exposure
