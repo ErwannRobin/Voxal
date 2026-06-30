@@ -1,0 +1,63 @@
+<!-- @dsCard group="Home" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #0f0f1a; --bg-raised: #1c1c33; --border: #2e2e50;
+    --text: #e0e0f0; --text-muted: #7a7a9d; --accent: #7c6af7;
+    --green: #4ade80; --radius: 10px; --purple: #7c6af7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin: 0; padding: 20px; font-size: 13px;
+  }
+  .lbl { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; margin-bottom: 12px; }
+  .channels-list { display: flex; flex-direction: column; gap: 4px; max-width: 300px; }
+  .channel-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; background: var(--bg-raised);
+    border-radius: var(--radius); border: 1px solid var(--border);
+    cursor: pointer; transition: background 0.15s, border-color 0.15s;
+  }
+  .channel-item:hover { border-color: var(--purple); background: #1e1e38; }
+  .channel-item.loading { opacity: 0.6; cursor: default; pointer-events: none; }
+  .channel-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .channel-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .channel-members { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .channel-count { font-size: 12px; font-weight: 600; color: var(--green); min-width: 16px; text-align: right; }
+  .channel-join-icon { font-size: 18px; color: var(--text-muted); flex-shrink: 0; }
+</style>
+</head>
+<body>
+  <div class="lbl">Channel list (presence)</div>
+  <div class="channels-list">
+    <div class="channel-item">
+      <div class="channel-info">
+        <span class="channel-name">Engineering</span>
+        <span class="channel-members">Alice, Bob, Carol</span>
+      </div>
+      <span class="channel-count">3</span>
+      <span class="channel-join-icon">→</span>
+    </div>
+    <div class="channel-item">
+      <div class="channel-info">
+        <span class="channel-name">Design</span>
+        <span class="channel-members">Dave</span>
+      </div>
+      <span class="channel-count">1</span>
+      <span class="channel-join-icon">→</span>
+    </div>
+    <div class="channel-item loading">
+      <div class="channel-info">
+        <span class="channel-name">Marketing</span>
+        <span class="channel-members">Connecting…</span>
+      </div>
+      <span class="channel-join-icon">→</span>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,7 @@
+{
+  "projectId": "2ebf3a88-db5d-4655-bcb5-7fa94b849185",
+  "shape": "package",
+  "pkg": "voxal-push2talk",
+  "sourceDir": "src",
+  "notes": "Plain HTML/CSS/JS app — no bundler, no Storybook. Components authored manually from index.html + styles.css + main.js."
+}

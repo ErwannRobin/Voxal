@@ -1,0 +1,53 @@
+<!-- @dsCard group="Actions" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #0f0f1a; --bg-surface: #151526; --bg-raised: #1c1c33;
+    --border: #2e2e50; --text: #e0e0f0; --text-muted: #7a7a9d;
+    --accent: #7c6af7; --accent-dim: #4d4080;
+    --green: #4ade80; --red: #f87171; --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin: 0; padding: 20px;
+  }
+  .lbl { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; margin-bottom: 10px; }
+  .row { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+  .btn {
+    padding: 9px 16px; border-radius: var(--radius); border: none;
+    font-size: 13px; font-weight: 600; cursor: pointer; outline: none;
+    white-space: nowrap; font-family: inherit; transition: opacity 0.15s;
+  }
+  .btn-primary  { background: var(--accent); color: #fff; }
+  .btn-secondary { background: var(--bg-raised); color: var(--text); border: 1px solid var(--border); }
+  .btn-ghost    { background: transparent; color: var(--text-muted); font-size: 12px; }
+  .btn-sm       { font-size: 12px; padding: 5px 12px; }
+  .btn-full     { width: 100%; display: block; text-align: center; }
+</style>
+</head>
+<body>
+  <div class="lbl">Primary</div>
+  <div class="row">
+    <button class="btn btn-primary">Create room</button>
+    <button class="btn btn-primary btn-sm">Connect</button>
+  </div>
+  <div class="lbl">Secondary</div>
+  <div class="row">
+    <button class="btn btn-secondary">Join room</button>
+    <button class="btn btn-secondary btn-sm">Cancel</button>
+  </div>
+  <div class="lbl">Ghost</div>
+  <div class="row">
+    <button class="btn btn-ghost">Leave room</button>
+  </div>
+  <div class="lbl">Full width</div>
+  <div style="max-width:260px">
+    <button class="btn btn-primary btn-full">Connect with Voxal</button>
+  </div>
+</body>
+</html>

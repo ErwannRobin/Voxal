@@ -1,0 +1,71 @@
+<!-- @dsCard group="Room" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #0f0f1a; --bg-surface: #151526; --bg-raised: #1c1c33;
+    --border: #2e2e50; --text: #e0e0f0; --text-muted: #7a7a9d;
+    --accent: #7c6af7; --green: #4ade80; --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin: 0; padding: 20px; font-size: 13px;
+  }
+  .lbl { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; margin-bottom: 10px; }
+  .peers-list {
+    background: var(--bg-surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 8px;
+    overflow-y: auto; display: flex; flex-direction: column; gap: 4px;
+    min-height: 80px; max-height: 180px; margin-bottom: 16px; max-width: 320px;
+  }
+  .peer-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px; border-radius: 6px; font-size: 13px; color: var(--text-muted);
+  }
+  .peer-item.peer-self { color: var(--text); }
+  .peer-item.talking { background: rgba(74,222,128,0.1); color: var(--text); }
+  .peer-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border); flex-shrink: 0; }
+  .peer-self .peer-dot { background: var(--green); }
+  .peer-dot-direct { background: var(--green); }
+  .peer-dot-stun   { background: #fbbf24; }
+  .peer-item.talking .peer-dot { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .room-invite-nudge {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; padding: 8px 8px 4px; margin-top: 2px;
+    border-top: 1px dashed var(--border);
+  }
+  .room-invite-nudge-text { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+  .btn { padding: 5px 12px; border-radius: var(--radius); border: none; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .btn-secondary { background: var(--bg-raised); color: var(--text); border: 1px solid var(--border); }
+</style>
+</head>
+<body>
+  <div class="lbl">Peers list — 3 peers</div>
+  <div class="peers-list">
+    <div class="peer-item peer-self">
+      <span class="peer-dot"></span><span>You (Alice)</span>
+    </div>
+    <div class="peer-item talking">
+      <span class="peer-dot"></span><span>Bob</span>
+    </div>
+    <div class="peer-item">
+      <span class="peer-dot peer-dot-stun"></span><span>Carol</span>
+    </div>
+  </div>
+
+  <div class="lbl">Peers list — alone (invite nudge)</div>
+  <div class="peers-list">
+    <div class="peer-item peer-self">
+      <span class="peer-dot"></span><span>You (Alice)</span>
+    </div>
+    <div class="room-invite-nudge">
+      <span class="room-invite-nudge-text">Share the room code to invite others</span>
+      <button class="btn btn-secondary">Copy link</button>
+    </div>
+  </div>
+</body>
+</html>

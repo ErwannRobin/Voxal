@@ -1,0 +1,43 @@
+<!-- @dsCard group="Home" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #0f0f1a; --bg-raised: #1c1c33; --border: #2e2e50;
+    --text: #e0e0f0; --text-muted: #7a7a9d; --accent: #7c6af7; --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin: 0; padding: 20px; font-size: 13px;
+  }
+  .lbl { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; margin-bottom: 12px; }
+  .rejoin-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg-raised);
+    max-width: 300px;
+  }
+  .rejoin-icon { font-size: 15px; flex-shrink: 0; }
+  .rejoin-label {
+    flex: 1; font-size: 12px; color: var(--text-muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .btn { padding: 4px 12px; border-radius: var(--radius); border: none; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .rejoin-btn { background: var(--accent); color: #fff; flex-shrink: 0; }
+  .rejoin-dismiss { background: none; border: none; cursor: pointer; font-size: 14px; color: var(--text-muted); flex-shrink: 0; padding: 2px 4px; }
+</style>
+</head>
+<body>
+  <div class="lbl">Rejoin bar</div>
+  <div class="rejoin-bar">
+    <span class="rejoin-icon">↩️</span>
+    <span class="rejoin-label">abc-xyz-7f3k</span>
+    <button class="btn rejoin-btn">Rejoin</button>
+    <button class="rejoin-dismiss" title="Dismiss">×</button>
+  </div>
+</body>
+</html>

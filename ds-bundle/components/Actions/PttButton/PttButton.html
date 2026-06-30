@@ -1,0 +1,62 @@
+<!-- @dsCard group="Actions" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #0f0f1a; --bg-raised: #1c1c33; --border: #2e2e50;
+    --text-muted: #7a7a9d; --accent: #7c6af7; --accent-dim: #4d4080;
+    --green: #4ade80;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: #e0e0f0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin: 0; padding: 20px;
+  }
+  .lbl { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; margin-bottom: 16px; }
+  .row { display: flex; align-items: flex-start; gap: 32px; }
+  .col { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .state { font-size: 11px; color: var(--text-muted); }
+  .ptt-btn {
+    width: 80px; height: 80px; border-radius: 50%; overflow: hidden;
+    clip-path: circle(50%);
+    border: 3px solid var(--accent-dim); background: var(--bg-raised);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 30px; outline: none; cursor: pointer;
+    transition: background 0.1s, border-color 0.1s, transform 0.08s;
+  }
+  .ptt-btn.active {
+    background: var(--accent); border-color: var(--accent);
+    transform: scale(0.95);
+  }
+  .ptt-btn.freehand {
+    border-color: var(--green);
+    box-shadow: 0 0 16px rgba(74,222,128,0.35);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%,100% { box-shadow: 0 0 12px rgba(74,222,128,0.25); }
+    50%      { box-shadow: 0 0 24px rgba(74,222,128,0.55); }
+  }
+</style>
+</head>
+<body>
+  <div class="lbl">Push-to-talk button</div>
+  <div class="row">
+    <div class="col">
+      <button class="ptt-btn">🎙️</button>
+      <span class="state">Idle</span>
+    </div>
+    <div class="col">
+      <button class="ptt-btn active">🎙️</button>
+      <span class="state">Active</span>
+    </div>
+    <div class="col">
+      <button class="ptt-btn freehand">🎙️</button>
+      <span class="state">Hands-free</span>
+    </div>
+  </div>
+</body>
+</html>

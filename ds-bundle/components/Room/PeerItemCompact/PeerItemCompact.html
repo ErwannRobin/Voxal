@@ -1,0 +1,67 @@
+<!-- @dsCard group="Room" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #0f0f1a; --bg-surface: #151526; --border: #2e2e50;
+    --text: #e0e0f0; --text-muted: #7a7a9d; --accent: #7c6af7; --accent-dim: #4d4080;
+    --green: #4ade80;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin: 0; padding: 20px; font-size: 13px;
+  }
+  .lbl { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; margin-bottom: 12px; }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+  .peer-item-compact {
+    display: inline-flex; align-items: center; gap: 0;
+    height: 28px; box-sizing: border-box; padding: 5px 9px;
+    border-radius: 999px; border: 1px solid var(--border);
+    background: var(--bg-surface);
+    transition: transform 0.12s, border-color 0.12s, box-shadow 0.12s;
+    font-size: 12px; font-weight: 400; color: var(--text);
+  }
+  .peer-item-compact.peer-self {
+    border-color: var(--accent-dim); padding: 6px 9px;
+    height: 62px; flex-direction: column; align-items: center; gap: 4px;
+    cursor: pointer;
+  }
+  .peer-item-compact.peer-self .peer-mic-icon {
+    color: var(--accent-dim); font-size: 15px;
+  }
+  .peer-item-compact.peer-self .peer-compact-label {
+    max-width: 38px; white-space: normal; display: -webkit-box;
+    -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+    font-size: 12px; text-align: center;
+  }
+  .peer-item-compact.talking {
+    background: rgba(74,222,128,0.2); border-color: var(--green);
+    box-shadow: inset 0 0 0 1px rgba(74,222,128,0.55), inset 0 0 10px rgba(74,222,128,0.25);
+  }
+  .peer-item-compact.talking .peer-compact-label { color: #d1fae5; }
+  .peer-compact-label { line-height: 1.25; }
+</style>
+</head>
+<body>
+  <div class="lbl">Compact chips (tiny embed)</div>
+
+  <div class="row">
+    <!-- Self chip (tall, 62px) -->
+    <div class="peer-item-compact peer-self">
+      <span class="peer-mic-icon">🎙️</span>
+      <span class="peer-compact-label">Alice</span>
+    </div>
+
+    <!-- Remote peers (28px) -->
+    <div class="peer-item-compact"><span class="peer-compact-label">Bob</span></div>
+    <div class="peer-item-compact"><span class="peer-compact-label">Carol</span></div>
+
+    <!-- Talking chip -->
+    <div class="peer-item-compact talking"><span class="peer-compact-label">Dave</span></div>
+  </div>
+</body>
+</html>

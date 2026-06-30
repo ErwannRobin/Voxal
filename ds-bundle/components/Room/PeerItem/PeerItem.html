@@ -1,0 +1,108 @@
+<!-- @dsCard group="Room" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #0f0f1a; --bg-raised: #1c1c33; --bg-surface: #151526;
+    --border: #2e2e50; --text: #e0e0f0; --text-muted: #7a7a9d;
+    --accent: #7c6af7; --green: #4ade80; --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin: 0; padding: 20px; font-size: 13px;
+  }
+  .lbl { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; margin-bottom: 10px; }
+  .peer-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px; border-radius: 6px;
+    font-size: 13px; color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+  .peer-item.peer-self { color: var(--text); }
+  .peer-item.talking { background: rgba(74,222,128,0.1); color: var(--text); }
+  .peer-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--border); flex-shrink: 0;
+  }
+  .peer-self .peer-dot { background: var(--green); }
+  .peer-dot-direct { background: var(--green); }
+  .peer-dot-stun   { background: #fbbf24; }
+  .peer-dot-relay  { background: #f87171; }
+  .peer-item.talking .peer-dot {
+    background: var(--green);
+    box-shadow: 0 0 6px var(--green);
+    animation: dot-pulse 0.8s ease-in-out infinite;
+  }
+  @keyframes dot-pulse {
+    0%,100% { opacity: 1; } 50% { opacity: 0.4; }
+  }
+  .peer-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+  .peer-label-row { display: inline-flex; align-items: center; gap: 6px; }
+  .peer-role { color: var(--text-muted); font-style: italic; font-size: 12px; }
+  .peer-uuid {
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px;
+    color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .stat-badge {
+    display: inline-block; font-family: monospace; font-size: 10px;
+    padding: 1px 6px; border-radius: 10px; white-space: nowrap;
+  }
+  .ice-direct { background: rgba(74,222,128,0.15); color: var(--green); }
+  .ice-stun   { background: rgba(250,204,21,0.15); color: #fbbf24; }
+  .ice-relay  { background: rgba(248,113,113,0.15); color: #f87171; }
+  .peer-webrtc-stats { display: flex; flex-wrap: wrap; gap: 4px; flex-basis: 100%; margin-top: 2px; padding-left: 15px; }
+</style>
+</head>
+<body>
+  <div class="lbl">Peer list rows</div>
+
+  <!-- Self -->
+  <div class="peer-item peer-self">
+    <span class="peer-dot"></span>
+    <span class="peer-main">
+      <span class="peer-label-row">
+        <span>You (Alice)</span>
+        <span class="peer-role">host</span>
+      </span>
+    </span>
+  </div>
+
+  <!-- Remote peer — direct ICE -->
+  <div class="peer-item">
+    <span class="peer-dot peer-dot-direct"></span>
+    <span class="peer-main">
+      <span class="peer-label-row"><span>Bob</span></span>
+      <span class="peer-uuid">9f3a-b27c</span>
+      <div class="peer-webrtc-stats">
+        <span class="stat-badge ice-direct">direct</span>
+        <span class="stat-badge" style="background:var(--bg-raised);color:var(--text-muted)">12 ms</span>
+      </div>
+    </span>
+  </div>
+
+  <!-- Remote peer — STUN relay -->
+  <div class="peer-item">
+    <span class="peer-dot peer-dot-stun"></span>
+    <span class="peer-main">
+      <span class="peer-label-row"><span>Carol</span></span>
+      <span class="peer-uuid">4a1e-cc82</span>
+      <div class="peer-webrtc-stats">
+        <span class="stat-badge ice-stun">stun</span>
+        <span class="stat-badge" style="background:var(--bg-raised);color:var(--text-muted)">38 ms</span>
+      </div>
+    </span>
+  </div>
+
+  <!-- Talking -->
+  <div class="peer-item talking">
+    <span class="peer-dot"></span>
+    <span class="peer-main">
+      <span class="peer-label-row"><span>Dave</span></span>
+    </span>
+  </div>
+</body>
+</html>

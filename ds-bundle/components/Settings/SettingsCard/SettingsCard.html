@@ -1,0 +1,66 @@
+<!-- @dsCard group="Settings" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #0f0f1a; --bg-surface: #151526; --bg-raised: #1c1c33;
+    --border: #2e2e50; --text: #e0e0f0; --text-muted: #7a7a9d;
+    --accent: #7c6af7; --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin: 0; padding: 20px; font-size: 13px;
+  }
+  .settings-card {
+    border: 1px solid var(--border); border-radius: 12px;
+    background: color-mix(in srgb, var(--bg-surface) 88%, var(--bg-raised) 12%);
+    padding: 14px; display: flex; flex-direction: column; gap: 10px;
+    max-width: 320px;
+  }
+  .settings-card + .settings-card { margin-top: 24px; }
+  .settings-card-toggle {
+    border: none; background: transparent; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.05em; font-size: 12px; font-weight: 600;
+    text-align: left; padding: 0; cursor: pointer;
+    display: flex; align-items: center; gap: 8px; font-family: inherit;
+  }
+  .settings-card-toggle::before { content: '▶'; font-size: 9px; display: inline-block; transform: rotate(90deg); transition: transform 0.15s; }
+  .settings-field { display: flex; flex-direction: column; gap: 4px; }
+  .settings-field label { font-size: 12px; color: var(--text-muted); }
+  .field-helper { font-size: 11px; color: var(--text-muted); margin: 2px 0 0; }
+  .settings-inline-toggle { flex-direction: row; align-items: center; gap: 10px; }
+  input[type="text"] {
+    background: var(--bg-raised); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text); font-size: 13px;
+    padding: 9px 12px; outline: none; width: 100%;
+    transition: border-color 0.15s; font-family: inherit;
+  }
+  input[type="text"]:focus { border-color: var(--accent); }
+  .settings-separator { height: 1px; background: var(--border); margin: 4px 0; }
+  .toggle-btn {
+    padding: 3px 10px; border-radius: 20px; border: 1px solid var(--border);
+    background: var(--bg-raised); color: var(--text-muted); font-size: 11px; font-weight: 700;
+    cursor: pointer; letter-spacing: 0.5px; font-family: inherit;
+  }
+</style>
+</head>
+<body>
+  <div class="settings-card">
+    <button class="settings-card-toggle">Profile</button>
+    <div class="settings-field">
+      <label>Display name</label>
+      <input type="text" value="Alice" placeholder="Your name…">
+      <span class="field-helper">Shown to other participants in a room.</span>
+    </div>
+    <div class="settings-separator"></div>
+    <div class="settings-field settings-inline-toggle">
+      <label>Join muted</label>
+      <button class="toggle-btn">OFF</button>
+    </div>
+  </div>
+</body>
+</html>

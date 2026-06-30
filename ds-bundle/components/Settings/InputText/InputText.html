@@ -1,0 +1,55 @@
+<!-- @dsCard group="Settings" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #0f0f1a; --bg-raised: #1c1c33; --border: #2e2e50;
+    --text: #e0e0f0; --text-muted: #7a7a9d; --accent: #7c6af7; --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin: 0; padding: 20px; font-size: 13px;
+  }
+  .lbl { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; margin-bottom: 10px; }
+  .group { margin-bottom: 20px; max-width: 280px; }
+  input[type="text"] {
+    background: var(--bg-raised); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text); font-size: 13px;
+    padding: 9px 12px; outline: none; width: 100%;
+    transition: border-color 0.15s; font-family: inherit;
+  }
+  input[type="text"]::placeholder { color: var(--text-muted); }
+  input[type="text"]:focus { border-color: var(--accent); }
+  /* Clearable variant */
+  .input-clearable { position: relative; display: flex; align-items: center; }
+  .input-clearable input { padding-right: 36px !important; }
+  .input-clear {
+    position: absolute; right: 6px; background: none; border: none;
+    color: var(--text-muted); font-size: 16px; cursor: pointer;
+    padding: 4px 6px; opacity: 0.5; line-height: 1;
+  }
+  .input-clear:hover { opacity: 1; }
+</style>
+</head>
+<body>
+  <div class="group">
+    <div class="lbl">Text input</div>
+    <input type="text" placeholder="Room code…">
+  </div>
+  <div class="group">
+    <div class="lbl">Focused</div>
+    <input type="text" value="abc-xyz-7f3k" style="border-color: var(--accent)">
+  </div>
+  <div class="group">
+    <div class="lbl">Clearable</div>
+    <div class="input-clearable">
+      <input type="text" value="My API key">
+      <button class="input-clear" title="Clear">×</button>
+    </div>
+  </div>
+</body>
+</html>
