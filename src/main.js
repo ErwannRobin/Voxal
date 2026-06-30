@@ -279,7 +279,8 @@ function handleDeepLink(urlStr) {
       if (roomId) {
         if (_audioCtx.state === 'suspended') _audioCtx.resume();
         var doJoinUL = function() {
-          joinRoom(roomId).catch(function(err) { showError(err.message); });
+          var joinFn = !UUID_RE.test(roomId) ? joinOrCreateByChannelName : joinRoom;
+          joinFn(roomId).catch(function(err) { showError(err.message); });
         };
         if (inRoom) { leaveRoom(); setTimeout(doJoinUL, 150); }
         else { doJoinUL(); }
@@ -295,7 +296,8 @@ function handleDeepLink(urlStr) {
       if (!roomId) return;
       if (_audioCtx.state === 'suspended') _audioCtx.resume();
       var doJoin = function() {
-        joinRoom(roomId).catch(function(err) { showError(err.message); });
+        var joinFn = !UUID_RE.test(roomId) ? joinOrCreateByChannelName : joinRoom;
+        joinFn(roomId).catch(function(err) { showError(err.message); });
       };
       if (inRoom) {
         leaveRoom();
