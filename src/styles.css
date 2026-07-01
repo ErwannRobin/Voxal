@@ -1364,6 +1364,34 @@ body.embed-tiny #screen-room .room-bottom-bar {
   display: none;
 }
 
+/* Pop-out affordance: only when embedded in tiny mode inside an iframe. */
+.tiny-popout-btn {
+  display: none;
+}
+body.embed-tiny.embed-can-popout #screen-room .tiny-popout-btn {
+  display: flex;
+  position: absolute;
+  top: max(calc(env(safe-area-inset-top) + 6px), 6px);
+  right: max(calc(env(safe-area-inset-right) + 8px), 8px);
+  z-index: 40;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-raised) 82%, transparent);
+  backdrop-filter: blur(4px);
+}
+body.embed-tiny.embed-can-popout #screen-room .tiny-popout-btn:hover {
+  color: var(--text);
+}
+/* Micro (<100 px) is too cramped for the corner icon. */
+body.embed-tiny.tiny-micro #screen-room .tiny-popout-btn {
+  display: none;
+}
+
 
 body.embed-tiny #screen-room #ptt-hint,
 body.embed-tiny #screen-room #ptt-status,

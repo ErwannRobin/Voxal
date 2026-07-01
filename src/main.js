@@ -125,6 +125,18 @@ function shouldPersistPseudoGlobally() {
 }
 
 function loadInitialPseudo() {
+  // A pop-out window (from a tiny embed) carries the current display name via
+  // ?name= so the session continues under the same identity — on web the pseudo
+  // lives in sessionStorage, which a freshly opened window does not inherit.
+  try {
+    var nameParam = (new URLSearchParams(window.location.search || '').get('name') || '').trim();
+    if (nameParam) {
+      sessionStorage.setItem(PSEUDO_SESSION_KEY, nameParam);
+      if (shouldPersistPseudoGlobally()) localStorage.setItem(PSEUDO_KEY, nameParam);
+      return nameParam;
+    }
+  } catch (_) {}
+
   var sessionPseudo = sessionStorage.getItem(PSEUDO_SESSION_KEY);
   if (sessionPseudo !== null) return sessionPseudo;
 
@@ -155,6 +167,8 @@ function loadInitialPseudo() {
 //   { source: 'voxal', type: 'talking', active: true|false }
 //   { source: 'voxal', type: 'peers',   peers: [{ id, pseudo, talking }] }
 //   { source: 'voxal', type: 'host-changed', roomCode: '<peerId>', isSelf: true|false }
+//   { source: 'voxal', type: 'popout', url: '<standalone url>' }        (user popped out; embed left the room)
+//   { source: 'voxal', type: 'popout-blocked', url: '<standalone url>' } (browser blocked window.open)
 
 var _isIframe = (function() { try { return window.self !== window.top; } catch(e) { return true; } })();
 var IS_TINY_EMBED = (function() {
@@ -1956,6 +1970,37 @@ function roomInviteUrl(roomId) {
 
 function roomDisplayCode() {
   return activeChannelRoomId || activeChannel || _publishedRoomId || roomCode || '';
+}
+
+// Full-window URL for the "pop out" action in a tiny embed: same room, same
+// display name, but without the embed params so it opens as a standalone app.
+function tinyPopoutUrl() {
+  var code = roomDisplayCode() || roomCode;
+  if (!code) return '';
+  var url = new URL(roomInviteBaseUrl());
+  url.searchParams.set('room', code);
+  // Join straight away in this browser window instead of prompting to open the
+  // native app (the whole point of popping out is to stay on the web).
+  url.searchParams.set('forceWeb', '1');
+  var name = displayPseudoForSelf();
+  if (name && name !== 'You') url.searchParams.set('name', name);
+  return url.toString();
+}
+
+// Detach the tiny embed into a standalone window: open the full app on the same
+// room, then leave here (WebRTC sessions can't be transferred between windows).
+function popOutTinyEmbed() {
+  var url = tinyPopoutUrl();
+  if (!url) return;
+  var win = window.open(url, 'voxal-popout', 'width=440,height=680');
+  if (!win) {
+    // Blocked — e.g. an iframe sandbox without allow-popups. Keep the session.
+    iframeEmit({ type: 'popout-blocked', url: url });
+    showCopyToast('Pop-out blocked by the browser');
+    return;
+  }
+  iframeEmit({ type: 'popout', url: url });
+  if (inRoom) leaveRoom();
 }
 
 function roomIdFromPayload(obj) {
@@ -6249,6 +6294,18 @@ window.addEventListener('DOMContentLoaded', function() {
   function applyTinyEmbedMode() {
     if (!IS_TINY_EMBED) return;
     document.body.classList.add('embed-tiny');
+
+    // Pop-out: only meaningful when actually embedded in a parent page.
+    var popoutBtn = $('btn-popout-tiny');
+    if (popoutBtn) {
+      if (_isIframe) {
+        document.body.classList.add('embed-can-popout');
+        popoutBtn.addEventListener('click', popOutTinyEmbed);
+      } else {
+        popoutBtn.remove();
+      }
+    }
+
     var btn = $('btn-toggle-peers');
     var pttBtn = $('ptt-btn');
     var pttHint = $('ptt-hint');
