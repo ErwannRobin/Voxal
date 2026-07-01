@@ -1306,11 +1306,12 @@ body.embed-tiny.tiny-compact #screen-invite-loading:not(.tiny-connecting) .invit
   flex: 0 0 auto;
   margin: 0;
 }
+/* Match the Start button below it. The base input keeps its iOS-zoom trick
+   (font-size:16px + transform:scale(0.8125), width compensated), so we only
+   bump the vertical padding to equal the button's height and center the text. */
 body.embed-tiny.tiny-compact #screen-invite-loading .invite-pseudo-field input[type="text"] {
-  width: 100%;
-  box-sizing: border-box;
-  font-size: 11px;
-  padding: 4px 8px;
+  padding: 11px 16px;
+  text-align: center;
 }
 
 body.embed-tiny.tiny-compact #screen-invite-loading #btn-cancel-invite-join {

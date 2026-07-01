@@ -34,11 +34,23 @@ test('shows the name input on its own line above the Start button', async ({ pag
   expect(info.inputAboveButton).toBe(true);
 });
 
-test('anonymous name is shown as placeholder, value stays empty', async ({ page }) => {
+test('anonymous name leaves the field empty with a static "Your Name" placeholder', async ({ page }) => {
   await showCompactStart(page, { anon: true });
   const input = page.locator('#input-pseudo-invite');
   expect(await input.inputValue()).toBe('');
-  expect(await input.getAttribute('placeholder')).toBe('Azure Fox');
+  expect(await input.getAttribute('placeholder')).toBe('Your Name');
+});
+
+test('the input matches the Start button width and height', async ({ page }) => {
+  await showCompactStart(page, { anon: true });
+  const dims = await page.evaluate(() => {
+    const ir = document.getElementById('input-pseudo-invite').getBoundingClientRect();
+    const br = document.getElementById('btn-cancel-invite-join').getBoundingClientRect();
+    return { dw: Math.abs(ir.width - br.width), dh: Math.abs(ir.height - br.height), dl: Math.abs(ir.left - br.left) };
+  });
+  expect(dims.dw).toBeLessThanOrEqual(1); // same width as the button
+  expect(dims.dh).toBeLessThanOrEqual(2); // same height (~1px rounding)
+  expect(dims.dl).toBeLessThanOrEqual(1); // left-aligned with the button
 });
 
 test('a manual name is shown as the value', async ({ page }) => {
