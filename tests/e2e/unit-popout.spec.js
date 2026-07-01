@@ -40,6 +40,22 @@ test.describe('tinyPopoutUrl', () => {
   });
 });
 
+test.describe('ALLOW_POPOUT — opt-in flag', () => {
+  test('off by default', async ({ page }) => {
+    await page.goto('/');
+    expect(await page.evaluate(() => ALLOW_POPOUT)).toBe(false);
+  });
+
+  test('enabled by ?popout=1 and its aliases', async ({ page }) => {
+    await page.goto('/?popout=1');
+    expect(await page.evaluate(() => ALLOW_POPOUT)).toBe(true);
+    await page.goto('/?allowPopout=true');
+    expect(await page.evaluate(() => ALLOW_POPOUT)).toBe(true);
+    await page.goto('/?canPopout=yes');
+    expect(await page.evaluate(() => ALLOW_POPOUT)).toBe(true);
+  });
+});
+
 test.describe('loadInitialPseudo — ?name= inheritance', () => {
   test('a name query param becomes the session pseudo', async ({ page }) => {
     await page.goto('/?name=Popped%20Out');

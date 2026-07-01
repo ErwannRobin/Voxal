@@ -215,6 +215,22 @@ var FORCE_WEB_JOIN = (function() {
     return false;
   }
 })();
+// Opt-in: embedders enable the "pop out to a standalone window" affordance by
+// adding ?popout=1 (aliases: allowPopout / canPopout) to the iframe src.
+var ALLOW_POPOUT = (function() {
+  try {
+    var params = new URLSearchParams(window.location.search || '');
+    var raw = (
+      params.get('popout') ||
+      params.get('allowPopout') ||
+      params.get('canPopout') ||
+      ''
+    ).toLowerCase();
+    return raw === '1' || raw === 'true' || raw === 'yes';
+  } catch (_) {
+    return false;
+  }
+})();
 
 function getAllowedParentOrigin() {
   try {
@@ -6295,10 +6311,10 @@ window.addEventListener('DOMContentLoaded', function() {
     if (!IS_TINY_EMBED) return;
     document.body.classList.add('embed-tiny');
 
-    // Pop-out: only meaningful when actually embedded in a parent page.
+    // Pop-out: opt-in via ?popout=1, and only when actually embedded in a parent page.
     var popoutBtn = $('btn-popout-tiny');
     if (popoutBtn) {
-      if (_isIframe) {
+      if (_isIframe && ALLOW_POPOUT) {
         document.body.classList.add('embed-can-popout');
         popoutBtn.addEventListener('click', popOutTinyEmbed);
       } else {

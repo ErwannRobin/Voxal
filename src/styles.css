@@ -1372,17 +1372,27 @@ body.embed-tiny.embed-can-popout #screen-room .tiny-popout-btn {
   display: flex;
   position: absolute;
   top: max(calc(env(safe-area-inset-top) + 6px), 6px);
-  right: max(calc(env(safe-area-inset-right) + 8px), 8px);
+  right: max(calc(env(safe-area-inset-right) + 6px), 6px);
   z-index: 40;
-  width: 24px;
-  height: 24px;
+  box-sizing: border-box;
+  width: 30px;
+  height: 30px;
   padding: 0;
+  margin: 0;
   align-items: center;
   justify-content: center;
+  /* Neutralize .btn-icon's inherited text metrics so the hit box matches the
+     icon exactly (no phantom line box shifting or shrinking the target). */
+  font-size: 0;
+  line-height: 0;
   border-radius: 6px;
   color: var(--text-muted);
   background: color-mix(in srgb, var(--bg-raised) 82%, transparent);
   backdrop-filter: blur(4px);
+}
+body.embed-tiny.embed-can-popout #screen-room .tiny-popout-btn svg {
+  display: block;
+  flex: none;
 }
 body.embed-tiny.embed-can-popout #screen-room .tiny-popout-btn:hover {
   color: var(--text);
