@@ -1373,7 +1373,7 @@ body.embed-tiny.embed-can-popout #screen-room .tiny-popout-btn {
   position: absolute;
   top: max(calc(env(safe-area-inset-top) + 6px), 6px);
   right: max(calc(env(safe-area-inset-right) + 6px), 6px);
-  z-index: 40;
+  z-index: 50;
   box-sizing: border-box;
   width: 30px;
   height: 30px;

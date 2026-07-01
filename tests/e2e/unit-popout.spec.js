@@ -59,6 +59,54 @@ test.describe('ALLOW_POPOUT — opt-in flag', () => {
   });
 });
 
+test.describe('pop-out button stacking', () => {
+  // Regression: the button used to live inside .room-bottom-bar (z-index 20),
+  // whose stacking context sits below the peers panel (z-index 30) — so the
+  // panel overlaid the left of the button and stole its clicks. It must be a
+  // direct child of #screen-room and hit-testable across its full width.
+
+  test('is a direct child of #screen-room, not inside .room-bottom-bar', async ({ page }) => {
+    const html = await page.evaluate(() => fetch('/index.html').then((r) => r.text()));
+    const loc = await page.evaluate((markup) => {
+      const doc = new DOMParser().parseFromString(markup, 'text/html');
+      const btn = doc.getElementById('btn-popout-tiny');
+      return {
+        inBottomBar: !!btn.closest('.room-bottom-bar'),
+        parentIsScreenRoom: btn.parentElement.id === 'screen-room',
+      };
+    }, html);
+    expect(loc.inBottomBar).toBe(false);
+    expect(loc.parentIsScreenRoom).toBe(true);
+  });
+
+  test('is hit-testable across its whole width (not overlaid by the peers panel)', async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 220 });
+    await page.goto('/?ui=tiny&popout=1');
+    await page.evaluate(() => document.body.classList.add('embed-tiny', 'embed-can-popout'));
+    await seedRoom(page, { selfId: 'host', isHost: true, roomCode: 'probe', myPseudo: 'Alice', connections: [] });
+    await page.evaluate(() => { showScreen('room'); updatePeerList(); });
+
+    const hits = await page.evaluate(() => {
+      // Bootstrap removes the button when the page isn't a real iframe; re-insert
+      // it in its real DOM slot (direct child of #screen-room) to test stacking.
+      let btn = document.getElementById('btn-popout-tiny');
+      if (!btn) {
+        btn = document.createElement('button');
+        btn.id = 'btn-popout-tiny';
+        btn.className = 'btn-icon tiny-popout-btn';
+        document.getElementById('screen-room').appendChild(btn);
+      }
+      const r = btn.getBoundingClientRect();
+      const y = r.top + r.height / 2;
+      return [r.left + 3, r.left + r.width / 2, r.right - 3].map((x) => {
+        const el = document.elementFromPoint(x, y);
+        return !!el && btn.contains(el); // el is the button or its <svg>
+      });
+    });
+    expect(hits).toEqual([true, true, true]);
+  });
+});
+
 test.describe('applyPopoutIdentityFromUrl — ?name= / ?color= inheritance', () => {
   test('a manual name becomes the session pseudo (runs on load)', async ({ page }) => {
     await page.goto('/?name=Popped%20Out');
