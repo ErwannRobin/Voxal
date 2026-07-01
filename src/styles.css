@@ -1293,8 +1293,24 @@ body.embed-tiny #screen-invite-loading .invite-pseudo-field {
   margin-top: 0;
 }
 
-body.embed-tiny.tiny-compact #screen-invite-loading .invite-pseudo-field {
-  display: none;
+/* Compact: stack the "Your name" input on its own line above the Start button
+   (in full tiny they sit side by side; while connecting the field is hidden). */
+body.embed-tiny.tiny-compact #screen-invite-loading .invite-loading-panel {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+body.embed-tiny.tiny-compact #screen-invite-loading:not(.tiny-connecting) .invite-pseudo-field {
+  display: block;
+  width: 100%;
+  flex: 0 0 auto;
+  margin: 0;
+}
+body.embed-tiny.tiny-compact #screen-invite-loading .invite-pseudo-field input[type="text"] {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 11px;
+  padding: 4px 8px;
 }
 
 body.embed-tiny.tiny-compact #screen-invite-loading #btn-cancel-invite-join {
