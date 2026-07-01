@@ -1364,6 +1364,67 @@ body.embed-tiny #screen-room .room-bottom-bar {
   display: none;
 }
 
+/* Pop-out affordance: only when embedded in tiny mode inside an iframe. */
+.tiny-popout-btn {
+  display: none;
+}
+body.embed-tiny.embed-can-popout #screen-room .tiny-popout-btn {
+  display: flex;
+  position: absolute;
+  top: max(calc(env(safe-area-inset-top) + 6px), 6px);
+  right: max(calc(env(safe-area-inset-right) + 6px), 6px);
+  z-index: 50;
+  box-sizing: border-box;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  margin: 0;
+  align-items: center;
+  justify-content: center;
+  /* Neutralize .btn-icon's inherited text metrics so the hit box matches the
+     icon exactly (no phantom line box shifting or shrinking the target). */
+  font-size: 0;
+  line-height: 0;
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-raised) 82%, transparent);
+  backdrop-filter: blur(4px);
+}
+body.embed-tiny.embed-can-popout #screen-room .tiny-popout-btn svg {
+  display: block;
+  flex: none;
+}
+body.embed-tiny.embed-can-popout #screen-room .tiny-popout-btn:hover {
+  color: var(--text);
+}
+/* Micro (<100 px) is too cramped for the corner icon. */
+body.embed-tiny.tiny-micro #screen-room .tiny-popout-btn {
+  display: none;
+}
+
+/* Attribution: only in full tiny mode (there's no room for it in compact/micro). */
+.tiny-powered-by {
+  display: none;
+}
+body.embed-tiny:not(.tiny-compact):not(.tiny-micro) #screen-room .tiny-powered-by {
+  display: block;
+  position: absolute;
+  bottom: max(calc(env(safe-area-inset-bottom) + 5px), 5px);
+  right: max(calc(env(safe-area-inset-right) + 8px), 8px);
+  z-index: 20;
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  opacity: 0.7;
+  text-decoration: none;
+  transition: opacity 0.15s, color 0.15s;
+}
+body.embed-tiny:not(.tiny-compact):not(.tiny-micro) #screen-room .tiny-powered-by:hover {
+  opacity: 1;
+  color: var(--text);
+}
+
 
 body.embed-tiny #screen-room #ptt-hint,
 body.embed-tiny #screen-room #ptt-status,

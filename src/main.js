@@ -155,6 +155,8 @@ function loadInitialPseudo() {
 //   { source: 'voxal', type: 'talking', active: true|false }
 //   { source: 'voxal', type: 'peers',   peers: [{ id, pseudo, talking }] }
 //   { source: 'voxal', type: 'host-changed', roomCode: '<peerId>', isSelf: true|false }
+//   { source: 'voxal', type: 'popout', url: '<standalone url>' }        (user popped out; embed left the room)
+//   { source: 'voxal', type: 'popout-blocked', url: '<standalone url>' } (browser blocked window.open)
 
 var _isIframe = (function() { try { return window.self !== window.top; } catch(e) { return true; } })();
 var IS_TINY_EMBED = (function() {
@@ -194,6 +196,22 @@ var FORCE_WEB_JOIN = (function() {
       params.get('forceWeb') ||
       params.get('webOnly') ||
       params.get('web') ||
+      ''
+    ).toLowerCase();
+    return raw === '1' || raw === 'true' || raw === 'yes';
+  } catch (_) {
+    return false;
+  }
+})();
+// Opt-in: embedders enable the "pop out to a standalone window" affordance by
+// adding ?popout=1 (aliases: allowPopout / canPopout) to the iframe src.
+var ALLOW_POPOUT = (function() {
+  try {
+    var params = new URLSearchParams(window.location.search || '');
+    var raw = (
+      params.get('popout') ||
+      params.get('allowPopout') ||
+      params.get('canPopout') ||
       ''
     ).toLowerCase();
     return raw === '1' || raw === 'true' || raw === 'yes';
@@ -1958,6 +1976,69 @@ function roomInviteUrl(roomId) {
 
 function roomDisplayCode() {
   return activeChannelRoomId || activeChannel || _publishedRoomId || roomCode || '';
+}
+
+// Full-window URL for the "pop out" action in a tiny embed: same room, same
+// display name, but without the embed params so it opens as a standalone app.
+function tinyPopoutUrl() {
+  var code = roomDisplayCode() || roomCode;
+  if (!code) return '';
+  var url = new URL(roomInviteBaseUrl());
+  url.searchParams.set('room', code);
+  // Join straight away in this browser window instead of prompting to open the
+  // native app (the whole point of popping out is to stay on the web).
+  url.searchParams.set('forceWeb', '1');
+  var profile = selfPseudoProfile();
+  var name = profile.pseudo;
+  if (name && name !== 'You') {
+    url.searchParams.set('name', name);
+    // Carry the color of an auto-assigned name so the popped-out window keeps
+    // the colored dot and stays detectable as an anonymous identity (see
+    // applyPopoutIdentityFromUrl).
+    if (profile.anonymous && profile.pseudoColor) url.searchParams.set('color', profile.pseudoColor);
+  }
+  return url.toString();
+}
+
+// Pop-out target reads ?name= (and optional ?color=) to continue under the same
+// identity. On web the pseudo lives in sessionStorage, which a freshly opened
+// window does not inherit, so it must ride the URL. Runs from bootstrap (after
+// top-level init) so ANON_COLOR_CHOICES / isAnonymousProfile are available.
+function applyPopoutIdentityFromUrl() {
+  var name, color;
+  try {
+    var params = new URLSearchParams(window.location.search || '');
+    name = (params.get('name') || '').trim();
+    color = (params.get('color') || '').trim();
+  } catch (_) { return; }
+  if (!name) return;
+
+  if (color && isAnonymousProfile(name, color)) {
+    // Restore the auto-assigned identity: colored dot + "anonymous" detection.
+    _anonymousProfile = { pseudo: name, pseudoColor: color };
+    myPseudo = '';
+    sessionStorage.removeItem(PSEUDO_SESSION_KEY);
+    return;
+  }
+  myPseudo = name;
+  sessionStorage.setItem(PSEUDO_SESSION_KEY, name);
+  if (shouldPersistPseudoGlobally()) localStorage.setItem(PSEUDO_KEY, name);
+}
+
+// Detach the tiny embed into a standalone window: open the full app on the same
+// room, then leave here (WebRTC sessions can't be transferred between windows).
+function popOutTinyEmbed() {
+  var url = tinyPopoutUrl();
+  if (!url) return;
+  var win = window.open(url, 'voxal-popout', 'width=440,height=680');
+  if (!win) {
+    // Blocked — e.g. an iframe sandbox without allow-popups. Keep the session.
+    iframeEmit({ type: 'popout-blocked', url: url });
+    showCopyToast('Pop-out blocked by the browser');
+    return;
+  }
+  iframeEmit({ type: 'popout', url: url });
+  if (inRoom) leaveRoom();
 }
 
 function roomIdFromPayload(obj) {
@@ -6251,6 +6332,18 @@ window.addEventListener('DOMContentLoaded', function() {
   function applyTinyEmbedMode() {
     if (!IS_TINY_EMBED) return;
     document.body.classList.add('embed-tiny');
+
+    // Pop-out: opt-in via ?popout=1, and only when actually embedded in a parent page.
+    var popoutBtn = $('btn-popout-tiny');
+    if (popoutBtn) {
+      if (_isIframe && ALLOW_POPOUT) {
+        document.body.classList.add('embed-can-popout');
+        popoutBtn.addEventListener('click', popOutTinyEmbed);
+      } else {
+        popoutBtn.remove();
+      }
+    }
+
     var btn = $('btn-toggle-peers');
     var pttBtn = $('ptt-btn');
     var pttHint = $('ptt-hint');
@@ -6280,6 +6373,7 @@ window.addEventListener('DOMContentLoaded', function() {
     updateTinyRoomBreakpoint();
   }
 
+  applyPopoutIdentityFromUrl();
   applyEmbedHeaderMode();
   applyTinyEmbedMode();
 
