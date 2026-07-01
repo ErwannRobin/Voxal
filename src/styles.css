@@ -1402,6 +1402,29 @@ body.embed-tiny.tiny-micro #screen-room .tiny-popout-btn {
   display: none;
 }
 
+/* Attribution: only in full tiny mode (there's no room for it in compact/micro). */
+.tiny-powered-by {
+  display: none;
+}
+body.embed-tiny:not(.tiny-compact):not(.tiny-micro) #screen-room .tiny-powered-by {
+  display: block;
+  position: absolute;
+  bottom: max(calc(env(safe-area-inset-bottom) + 5px), 5px);
+  right: max(calc(env(safe-area-inset-right) + 8px), 8px);
+  z-index: 20;
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  opacity: 0.7;
+  text-decoration: none;
+  transition: opacity 0.15s, color 0.15s;
+}
+body.embed-tiny:not(.tiny-compact):not(.tiny-micro) #screen-room .tiny-powered-by:hover {
+  opacity: 1;
+  color: var(--text);
+}
+
 
 body.embed-tiny #screen-room #ptt-hint,
 body.embed-tiny #screen-room #ptt-status,

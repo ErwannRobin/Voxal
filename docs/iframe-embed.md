@@ -42,7 +42,22 @@ All Voxal-originated events carry `source: 'voxal'` so they are trivial to filte
 | `tiny`, `compact` | `1`, `true` | Compact tiny embed layout |
 | `hideHeader`, `noHeader` | `1`, `true`, `yes` | Hides room header (iframe only) |
 | `forceWeb`, `webOnly`, `web` | `1`, `true`, `yes` | Skip native-app redirection and stay on web |
+| `popout`, `allowPopout`, `canPopout` | `1`, `true`, `yes` | Show a **pop-out** button that detaches the session into a standalone `web.voxal.app` window (see [Pop out](#5--pop-out-to-a-standalone-window)). Tiny embeds only. |
 | `parentOrigin` | absolute `https://...` origin | Locks the bridge to your origin: outbound events are sent only to it, **and inbound commands from any other origin are rejected** (see [Security](#security)). Strongly recommended. |
+
+> `name` and `color` are also read from the URL, but you don't set these — Voxal adds them itself when opening a [pop-out window](#5--pop-out-to-a-standalone-window) to carry the user's identity across.
+
+### Embedding modes by width
+
+The tiny embed adapts to the iframe's rendered width via a `ResizeObserver`. Size the iframe to pick a mode — no extra parameter needed:
+
+| Mode | Width | Layout |
+|---|---|---|
+| **Micro** | `≤ 100 px` | Just the self mic chip — tap-to-talk, nothing else. No peer names, no pop-out, no attribution. Auto-joins on load (too small for a name prompt; a random name is used). |
+| **Compact** | `101–199 px` | Self chip + a "N peers connected" count + the current speaker's name below. Other-peer chips are hidden. |
+| **Tiny** | `≥ 200 px` | Full tiny layout: self chip + all peer chips, the [pop-out](#5--pop-out-to-a-standalone-window) button (if enabled), and a small "powered by voxal.app" note. |
+
+All three are the *same* embed (`ui=tiny`); only the width differs. Below ~100 px the UI is intentionally bare so it fits a toolbar/badge slot.
 
 ---
 
@@ -133,6 +148,8 @@ window.addEventListener('message', (e) => {
 | `peers`        | `peers: Array<{ id, pseudo, pseudoColor?, self, talking }>`       | On join and on any peer-list change           |
 | `host-changed` | `roomCode: string`, `isSelf: boolean`                             | Host migration: a new host took over (`isSelf:true` = this peer became host). `roomCode` may change. |
 | `config-applied` | `iceServers: number`                                            | Acknowledges a `config` command — number of ICE servers accepted |
+| `popout`       | `url: string`                                                     | User popped the session out to a standalone window; the embed then leaves the room (a `left` event follows). |
+| `popout-blocked` | `url: string`                                                   | The browser blocked the pop-out window (e.g. `sandbox` without `allow-popups`); the embed **keeps** its session. |
 | `error`        | `message: string`                                                 | Microphone denied, PeerJS error, etc.         |
 
 ---
@@ -172,6 +189,31 @@ window.addEventListener('message', (e) => {
 > A TURN relay only forwards **encrypted** DTLS-SRTP — it can't decrypt the audio, so using one doesn't change Voxal's "no server hears your voice" property.
 
 Standalone (non-embedded) users configure the same thing under **Settings → Advanced → Fallback relay** (Automatic / Off / Custom). See [TURN & ICE configuration](turn-and-ice.md) for the full precedence order and self-hosting a coturn relay.
+
+---
+
+## 5 — Pop out to a standalone window
+
+A tiny embed can offer a **pop-out** button that moves the session into a dedicated `web.voxal.app` browser window, independent of your page — handy when a user wants a persistent, full-size call while navigating away.
+
+Enable it by adding `popout=1` to the iframe `src`:
+
+```html
+<iframe
+  src="https://web.voxal.app?ui=tiny&popout=1"
+  allow="camera; microphone"
+  style="width: 320px; height: 200px; border: none;"
+></iframe>
+```
+
+The button only appears in **tiny** mode (≥ 200 px wide) — never in compact/micro. When clicked:
+
+1. Voxal opens a standalone window on the same room, carrying the user's display name (and color, for auto-assigned names) so the identity is preserved. It also passes `forceWeb=1` so the new window joins in-browser immediately.
+2. The embed emits `{ source:'voxal', type:'popout', url }` and **leaves the room** — WebRTC sessions can't be transferred between windows, so there's a brief reconnect in the new window.
+
+> **`window.open` needs a user gesture and pop-ups allowed.** If your iframe uses `sandbox`, include `allow-popups` (and `allow-popups-to-escape-sandbox`), otherwise the browser blocks the window: Voxal keeps the current session and emits `{ type:'popout-blocked', url }` so you can react (e.g. surface your own "open in new tab" link).
+
+You can also trigger the same detach from your own UI by opening that `url` yourself — listen for `popout`/`popout-blocked`, or just open `https://web.voxal.app?room=<code>&forceWeb=1` in a new window.
 
 ---
 

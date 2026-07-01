@@ -125,18 +125,6 @@ function shouldPersistPseudoGlobally() {
 }
 
 function loadInitialPseudo() {
-  // A pop-out window (from a tiny embed) carries the current display name via
-  // ?name= so the session continues under the same identity — on web the pseudo
-  // lives in sessionStorage, which a freshly opened window does not inherit.
-  try {
-    var nameParam = (new URLSearchParams(window.location.search || '').get('name') || '').trim();
-    if (nameParam) {
-      sessionStorage.setItem(PSEUDO_SESSION_KEY, nameParam);
-      if (shouldPersistPseudoGlobally()) localStorage.setItem(PSEUDO_KEY, nameParam);
-      return nameParam;
-    }
-  } catch (_) {}
-
   var sessionPseudo = sessionStorage.getItem(PSEUDO_SESSION_KEY);
   if (sessionPseudo !== null) return sessionPseudo;
 
@@ -1998,9 +1986,41 @@ function tinyPopoutUrl() {
   // Join straight away in this browser window instead of prompting to open the
   // native app (the whole point of popping out is to stay on the web).
   url.searchParams.set('forceWeb', '1');
-  var name = displayPseudoForSelf();
-  if (name && name !== 'You') url.searchParams.set('name', name);
+  var profile = selfPseudoProfile();
+  var name = profile.pseudo;
+  if (name && name !== 'You') {
+    url.searchParams.set('name', name);
+    // Carry the color of an auto-assigned name so the popped-out window keeps
+    // the colored dot and stays detectable as an anonymous identity (see
+    // applyPopoutIdentityFromUrl).
+    if (profile.anonymous && profile.pseudoColor) url.searchParams.set('color', profile.pseudoColor);
+  }
   return url.toString();
+}
+
+// Pop-out target reads ?name= (and optional ?color=) to continue under the same
+// identity. On web the pseudo lives in sessionStorage, which a freshly opened
+// window does not inherit, so it must ride the URL. Runs from bootstrap (after
+// top-level init) so ANON_COLOR_CHOICES / isAnonymousProfile are available.
+function applyPopoutIdentityFromUrl() {
+  var name, color;
+  try {
+    var params = new URLSearchParams(window.location.search || '');
+    name = (params.get('name') || '').trim();
+    color = (params.get('color') || '').trim();
+  } catch (_) { return; }
+  if (!name) return;
+
+  if (color && isAnonymousProfile(name, color)) {
+    // Restore the auto-assigned identity: colored dot + "anonymous" detection.
+    _anonymousProfile = { pseudo: name, pseudoColor: color };
+    myPseudo = '';
+    sessionStorage.removeItem(PSEUDO_SESSION_KEY);
+    return;
+  }
+  myPseudo = name;
+  sessionStorage.setItem(PSEUDO_SESSION_KEY, name);
+  if (shouldPersistPseudoGlobally()) localStorage.setItem(PSEUDO_KEY, name);
 }
 
 // Detach the tiny embed into a standalone window: open the full app on the same
@@ -6351,6 +6371,7 @@ window.addEventListener('DOMContentLoaded', function() {
     updateTinyRoomBreakpoint();
   }
 
+  applyPopoutIdentityFromUrl();
   applyEmbedHeaderMode();
   applyTinyEmbedMode();
 

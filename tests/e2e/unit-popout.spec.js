@@ -10,18 +10,20 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe('tinyPopoutUrl', () => {
-  test('includes room, forceWeb, and a manual name', async ({ page }) => {
+  test('includes room, forceWeb, and a manual name (no color)', async ({ page }) => {
     await seedRoom(page, { selfId: 'host', isHost: true, roomCode: 'myroom', myPseudo: 'Alice', connections: [] });
     const raw = await callFn(page, 'tinyPopoutUrl');
     const url = new URL(raw);
     expect(url.searchParams.get('room')).toBe('myroom');
     expect(url.searchParams.get('forceWeb')).toBe('1');
     expect(url.searchParams.get('name')).toBe('Alice');
+    // A manual name has no color to carry.
+    expect(url.searchParams.get('color')).toBeNull();
     // Embed params must not leak into the standalone window.
     expect(url.searchParams.get('tiny')).toBeNull();
   });
 
-  test('carries an anonymous color+animal name', async ({ page }) => {
+  test('carries an anonymous name together with its color', async ({ page }) => {
     await seedRoom(page, {
       selfId: 'host',
       isHost: true,
@@ -32,6 +34,7 @@ test.describe('tinyPopoutUrl', () => {
     });
     const url = new URL(await callFn(page, 'tinyPopoutUrl'));
     expect(url.searchParams.get('name')).toBe('Azure Fox');
+    expect(url.searchParams.get('color')).toBe('#3b82f6');
   });
 
   test('returns empty string when there is no room', async ({ page }) => {
@@ -56,12 +59,27 @@ test.describe('ALLOW_POPOUT — opt-in flag', () => {
   });
 });
 
-test.describe('loadInitialPseudo — ?name= inheritance', () => {
-  test('a name query param becomes the session pseudo', async ({ page }) => {
+test.describe('applyPopoutIdentityFromUrl — ?name= / ?color= inheritance', () => {
+  test('a manual name becomes the session pseudo (runs on load)', async ({ page }) => {
     await page.goto('/?name=Popped%20Out');
-    const pseudo = await page.evaluate(() => loadInitialPseudo());
-    expect(pseudo).toBe('Popped Out');
-    const session = await page.evaluate(() => sessionStorage.getItem('pseudo-session'));
-    expect(session).toBe('Popped Out');
+    // applyPopoutIdentityFromUrl() runs in the DOMContentLoaded bootstrap.
+    expect(await page.evaluate(() => myPseudo)).toBe('Popped Out');
+    expect(await page.evaluate(() => sessionStorage.getItem('pseudo-session'))).toBe('Popped Out');
+    expect(await page.evaluate(() => selfPseudoProfile().anonymous)).toBeFalsy();
+  });
+
+  test('a name + valid color restores an anonymous profile (colored + detectable)', async ({ page }) => {
+    await page.goto('/?name=Azure%20Fox&color=%233b82f6');
+    expect(await page.evaluate(() => displayPseudoForSelf())).toBe('Azure Fox');
+    expect(await page.evaluate(() => pseudoColorForSelf())).toBe('#3b82f6');
+    expect(await page.evaluate(() => selfPseudoProfile().anonymous)).toBe(true);
+    // Anonymous identity must not be stored as a manual pseudo.
+    expect(await page.evaluate(() => myPseudo)).toBe('');
+  });
+
+  test('a name with a non-anon color falls back to a manual pseudo', async ({ page }) => {
+    await page.goto('/?name=Azure%20Fox&color=%23000000');
+    expect(await page.evaluate(() => myPseudo)).toBe('Azure Fox');
+    expect(await page.evaluate(() => selfPseudoProfile().anonymous)).toBeFalsy();
   });
 });
