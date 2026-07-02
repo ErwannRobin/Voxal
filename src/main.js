@@ -3404,6 +3404,30 @@ function syncNoiseSuppressionControls() {
   document.querySelectorAll('input[name="noise-suppression-mode"]').forEach(function(input) {
     input.checked = (input.value === mode);
   });
+  applyNoiseSuppressionRecommendation();
+}
+
+// The "(Recommended)" badge lives on RNNoise (best quality) in the static HTML,
+// which is right for desktop/web. On mobile RNNoise sizzles, so move the badge
+// to the Standard (system) option instead. Idempotent.
+function applyNoiseSuppressionRecommendation() {
+  var recommended = IS_NATIVE_MOBILE ? 'browser' : 'rnnoise';
+  document.querySelectorAll('input[name="noise-suppression-mode"]').forEach(function(input) {
+    var title = input.closest('.noise-card') && input.closest('.noise-card').querySelector('.noise-card-title');
+    if (!title) return;
+    var wantBadge = (input.value === recommended);
+    var hasBadge = !!title.querySelector('em');
+    if (wantBadge === hasBadge) return;
+    var base = title.textContent.replace(/\s*\(Recommended\)\s*$/, '').trim();
+    if (wantBadge) {
+      title.textContent = base + ' ';
+      var em = document.createElement('em');
+      em.textContent = '(Recommended)';
+      title.appendChild(em);
+    } else {
+      title.textContent = base;
+    }
+  });
 }
 
 function selectedMicDeviceId() {

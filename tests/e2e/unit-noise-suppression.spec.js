@@ -33,3 +33,24 @@ test('the Standard option is labelled "System built-in suppression"', async ({ p
   });
   expect(desc).toBe('System built-in suppression');
 });
+
+function readBadges(page) {
+  return page.evaluate(() => {
+    const has = (v) => {
+      const input = document.querySelector(`input[name="noise-suppression-mode"][value="${v}"]`);
+      return !!input.closest('.noise-card').querySelector('.noise-card-title em');
+    };
+    return { rnnoise: has('rnnoise'), browser: has('browser') };
+  });
+}
+
+test('web keeps the (Recommended) badge on RNNoise', async ({ page }) => {
+  await page.goto('/');
+  expect(await readBadges(page)).toEqual({ rnnoise: true, browser: false });
+});
+
+test('mobile moves the (Recommended) badge to Standard', async ({ page }) => {
+  await page.addInitScript(() => { window.Capacitor = { isNativePlatform: () => true }; });
+  await page.goto('/');
+  expect(await readBadges(page)).toEqual({ rnnoise: false, browser: true });
+});
