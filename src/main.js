@@ -1118,7 +1118,9 @@ async function lookupRoom(code) {
   if (UUID_RE.test(code)) return null;
   try {
     devLog('→ Resolving lobby "' + code + '"…');
-    var res = await tauriFetch(ANONYMOUS_ROOMS_BASE + '/' + encodeURIComponent(code));
+    // cache: 'no-store' — the service omits Cache-Control, so without it the
+    // browser can replay a stale (even days-old) 404/410 and fork the room.
+    var res = await tauriFetch(ANONYMOUS_ROOMS_BASE + '/' + encodeURIComponent(code), { cache: 'no-store' });
     if (!res.ok) {
       devLog('✗ Lobby "' + code + '" not found');
       return null;
@@ -1134,7 +1136,7 @@ async function lookupRoom(code) {
 async function lookupRoomInfo(code) {
   if (!code || UUID_RE.test(code)) return null;
   try {
-    var res = await tauriFetch(ANONYMOUS_ROOMS_BASE + '/' + encodeURIComponent(code));
+    var res = await tauriFetch(ANONYMOUS_ROOMS_BASE + '/' + encodeURIComponent(code), { cache: 'no-store' });
     if (!res.ok) return null;
     var data = await res.json();
     var rawCount = data && (data.peer_count || data.peerCount || (data.room && data.room.peer_count));
@@ -6324,7 +6326,7 @@ async function joinOrCreateByChannelName(channelName) {
 
   // No presence configured, or channel not found in org — use anonymous room service.
   var lookupRes = null;
-  try { lookupRes = await tauriFetch(ANONYMOUS_ROOMS_BASE + '/' + encodeURIComponent(normalizedName)); }
+  try { lookupRes = await tauriFetch(ANONYMOUS_ROOMS_BASE + '/' + encodeURIComponent(normalizedName), { cache: 'no-store' }); }
   catch (_) {}
   if (cancelled) throw new Error('Connection cancelled.');
 
