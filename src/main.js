@@ -3391,7 +3391,12 @@ function applyRNNoise(stream) {
 }
 
 function getNoiseSuppressionMode() {
-  return localStorage.getItem(NOISE_SUPPRESSION_KEY) || 'rnnoise';
+  var stored = localStorage.getItem(NOISE_SUPPRESSION_KEY);
+  if (stored) return stored;
+  // RNNoise's real-time 48kHz AudioWorklet underruns on iOS/Android WebViews
+  // and crackles the outgoing audio. The OS voice-processing (echoCancellation)
+  // handles suppression cleanly there, so default mobile to 'browser'.
+  return IS_NATIVE_MOBILE ? 'browser' : 'rnnoise';
 }
 
 function syncNoiseSuppressionControls() {
