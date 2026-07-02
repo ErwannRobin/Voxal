@@ -6205,9 +6205,27 @@ async function joinChannel(item) {
       console.warn('[Presence] session registration failed:', e.message);
     });
   };
-  if (connected.length === 0) {
+  // Presence shows no reachable host. Before creating a fresh room, check the
+  // anonymous-rooms service — a host may be live there (presence poll lag, or a
+  // host that only registered anonymously) and is exactly what the embedded /
+  // iframe path resolves. Join it if present; otherwise create.
+  var recoverOrCreate = async function() {
+    var anonHostId = await lookupRoom(activeChannel);
+    if (anonHostId) {
+      try {
+        await joinRoom(anonHostId, postPresence);
+        return;
+      } catch (err) {
+        if (err && err.message === 'Connection cancelled.') throw err;
+        if (isMicDeniedError(err)) throw err;
+        // Stale anonymous host — fall through to create.
+      }
+    }
     showInviteLoading(activeChannel || '', 'Connecting…');
     await createRoom(postPresence);
+  };
+  if (connected.length === 0) {
+    await recoverOrCreate();
   } else {
     const candidateHostIds = Array.from(new Set(
       connected
@@ -6233,8 +6251,7 @@ async function joinChannel(item) {
       }
     }
     if (allUnavailable) {
-      showInviteLoading(activeChannel || '', 'Connecting…');
-      await createRoom(postPresence);
+      await recoverOrCreate();
       return;
     }
     throw lastError || new Error('Could not join this channel.');
