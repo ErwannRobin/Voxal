@@ -2430,6 +2430,14 @@ function showTinyInviteConnect(roomId, peerCount) {
   setInviteLoadingSpinnerVisible(false);
   setTinyInvitePeerCount(Number.isFinite(peerCount) ? peerCount : null);
   setInviteLoadingCtaMode('connect');
+  // Prefill a manual name; leave the field empty for an auto-assigned name so a
+  // no-op interaction can't commit it as a manual pseudo (and drop its color).
+  var invitePseudoEl = $('input-pseudo-invite');
+  if (invitePseudoEl) {
+    var _prof = selfPseudoProfile();
+    invitePseudoEl.value = _prof.anonymous ? '' : (_prof.pseudo || '');
+    invitePseudoEl.placeholder = 'Your Name';
+  }
   showScreen('invite-loading');
   lookupRoomInfo(normalized).then(function(info) {
     if (!_invitePendingRoomId || _invitePendingRoomId !== normalized || !info) return;
