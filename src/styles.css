@@ -883,6 +883,7 @@ body.embed-tiny #screen-home #btn-connect-voxal-home,
 body.embed-tiny #screen-home #divider-after-connect,
 body.embed-tiny #screen-home .divider,
 body.embed-tiny #screen-home #rejoin-bar,
+body.embed-tiny #screen-home #recent-rooms,
 body.embed-tiny #screen-home #dev-log-panel {
   display: none !important;
 }
@@ -1524,6 +1525,56 @@ body.embed-tiny #screen-room .ptt-btn { display: none; }
   font-size: 14px;
   flex-shrink: 0;
   padding: 2px 4px;
+}
+
+/* ── Recent rooms (home screen) ─────────────────────────────────── */
+
+.recent-rooms {
+  margin-top: 8px;
+}
+.recent-rooms-label {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.recent-rooms-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.recent-room-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.recent-room-join {
+  border: none;
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+  padding: 5px 4px 5px 12px;
+  cursor: pointer;
+  max-width: 160px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.recent-room-join:hover {
+  color: var(--accent);
+}
+.recent-room-remove {
+  font-size: 11px;
+  padding: 5px 10px 5px 6px;
+  color: var(--text-muted);
+}
+.recent-room-remove:hover {
+  color: var(--text);
 }
 
 /* ── Dev log panel ──────────────────────────────────────────────── */
