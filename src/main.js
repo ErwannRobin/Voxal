@@ -680,6 +680,13 @@ async function fetchIceServers() {
 const IS_TAURI_DESKTOP = !!window.__TAURI__;
 const IS_NATIVE_MOBILE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 const IS_PLAIN_WEB     = !IS_TAURI_DESKTOP && !IS_NATIVE_MOBILE;
+// Any phone/tablet — native app or mobile browser. RNNoise's real-time worklet
+// underruns on these regardless of wrapper (the WebView and the mobile browser
+// share the same audio stack). The Mac+touch test catches iPadOS Safari, whose
+// default UA masquerades as desktop macOS.
+const IS_MOBILE_DEVICE = IS_NATIVE_MOBILE ||
+  /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '') ||
+  ((navigator.maxTouchPoints || 0) > 1 && /Mac/.test(navigator.platform || ''));
 const DEFAULT_SHORTCUT = IS_PLAIN_WEB ? 'Space' : 'Shift+Space';
 
 // --- Audio feedback ----------------------------------------------------------
@@ -3395,10 +3402,11 @@ function applyRNNoise(stream) {
 function getNoiseSuppressionMode() {
   var stored = localStorage.getItem(NOISE_SUPPRESSION_KEY);
   if (stored) return stored;
-  // RNNoise's real-time 48kHz AudioWorklet underruns on iOS/Android WebViews
-  // and crackles the outgoing audio. The OS voice-processing (echoCancellation)
-  // handles suppression cleanly there, so default mobile to 'browser'.
-  return IS_NATIVE_MOBILE ? 'browser' : 'rnnoise';
+  // RNNoise's real-time 48kHz AudioWorklet underruns on phones/tablets — in
+  // native WebViews and mobile browsers alike — and crackles the outgoing
+  // audio. The OS voice-processing (echoCancellation) handles suppression
+  // cleanly there, so default mobile to 'browser'.
+  return IS_MOBILE_DEVICE ? 'browser' : 'rnnoise';
 }
 
 function syncNoiseSuppressionControls() {
@@ -3410,10 +3418,10 @@ function syncNoiseSuppressionControls() {
 }
 
 // The "(Recommended)" badge lives on RNNoise (best quality) in the static HTML,
-// which is right for desktop/web. On mobile RNNoise sizzles, so move the badge
-// to the Standard (system) option instead. Idempotent.
+// which is right for desktop. On mobile (native or browser) RNNoise sizzles, so
+// move the badge to the Standard (system) option instead. Idempotent.
 function applyNoiseSuppressionRecommendation() {
-  var recommended = IS_NATIVE_MOBILE ? 'browser' : 'rnnoise';
+  var recommended = IS_MOBILE_DEVICE ? 'browser' : 'rnnoise';
   document.querySelectorAll('input[name="noise-suppression-mode"]').forEach(function(input) {
     var title = input.closest('.noise-card') && input.closest('.noise-card').querySelector('.noise-card-title');
     if (!title) return;
