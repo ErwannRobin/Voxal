@@ -103,6 +103,8 @@ const VIDEO_MODE_KEY            = 'video-mode-enabled';
 const REJOIN_SNAPSHOT_KEY       = 'rejoin-snapshot';
 const REJOIN_TTL_MS             = 30 * 60 * 1000; // 30 minutes
 var   _rejoinDismissed          = false;
+const RECENT_ROOMS_KEY          = 'recent-rooms';
+const RECENT_ROOMS_MAX          = 5;
 
 function presenceBase()       { return (localStorage.getItem(SERVICE_URL_KEY) || DEFAULT_PRESENCE_BASE).replace(/\/$/, ''); }
 function voxalConnectUrl()    { return localStorage.getItem('voxal-connect-url') || DEFAULT_VOXAL_CONNECT_URL; }
@@ -1869,7 +1871,11 @@ function showScreen(name) {
   if (prev && prev.id) _prevScreen = prev.id.replace(/^screen-/, '');
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById('screen-' + name).classList.add('active');
-  if (name === 'home') { startPresencePolling(); if (window._updateRejoinBar) window._updateRejoinBar(); }
+  if (name === 'home') {
+    startPresencePolling();
+    if (window._updateRejoinBar) window._updateRejoinBar();
+    if (window._updateRecentRooms) window._updateRecentRooms();
+  }
   else                 stopPresencePolling();
   if (window._updateTinyPeersToggle) window._updateTinyPeersToggle();
 }
@@ -2549,6 +2555,11 @@ function saveRejoinSnapshot() {
     savedAt:     Date.now()
   };
   localStorage.setItem(REJOIN_SNAPSHOT_KEY, JSON.stringify(snapshot));
+  // Track the named anonymous room code (not presence channel names — those
+  // already live in the Channels panel).
+  var anonCode = (activeChannelRoomId && !UUID_RE.test(activeChannelRoomId) ? activeChannelRoomId : null)
+    || (_publishedRoomId && !UUID_RE.test(_publishedRoomId) ? _publishedRoomId : null);
+  if (anonCode && !activeChannel) recordRecentRoom(anonCode);
 }
 
 function loadRejoinSnapshot() {
@@ -2577,6 +2588,34 @@ function rejoinCandidates(snapshot) {
     if (id && !seen.has(id)) { seen.add(id); result.push(id); }
   });
   return result;
+}
+
+// --- Recent rooms ---------------------------------------------------------
+// Last few *named* anonymous room codes joined, newest first, for one-tap
+// rejoin from the home screen. UUID codes are excluded — they are PeerJS peer
+// IDs that die with the host's session, so they can't be re-resolved later.
+
+function loadRecentRooms() {
+  try {
+    var list = JSON.parse(localStorage.getItem(RECENT_ROOMS_KEY) || '[]');
+    if (!Array.isArray(list)) return [];
+    return list.filter(function(c) { return typeof c === 'string' && c && !UUID_RE.test(c); });
+  } catch (_) { return []; }
+}
+
+function recordRecentRoom(code) {
+  code = String(code || '').trim();
+  if (!code || UUID_RE.test(code)) return;
+  var list = loadRecentRooms().filter(function(c) { return c !== code; });
+  list.unshift(code);
+  localStorage.setItem(RECENT_ROOMS_KEY, JSON.stringify(list.slice(0, RECENT_ROOMS_MAX)));
+  if (window._updateRecentRooms) window._updateRecentRooms();
+}
+
+function removeRecentRoom(code) {
+  var list = loadRecentRooms().filter(function(c) { return c !== code; });
+  localStorage.setItem(RECENT_ROOMS_KEY, JSON.stringify(list));
+  if (window._updateRecentRooms) window._updateRecentRooms();
 }
 
 // --- WebRTC stats helpers ----------------------------------------------------
@@ -7468,6 +7507,43 @@ window.addEventListener('DOMContentLoaded', function() {
   // Wire the initially-rendered rejoin bar (if present in DOM on first load)
   var _initialBar = $('rejoin-bar');
   if (_initialBar) _wireRejoinBar(_initialBar);
+
+  // --- Recent rooms list ---
+  var updateRecentRooms = function() {
+    var wrap = $('recent-rooms');
+    var listEl = $('recent-rooms-list');
+    if (!wrap || !listEl) return;
+    var rooms = loadRecentRooms();
+    if (!rooms.length) { wrap.classList.add('hidden'); return; }
+    listEl.textContent = '';
+    rooms.forEach(function(code) {
+      var chip = document.createElement('div');
+      chip.className = 'recent-room-chip';
+      var joinBtn = document.createElement('button');
+      joinBtn.type = 'button';
+      joinBtn.className = 'recent-room-join';
+      joinBtn.textContent = code;
+      joinBtn.title = 'Join "' + code + '"';
+      joinBtn.addEventListener('click', function() {
+        var input = $('input-code');
+        if (input) input.value = code;
+        // Reuse the Join button flow: spinner/cancel UX, CTA locking, errors.
+        $('btn-join').click();
+      });
+      var removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'btn-icon recent-room-remove';
+      removeBtn.setAttribute('aria-label', 'Remove "' + code + '" from recent rooms');
+      removeBtn.textContent = '✕';
+      removeBtn.addEventListener('click', function() { removeRecentRoom(code); });
+      chip.appendChild(joinBtn);
+      chip.appendChild(removeBtn);
+      listEl.appendChild(chip);
+    });
+    wrap.classList.remove('hidden');
+  };
+  window._updateRecentRooms = updateRecentRooms;
+  updateRecentRooms();
   $('btn-back').addEventListener('click', function() { showScreen('home'); });
   $('btn-retry-mic').addEventListener('click', function() {
     if (typeof _pendingMicAction === 'function') {
