@@ -159,6 +159,7 @@ function loadInitialPseudo() {
 //   { source: 'voxal', type: 'host-changed', roomCode: '<peerId>', isSelf: true|false }
 //   { source: 'voxal', type: 'popout', url: '<standalone url>' }        (user popped out; embed left the room)
 //   { source: 'voxal', type: 'popout-blocked', url: '<standalone url>' } (browser blocked window.open)
+//   { source: 'voxal', type: 'popout-closed', url: '<standalone url>' }  (the popped-out window was closed)
 
 var _isIframe = (function() { try { return window.self !== window.top; } catch(e) { return true; } })();
 var IS_TINY_EMBED = (function() {
@@ -2053,7 +2054,25 @@ function popOutTinyEmbed() {
     return;
   }
   iframeEmit({ type: 'popout', url: url });
+  watchPopoutWindow(win, url);
   if (inRoom) leaveRoom();
+}
+
+var _popoutWatchTimer = null;
+// The parent page can't poll the pop-out window (window.open handed the handle
+// to this iframe, not to the parent), so we watch it here and relay a
+// 'popout-closed' event. `win.closed` is readable even cross-origin.
+function watchPopoutWindow(win, url) {
+  if (_popoutWatchTimer) { clearInterval(_popoutWatchTimer); _popoutWatchTimer = null; }
+  if (!win) return;
+  _popoutWatchTimer = setInterval(function() {
+    var closed = true;
+    try { closed = win.closed; } catch (_) { closed = true; }
+    if (!closed) return;
+    clearInterval(_popoutWatchTimer);
+    _popoutWatchTimer = null;
+    iframeEmit({ type: 'popout-closed', url: url });
+  }, 1000);
 }
 
 function roomIdFromPayload(obj) {
