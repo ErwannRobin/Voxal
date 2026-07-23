@@ -7164,6 +7164,28 @@ window.addEventListener('DOMContentLoaded', function() {
     });
   }
 
+  // Handedness — which side the talk button sits on in the landscape layout.
+  const HANDEDNESS_KEY = 'handedness';
+  function applyHandedness(val) {
+    var v = val === 'left' ? 'left' : 'right';
+    document.documentElement.setAttribute('data-hand', v);
+    var toggle = document.getElementById('hand-toggle');
+    if (!toggle) return;
+    toggle.querySelectorAll('button[data-hand]').forEach(function(btn) {
+      btn.classList.toggle('active', btn.dataset.hand === v);
+    });
+  }
+  applyHandedness(localStorage.getItem(HANDEDNESS_KEY));
+  var handToggle = document.getElementById('hand-toggle');
+  if (handToggle) {
+    handToggle.addEventListener('click', function(e) {
+      var btn = e.target.closest('button[data-hand]');
+      if (!btn) return;
+      localStorage.setItem(HANDEDNESS_KEY, btn.dataset.hand);
+      applyHandedness(btn.dataset.hand);
+    });
+  }
+
   // Clear (×) buttons inside .input-clearable wrappers
   document.querySelectorAll('.input-clear').forEach(function(btn) {
     btn.addEventListener('click', function() {
