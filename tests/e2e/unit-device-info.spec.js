@@ -108,6 +108,26 @@ test.describe('self panel respects the sharing preference', () => {
     await expect(page.locator('#device-info-popover')).toContainText('Timezone');
     await expect(page.locator('#device-info-popover')).not.toContainText('Device sharing is off');
   });
+
+  test('self row Network section aggregates link stats across peers', async ({ page }) => {
+    await seedRoom(page, {
+      selfId: 'host', isHost: true, roomCode: 'host',
+      connections: [{ id: 'peer-a', pseudo: 'A' }, { id: 'peer-b', pseudo: 'B' }],
+    });
+    await page.evaluate(() => {
+      localStorage.setItem('dev-mode', 'true');
+      localStorage.setItem('debug-share-device-info', 'true');
+      connections.get('peer-a').webrtcStats = { rttMs: 40, lossPercent: 1.0 };
+      connections.get('peer-b').webrtcStats = { rttMs: 60, lossPercent: 3.0 };
+      showScreen('room');
+      updatePeerList();
+    });
+    await page.locator('#peer-item-self .peer-info-btn').click();
+    const pop = page.locator('#device-info-popover');
+    await expect(pop).toContainText('Network');
+    await expect(pop).toContainText('50 ms'); // mean of 40 and 60
+    await expect(pop).toContainText('3.0%');  // worst loss
+  });
 });
 
 test.describe('network link stats show without the peer self-report', () => {

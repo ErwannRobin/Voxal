@@ -3043,11 +3043,12 @@ async function collectDeviceInfo() {
   audio.headset = headset;
 
   var net = _collectNetworkInfo();
+  if (native && native.net_type) net.connType = native.net_type; // desktop: fills what navigator.connection can't
   net.battery = {
     present: batLevel != null,
     level: batLevel,
     charging: batCharging,
-    lowPower: null, // low-power mode is not exposed to web/WebView or the crates we use
+    lowPower: (native && native.low_power != null) ? native.low_power : null, // native only; not web-exposed
     background: (typeof document !== 'undefined' && document.visibilityState === 'hidden')
   };
 
@@ -3135,6 +3136,23 @@ function requestDeviceInfo(peerId) {
   }
 }
 
+// The self row has no single peer link, so summarize the WebRTC link stats
+// across all current connections (mean RTT, worst packet loss) — this is what
+// lets the Network section show latency/loss on your own row too.
+function _aggregateLinkStats() {
+  var rtts = [], losses = [];
+  connections.forEach(function(c) {
+    if (!c || !c.webrtcStats) return;
+    if (typeof c.webrtcStats.rttMs === 'number') rtts.push(c.webrtcStats.rttMs);
+    if (typeof c.webrtcStats.lossPercent === 'number') losses.push(c.webrtcStats.lossPercent);
+  });
+  if (!rtts.length && !losses.length) return null;
+  var stats = {};
+  if (rtts.length) stats.rttMs = Math.round(rtts.reduce(function(a, b) { return a + b; }, 0) / rtts.length);
+  if (losses.length) stats.lossPercent = Math.max.apply(null, losses);
+  return stats;
+}
+
 function _fmtBytes(n) {
   if (typeof n !== 'number' || !isFinite(n)) return null;
   if (n < 1024) return n + ' B';
@@ -3204,7 +3222,11 @@ function _renderDeviceInfo(container, info, wstats) {
   container.appendChild(_diRow('Packet loss', (wstats && typeof wstats.lossPercent === 'number') ? wstats.lossPercent.toFixed(1) + '%' : null));
   var batStr = null;
   if (bat.present) {
-    batStr = bat.level + '%' + (bat.charging ? ' ⚡ charging' : '') + (bat.background ? ' · background' : '');
+    batStr = bat.level + '%' + (bat.charging ? ' ⚡ charging' : '')
+      + (bat.lowPower ? ' · low power' : '')
+      + (bat.background ? ' · background' : '');
+  } else if (bat.lowPower) {
+    batStr = 'Low power mode';
   }
   container.appendChild(_diRow('Battery', batStr));
 }
@@ -3229,7 +3251,7 @@ function _refreshDeviceInfoPopover() {
     }
     collectDeviceInfo().then(function(info) {
       if (_deviceInfoPeerId !== 'self') return;
-      _renderDeviceInfo(body, info, null);
+      _renderDeviceInfo(body, info, _aggregateLinkStats());
     });
     return;
   }
