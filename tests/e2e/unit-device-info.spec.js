@@ -31,18 +31,65 @@ test.describe('collectDeviceInfo', () => {
   });
 });
 
-test.describe('sharing preference (opt-out, default on)', () => {
-  test('defaults to enabled when unset', async ({ page }) => {
-    const on = await page.evaluate(() => isDeviceInfoSharingEnabled());
-    expect(on).toBe(true);
+test.describe('sharing consent (opt-in, default off)', () => {
+  test('defaults to unset — nothing shared until accepted', async ({ page }) => {
+    const r = await page.evaluate(() => ({ consent: deviceInfoConsent(), on: isDeviceInfoSharingEnabled() }));
+    expect(r.consent).toBe('unset');
+    expect(r.on).toBe(false);
   });
 
-  test('honors an explicit "false"', async ({ page }) => {
-    const on = await page.evaluate(() => {
-      localStorage.setItem('debug-share-device-info', 'false');
-      return isDeviceInfoSharingEnabled();
+  test('accepted enables sharing, declined disables it', async ({ page }) => {
+    const acc = await page.evaluate(() => { setDeviceInfoConsent('accepted'); return isDeviceInfoSharingEnabled(); });
+    expect(acc).toBe(true);
+    const dec = await page.evaluate(() => { setDeviceInfoConsent('declined'); return isDeviceInfoSharingEnabled(); });
+    expect(dec).toBe(false);
+  });
+
+  test('migrates the old true/false preference values', async ({ page }) => {
+    const t = await page.evaluate(() => { localStorage.setItem('debug-share-device-info', 'true'); return deviceInfoConsent(); });
+    expect(t).toBe('accepted');
+    const f = await page.evaluate(() => { localStorage.setItem('debug-share-device-info', 'false'); return deviceInfoConsent(); });
+    expect(f).toBe('declined');
+  });
+});
+
+test.describe('debug-mode consent banner', () => {
+  function bannerHidden(page) {
+    return page.evaluate(() => document.getElementById('debug-consent-banner').classList.contains('hidden'));
+  }
+
+  test('shown to a participant when the host has debug mode on and consent is unset', async ({ page }) => {
+    await seedRoom(page, { selfId: 'me', isHost: false, hostId: 'host', roomCode: 'host' });
+    await page.evaluate(() => { _hostDebugMode = true; updateDebugConsentBanner(); });
+    expect(await bannerHidden(page)).toBe(false);
+  });
+
+  test('hidden for the host, and once a choice is made', async ({ page }) => {
+    // Host never sees it.
+    await seedRoom(page, { selfId: 'host', isHost: true, roomCode: 'host' });
+    await page.evaluate(() => { _hostDebugMode = true; updateDebugConsentBanner(); });
+    expect(await bannerHidden(page)).toBe(true);
+
+    // Participant who already accepted/declined doesn't see it.
+    await seedRoom(page, { selfId: 'me', isHost: false, hostId: 'host', roomCode: 'host' });
+    await page.evaluate(() => { setDeviceInfoConsent('declined'); _hostDebugMode = true; updateDebugConsentBanner(); });
+    expect(await bannerHidden(page)).toBe(true);
+  });
+
+  test('nothing is transmitted while consent is unset (reply is declined)', async ({ page }) => {
+    await seedRoom(page, {
+      selfId: 'me', isHost: false, hostId: 'host', roomCode: 'host',
+      connections: [{ id: 'host', pseudo: 'Host' }],
     });
-    expect(on).toBe(false);
+    const sent = await page.evaluate(() => {
+      const captured = [];
+      connections.get('host').data.send = function(m) { captured.push(m); };
+      respondToDeviceInfoRequest(null); // consent is unset (default)
+      return captured;
+    });
+    expect(sent.length).toBe(1);
+    expect(sent[0].declined).toBe(true);
+    expect(sent[0].info).toBeNull();
   });
 });
 

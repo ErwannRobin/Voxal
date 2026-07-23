@@ -361,6 +361,30 @@ html[data-theme="light"] .room-size-warning.hard { color: #b91c1c; }
   html[data-theme="system"] .room-size-warning.hard { color: #b91c1c; }
 }
 
+/* Debug-mode consent notice (shown to participants) */
+.debug-consent-banner {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--bg-raised);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  flex-shrink: 0;
+}
+.debug-consent-body { display: flex; flex-direction: column; gap: 10px; }
+.debug-consent-text {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text);
+}
+.debug-consent-text strong { color: #fbbf24; font-weight: 600; }
+html[data-theme="light"] .debug-consent-text strong { color: #b45309; }
+@media (prefers-color-scheme: light) {
+  html[data-theme="system"] .debug-consent-text strong { color: #b45309; }
+}
+.debug-consent-actions { display: flex; gap: 8px; }
+.debug-consent-actions .btn { flex: 0 0 auto; }
+.debug-consent-note { font-size: 11px; color: var(--text-muted); }
+
 .room-meta {
   display: flex;
   align-items: center;
@@ -924,8 +948,9 @@ kbd {
   html.is-web body:not(.embed-tiny) #screen-room.active {
     display: grid;
     grid-template-columns: 2fr 1fr;         /* peers | talk (right-handed) */
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr);
     grid-template-areas:
+      "consent consent"
       "header  header"
       "warning warning"
       "peers   main";
@@ -939,10 +964,12 @@ kbd {
   html.is-web[data-hand="left"] body:not(.embed-tiny) #screen-room.active {
     grid-template-columns: 1fr 2fr;         /* talk | peers */
     grid-template-areas:
+      "consent consent"
       "header  header"
       "warning warning"
       "main    peers";
   }
+  html.is-web body:not(.embed-tiny) #screen-room #debug-consent-banner { grid-area: consent; }
   html.is-web body:not(.embed-tiny) #screen-room .room-header { grid-area: header; margin-bottom: 6px; }
   html.is-web body:not(.embed-tiny) #screen-room #room-size-warning { grid-area: warning; }
   /* Talk button + hint + controls fill the 1/3 column, centered. */
