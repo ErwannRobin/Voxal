@@ -46,6 +46,9 @@
         var isNative = !!window.__TAURI__ ||
           !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
         document.documentElement.classList.add(isNative ? 'is-native' : 'is-web');
+        // Handedness: which side the talk button sits on in the landscape layout.
+        document.documentElement.setAttribute(
+          'data-hand', localStorage.getItem('handedness') === 'left' ? 'left' : 'right');
       })();
     </script>
   </head>
@@ -278,6 +281,14 @@
                 <button data-theme="light">Light</button>
                 <button data-theme="system">System</button>
               </div>
+            </div>
+            <div class="settings-field" id="settings-handedness">
+              <label>Handedness</label>
+              <div class="theme-toggle hand-toggle" id="hand-toggle">
+                <button data-hand="left">Left‑handed</button>
+                <button data-hand="right">Right‑handed</button>
+              </div>
+              <p class="field-helper">Which side the talk button sits on in landscape (web).</p>
             </div>
             <div id="section-general" class="settings-field settings-inline-toggle hidden">
               <label for="toggle-launch-at-login" style="flex:1">Launch at login</label>

@@ -44,3 +44,35 @@ base.describe('desktop is unaffected', () => {
     expect(await display(page, '#screen-home')).toBe('flex');
   });
 });
+
+base.describe('handedness (talk button side in landscape)', () => {
+  base.use({ hasTouch: true, isMobile: true });
+
+  function sides(page) {
+    return page.evaluate(() => {
+      const peers = document.querySelector('#screen-room .room-peers-panel').getBoundingClientRect();
+      const talk = document.querySelector('#screen-room .room-bottom-bar').getBoundingClientRect();
+      return { peersLeft: peers.left, talkLeft: talk.left, peersW: peers.width, talkW: talk.width };
+    });
+  }
+
+  base('defaults to right-handed: peers left (2/3), talk button right (1/3)', async ({ page }) => {
+    await page.setViewportSize({ width: 844, height: 390 });
+    await page.goto('/');
+    expect(await page.evaluate(() => document.documentElement.getAttribute('data-hand'))).toBe('right');
+    await enterRoom(page);
+    const s = await sides(page);
+    expect(s.peersLeft).toBeLessThan(s.talkLeft); // peers column is on the left
+    expect(s.peersW).toBeGreaterThan(s.talkW);    // peers is the wider (2/3) column
+  });
+
+  base('left-handed setting moves the talk button to the left', async ({ page }) => {
+    await page.setViewportSize({ width: 844, height: 390 });
+    await page.goto('/');
+    await page.evaluate(() => { document.documentElement.setAttribute('data-hand', 'left'); });
+    await enterRoom(page);
+    const s = await sides(page);
+    expect(s.talkLeft).toBeLessThan(s.peersLeft); // talk column is now on the left
+    expect(s.peersW).toBeGreaterThan(s.talkW);    // peers is still the wider (2/3) column
+  });
+});
