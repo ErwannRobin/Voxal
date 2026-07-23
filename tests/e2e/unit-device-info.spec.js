@@ -110,6 +110,33 @@ test.describe('self panel respects the sharing preference', () => {
   });
 });
 
+test.describe('network link stats show without the peer self-report', () => {
+  test('latency/packet loss render from local WebRTC stats before device-info arrives', async ({ page }) => {
+    await seedRoom(page, {
+      selfId: 'host', isHost: true, roomCode: 'host',
+      connections: [{ id: 'peer-a', pseudo: 'Alice' }],
+    });
+    await page.evaluate(() => {
+      localStorage.setItem('dev-mode', 'true');
+      // Viewer-measured link stats exist, but the peer hasn't reported its device yet.
+      const c = connections.get('peer-a');
+      c.webrtcStats = { rttMs: 42, lossPercent: 1.5, iceType: 'relay' };
+      c.deviceInfo = null;
+      showScreen('room');
+      updatePeerList();
+    });
+    await page.locator('#peer-item-peer-a .peer-info-btn').click();
+    const pop = page.locator('#device-info-popover');
+    await expect(pop).toBeVisible();
+    // Network section is populated from local stats even with no self-report…
+    await expect(pop).toContainText('Network');
+    await expect(pop).toContainText('42 ms');
+    await expect(pop).toContainText('1.5%');
+    // …and the panel still notes the report is pending.
+    await expect(pop).toContainText('Requesting device info');
+  });
+});
+
 test.describe('a peer with sharing off declines requests', () => {
   test('respondToDeviceInfoRequest sends a declined response to the host', async ({ page }) => {
     await seedRoom(page, {
