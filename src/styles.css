@@ -1889,10 +1889,22 @@ input[type="password"]:focus { border-color: var(--accent); }
 }
 
 @media (max-width: 640px) {
+  /* Fill the *visible* viewport and anchor the content to the top. On mobile
+     browsers `100vh` is the large viewport (address bar hidden), which is taller
+     than the visible area — centering a full-height modal then pushes the fixed
+     header above the top with no way to scroll to it once a section is expanded.
+     `100dvh` (dynamic viewport) tracks the visible area, and align-items:stretch
+     pins the header to the top so only the middle scroller overflows. */
+  .modal {
+    align-items: stretch;
+  }
   .modal-content {
     width: 100vw;
     max-width: none;
-    max-height: 100vh;
+    height: 100vh;      /* fallback for engines without dvh */
+    height: 100dvh;
+    max-height: 100vh;  /* fallback */
+    max-height: 100dvh;
     border-radius: 0;
     border-left: none;
     border-right: none;
