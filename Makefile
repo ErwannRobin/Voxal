@@ -10,7 +10,7 @@ help:
 	@echo "  run-web      Serve the web version locally on http://localhost:8080"
 	@echo "  dev          Start Tauri in dev mode (hot reload, no URL scheme)"
 	@echo "  debug        Build debug bundle if needed, then launch it"
-	@echo "  build        Build the Tauri desktop app (release binary)"
+	@echo "  build        Build the Tauri desktop app (release binary, unsigned — no key needed)"
 	@echo "  build-signed Build release with updater signing (requires key)"
 	@echo "  build-debug  Build the Tauri desktop app (debug bundle — registers voxal:// scheme)"
 	@echo "  build-web    Bundle the web version into dist/"
@@ -67,7 +67,8 @@ debug:
 	open "$$APP"
 
 build:
-	npm run tauri build
+	@echo "→ Building release (unsigned, no updater artifacts). Use 'make build-signed' to sign."
+	npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
 build-signed:
 	@export TAURI_SIGNING_PRIVATE_KEY="$${TAURI_SIGNING_PRIVATE_KEY:-$$(cat ~/.tauri/voxal.key 2>/dev/null)}"; \
