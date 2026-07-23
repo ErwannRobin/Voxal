@@ -41,6 +41,11 @@
       (function() {
         var t = localStorage.getItem('theme') || 'system';
         document.documentElement.setAttribute('data-theme', t);
+        // Tag the platform so the landscape reflow can be scoped to web only
+        // (native apps are portrait-locked; this guards edge cases).
+        var isNative = !!window.__TAURI__ ||
+          !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+        document.documentElement.classList.add(isNative ? 'is-native' : 'is-web');
       })();
     </script>
   </head>
