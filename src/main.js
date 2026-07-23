@@ -7009,6 +7009,23 @@ async function joinOrCreateByChannelName(channelName) {
   });
 }
 
+// Web mobile: enable the CSS rotate-to-portrait overlay (outside iframe embeds),
+// and best-effort lock the Screen Orientation API where the browser allows it
+// (installed PWA / fullscreen). Native apps are already hard-locked to portrait
+// via Info.plist / AndroidManifest, so this is a no-op there — they never rotate.
+function applyPortraitLock() {
+  try {
+    if (!_isIframe) document.body.classList.add('allow-rotate-lock');
+  } catch (_) {}
+  try {
+    if (window.screen && screen.orientation && typeof screen.orientation.lock === 'function') {
+      var p = screen.orientation.lock('portrait');
+      // Rejects outside fullscreen / on desktop / where unsupported — ignore.
+      if (p && typeof p.catch === 'function') p.catch(function() {});
+    }
+  } catch (_) {}
+}
+
 // --- Bootstrap ---------------------------------------------------------------
 
 window.addEventListener('DOMContentLoaded', function() {
@@ -7064,6 +7081,7 @@ window.addEventListener('DOMContentLoaded', function() {
   applyPopoutIdentityFromUrl();
   applyEmbedHeaderMode();
   applyTinyEmbedMode();
+  applyPortraitLock();
 
   // Notify capacitor-updater that the bundle loaded successfully (enables auto-revert on crash)
   if (IS_NATIVE_MOBILE && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorUpdater) {

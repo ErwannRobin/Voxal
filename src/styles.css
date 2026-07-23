@@ -4,6 +4,37 @@
 
 .hidden { display: none !important; }
 
+/* ── Rotate-to-portrait overlay (web mobile) ─────────────────────────────
+   Native apps are hard-locked to portrait (Info.plist / AndroidManifest), so
+   this only ever fires on a mobile browser. Gated on `body.allow-rotate-lock`
+   (set in JS, off inside iframe embeds) + a phone-sized landscape viewport with
+   a coarse pointer, so it never triggers on desktop or tablets. */
+#rotate-overlay { display: none; }
+@media (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
+  body.allow-rotate-lock #rotate-overlay {
+    display: flex;
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 24px;
+    background: var(--bg, #16161e);
+    color: var(--text, #e5e7eb);
+  }
+}
+.rotate-overlay-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 320px;
+}
+.rotate-overlay-inner svg { color: var(--accent, #7c9cff); opacity: 0.9; }
+.rotate-overlay-title { font-size: 16px; font-weight: 600; }
+.rotate-overlay-text { font-size: 13px; color: var(--text-muted, #9ca3af); }
+
 /* Remove Android WebView's default green tap highlight on all elements */
 a, button, [role="button"], input, select, textarea, label {
   -webkit-tap-highlight-color: transparent;
