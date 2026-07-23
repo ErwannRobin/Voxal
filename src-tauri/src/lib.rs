@@ -80,6 +80,63 @@ struct DeviceStats {
     cpu_total: Option<f32>,        // system-wide CPU, percent
     battery_level: Option<u8>,     // 0..=100
     battery_charging: Option<bool>,
+    net_type: Option<String>,      // "Wi-Fi" | "Ethernet" (the active default route)
+    low_power: Option<bool>,       // OS Low Power Mode
+}
+
+// The Network Information API and Low Power Mode are not exposed to the WebView,
+// so read them natively. macOS-only for now (shells out to system tools that are
+// always present); best-effort — any failure (incl. an app sandbox denying the
+// spawn) just yields None and the panel shows "—".
+#[cfg(target_os = "macos")]
+fn read_low_power() -> Option<bool> {
+    let out = std::process::Command::new("pmset").arg("-g").output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with("lowpowermode") {
+            return Some(line.split_whitespace().last() == Some("1"));
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_low_power() -> Option<bool> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn read_net_type() -> Option<String> {
+    // Interface backing the default route, e.g. "en0".
+    let route = std::process::Command::new("route")
+        .args(["-n", "get", "default"])
+        .output()
+        .ok()?;
+    let route_text = String::from_utf8_lossy(&route.stdout);
+    let iface = route_text.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("interface:")
+            .map(|rest| rest.trim().to_string())
+    })?;
+
+    // `networksetup -getairportnetwork <iface>` prints "Current Wi-Fi Network:"
+    // for a connected Wi-Fi interface, otherwise "… is not a Wi-Fi interface".
+    let airport = std::process::Command::new("networksetup")
+        .args(["-getairportnetwork", &iface])
+        .output()
+        .ok()?;
+    let airport_text = String::from_utf8_lossy(&airport.stdout);
+    if airport_text.contains("Current Wi-Fi Network:") {
+        Some("Wi-Fi".to_string())
+    } else {
+        Some("Ethernet".to_string())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_net_type() -> Option<String> {
+    None
 }
 
 fn read_battery() -> (Option<u8>, Option<bool>) {
@@ -139,6 +196,8 @@ async fn get_device_stats() -> Result<DeviceStats, String> {
             cpu_total: Some(sys.global_cpu_usage()),
             battery_level,
             battery_charging,
+            net_type: read_net_type(),
+            low_power: read_low_power(),
         }
     })
     .await
