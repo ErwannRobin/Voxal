@@ -3188,6 +3188,16 @@ function _refreshDeviceInfoPopover() {
   var isSelf = _deviceInfoPeerId === 'self';
 
   if (isSelf) {
+    // The sharing preference gates our own device too — when off, this device
+    // neither collects nor shows diagnostics, so the toggle has a visible effect.
+    if (!isDeviceInfoSharingEnabled()) {
+      body.innerHTML = '';
+      var off = document.createElement('div');
+      off.className = 'di-empty';
+      off.textContent = 'Device sharing is off. Turn on “Share device info in dev mode” in Settings → Advanced to collect diagnostics.';
+      body.appendChild(off);
+      return;
+    }
     collectDeviceInfo().then(function(info) {
       if (_deviceInfoPeerId !== 'self') return;
       _renderDeviceInfo(body, info, null);

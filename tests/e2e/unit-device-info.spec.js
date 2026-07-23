@@ -81,6 +81,56 @@ test.describe('device-info button visibility', () => {
   });
 });
 
+test.describe('self panel respects the sharing preference', () => {
+  test('shows an "off" notice for your own row when sharing is disabled', async ({ page }) => {
+    await seedRoom(page, { selfId: 'host', isHost: true, roomCode: 'host' });
+    await page.evaluate(() => {
+      localStorage.setItem('dev-mode', 'true');
+      localStorage.setItem('debug-share-device-info', 'false');
+      showScreen('room');
+      updatePeerList();
+    });
+    await page.locator('#peer-item-self .peer-info-btn').click();
+    await expect(page.locator('#device-info-popover')).toBeVisible();
+    await expect(page.locator('#device-info-popover')).toContainText('Device sharing is off');
+    await expect(page.locator('#device-info-popover')).not.toContainText('Timezone');
+  });
+
+  test('shows diagnostics for your own row when sharing is enabled', async ({ page }) => {
+    await seedRoom(page, { selfId: 'host', isHost: true, roomCode: 'host' });
+    await page.evaluate(() => {
+      localStorage.setItem('dev-mode', 'true');
+      localStorage.setItem('debug-share-device-info', 'true');
+      showScreen('room');
+      updatePeerList();
+    });
+    await page.locator('#peer-item-self .peer-info-btn').click();
+    await expect(page.locator('#device-info-popover')).toContainText('Timezone');
+    await expect(page.locator('#device-info-popover')).not.toContainText('Device sharing is off');
+  });
+});
+
+test.describe('a peer with sharing off declines requests', () => {
+  test('respondToDeviceInfoRequest sends a declined response to the host', async ({ page }) => {
+    await seedRoom(page, {
+      selfId: 'peer-a', isHost: false, hostId: 'host', roomCode: 'host',
+      connections: [{ id: 'host', pseudo: 'Host' }],
+    });
+    const sent = await page.evaluate(() => {
+      localStorage.setItem('debug-share-device-info', 'false');
+      const captured = [];
+      const hc = connections.get('host');
+      hc.data.send = function(m) { captured.push(m); };
+      respondToDeviceInfoRequest(null);
+      return captured;
+    });
+    expect(sent.length).toBe(1);
+    expect(sent[0].type).toBe('device-info-response');
+    expect(sent[0].declined).toBe(true);
+    expect(sent[0].info).toBeNull();
+  });
+});
+
 test.describe('host relay of device-info messages', () => {
   test('host stores a peer response and does not throw on malformed shapes', async ({ page }) => {
     await seedRoom(page, {
