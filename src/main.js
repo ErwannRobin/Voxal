@@ -7009,24 +7009,6 @@ async function joinOrCreateByChannelName(channelName) {
   });
 }
 
-// Web mobile: keep the UI in portrait even when the phone is held in landscape.
-// Enables the CSS counter-rotation (body.allow-rotate-lock, skipped inside iframe
-// embeds so an embedded player isn't rotated) and best-effort locks the Screen
-// Orientation API where the browser allows it (installed PWA / fullscreen).
-// Native apps are already hard-locked via Info.plist / AndroidManifest.
-function applyPortraitLock() {
-  try {
-    if (!_isIframe) document.body.classList.add('allow-rotate-lock');
-  } catch (_) {}
-  try {
-    if (window.screen && screen.orientation && typeof screen.orientation.lock === 'function') {
-      var p = screen.orientation.lock('portrait');
-      // Rejects outside fullscreen / on desktop / where unsupported — ignore.
-      if (p && typeof p.catch === 'function') p.catch(function() {});
-    }
-  } catch (_) {}
-}
-
 // --- Bootstrap ---------------------------------------------------------------
 
 window.addEventListener('DOMContentLoaded', function() {
@@ -7082,7 +7064,6 @@ window.addEventListener('DOMContentLoaded', function() {
   applyPopoutIdentityFromUrl();
   applyEmbedHeaderMode();
   applyTinyEmbedMode();
-  applyPortraitLock();
 
   // Notify capacitor-updater that the bundle loaded successfully (enables auto-revert on crash)
   if (IS_NATIVE_MOBILE && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorUpdater) {

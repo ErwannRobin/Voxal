@@ -4,53 +4,6 @@
 
 .hidden { display: none !important; }
 
-/* ── Force portrait on web mobile (counter-rotation) ─────────────────────
-   Native apps are hard-locked to portrait (Info.plist / AndroidManifest). On a
-   mobile *browser* there's no real orientation lock, so when a phone is held in
-   landscape we counter-rotate the whole page 90° and swap its dimensions, so the
-   UI stays in a portrait layout (mirrors the native lock). Gated on
-   `body.allow-rotate-lock` (set in JS, off inside iframe embeds) + a phone-sized
-   landscape viewport with a coarse pointer, so desktop and tablets are untouched.
-
-   Caveat: width-based media queries still see the physical (landscape) viewport,
-   so components that switch layout on width need a companion `max-height` gate to
-   stay in their mobile form while rotated (see the settings modal below). */
-@media (orientation: landscape) and (max-height: 500px) and (pointer: coarse) {
-  body.allow-rotate-lock {
-    position: fixed;
-    top: 0;
-    left: 0;
-    /* Portrait frame: width = device short side, height = device long side. */
-    width: 100vh;
-    width: 100dvh;
-    height: 100vw;
-    height: 100dvw;
-    transform-origin: top left;
-    transform: translateX(100vw) rotate(90deg);
-    transform: translateX(100dvw) rotate(90deg);
-    overflow: hidden;
-  }
-  /* Children sized to the viewport must fill the rotated (portrait) frame. */
-  body.allow-rotate-lock .screen {
-    height: 100vw;
-    height: 100dvw;
-    max-width: none;
-  }
-  body.allow-rotate-lock #screen-home {
-    height: auto;
-    min-height: 100vw;
-    min-height: 100dvw;
-  }
-  /* Full-viewport-height fixed layers (modal, video/screen popups) must span the
-     rotated portrait height (device long side), not `100dvh` (the short side). */
-  body.allow-rotate-lock .modal-content {
-    height: 100vw;
-    height: 100dvw;
-    max-height: 100vw;
-    max-height: 100dvw;
-  }
-}
-
 /* Remove Android WebView's default green tap highlight on all elements */
 a, button, [role="button"], input, select, textarea, label {
   -webkit-tap-highlight-color: transparent;
@@ -956,6 +909,84 @@ kbd {
 
 #screen-room .room-bottom-bar .room-controls {
   margin-top: 8px;
+}
+
+/* ── Landscape (short viewport) — reflow to two columns ───────────────────
+   A phone held in landscape (or a short desktop window) has plenty of width but
+   little height, so the default vertical stacks overflow. Reflow Home and Room
+   into side-by-side columns via grid. Scoped to non-embed (embeds have their own
+   layout) and `.active` so an inactive screen stays hidden. */
+@media (orientation: landscape) and (max-height: 600px) {
+  /* Home: branding beside the actions. */
+  body:not(.embed-tiny) #screen-home.active {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas:
+      "topbar topbar"
+      "brand  actions";
+    align-items: center;
+    column-gap: clamp(20px, 6vw, 64px);
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    padding-top:    max(calc(env(safe-area-inset-top)    + 12px), 12px);
+    padding-bottom: max(calc(env(safe-area-inset-bottom) + 12px), 12px);
+    overflow: hidden;
+  }
+  body:not(.embed-tiny) #screen-home .screen-topbar { grid-area: topbar; margin: 0; }
+  body:not(.embed-tiny) #screen-home .brand {
+    grid-area: brand;
+    justify-self: end;
+    padding: 0;
+    max-width: 320px;
+  }
+  body:not(.embed-tiny) #screen-home .home-actions {
+    grid-area: actions;
+    justify-self: start;
+    width: 100%;
+    max-width: 360px;
+    max-height: 100%;
+    overflow-y: auto;
+  }
+  body:not(.embed-tiny) #screen-home #divider-after-connect { margin: 12px 0; }
+  body:not(.embed-tiny) #screen-home #dev-log-panel { display: none; }
+
+  /* Room: peers list on the left, talk button + controls on the right. */
+  body:not(.embed-tiny) #screen-room.active {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(200px, 280px);
+    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-areas:
+      "header  header"
+      "warning warning"
+      "peers   controls";
+    column-gap: 16px;
+    align-items: stretch;
+  }
+  body:not(.embed-tiny) #screen-room .room-header { grid-area: header; margin-bottom: 6px; }
+  body:not(.embed-tiny) #screen-room #room-size-warning { grid-area: warning; }
+  body:not(.embed-tiny) #screen-room .room-peers-panel {
+    grid-area: peers;
+    padding-bottom: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+  /* Un-pin the bottom bar and make it the right-hand control column. */
+  body:not(.embed-tiny) #screen-room .room-bottom-bar {
+    grid-area: controls;
+    position: static;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 0;
+  }
+  body:not(.embed-tiny) #screen-room .room-bottom-bar .room-controls { margin-top: 0; }
 }
 
 body.embed-hide-header #screen-room .room-header {
@@ -1935,10 +1966,7 @@ input[type="password"]:focus { border-color: var(--accent); }
   overflow: hidden;
 }
 
-/* `max-height: 500px` also matches a landscape phone: while the page is
-   counter-rotated to portrait, width media queries still see the wide physical
-   viewport, so without this the modal would fall back to its desktop layout. */
-@media (max-width: 640px), (max-height: 500px) {
+@media (max-width: 640px) {
   /* Fill the *visible* viewport and anchor the content to the top. On mobile
      browsers `100vh` is the large viewport (address bar hidden), which is taller
      than the visible area — centering a full-height modal then pushes the fixed
@@ -2038,9 +2066,7 @@ input[type="password"]:focus { border-color: var(--accent); }
 .modal-sidebar-visible #turn-details > summary::before { display: none; }
 .modal-sidebar-visible .settings-card.hidden-by-sidebar { display: none; }
 
-/* `min-height: 501px` keeps the desktop two-column modal off landscape phones
-   (whose physical width can exceed 861px while counter-rotated to portrait). */
-@media (min-width: 861px) and (min-height: 501px) {
+@media (min-width: 861px) {
   .modal-content {
     max-width: 1040px;
     height: min(760px, calc(100vh - 80px));
