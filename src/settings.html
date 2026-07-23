@@ -368,10 +368,10 @@
             </div>
             <div class="settings-field settings-inline-toggle" style="margin-top:12px">
               <label for="toggle-debug-share" style="flex:1">Share device info in dev mode</label>
-              <button id="toggle-debug-share" class="toggle-btn" role="switch" aria-checked="true"
-                      title="Let the host see this device's diagnostics (type, OS, audio, network) while debugging">ON</button>
+              <button id="toggle-debug-share" class="toggle-btn" role="switch" aria-checked="false"
+                      title="Let the host see this device's diagnostics (type, OS, audio, network) while debugging">OFF</button>
             </div>
-            <p class="settings-hint" style="margin-top:6px">When a room host has dev mode on, an “i” button appears next to each name showing device, audio &amp; network diagnostics. Turn this off to stop sharing yours.</p>
+            <p class="settings-hint" style="margin-top:6px">When a room host has dev mode on, an “i” button appears next to each name showing device, audio &amp; network diagnostics. This is off until you accept — nothing is shared otherwise.</p>
           </div>
         </details>
       </div>
@@ -994,20 +994,23 @@
         });
       })();
 
-      // --- Share device info toggle (dev-mode diagnostics, default ON) ---
+      // --- Share device info toggle (dev-mode diagnostics; opt-in consent) ---
       (function() {
         var btn = $id('toggle-debug-share');
         if (!btn) return;
+        function accepted() {
+          var v = localStorage.getItem(DEBUG_INFO_SHARE_KEY);
+          return v === 'accepted' || v === 'true';
+        }
         function sync() {
-          var on = localStorage.getItem(DEBUG_INFO_SHARE_KEY) !== 'false';
+          var on = accepted();
           btn.setAttribute('aria-checked', String(on));
           btn.classList.toggle('active', on);
           btn.textContent = on ? 'ON' : 'OFF';
         }
         sync();
         btn.addEventListener('click', function() {
-          var on = localStorage.getItem(DEBUG_INFO_SHARE_KEY) !== 'false';
-          localStorage.setItem(DEBUG_INFO_SHARE_KEY, String(!on));
+          localStorage.setItem(DEBUG_INFO_SHARE_KEY, accepted() ? 'declined' : 'accepted');
           sync();
         });
       })();

@@ -2506,10 +2506,23 @@ function isDevModeEnabled() {
   return localStorage.getItem(DEV_MODE_KEY) === 'true';
 }
 
-// Whether this peer is willing to share its device diagnostics when the host is
-// in debug mode. Opt-out preference (Settings → Advanced), enabled by default.
+// Device-info sharing is opt-in with explicit consent: nothing is transmitted
+// until the user accepts. Consent is global (managed in Settings → Advanced):
+// 'accepted' | 'declined' | 'unset'. ('true'/'false' are migrated from the old
+// opt-out preference.)
+function deviceInfoConsent() {
+  var v = localStorage.getItem(DEBUG_INFO_SHARE_KEY);
+  if (v === 'accepted' || v === 'true') return 'accepted';
+  if (v === 'declined' || v === 'false') return 'declined';
+  return 'unset';
+}
+
+function setDeviceInfoConsent(state) {
+  localStorage.setItem(DEBUG_INFO_SHARE_KEY, state === 'accepted' ? 'accepted' : 'declined');
+}
+
 function isDeviceInfoSharingEnabled() {
-  return localStorage.getItem(DEBUG_INFO_SHARE_KEY) !== 'false';
+  return deviceInfoConsent() === 'accepted';
 }
 
 // The "i" device-info button is shown only when local dev mode is on AND either
@@ -2519,6 +2532,26 @@ function deviceInfoButtonVisible() {
   if (IS_TINY_EMBED) return false;
   if (!isDevModeEnabled()) return false;
   return isHost || _hostDebugMode;
+}
+
+// Show the consent warning to a participant when the host has debug mode on and
+// they haven't decided yet. Nothing is shared while the choice is 'unset'.
+function updateDebugConsentBanner() {
+  var el = document.getElementById('debug-consent-banner');
+  if (!el) return;
+  var show = !IS_TINY_EMBED && inRoom && !isHost && _hostDebugMode && deviceInfoConsent() === 'unset';
+  el.classList.toggle('hidden', !show);
+}
+
+// Reflect the current consent in the Settings → Advanced toggles (if present).
+function syncDeviceShareToggles() {
+  var on = isDeviceInfoSharingEnabled();
+  var btn = document.getElementById('toggle-debug-share-modal');
+  if (btn) {
+    btn.setAttribute('aria-checked', String(on));
+    btn.classList.toggle('active', on);
+    btn.textContent = on ? 'ON' : 'OFF';
+  }
 }
 
 function devLog(msg, level) {
@@ -5443,6 +5476,7 @@ function leaveRoom() {
   closeStatsPopover();
   closeDeviceInfoPopover();
   _hostDebugMode = false;
+  updateDebugConsentBanner();
   stopHostHeartbeat();
   stopHostHeartbeatMonitor();
   stopPeerHeartbeat();
@@ -6414,7 +6448,7 @@ function handleHostMessage(msg) {
   // device-info "i" button only appears while the host is actually debugging.
   if (typeof msg.debugMode === 'boolean' && _hostDebugMode !== msg.debugMode) {
     _hostDebugMode = msg.debugMode;
-    if (inRoom && !isHost) updatePeerList();
+    if (inRoom && !isHost) { updatePeerList(); updateDebugConsentBanner(); }
   }
   if (msg.type === 'heartbeat') return;
   if (msg.type === 'device-info-request') {
@@ -6729,6 +6763,7 @@ function finishJoin(targetHostId, hostData) {
   requestAudioFocus(); // Keep foreground service running while in room
   showScreen('room');
   updatePeerList();
+  updateDebugConsentBanner();
   updateShortcutDisplay();
   updateVideoModeUI();
   startStatsPolling();
@@ -7808,11 +7843,26 @@ window.addEventListener('DOMContentLoaded', function() {
   var shareToggleModal = document.getElementById('toggle-debug-share-modal');
   if (shareToggleModal) {
     shareToggleModal.addEventListener('click', function() {
-      var on = !isDeviceInfoSharingEnabled();
-      localStorage.setItem(DEBUG_INFO_SHARE_KEY, String(on));
-      shareToggleModal.setAttribute('aria-checked', String(on));
-      shareToggleModal.classList.toggle('active', on);
-      shareToggleModal.textContent = on ? 'ON' : 'OFF';
+      setDeviceInfoConsent(isDeviceInfoSharingEnabled() ? 'declined' : 'accepted');
+      syncDeviceShareToggles();
+      updateDebugConsentBanner();
+    });
+  }
+
+  var acceptBtn = document.getElementById('btn-debug-accept');
+  if (acceptBtn) {
+    acceptBtn.addEventListener('click', function() {
+      setDeviceInfoConsent('accepted');
+      updateDebugConsentBanner();
+      syncDeviceShareToggles();
+    });
+  }
+  var declineBtn = document.getElementById('btn-debug-decline');
+  if (declineBtn) {
+    declineBtn.addEventListener('click', function() {
+      setDeviceInfoConsent('declined');
+      updateDebugConsentBanner();
+      syncDeviceShareToggles();
     });
   }
 
