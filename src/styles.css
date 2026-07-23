@@ -1918,6 +1918,7 @@ input[type="password"]:focus { border-color: var(--accent); }
 
 .modal-body {
   flex: 1;
+  min-height: 0; /* allow the flex child to shrink so the scroll area is bounded (else tall content overflows .modal-content and clips the top out of reach) */
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -1960,7 +1961,10 @@ input[type="password"]:focus { border-color: var(--accent); }
 .modal-settings-scrollable {
   flex: 1;
   min-width: 0;
+  min-height: 0; /* pair with .modal-body min-height:0 so this is the element that actually scrolls */
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   padding: 16px 20px;
 }
 
