@@ -367,6 +367,12 @@
                   <button id="toggle-dev-mode-modal" class="toggle-btn" role="switch" aria-checked="false"
                           title="Show dev log panel, peer UUIDs, and debug labels">OFF</button>
                 </div>
+                <div class="settings-field settings-inline-toggle" style="margin-top:12px">
+                  <label for="toggle-debug-share-modal" style="flex:1">Share device info in dev mode</label>
+                  <button id="toggle-debug-share-modal" class="toggle-btn" role="switch" aria-checked="true"
+                          title="Let the host see this device's diagnostics (type, OS, audio, network) while debugging">ON</button>
+                </div>
+                <p class="settings-hint" style="margin-top:6px">When a room host has dev mode on, an “i” button appears next to each name showing device, audio &amp; network diagnostics. Turn this off to stop sharing yours.</p>
               </div>
             </details>
           </div>

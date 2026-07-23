@@ -143,4 +143,20 @@ real goal, the path is:
 Decided **not** to build either now; the mesh + size warning is enough for the
 small-room product.
 
+## 🩺 Device-info diagnostics panel (dev mode)
+
+**Status:** ✅ Implemented — `collectDeviceInfo()` + host-side "i" panel in `main.js`,
+sharing opt-out in Settings → Advanced (both `index.html` modal and `settings.html`).
+
+When a room host has dev mode on, an "i" button appears next to each roster name
+showing 📱 Device / 🎤 Audio / 🌐 Network diagnostics. Snapshots are collected on
+demand only (host relays a `device-info-request`/`-response` round-trip) and each
+peer can opt out (`debug-share-device-info`, default on). Regression-tested in
+`tests/e2e/unit-device-info.spec.js`.
+
+**Possible follow-up (native only):** CPU %, real process memory, and battery
+low-power mode are not web-exposed (see learning.md). A small Tauri command /
+Capacitor plugin could surface these on desktop/mobile and feed them into the
+`device`/`network` blocks — the panel already renders "N/A" gracefully until then.
+
 _Add new items above this line._

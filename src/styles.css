@@ -675,6 +675,64 @@ html[data-theme="light"] .room-size-warning.hard { color: #b91c1c; }
   color: var(--text-muted);
 }
 
+/* Device info button + popover (dev-mode diagnostics) */
+.peer-info-btn {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  padding: 0 1px;
+}
+.peer-info-btn:hover { color: var(--accent); }
+.device-info-popover {
+  position: fixed;
+  z-index: 1001;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  width: 260px;
+  max-width: calc(100vw - 16px);
+  max-height: 70vh;
+  overflow-y: auto;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+}
+.device-info-popover .di-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.device-info-popover .di-section {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin: 10px 0 4px;
+}
+.device-info-popover .di-section:first-of-type { margin-top: 0; }
+.device-info-popover .di-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11.5px;
+  padding: 2px 0;
+  line-height: 1.35;
+}
+.device-info-popover .di-key { color: var(--text-muted); flex-shrink: 0; }
+.device-info-popover .di-val {
+  color: var(--text);
+  text-align: right;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.device-info-popover .di-empty {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  padding: 4px 0;
+}
+
 .ptt-area {
   display: flex;
   flex-direction: column;

@@ -22,6 +22,14 @@
  *   video-mode   { enabled }                    host -> peer (toggle video mode, dev only)
  *   video-offer  { peerId }                     peer -> host (relayed) — peer started camera
  *   video-stop   { peerId }                     peer -> host (relayed) — peer stopped camera
+ *   device-info-request  { peerId, from }       viewer -> host (relayed to target); dev only
+ *   device-info-response { peerId, info,        target -> host (relayed to requester); dev only
+ *                          declined, from }
+ *
+ * Dev-mode debugging: the host advertises `debugMode` in every peer-list and
+ * heartbeat. When on, a device-info "i" button appears next to each roster name.
+ * Snapshots (device / audio / network) are collected on demand only and each
+ * peer can opt out of sharing via Settings → Advanced (default on).
  *
  * Host migration:
  *   When the host's DataConnection closes (or heartbeat times out), every peer runs
@@ -99,6 +107,7 @@ const SERVICE_URL_KEY           = 'service-url';
 const PSEUDO_KEY                = 'pseudo';
 const PSEUDO_SESSION_KEY        = 'pseudo-session';
 const DEV_MODE_KEY              = 'dev-mode';
+const DEBUG_INFO_SHARE_KEY      = 'debug-share-device-info'; // opt-out for sharing device diagnostics in dev mode (default ON)
 const VIDEO_MODE_KEY            = 'video-mode-enabled';
 const REJOIN_SNAPSHOT_KEY       = 'rejoin-snapshot';
 const REJOIN_TTL_MS             = 30 * 60 * 1000; // 30 minutes
@@ -829,6 +838,7 @@ var _videoPopoutWindow = null;   // reference to video popup window
 var _screenPopoutWindow = null;  // reference to screen popup window
 var _devLogBuffer  = [];         // ring buffer of all log entries (max 200)
 var _devLogChannel = null;       // BroadcastChannel to the detached devlog window
+var _hostDebugMode = false;      // non-host mirror of the host's dev-mode flag (from peer-list/heartbeat)
 
 // --- WebRTC stats polling ---
 var _statsIntervalId  = null;
@@ -1665,6 +1675,7 @@ function broadcastHostHeartbeat() {
   var msg = {
     type: 'heartbeat',
     at: Date.now(),
+    debugMode: isDevModeEnabled(),
     deputyId: successorIds[0] || null,
     successorIds: successorIds
   };
@@ -2495,6 +2506,21 @@ function isDevModeEnabled() {
   return localStorage.getItem(DEV_MODE_KEY) === 'true';
 }
 
+// Whether this peer is willing to share its device diagnostics when the host is
+// in debug mode. Opt-out preference (Settings → Advanced), enabled by default.
+function isDeviceInfoSharingEnabled() {
+  return localStorage.getItem(DEBUG_INFO_SHARE_KEY) !== 'false';
+}
+
+// The "i" device-info button is shown only when local dev mode is on AND either
+// we are the host (the debugger) or the host itself advertised debug mode — so
+// the feature is active "only if the host is in debug mode".
+function deviceInfoButtonVisible() {
+  if (IS_TINY_EMBED) return false;
+  if (!isDevModeEnabled()) return false;
+  return isHost || _hostDebugMode;
+}
+
 function devLog(msg, level) {
   var lvl = level || 'info';
   if (lvl === 'warn') console.warn('[dev]', msg);
@@ -2821,13 +2847,446 @@ function closeStatsPopover() {
   document.removeEventListener('click', _onDocClickDismissPopover, { capture: true });
 }
 
+// --- Device info diagnostics (dev mode) --------------------------------------
+//
+// Collected strictly on demand (only when a device-info panel is opened and,
+// for remote peers, only after the host asks). Nothing is polled or sent in the
+// steady state, so this has no effect on runtime performance. All probes are
+// best-effort and wrapped in try/catch — anything the platform can't expose is
+// rendered as "—" rather than failing.
+
+var _uaHighEntropy = null; // cached getHighEntropyValues() result (immutable per session)
+
+function _getUAHighEntropy() {
+  if (_uaHighEntropy) return Promise.resolve(_uaHighEntropy);
+  try {
+    if (navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {
+      return navigator.userAgentData
+        .getHighEntropyValues(['architecture', 'bitness', 'model', 'platformVersion'])
+        .then(function(v) { _uaHighEntropy = v || {}; return _uaHighEntropy; })
+        .catch(function() { return {}; });
+    }
+  } catch (_) {}
+  return Promise.resolve({});
+}
+
+function _detectDeviceType() {
+  var ua = navigator.userAgent || '';
+  var uaData = navigator.userAgentData;
+  var isTablet = /iPad/.test(ua) ||
+                 (/Android/.test(ua) && !/Mobile/.test(ua)) ||
+                 (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); // iPadOS desktop UA
+  if (isTablet) return 'Tablet';
+  var mobile = uaData ? !!uaData.mobile : /Mobi|Android|iPhone|iPod/i.test(ua);
+  if (mobile) return 'Phone';
+  return 'Desktop';
+}
+
+function _detectOS() {
+  var ua = navigator.userAgent || '';
+  var p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+  if (/iPhone|iPad|iPod/.test(ua) || (p === 'MacIntel' && navigator.maxTouchPoints > 1)) return 'iOS';
+  if (/Android/.test(ua) || /Android/i.test(p)) return 'Android';
+  if (/Mac/i.test(p) || /Mac OS X/.test(ua)) return 'macOS';
+  if (/Win/i.test(p) || /Windows/.test(ua)) return 'Windows';
+  if (/Linux|X11|CrOS/i.test(p) || /Linux|CrOS/.test(ua)) return 'Linux';
+  return p || 'Unknown';
+}
+
+function _archLabel(he) {
+  if (!he || !he.architecture) return null;
+  var a = he.architecture, bits = he.bitness;
+  if (a === 'arm') return bits === '64' ? 'arm64' : 'arm';
+  if (a === 'x86') return bits === '64' ? 'x64' : 'x86';
+  return a + (bits ? bits : '');
+}
+
+function _detectAppSetup() {
+  if (window.__TAURI__) return 'Desktop app (Tauri)';
+  if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+    var plat = window.Capacitor.getPlatform ? window.Capacitor.getPlatform() : '';
+    if (plat === 'ios') return 'iOS app (native)';
+    if (plat === 'android') return 'Android app (native)';
+    return 'Native app';
+  }
+  return 'Web browser';
+}
+
+function _guessMicConnection(label) {
+  if (!label) return null;
+  var l = label.toLowerCase();
+  if (/bluetooth|airpod|buds|wireless|hands-?free/.test(l)) return 'Bluetooth';
+  if (/\busb\b/.test(l)) return 'USB';
+  if (/built-?in|internal|macbook|default|iphone|ipad/.test(l)) return 'Built-in';
+  return 'Wired / other';
+}
+
+function _collectAudioInfo() {
+  var info = { micName: null, micConnection: null, sampleRate: null, channels: null, volume: null };
+  try {
+    var track = audioTrack || (stream && stream.getAudioTracks ? stream.getAudioTracks()[0] : null);
+    if (track) {
+      info.micName = track.label || null;
+      info.micConnection = _guessMicConnection(track.label);
+      var s = track.getSettings ? track.getSettings() : {};
+      if (s.sampleRate) info.sampleRate = s.sampleRate;
+      if (s.channelCount) info.channels = s.channelCount;
+      if (typeof s.volume === 'number') info.volume = s.volume;
+    }
+    if (!info.sampleRate && _audioCtx && _audioCtx.sampleRate) info.sampleRate = _audioCtx.sampleRate;
+  } catch (_) {}
+  return info;
+}
+
+function _detectHeadset() {
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return Promise.resolve(null);
+    return navigator.mediaDevices.enumerateDevices().then(function(devs) {
+      var re = /head(set|phone)|airpod|buds|bluetooth|hands-?free/i;
+      var outputs = devs.filter(function(d) { return d.kind === 'audiooutput'; });
+      if (!outputs.length || !outputs.some(function(d) { return d.label; })) return null; // no label permission
+      return outputs.some(function(d) { return re.test(d.label || ''); });
+    }).catch(function() { return null; });
+  } catch (_) { return Promise.resolve(null); }
+}
+
+function _labelConnType(c) {
+  if (!c) return null;
+  if (c.type === 'wifi') return 'Wi-Fi';
+  if (c.type === 'ethernet') return 'Ethernet';
+  if (c.type === 'cellular') return 'Cellular' + (c.effectiveType ? ' (' + c.effectiveType.toUpperCase() + ')' : '');
+  if (c.type === 'bluetooth') return 'Bluetooth';
+  if (c.type === 'none') return 'Offline';
+  if (c.effectiveType) return c.effectiveType.toUpperCase(); // desktop Chrome exposes only effectiveType
+  return null;
+}
+
+function _deriveSignal(c) {
+  if (!c) return null;
+  var et = c.effectiveType, dl = c.downlink;
+  if (et === '4g' || (typeof dl === 'number' && dl >= 5)) return 'Excellent';
+  if (et === '3g' || (typeof dl === 'number' && dl >= 1.5)) return 'Good';
+  if (et) return 'Poor';
+  return null;
+}
+
+function _collectNetworkInfo() {
+  var info = { connType: null, signal: null, downlink: null, rttMs: null };
+  try {
+    var c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if (c) {
+      info.connType = _labelConnType(c);
+      info.signal = _deriveSignal(c);
+      if (typeof c.downlink === 'number') info.downlink = c.downlink;
+      if (typeof c.rtt === 'number') info.rttMs = c.rtt;
+    }
+  } catch (_) {}
+  return info;
+}
+
+function _collectBatteryInfo() {
+  try {
+    if (navigator.getBattery) {
+      return navigator.getBattery().then(function(b) {
+        return { present: true, level: Math.round(b.level * 100), charging: !!b.charging };
+      }).catch(function() { return { present: false }; });
+    }
+  } catch (_) {}
+  return Promise.resolve({ present: false });
+}
+
+// Gather the full device snapshot. Always resolves (never rejects).
+async function collectDeviceInfo() {
+  var he = {}, battery = { present: false }, headset = null;
+  try { he = await _getUAHighEntropy(); } catch (_) {}
+  try { battery = await _collectBatteryInfo(); } catch (_) {}
+  try { headset = await _detectHeadset(); } catch (_) {}
+
+  var type = _detectDeviceType();
+  // A device running on battery power (not charging) is a portable — call it a laptop.
+  if (type === 'Desktop' && battery && battery.present && battery.charging === false) type = 'Laptop';
+
+  var memApp = null, memTotal = null;
+  try { if (window.performance && performance.memory) memApp = performance.memory.usedJSHeapSize; } catch (_) {}
+  try { if (navigator.deviceMemory) memTotal = navigator.deviceMemory; } catch (_) {} // GB, coarse (capped at 8)
+
+  var audio = _collectAudioInfo();
+  audio.headset = headset;
+
+  var net = _collectNetworkInfo();
+  net.battery = {
+    present: !!(battery && battery.present),
+    level: battery && battery.present ? battery.level : null,
+    charging: battery && battery.present ? battery.charging : null,
+    lowPower: null, // not exposed to web/WebView on any platform
+    background: (typeof document !== 'undefined' && document.visibilityState === 'hidden')
+  };
+
+  return {
+    ts: Date.now(),
+    device: {
+      type: type,
+      arch: _archLabel(he),
+      os: _detectOS(),
+      osVersion: he.platformVersion || null,
+      setup: _detectAppSetup(),
+      appVersion: (typeof VOXAL_VERSION !== 'undefined' ? VOXAL_VERSION : null),
+      timezone: (function() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (_) { return null; } })(),
+      cores: (typeof navigator.hardwareConcurrency === 'number' ? navigator.hardwareConcurrency : null),
+      cpuApp: null,   // per-process CPU is not exposed to browsers/WebViews
+      cpuTotal: null,
+      memApp: memApp,
+      memTotal: memTotal
+    },
+    audio: audio,
+    network: net
+  };
+}
+
+// --- Device info panel (host-side viewer) ------------------------------------
+
+var _deviceInfoPeerId = null; // id currently shown ('self' sentinel for own row)
+
+function _sendToHostData(msg) {
+  if (isHost || !roomCode) return false;
+  var hc = connections.get(roomCode);
+  if (hc && hc.data) { sendDataIfOpen(hc.data, msg); return true; }
+  return false;
+}
+
+// A non-host peer answers a device-info request relayed by the host. Honors the
+// per-peer sharing preference; if disabled, replies with a "declined" marker.
+function respondToDeviceInfoRequest(from) {
+  if (!isDeviceInfoSharingEnabled()) {
+    _sendToHostData({ type: 'device-info-response', peerId: peer && peer.id, info: null, declined: true, from: from || null });
+    return;
+  }
+  collectDeviceInfo().then(function(info) {
+    _sendToHostData({ type: 'device-info-response', peerId: peer && peer.id, info: info, declined: false, from: from || null });
+  }).catch(function() {
+    _sendToHostData({ type: 'device-info-response', peerId: peer && peer.id, info: null, declined: false, from: from || null });
+  });
+}
+
+// Host receives a request from `requesterId` about `targetId`. Answers directly
+// if it's about the host itself, otherwise relays to the target peer.
+function handleDeviceInfoRequestAtHost(requesterId, targetId) {
+  if (!targetId || targetId === (peer && peer.id)) {
+    var reply = function(info, declined) {
+      var rc = connections.get(requesterId);
+      if (rc && rc.data) sendDataIfOpen(rc.data, { type: 'device-info-response', peerId: peer && peer.id, info: info, declined: declined });
+    };
+    if (!isDeviceInfoSharingEnabled()) { reply(null, true); return; }
+    collectDeviceInfo().then(function(info) { reply(info, false); }).catch(function() { reply(null, false); });
+    return;
+  }
+  var tc = connections.get(targetId);
+  if (tc && tc.data) sendDataIfOpen(tc.data, { type: 'device-info-request', peerId: targetId, from: requesterId });
+}
+
+function updatePeerDeviceInfo(peerId, info, declined) {
+  var c = connections.get(peerId);
+  if (!c) return;
+  c.deviceInfo = { info: info || null, declined: !!declined, at: Date.now() };
+}
+
+function onDeviceInfoResponse(peerId, info, declined) {
+  updatePeerDeviceInfo(peerId, info, declined);
+  if (_deviceInfoPeerId && _deviceInfoPeerId === peerId) _refreshDeviceInfoPopover();
+}
+
+// Ask a remote peer for its device info. Host asks the peer directly; a non-host
+// viewer routes the request through the host (which answers or relays).
+function requestDeviceInfo(peerId) {
+  if (isHost) {
+    var c = connections.get(peerId);
+    if (c && c.data) sendDataIfOpen(c.data, { type: 'device-info-request' });
+  } else {
+    _sendToHostData({ type: 'device-info-request', peerId: peerId });
+  }
+}
+
+function _fmtBytes(n) {
+  if (typeof n !== 'number' || !isFinite(n)) return null;
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
+  if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+function _diRow(label, value) {
+  var row = document.createElement('div');
+  row.className = 'di-row';
+  var k = document.createElement('span');
+  k.className = 'di-key';
+  k.textContent = label;
+  var v = document.createElement('span');
+  v.className = 'di-val';
+  v.textContent = (value === null || value === undefined || value === '') ? '—' : String(value);
+  row.appendChild(k);
+  row.appendChild(v);
+  return row;
+}
+
+function _diSection(icon, title) {
+  var h = document.createElement('div');
+  h.className = 'di-section';
+  h.textContent = icon + ' ' + title;
+  return h;
+}
+
+// Build the panel body from a self-reported snapshot merged with locally-known
+// WebRTC link stats (rtt / packet loss) the viewer measured for that peer.
+function _renderDeviceInfo(container, info, wstats) {
+  container.innerHTML = '';
+  var d = (info && info.device) || {};
+  var a = (info && info.audio) || {};
+  var n = (info && info.network) || {};
+  var bat = n.battery || {};
+
+  container.appendChild(_diSection('📱', 'Device'));
+  var deviceLine = d.type || null;
+  if (d.type && d.arch) deviceLine = d.type + ' · ' + d.arch;
+  container.appendChild(_diRow('Type', deviceLine));
+  container.appendChild(_diRow('OS', d.os ? (d.os + (d.osVersion ? ' ' + d.osVersion : '')) : null));
+  container.appendChild(_diRow('App', d.setup ? (d.setup + (d.appVersion ? ' · v' + d.appVersion : '')) : null));
+  container.appendChild(_diRow('Timezone', d.timezone));
+  container.appendChild(_diRow('CPU', d.cpuApp != null ? (d.cpuApp + '% / ' + d.cpuTotal + '%')
+    : (d.cores != null ? d.cores + ' cores (usage N/A)' : 'N/A')));
+  var memStr = null;
+  if (d.memApp != null || d.memTotal != null) {
+    memStr = (d.memApp != null ? _fmtBytes(d.memApp) : '—') + ' / ' + (d.memTotal != null ? d.memTotal + ' GB' : '—');
+  }
+  container.appendChild(_diRow('Memory', memStr));
+
+  container.appendChild(_diSection('🎤', 'Audio'));
+  container.appendChild(_diRow('Microphone', a.micName ? (a.micName + (a.micConnection ? ' · ' + a.micConnection : '')) : (a.micName === null ? 'Not acquired' : null)));
+  container.appendChild(_diRow('Headset', a.headset === true ? 'Yes' : a.headset === false ? 'No' : null));
+  container.appendChild(_diRow('Sample rate', a.sampleRate ? (a.sampleRate / 1000).toFixed(a.sampleRate % 1000 ? 1 : 0) + ' kHz' : null));
+  container.appendChild(_diRow('Channels', a.channels === 1 ? 'Mono' : a.channels === 2 ? 'Stereo' : a.channels ? a.channels + ' ch' : null));
+  container.appendChild(_diRow('Volume', typeof a.volume === 'number' ? Math.round(a.volume * 100) + '%' : null));
+
+  container.appendChild(_diSection('🌐', 'Network'));
+  container.appendChild(_diRow('Connection', n.connType));
+  container.appendChild(_diRow('Signal', n.signal));
+  var latency = (wstats && typeof wstats.rttMs === 'number') ? wstats.rttMs + ' ms (link)'
+    : (typeof n.rttMs === 'number' ? n.rttMs + ' ms' : null);
+  container.appendChild(_diRow('Latency', latency));
+  container.appendChild(_diRow('Packet loss', (wstats && typeof wstats.lossPercent === 'number') ? wstats.lossPercent.toFixed(1) + '%' : null));
+  var batStr = null;
+  if (bat.present) {
+    batStr = bat.level + '%' + (bat.charging ? ' ⚡ charging' : '') + (bat.background ? ' · background' : '');
+  }
+  container.appendChild(_diRow('Battery', batStr));
+}
+
+function _refreshDeviceInfoPopover() {
+  var popover = document.getElementById('device-info-popover');
+  if (!popover) return;
+  var body = popover.querySelector('.di-body');
+  if (!body) return;
+  var isSelf = _deviceInfoPeerId === 'self';
+
+  if (isSelf) {
+    collectDeviceInfo().then(function(info) {
+      if (_deviceInfoPeerId !== 'self') return;
+      _renderDeviceInfo(body, info, null);
+    });
+    return;
+  }
+
+  var conn = connections.get(_deviceInfoPeerId);
+  var stored = conn && conn.deviceInfo;
+  var wstats = conn && conn.webrtcStats;
+  if (stored && stored.declined) {
+    body.innerHTML = '';
+    var msg = document.createElement('div');
+    msg.className = 'di-empty';
+    msg.textContent = 'This peer has device sharing turned off.';
+    body.appendChild(msg);
+    return;
+  }
+  if (stored && stored.info) {
+    _renderDeviceInfo(body, stored.info, wstats);
+  } else {
+    body.innerHTML = '';
+    var loading = document.createElement('div');
+    loading.className = 'di-empty';
+    loading.textContent = 'Requesting device info…';
+    body.appendChild(loading);
+  }
+}
+
+function showDeviceInfoPopover(peerId, anchorEl, isSelf) {
+  closeDeviceInfoPopover();
+  closeStatsPopover();
+  _deviceInfoPeerId = isSelf ? 'self' : peerId;
+
+  var popover = document.createElement('div');
+  popover.id = 'device-info-popover';
+  popover.className = 'device-info-popover';
+
+  var title = document.createElement('div');
+  title.className = 'di-title';
+  if (isSelf) {
+    title.textContent = displayPseudoForSelf() + ' (you)';
+  } else {
+    var conn = connections.get(peerId);
+    title.textContent = (conn && conn.pseudo) || shortId(peerId);
+  }
+  popover.appendChild(title);
+
+  var body = document.createElement('div');
+  body.className = 'di-body';
+  popover.appendChild(body);
+
+  document.body.appendChild(popover);
+
+  // Position under the anchor, clamped to the viewport.
+  var rect = anchorEl.getBoundingClientRect();
+  var pw = 260;
+  var top = rect.bottom + window.scrollY + 4;
+  var left = rect.left + window.scrollX;
+  if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
+  if (left < 8) left = 8;
+  popover.style.top = top + 'px';
+  popover.style.left = left + 'px';
+
+  _refreshDeviceInfoPopover();
+  if (!isSelf) requestDeviceInfo(peerId);
+
+  setTimeout(function() {
+    document.addEventListener('click', _onDocClickDismissDeviceInfo, { capture: true, once: true });
+  }, 0);
+}
+
+function _onDocClickDismissDeviceInfo(e) {
+  var popover = document.getElementById('device-info-popover');
+  if (popover && popover.contains(e.target)) {
+    setTimeout(function() {
+      document.addEventListener('click', _onDocClickDismissDeviceInfo, { capture: true, once: true });
+    }, 0);
+    return;
+  }
+  closeDeviceInfoPopover();
+}
+
+function closeDeviceInfoPopover() {
+  var existing = document.getElementById('device-info-popover');
+  if (existing) existing.remove();
+  _deviceInfoPeerId = null;
+  document.removeEventListener('click', _onDocClickDismissDeviceInfo, { capture: true });
+}
+
 
 function updatePeerList() {
   closeStatsPopover();
+  closeDeviceInfoPopover();
   const list = $('peers-list');
   list.innerHTML = '';
   const deputyPeerId = roomCode ? currentDeputyId() : null;
   const showPeerUuids = isDevModeEnabled();
+  const showDeviceInfo = deviceInfoButtonVisible();
 
   if (IS_TINY_EMBED) {
     // Singleton tooltip shown on click/touch for all peer chips
@@ -3068,6 +3527,23 @@ function updatePeerList() {
     parent.appendChild(_buildStatsBadge(conn.webrtcStats));
   };
 
+  const appendDeviceInfoButton = function(parent, peerId, isSelf) {
+    if (!showDeviceInfo) return;
+    const btn = document.createElement('button');
+    btn.className = 'btn-icon peer-info-btn';
+    btn.title = 'Device diagnostics';
+    btn.setAttribute('aria-label', 'Show device info');
+    btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
+    btn.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var key = isSelf ? 'self' : peerId;
+      if (_deviceInfoPeerId === key) { closeDeviceInfoPopover(); return; }
+      showDeviceInfoPopover(peerId, btn, isSelf);
+    });
+    parent.appendChild(btn);
+  };
+
   const appendCameraLiveDot = function(parent, active, title) {
     if (!active) return;
     const dot = document.createElement('span');
@@ -3120,6 +3596,7 @@ function updatePeerList() {
       appendPeerUuid(peerMain, actualPeerId);
       div.appendChild(peerMain);
       appendCopyPeerButton(div, actualPeerId, label);
+      appendDeviceInfoButton(div, actualPeerId, false);
       // Video camera icon (dev mode video prototype)
       if (videoModeEnabled && actualPeerId) {
         if (peerConn && peerConn.videoActive) {
@@ -3225,6 +3702,7 @@ function updatePeerList() {
     appendPeerUuid(peerMain, actualPeerId);
     div.appendChild(peerMain);
     appendCopyPeerButton(div, actualPeerId, label || 'You');
+    appendDeviceInfoButton(div, peer && peer.id, true);
     list.appendChild(div);
   };
 
@@ -4886,6 +5364,8 @@ function leaveRoom() {
   stopMigrationSettle();
   stopStatsPolling();
   closeStatsPopover();
+  closeDeviceInfoPopover();
+  _hostDebugMode = false;
   stopHostHeartbeat();
   stopHostHeartbeatMonitor();
   stopPeerHeartbeat();
@@ -5477,6 +5957,7 @@ function sendHostPeerList(dataConn, excludedPeerId) {
     hostVideoActive: localVideoActive,
     hostScreenActive: localScreenActive,
     videoModeEnabled: videoModeEnabled,
+    debugMode: isDevModeEnabled(),
     deputyId: successorIds[0] || null,
     successorIds: successorIds,
     protocolVersion: PROTOCOL_VERSION,
@@ -5485,6 +5966,7 @@ function sendHostPeerList(dataConn, excludedPeerId) {
   dataConn.send({
     type: 'heartbeat',
     at: Date.now(),
+    debugMode: isDevModeEnabled(),
     deputyId: successorIds[0] || null,
     successorIds: successorIds
   });
@@ -5676,6 +6158,18 @@ function handleJoinerDataConnection(dataConn) {
       connections.forEach(function(c, id) {
         if (id !== joinerId && c.data) sendDataIfOpen(c.data, { type: 'screen-stop', peerId: joinerId });
       });
+    } else if (msg.type === 'device-info-request') {
+      // A peer wants someone's device info: answer for the host, else relay to the target.
+      handleDeviceInfoRequestAtHost(joinerId, msg.peerId);
+    } else if (msg.type === 'device-info-response') {
+      // Store this joiner's snapshot; relay back if it was for another requester.
+      updatePeerDeviceInfo(joinerId, msg.info, msg.declined);
+      if (msg.from && msg.from !== (peer && peer.id)) {
+        var reqConn = connections.get(msg.from);
+        if (reqConn && reqConn.data) sendDataIfOpen(reqConn.data, { type: 'device-info-response', peerId: joinerId, info: msg.info, declined: msg.declined });
+      } else {
+        onDeviceInfoResponse(joinerId, msg.info, msg.declined);
+      }
     }
   });
 
@@ -5839,7 +6333,21 @@ function handleHostMessage(msg) {
   if (!msg || typeof msg !== 'object') return;
   noteHostHeartbeat(msg.at ? msg.at : Date.now());
   applyHostRoutingHints(msg);
+  // Mirror the host's debug-mode flag (carried in peer-list + heartbeat) so the
+  // device-info "i" button only appears while the host is actually debugging.
+  if (typeof msg.debugMode === 'boolean' && _hostDebugMode !== msg.debugMode) {
+    _hostDebugMode = msg.debugMode;
+    if (inRoom && !isHost) updatePeerList();
+  }
   if (msg.type === 'heartbeat') return;
+  if (msg.type === 'device-info-request') {
+    respondToDeviceInfoRequest(msg.from || null);
+    return;
+  }
+  if (msg.type === 'device-info-response') {
+    onDeviceInfoResponse(msg.peerId, msg.info, msg.declined);
+    return;
+  }
   if (msg.type === 'pseudo-assigned') {
     applyAssignedSelfProfile(msg.pseudo, msg.pseudoColor || null);
     return;
@@ -7008,6 +7516,13 @@ window.addEventListener('DOMContentLoaded', function() {
       devBtn.classList.toggle('active', devOn);
       devBtn.textContent = devOn ? 'ON' : 'OFF';
     }
+    var shareBtn = document.getElementById('toggle-debug-share-modal');
+    if (shareBtn) {
+      var shareOn = isDeviceInfoSharingEnabled();
+      shareBtn.setAttribute('aria-checked', String(shareOn));
+      shareBtn.classList.toggle('active', shareOn);
+      shareBtn.textContent = shareOn ? 'ON' : 'OFF';
+    }
     updateVideoModeUI();
     stopMicTest();
     stopCameraPreview();
@@ -7185,7 +7700,20 @@ window.addEventListener('DOMContentLoaded', function() {
       updateVideoModeUI();
       if (inRoom) {
         updatePeerList();
+        // Let peers learn the host's debug state so their "i" button toggles too.
+        if (isHost) broadcastHostPeerLists();
       }
+    });
+  }
+
+  var shareToggleModal = document.getElementById('toggle-debug-share-modal');
+  if (shareToggleModal) {
+    shareToggleModal.addEventListener('click', function() {
+      var on = !isDeviceInfoSharingEnabled();
+      localStorage.setItem(DEBUG_INFO_SHARE_KEY, String(on));
+      shareToggleModal.setAttribute('aria-checked', String(on));
+      shareToggleModal.classList.toggle('active', on);
+      shareToggleModal.textContent = on ? 'ON' : 'OFF';
     });
   }
 
@@ -7295,6 +7823,7 @@ window.addEventListener('DOMContentLoaded', function() {
         if (isDevModeEnabled()) startStatsPolling(); else stopStatsPolling();
         updateVideoModeUI();
         updatePeerList();
+        if (isHost) broadcastHostPeerLists();
       }
       return;
     }
