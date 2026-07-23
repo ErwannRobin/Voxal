@@ -154,9 +154,15 @@ demand only (host relays a `device-info-request`/`-response` round-trip) and eac
 peer can opt out (`debug-share-device-info`, default on). Regression-tested in
 `tests/e2e/unit-device-info.spec.js`.
 
-**Possible follow-up (native only):** CPU %, real process memory, and battery
-low-power mode are not web-exposed (see learning.md). A small Tauri command /
-Capacitor plugin could surface these on desktop/mobile and feed them into the
-`device`/`network` blocks — the panel already renders "N/A" gracefully until then.
+**Native desktop stats:** ✅ Done — the Tauri command `get_device_stats`
+(`sysinfo` + `starship-battery`) surfaces real process/total memory, process/
+system CPU %, and battery level/charging on the desktop app (WKWebView exposes
+none of these). `collectDeviceInfo()` merges it in.
+
+**Remaining follow-up (Capacitor native mobile):** connection type, battery, and
+memory on the iOS/Android *native* apps still fall back to web APIs. Adding
+`@capacitor/device` + `@capacitor/network` would fill these, but needs a native
+rebuild (not OTA). Battery low-power mode and connection type on iOS/desktop
+WebKit remain unavailable regardless — the panel renders "—" for them.
 
 _Add new items above this line._

@@ -2995,30 +2995,59 @@ function _collectBatteryInfo() {
   return Promise.resolve({ present: false });
 }
 
+// On Tauri desktop the WebView (WKWebView on macOS) exposes none of
+// performance.memory / navigator.getBattery / per-process CPU, so we read them
+// from the native side via the `get_device_stats` command. Returns null off Tauri
+// or on any error. Values: bytes for memory, percent for CPU, 0..100 for battery.
+function _getNativeDeviceStats() {
+  try {
+    if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+      return window.__TAURI__.core.invoke('get_device_stats').catch(function() { return null; });
+    }
+  } catch (_) {}
+  return Promise.resolve(null);
+}
+
 // Gather the full device snapshot. Always resolves (never rejects).
 async function collectDeviceInfo() {
-  var he = {}, battery = { present: false }, headset = null;
+  var he = {}, battery = { present: false }, headset = null, native = null;
   try { he = await _getUAHighEntropy(); } catch (_) {}
   try { battery = await _collectBatteryInfo(); } catch (_) {}
   try { headset = await _detectHeadset(); } catch (_) {}
+  try { native = await _getNativeDeviceStats(); } catch (_) {}
+
+  // Memory + CPU (bytes / percent). Web APIs first, native overrides when present.
+  var memApp = null, memTotal = null, cpuApp = null, cpuTotal = null;
+  try { if (window.performance && performance.memory) memApp = performance.memory.usedJSHeapSize; } catch (_) {} // JS heap (Chromium only)
+  try { if (navigator.deviceMemory) memTotal = navigator.deviceMemory * 1024 * 1024 * 1024; } catch (_) {} // GB → bytes, coarse
+  if (native) {
+    if (native.mem_app != null)   memApp   = native.mem_app;   // real process RSS
+    if (native.mem_total != null) memTotal = native.mem_total;
+    if (native.cpu_app != null)   cpuApp   = Math.round(native.cpu_app * 10) / 10;
+    if (native.cpu_total != null) cpuTotal = Math.round(native.cpu_total * 10) / 10;
+  }
+
+  // Battery: web getBattery() first (Chromium/Android), native fallback (desktop).
+  var batLevel   = battery && battery.present ? battery.level : null;
+  var batCharging = battery && battery.present ? battery.charging : null;
+  if (native) {
+    if (native.battery_level != null)    batLevel = native.battery_level;
+    if (native.battery_charging != null) batCharging = native.battery_charging;
+  }
 
   var type = _detectDeviceType();
   // A device running on battery power (not charging) is a portable — call it a laptop.
-  if (type === 'Desktop' && battery && battery.present && battery.charging === false) type = 'Laptop';
-
-  var memApp = null, memTotal = null;
-  try { if (window.performance && performance.memory) memApp = performance.memory.usedJSHeapSize; } catch (_) {}
-  try { if (navigator.deviceMemory) memTotal = navigator.deviceMemory; } catch (_) {} // GB, coarse (capped at 8)
+  if (type === 'Desktop' && batCharging === false) type = 'Laptop';
 
   var audio = _collectAudioInfo();
   audio.headset = headset;
 
   var net = _collectNetworkInfo();
   net.battery = {
-    present: !!(battery && battery.present),
-    level: battery && battery.present ? battery.level : null,
-    charging: battery && battery.present ? battery.charging : null,
-    lowPower: null, // not exposed to web/WebView on any platform
+    present: batLevel != null,
+    level: batLevel,
+    charging: batCharging,
+    lowPower: null, // low-power mode is not exposed to web/WebView or the crates we use
     background: (typeof document !== 'undefined' && document.visibilityState === 'hidden')
   };
 
@@ -3033,10 +3062,10 @@ async function collectDeviceInfo() {
       appVersion: (typeof VOXAL_VERSION !== 'undefined' ? VOXAL_VERSION : null),
       timezone: (function() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (_) { return null; } })(),
       cores: (typeof navigator.hardwareConcurrency === 'number' ? navigator.hardwareConcurrency : null),
-      cpuApp: null,   // per-process CPU is not exposed to browsers/WebViews
-      cpuTotal: null,
+      cpuApp: cpuApp,
+      cpuTotal: cpuTotal,
       memApp: memApp,
-      memTotal: memTotal
+      memTotal: memTotal   // bytes
     },
     audio: audio,
     network: net
@@ -3155,7 +3184,7 @@ function _renderDeviceInfo(container, info, wstats) {
     : (d.cores != null ? d.cores + ' cores (usage N/A)' : 'N/A')));
   var memStr = null;
   if (d.memApp != null || d.memTotal != null) {
-    memStr = (d.memApp != null ? _fmtBytes(d.memApp) : '—') + ' / ' + (d.memTotal != null ? d.memTotal + ' GB' : '—');
+    memStr = (d.memApp != null ? _fmtBytes(d.memApp) : '—') + ' / ' + (d.memTotal != null ? _fmtBytes(d.memTotal) : '—');
   }
   container.appendChild(_diRow('Memory', memStr));
 
@@ -3208,22 +3237,25 @@ function _refreshDeviceInfoPopover() {
   var conn = connections.get(_deviceInfoPeerId);
   var stored = conn && conn.deviceInfo;
   var wstats = conn && conn.webrtcStats;
+  var info = stored && stored.info ? stored.info : null;
+
+  // Always render — even before the peer's self-report arrives or when it's
+  // declined — so the viewer still sees the link stats (latency/packet loss) it
+  // measured locally for this peer, rather than a blank "requesting" panel.
+  _renderDeviceInfo(body, info, wstats);
+
+  var note = null;
   if (stored && stored.declined) {
-    body.innerHTML = '';
-    var msg = document.createElement('div');
-    msg.className = 'di-empty';
-    msg.textContent = 'This peer has device sharing turned off.';
-    body.appendChild(msg);
-    return;
+    note = 'This peer has device sharing turned off — showing link stats only.';
+  } else if (!info) {
+    note = 'Requesting device info…';
   }
-  if (stored && stored.info) {
-    _renderDeviceInfo(body, stored.info, wstats);
-  } else {
-    body.innerHTML = '';
-    var loading = document.createElement('div');
-    loading.className = 'di-empty';
-    loading.textContent = 'Requesting device info…';
-    body.appendChild(loading);
+  if (note) {
+    var el = document.createElement('div');
+    el.className = 'di-empty';
+    el.style.marginTop = '8px';
+    el.textContent = note;
+    body.appendChild(el);
   }
 }
 
@@ -3263,7 +3295,20 @@ function showDeviceInfoPopover(peerId, anchorEl, isSelf) {
   popover.style.left = left + 'px';
 
   _refreshDeviceInfoPopover();
-  if (!isSelf) requestDeviceInfo(peerId);
+  if (!isSelf) {
+    requestDeviceInfo(peerId);
+    // Collect fresh WebRTC link stats immediately (getStats works on every
+    // engine, incl. WebKit) so latency/packet loss show without waiting for the
+    // 5s poll — this is what fills the Network section on Safari/WKWebView peers.
+    var lc = connections.get(peerId);
+    if (lc) {
+      try {
+        _collectPeerStats(peerId, lc).then(function() {
+          if (_deviceInfoPeerId === peerId) _refreshDeviceInfoPopover();
+        });
+      } catch (_) {}
+    }
+  }
 
   setTimeout(function() {
     document.addEventListener('click', _onDocClickDismissDeviceInfo, { capture: true, once: true });

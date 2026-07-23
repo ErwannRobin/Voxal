@@ -67,6 +67,84 @@ async fn presence_fetch(
     parse_presence_response_text(&text)
 }
 
+// Device diagnostics for the dev-mode debug panel. The WebView (WKWebView on
+// macOS) exposes none of `performance.memory` / `navigator.getBattery` /
+// per-process CPU, so we read them natively here. Best-effort: any field the OS
+// won't give us stays `None` and renders as "—" in the panel.
+#[derive(serde::Serialize, Default)]
+struct DeviceStats {
+    mem_app: Option<u64>,          // process resident memory, bytes
+    mem_total: Option<u64>,        // total system memory, bytes
+    mem_used: Option<u64>,         // used system memory, bytes
+    cpu_app: Option<f32>,          // process CPU, percent
+    cpu_total: Option<f32>,        // system-wide CPU, percent
+    battery_level: Option<u8>,     // 0..=100
+    battery_charging: Option<bool>,
+}
+
+fn read_battery() -> (Option<u8>, Option<bool>) {
+    let manager = match starship_battery::Manager::new() {
+        Ok(m) => m,
+        Err(_) => return (None, None),
+    };
+    let mut batteries = match manager.batteries() {
+        Ok(b) => b,
+        Err(_) => return (None, None),
+    };
+    if let Some(Ok(battery)) = batteries.next() {
+        let level = (battery.state_of_charge().value * 100.0).round() as u8;
+        let charging = matches!(
+            battery.state(),
+            starship_battery::State::Charging | starship_battery::State::Full
+        );
+        return (Some(level.min(100)), Some(charging));
+    }
+    (None, None)
+}
+
+#[tauri::command]
+async fn get_device_stats() -> Result<DeviceStats, String> {
+    // CPU usage needs two samples spaced by at least the platform minimum, and
+    // sysinfo refreshes are blocking — run the whole thing off the async runtime.
+    tauri::async_runtime::spawn_blocking(|| {
+        use sysinfo::{get_current_pid, ProcessesToUpdate, System};
+
+        let mut sys = System::new();
+        sys.refresh_memory();
+        sys.refresh_cpu_all();
+        let pid = get_current_pid().ok();
+        if let Some(pid) = pid {
+            sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+        }
+
+        // Second sample so per-process/global CPU deltas are meaningful.
+        std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
+        sys.refresh_cpu_all();
+        if let Some(pid) = pid {
+            sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+        }
+
+        let (mem_app, cpu_app) = pid
+            .and_then(|pid| sys.process(pid))
+            .map(|p| (Some(p.memory()), Some(p.cpu_usage())))
+            .unwrap_or((None, None));
+
+        let (battery_level, battery_charging) = read_battery();
+
+        DeviceStats {
+            mem_app,
+            mem_total: Some(sys.total_memory()),
+            mem_used: Some(sys.used_memory()),
+            cpu_app,
+            cpu_total: Some(sys.global_cpu_usage()),
+            battery_level,
+            battery_charging,
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn update_ptt_shortcut(
     app: AppHandle,
@@ -199,7 +277,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![update_ptt_shortcut, presence_fetch])
+        .invoke_handler(tauri::generate_handler![update_ptt_shortcut, presence_fetch, get_device_stats])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
