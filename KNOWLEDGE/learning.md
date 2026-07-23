@@ -56,6 +56,19 @@ Copilot should read this file at the start of every session.
 - **Custom Capacitor Android plugin methods** must use `@PluginMethod` from `com.getcapacitor.PluginMethod`; without it, JS calls (e.g. `window.Capacitor.Plugins.AudioForeground.start()`) are not exposed.
 - **Android 12+ `AppOps` attribution logs** (`attributionTag ... not declared in manifest`) can come from service `getSystemService(...)` calls using the default empty context. Declare a `<attribution>` tag in `AndroidManifest.xml` and use `createAttributionContext(...)` before accessing services like `AudioManager` or `NotificationManager`.
 
+## Device-info diagnostics panel (dev mode)
+
+- **What a browser/WebView can and cannot report** (drives the `collectDeviceInfo()` fallbacks — all probes are best-effort, missing values render as "—"):
+  - **Per-process CPU usage is NOT exposed** to any browser or WebView (web/Tauri/Capacitor alike). There is no API. We show `navigator.hardwareConcurrency` cores instead and mark usage N/A. Never add a busy-loop sampler for this — it would defeat the "no perf impact" requirement.
+  - **Memory**: `performance.memory.usedJSHeapSize` (Chromium only, JS heap ≠ real RSS) for the app; `navigator.deviceMemory` for total (coarse, capped at 8 GB). Neither is real process memory.
+  - **Architecture + OS version** need `navigator.userAgentData.getHighEntropyValues(['architecture','bitness','platformVersion'])` — **async**, Chromium-only, absent on Safari/Firefox. Cache the result (immutable per session). Map `arm/64→arm64`, `x86/64→x64`.
+  - **Laptop vs Desktop is unknowable from the UA.** Heuristic: a device on battery power that is *not charging* is a portable → label "Laptop"; otherwise "Desktop". Needs `navigator.getBattery()` (async, deprecated but works in Chromium; absent in Safari).
+  - **Battery low-power mode and true "background" state are NOT web-exposed.** We report `document.visibilityState === 'hidden'` as a background proxy and leave low-power `null`.
+  - **`navigator.connection`** gives `effectiveType` (caps at `'4g'` — you cannot distinguish 4G from 5G on web), and on desktop Chrome `type` is usually absent (only `effectiveType`). Signal quality is derived from `effectiveType`/`downlink`.
+  - **Mic name/sample-rate/channels** come from the live `audioTrack.getSettings()` + `.label` — read the existing `stream`/`audioTrack`; **never call getUserMedia just to fill the panel** (perf + a spurious permission prompt). Headset detection reads `enumerateDevices()` output labels (needs prior mic permission for labels).
+  - **Real link latency/packet loss** are better measured by the *viewer* from its own `conn.webrtcStats` (RTT/loss the host already polls per peer) than self-reported — the panel merges the peer's self-reported network block with the viewer's WebRTC stats.
+- **Collection is strictly on-demand** (self panel = local; remote = a `device-info-request`/`device-info-response` round-trip the host relays). Nothing is polled or sent in steady state, so zero runtime cost. The host advertises `debugMode` in every `peer-list`/`heartbeat`; non-host peers mirror it into `_hostDebugMode` so the "i" button only shows while the host is actually debugging. Sharing is opt-out per peer (`debug-share-device-info`, default on) — a peer with it off replies `declined:true`.
+
 ## Web / CSS
 
 - **Embedded Voxal video** requires `allow="camera; microphone"` on the embedding `<iframe>`. If Voxal is nested inside other iframes, each ancestor must also delegate camera access.

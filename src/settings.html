@@ -366,6 +366,12 @@
               <button id="toggle-dev-mode" class="toggle-btn" role="switch" aria-checked="false"
                       title="Show peer UUIDs, copy buttons, and Host/Deputy labels">OFF</button>
             </div>
+            <div class="settings-field settings-inline-toggle" style="margin-top:12px">
+              <label for="toggle-debug-share" style="flex:1">Share device info in dev mode</label>
+              <button id="toggle-debug-share" class="toggle-btn" role="switch" aria-checked="true"
+                      title="Let the host see this device's diagnostics (type, OS, audio, network) while debugging">ON</button>
+            </div>
+            <p class="settings-hint" style="margin-top:6px">When a room host has dev mode on, an “i” button appears next to each name showing device, audio &amp; network diagnostics. Turn this off to stop sharing yours.</p>
           </div>
         </details>
       </div>
@@ -398,6 +404,7 @@
       const TURN_FALLBACK_KEY       = 'turn-fallback';
       const SERVICE_URL_KEY         = 'service-url';
       const DEV_MODE_KEY            = 'dev-mode';
+      const DEBUG_INFO_SHARE_KEY   = 'debug-share-device-info';
 
       function relayStateFromStorage() {
         var raw = localStorage.getItem(TURN_FALLBACK_KEY);
@@ -984,6 +991,24 @@
           var on = localStorage.getItem(DEV_MODE_KEY) === 'true';
           localStorage.setItem(DEV_MODE_KEY, String(!on));
           syncDev();
+        });
+      })();
+
+      // --- Share device info toggle (dev-mode diagnostics, default ON) ---
+      (function() {
+        var btn = $id('toggle-debug-share');
+        if (!btn) return;
+        function sync() {
+          var on = localStorage.getItem(DEBUG_INFO_SHARE_KEY) !== 'false';
+          btn.setAttribute('aria-checked', String(on));
+          btn.classList.toggle('active', on);
+          btn.textContent = on ? 'ON' : 'OFF';
+        }
+        sync();
+        btn.addEventListener('click', function() {
+          var on = localStorage.getItem(DEBUG_INFO_SHARE_KEY) !== 'false';
+          localStorage.setItem(DEBUG_INFO_SHARE_KEY, String(!on));
+          sync();
         });
       })();
 
