@@ -7009,10 +7009,11 @@ async function joinOrCreateByChannelName(channelName) {
   });
 }
 
-// Web mobile: enable the CSS rotate-to-portrait overlay (outside iframe embeds),
-// and best-effort lock the Screen Orientation API where the browser allows it
-// (installed PWA / fullscreen). Native apps are already hard-locked to portrait
-// via Info.plist / AndroidManifest, so this is a no-op there — they never rotate.
+// Web mobile: keep the UI in portrait even when the phone is held in landscape.
+// Enables the CSS counter-rotation (body.allow-rotate-lock, skipped inside iframe
+// embeds so an embedded player isn't rotated) and best-effort locks the Screen
+// Orientation API where the browser allows it (installed PWA / fullscreen).
+// Native apps are already hard-locked via Info.plist / AndroidManifest.
 function applyPortraitLock() {
   try {
     if (!_isIframe) document.body.classList.add('allow-rotate-lock');
