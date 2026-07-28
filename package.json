@@ -10,7 +10,7 @@
     "test:mesh": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test --project=mesh"
   },
   "devDependencies": {
-    "@playwright/test": "^1.61.1",
+    "@playwright/test": "^1.62.0",
     "@tauri-apps/cli": "^2",
     "monocart-coverage-reports": "^2.12.12",
     "peer": "^1.0.2"
