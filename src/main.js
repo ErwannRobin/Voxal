@@ -2677,55 +2677,234 @@ function removeRecentRoom(code) {
   if (window._updateRecentRooms) window._updateRecentRooms();
 }
 
+// --- Audio quality tuning ----------------------------------------------------
+//
+// Voxal is a push-to-talk walkie-talkie over a full audio mesh, so a speaker
+// uploads one Opus stream per listener and anonymous rooms have no org TURN —
+// they fall back to a shared, rate-limited public relay. Both make the outgoing
+// stream the fragile part, and untuned WebRTC defaults turn a lossy uplink into
+// chopped ("robotic") audio on the *listener's* side. Three knobs fix that:
+//
+//   1. Opus fmtp: in-band FEC on, DTX off, mono, capped bitrate (below).
+//   2. Sender: an explicit bitrate cap + high network priority (DSCP), so one
+//      speaker's N uploads don't congest each other.
+//   3. Receiver: a jitter-buffer floor via `playoutDelayHint`. Chromium's
+//      default target delay is tiny; a few tens of ms of jitter then produce
+//      audible chopping. Trading ~80 ms of latency for smoothness is the right
+//      call for PTT, and lossy/relayed links get a bigger buffer still.
+
+// Speech at 16 kHz mono is transparent well under this; the cap matters because
+// the mesh multiplies it by the number of listeners.
+const OPUS_MAX_BITRATE = 32000;
+
+// Jitter-buffer targets (seconds). Base applies to every link; poor kicks in on
+// measurable loss/jitter or a relayed path.
+const AUDIO_PLAYOUT_DELAY_BASE = 0.08;
+const AUDIO_PLAYOUT_DELAY_POOR = 0.20;
+const AUDIO_POOR_LOSS_PERCENT  = 3;
+const AUDIO_POOR_JITTER_MS     = 30;
+
+// Opus parameters we force into every audio offer/answer. `useinbandfec=1`
+// lets the decoder reconstruct isolated lost packets instead of dropping them;
+// `usedtx=0` keeps packets flowing while PTT is released (the mic track is
+// disabled, not removed) so the receiver's jitter buffer stays warm and the
+// first word after a press isn't clipped.
+const OPUS_FMTP_PARAMS = {
+  stereo: '0',
+  'sprop-stereo': '0',
+  useinbandfec: '1',
+  usedtx: '0',
+  maxaveragebitrate: String(OPUS_MAX_BITRATE)
+};
+
+// PeerJS `sdpTransform` hook — rewrites (or adds) the Opus fmtp line.
+function opusSdpTransform(sdp) {
+  if (typeof sdp !== 'string' || !sdp) return sdp;
+  try {
+    var rtpmap = /^a=rtpmap:(\d+)[ \t]+opus\/48000[^\r\n]*/im.exec(sdp);
+    if (!rtpmap) return sdp;
+    var pt = rtpmap[1];
+    var fmtpRe = new RegExp('^a=fmtp:' + pt + '[ \\t]+([^\\r\\n]*)', 'im');
+    var existing = fmtpRe.exec(sdp);
+
+    var params = {};
+    if (existing) {
+      existing[1].split(';').forEach(function(kv) {
+        var eq = kv.indexOf('=');
+        if (eq > 0) params[kv.slice(0, eq).trim()] = kv.slice(eq + 1).trim();
+        else if (kv.trim()) params[kv.trim()] = null;
+      });
+    }
+    Object.keys(OPUS_FMTP_PARAMS).forEach(function(k) { params[k] = OPUS_FMTP_PARAMS[k]; });
+
+    var line = 'a=fmtp:' + pt + ' ' + Object.keys(params).map(function(k) {
+      return params[k] === null ? k : k + '=' + params[k];
+    }).join(';');
+
+    return existing ? sdp.replace(fmtpRe, line) : sdp.replace(rtpmap[0], rtpmap[0] + '\r\n' + line);
+  } catch (_) {
+    return sdp; // never break call setup over a tuning nicety
+  }
+}
+
+// Options passed to every audio `peer.call()` / `call.answer()`.
+function audioCallOptions() {
+  return { sdpTransform: opusSdpTransform };
+}
+
+// The two MediaConnections that can carry audio for a peer: the one we answered
+// (`media`) and the one we opened (`audioMediaOut`).
+function audioPeerConnections(conn) {
+  if (!conn) return [];
+  return [conn.media, conn.audioMediaOut]
+    .filter(function(mc) { return mc && !mc.closed && mc.peerConnection; })
+    .map(function(mc) { return mc.peerConnection; });
+}
+
+function tuneAudioSenders(pc) {
+  if (!pc || typeof pc.getSenders !== 'function') return;
+  pc.getSenders().forEach(function(sender) {
+    if (!sender.track || sender.track.kind !== 'audio') return;
+    if (typeof sender.getParameters !== 'function' || typeof sender.setParameters !== 'function') return;
+    try {
+      var params = sender.getParameters();
+      if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+      var enc = params.encodings[0];
+      if (enc.maxBitrate === OPUS_MAX_BITRATE && enc.networkPriority === 'high') return; // already tuned
+      enc.maxBitrate = OPUS_MAX_BITRATE;
+      enc.networkPriority = 'high';
+      enc.priority = 'high';
+      var res = sender.setParameters(params);
+      if (res && typeof res.catch === 'function') res.catch(function() {});
+    } catch (_) {}
+  });
+}
+
+function tuneAudioReceivers(pc, delaySeconds) {
+  if (!pc || typeof pc.getReceivers !== 'function') return;
+  pc.getReceivers().forEach(function(receiver) {
+    if (!receiver.track || receiver.track.kind !== 'audio') return;
+    // Chromium-only; absent on WebKit (Safari, Tauri's WKWebView) — skip there.
+    if (!('playoutDelayHint' in receiver)) return;
+    try { receiver.playoutDelayHint = delaySeconds; } catch (_) {}
+  });
+}
+
+// A relayed path is the anonymous-room default (shared public TURN), so treat it
+// as poor up front rather than waiting for loss to show up.
+function audioPlayoutDelayFor(stats) {
+  if (!stats) return AUDIO_PLAYOUT_DELAY_BASE;
+  var poor = stats.iceType === 'relay'
+    || (typeof stats.lossPercent === 'number' && stats.lossPercent >= AUDIO_POOR_LOSS_PERCENT)
+    || (typeof stats.outLossPercent === 'number' && stats.outLossPercent >= AUDIO_POOR_LOSS_PERCENT)
+    || (typeof stats.jitterMs === 'number' && stats.jitterMs >= AUDIO_POOR_JITTER_MS);
+  return poor ? AUDIO_PLAYOUT_DELAY_POOR : AUDIO_PLAYOUT_DELAY_BASE;
+}
+
+// Idempotent — safe to call on every stats tick and whenever a stream arrives.
+function applyAudioTuning(conn, delaySeconds) {
+  var delay = typeof delaySeconds === 'number'
+    ? delaySeconds
+    : audioPlayoutDelayFor(conn && conn.webrtcStats);
+  audioPeerConnections(conn).forEach(function(pc) {
+    tuneAudioSenders(pc);
+    tuneAudioReceivers(pc, delay);
+  });
+}
+
+function applyAudioTuningToPeer(peerId) {
+  applyAudioTuning(connections.get(peerId));
+}
+
 // --- WebRTC stats helpers ----------------------------------------------------
 
+function _round1(n) { return Math.round(n * 10) / 10; }
+
 async function _collectPeerStats(peerId, conn) {
-  if (!conn || !conn.media || !conn.media.peerConnection) return;
+  var pcs = audioPeerConnections(conn);
+  if (!pcs.length) return;
   try {
-    var reports = await conn.media.peerConnection.getStats();
-    var selectedPairId = null;
-    var pairs = {};
-    var localCandidates = {};
-    var inboundRtp = null;
-
-    reports.forEach(function(report) {
-      if (report.type === 'candidate-pair' && report.nominated) {
-        pairs[report.id] = report;
-        if (!selectedPairId || report.state === 'succeeded') selectedPairId = report.id;
-      }
-      if (report.type === 'local-candidate') localCandidates[report.id] = report;
-      if (report.type === 'inbound-rtp' && report.kind === 'audio') inboundRtp = report;
-    });
-
     var stats = {};
+    // Deltas are computed against the previous tick, so raw counters are summed
+    // across every audio link to this peer (a mesh peer can have two).
+    var inRaw  = { packetsLost: 0, packetsReceived: 0 };
+    var outRaw = { packetsLost: 0, packetsSent: 0 };
+    var rtts = [], jitters = [], iceTypes = [];
 
-    var pair = selectedPairId ? pairs[selectedPairId] : null;
-    if (pair) {
-      if (typeof pair.currentRoundTripTime === 'number') {
-        stats.rttMs = Math.round(pair.currentRoundTripTime * 1000);
-      }
-      var localCand = localCandidates[pair.localCandidateId];
-      if (localCand) {
-        stats.iceType = localCand.candidateType; // 'host', 'srflx', 'relay'
+    for (var i = 0; i < pcs.length; i++) {
+      var reports = await pcs[i].getStats();
+      var selectedPairId = null;
+      var pairs = {};
+      var localCandidates = {};
+
+      reports.forEach(function(report) {
+        if (report.type === 'candidate-pair' && report.nominated) {
+          pairs[report.id] = report;
+          if (!selectedPairId || report.state === 'succeeded') selectedPairId = report.id;
+        }
+        if (report.type === 'local-candidate') localCandidates[report.id] = report;
+
+        if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+          inRaw.packetsLost     += report.packetsLost || 0;
+          inRaw.packetsReceived += report.packetsReceived || 0;
+          if (typeof report.jitter === 'number') jitters.push(report.jitter * 1000);
+        }
+        if (report.type === 'outbound-rtp' && report.kind === 'audio') {
+          outRaw.packetsSent += report.packetsSent || 0;
+        }
+        // What the remote peer reports about the stream *we* send it. Without
+        // this there is no way to see "they can't hear me" from our own side —
+        // inbound-rtp only ever describes the direction we receive.
+        if (report.type === 'remote-inbound-rtp' && report.kind === 'audio') {
+          outRaw.packetsLost += report.packetsLost || 0;
+          if (typeof report.roundTripTime === 'number') rtts.push(report.roundTripTime * 1000);
+        }
+      });
+
+      var pair = selectedPairId ? pairs[selectedPairId] : null;
+      if (pair) {
+        if (typeof pair.currentRoundTripTime === 'number') rtts.push(pair.currentRoundTripTime * 1000);
+        var localCand = localCandidates[pair.localCandidateId];
+        if (localCand && localCand.candidateType) iceTypes.push(localCand.candidateType);
       }
     }
 
-    if (inboundRtp) {
-      var prev = (conn.webrtcStats && conn.webrtcStats._inboundRaw) || {};
-      var lostDelta  = (inboundRtp.packetsLost || 0) - (prev.packetsLost || 0);
-      var recvDelta  = (inboundRtp.packetsReceived || 0) - (prev.packetsReceived || 0);
-      if (recvDelta + lostDelta > 0) {
-        stats.lossPercent = Math.round((lostDelta / (recvDelta + lostDelta)) * 1000) / 10;
-      } else if (conn.webrtcStats) {
-        stats.lossPercent = conn.webrtcStats.lossPercent; // carry forward
-      }
-      if (typeof inboundRtp.jitter === 'number') {
-        stats.jitterMs = Math.round(inboundRtp.jitter * 1000);
-      }
-      stats._inboundRaw = { packetsLost: inboundRtp.packetsLost || 0, packetsReceived: inboundRtp.packetsReceived || 0 };
+    // Report the worst link to this peer — that is the one degrading the call.
+    if (iceTypes.length) {
+      stats.iceType = iceTypes.indexOf('relay') !== -1 ? 'relay'
+        : iceTypes.indexOf('srflx') !== -1 ? 'srflx'
+        : iceTypes[0]; // 'host', 'prflx', …
     }
+    if (rtts.length)    stats.rttMs    = Math.round(Math.max.apply(null, rtts));
+    if (jitters.length) stats.jitterMs = Math.round(Math.max.apply(null, jitters));
+
+    var prev = conn.webrtcStats || {};
+
+    var prevIn   = prev._inboundRaw || {};
+    var lostDelta = Math.max(0, inRaw.packetsLost - (prevIn.packetsLost || 0));
+    var recvDelta = Math.max(0, inRaw.packetsReceived - (prevIn.packetsReceived || 0));
+    if (recvDelta + lostDelta > 0) {
+      stats.lossPercent = _round1((lostDelta / (recvDelta + lostDelta)) * 100);
+    } else if (typeof prev.lossPercent === 'number') {
+      stats.lossPercent = prev.lossPercent; // carry forward
+    }
+    stats._inboundRaw = inRaw;
+
+    var prevOut   = prev._outboundRaw || {};
+    var outLostDelta = Math.max(0, outRaw.packetsLost - (prevOut.packetsLost || 0));
+    var outSentDelta = Math.max(0, outRaw.packetsSent - (prevOut.packetsSent || 0));
+    if (outSentDelta > 0) {
+      stats.outLossPercent = _round1(Math.min(100, (outLostDelta / outSentDelta) * 100));
+    } else if (typeof prev.outLossPercent === 'number') {
+      stats.outLossPercent = prev.outLossPercent; // carry forward
+    }
+    stats._outboundRaw = outRaw;
 
     conn.webrtcStats = stats;
+
+    // Re-apply tuning with the freshly measured quality — this is what widens
+    // the jitter buffer once a link turns out to be lossy or relayed.
+    applyAudioTuning(conn, audioPlayoutDelayFor(stats));
   } catch (_) {}
 }
 
@@ -2790,8 +2969,16 @@ function _buildStatsBadge(stats) {
   if (typeof stats.lossPercent === 'number') {
     var loss = document.createElement('span');
     loss.className = 'stat-badge ' + (stats.lossPercent > 5 ? 'stat-warn' : 'stat-neutral');
-    loss.textContent = stats.lossPercent.toFixed(1) + '% loss';
+    loss.textContent = '↓ ' + stats.lossPercent.toFixed(1) + '% loss';
     wrap.appendChild(loss);
+  }
+  // Loss on the stream we send, as reported back by the peer — the only way to
+  // see "they can't hear me" (a chopped uplink) from this side.
+  if (typeof stats.outLossPercent === 'number') {
+    var outLoss = document.createElement('span');
+    outLoss.className = 'stat-badge ' + (stats.outLossPercent > 5 ? 'stat-warn' : 'stat-neutral');
+    outLoss.textContent = '↑ ' + stats.outLossPercent.toFixed(1) + '% loss';
+    wrap.appendChild(outLoss);
   }
   if (typeof stats.jitterMs === 'number') {
     var jitter = document.createElement('span');
@@ -3173,16 +3360,18 @@ function requestDeviceInfo(peerId) {
 // across all current connections (mean RTT, worst packet loss) — this is what
 // lets the Network section show latency/loss on your own row too.
 function _aggregateLinkStats() {
-  var rtts = [], losses = [];
+  var rtts = [], losses = [], outLosses = [];
   connections.forEach(function(c) {
     if (!c || !c.webrtcStats) return;
     if (typeof c.webrtcStats.rttMs === 'number') rtts.push(c.webrtcStats.rttMs);
     if (typeof c.webrtcStats.lossPercent === 'number') losses.push(c.webrtcStats.lossPercent);
+    if (typeof c.webrtcStats.outLossPercent === 'number') outLosses.push(c.webrtcStats.outLossPercent);
   });
-  if (!rtts.length && !losses.length) return null;
+  if (!rtts.length && !losses.length && !outLosses.length) return null;
   var stats = {};
   if (rtts.length) stats.rttMs = Math.round(rtts.reduce(function(a, b) { return a + b; }, 0) / rtts.length);
   if (losses.length) stats.lossPercent = Math.max.apply(null, losses);
+  if (outLosses.length) stats.outLossPercent = Math.max.apply(null, outLosses);
   return stats;
 }
 
@@ -3252,7 +3441,12 @@ function _renderDeviceInfo(container, info, wstats) {
   var latency = (wstats && typeof wstats.rttMs === 'number') ? wstats.rttMs + ' ms (link)'
     : (typeof n.rttMs === 'number' ? n.rttMs + ' ms' : null);
   container.appendChild(_diRow('Latency', latency));
-  container.appendChild(_diRow('Packet loss', (wstats && typeof wstats.lossPercent === 'number') ? wstats.lossPercent.toFixed(1) + '%' : null));
+  // Both directions: "in" is what we fail to receive, "out" is what the peer
+  // reports missing from the stream we send it (i.e. why they can't hear us).
+  var lossParts = [];
+  if (wstats && typeof wstats.lossPercent === 'number') lossParts.push('↓ ' + wstats.lossPercent.toFixed(1) + '%');
+  if (wstats && typeof wstats.outLossPercent === 'number') lossParts.push('↑ ' + wstats.outLossPercent.toFixed(1) + '%');
+  container.appendChild(_diRow('Packet loss', lossParts.length ? lossParts.join(' · ') : null));
   var batStr = null;
   if (bat.present) {
     batStr = bat.level + '%' + (bat.charging ? ' ⚡ charging' : '')
@@ -4607,15 +4801,31 @@ function broadcastTalkingState(active) {
   }
 }
 
+// True when the MediaConnection this peer opened to us is already carrying our
+// current mic track, because `handleIncomingCall` answered it with a live
+// `stream`. That connection is full duplex, so opening a second one would make
+// us upload the same mic twice to the same peer — the speaker's uplink is the
+// mesh's real ceiling, so that alone can chop the audio the peer hears.
+function peerAlreadyReceivesOurAudio(conn) {
+  var mc = conn && conn.media;
+  var pc = mc && !mc.closed ? mc.peerConnection : null;
+  if (!pc || typeof pc.getSenders !== 'function') return false;
+  var track = stream && stream.getAudioTracks ? stream.getAudioTracks()[0] : null;
+  if (!track || track.readyState !== 'live') return false;
+  return pc.getSenders().some(function(sender) { return sender.track === track; });
+}
+
 function connectOutgoingAudioToPeers() {
   if (!inRoom || !peer || !stream) return;
   connections.forEach(function(conn, peerId) {
     if (!peerId || peerId === peer.id) return;
     if (conn && conn.audioMediaOut && !conn.audioMediaOut.closed) return;
-    var call = peer.call(peerId, stream);
+    if (peerAlreadyReceivesOurAudio(conn)) { applyAudioTuning(conn); return; }
+    var call = peer.call(peerId, stream, audioCallOptions());
     if (!call) return;
     call.on('stream', function(remote) {
       attachAudio(peerId, remote);
+      applyAudioTuningToPeer(peerId);
     });
     call.on('close', function() {
       var current = connections.get(peerId);
@@ -6039,11 +6249,12 @@ function handleIncomingCall(call) {
     handleIncomingScreenCall(call);
     return;
   }
-  call.answer(stream || new MediaStream());
+  call.answer(stream || new MediaStream(), audioCallOptions());
   call.on('stream', function(remote) {
     attachAudio(call.peer, remote);
     const prev = connections.get(call.peer) || { data: null, pseudo: shortId(call.peer), pseudoColor: null, talking: false };
     connections.set(call.peer, Object.assign({}, prev, { media: call }));
+    applyAudioTuningToPeer(call.peer);
     updatePeerList();
   });
   call.on('close', function() { clearPeerMedia(call.peer); });

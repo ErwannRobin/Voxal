@@ -102,6 +102,49 @@ export async function waitForSharedDeputy(expect, pages, opts) {
   return agreed;
 }
 
+/**
+ * Per remote peer, the number of live audio senders we have across both possible
+ * MediaConnections — `media` (the call we answered) and `audioMediaOut` (the
+ * call we opened). More than 1 means we are uploading the same mic twice to that
+ * peer: the speaker's uplink is the mesh's real ceiling, so that alone can chop
+ * the audio the peer hears.
+ */
+export function outgoingAudioSenderCounts(page) {
+  return page.evaluate(() => {
+    const counts = {};
+    connections.forEach((conn, id) => {
+      let n = 0;
+      [conn.media, conn.audioMediaOut].forEach((mc) => {
+        if (!mc || mc.closed || !mc.peerConnection) return;
+        n += mc.peerConnection
+          .getSenders()
+          .filter((s) => s.track && s.track.kind === 'audio' && s.track.readyState === 'live').length;
+      });
+      counts[id] = n;
+    });
+    return counts;
+  });
+}
+
+/** Opus fmtp lines actually negotiated into the local SDP of every audio link. */
+export function negotiatedOpusFmtp(page) {
+  return page.evaluate(() => {
+    const lines = [];
+    connections.forEach((conn) => {
+      [conn.media, conn.audioMediaOut].forEach((mc) => {
+        const pc = mc && !mc.closed ? mc.peerConnection : null;
+        const sdp = pc && pc.localDescription ? pc.localDescription.sdp : null;
+        if (!sdp) return;
+        sdp
+          .split('\r\n')
+          .filter((l) => /^a=fmtp:\d+ .*useinbandfec/.test(l))
+          .forEach((l) => lines.push(l));
+      });
+    });
+    return lines;
+  });
+}
+
 /** Number of participant rows rendered in the peer list (self + others). */
 export function rosterCount(page) {
   return page.locator('#peers-list .peer-item').count();

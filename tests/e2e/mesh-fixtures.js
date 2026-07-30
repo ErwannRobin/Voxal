@@ -21,7 +21,7 @@ export const test = base.extend({
       const port = 9100 + workerInfo.workerIndex;
       const server = await new Promise((resolve) => {
         const s = PeerServer(
-          { port, path: '/', generateClientId: () => randomUUID() },
+          { host: '127.0.0.1', port, path: '/', generateClientId: () => randomUUID() },
           () => resolve(s)
         );
       });

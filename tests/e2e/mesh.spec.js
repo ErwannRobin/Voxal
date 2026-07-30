@@ -9,6 +9,8 @@ import {
   rosterCount,
   rosterText,
   waitForSharedDeputy,
+  outgoingAudioSenderCounts,
+  negotiatedOpusFmtp,
 } from './mesh-helpers.js';
 
 // Multi-peer mesh tests — real PeerJS signaling + real WebRTC between isolated
@@ -79,6 +81,69 @@ test.describe('mesh @mesh', () => {
 
     for (const p of [host, a]) {
       await expect.poll(async () => (await getState(p)).incomingAudio, POLL).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  // Guards the outgoing-audio bound. A speaker uploads one Opus stream per
+  // listener, so wasted uplink is what makes the *other* side sound chopped.
+  //
+  // NOTE: this asserts at most ONE outgoing call per peer, not exactly one.
+  // `connectOutgoingAudioToPeers` skips a peer that can already be seen to be
+  // receiving our mic (via the connection we answered), but when two peers call
+  // each other simultaneously neither has answered yet, so the glare is not
+  // observable and both calls survive — see KNOWLEDGE/learning.md. What must
+  // always hold is that we never open more than one outgoing call per peer, and
+  // that repeated `connectOutgoingAudioToPeers` passes add nothing.
+  test('a speaker opens at most one outgoing audio call per listener', async ({ makePeer }) => {
+    const host = await makePeer({ pseudo: 'Hostie' });
+    const code = await createRoom(host);
+    const a = await makePeer({ pseudo: 'Alice' });
+    const b = await makePeer({ pseudo: 'Bob' });
+    await joinRoom(a, code);
+    await joinRoom(b, code);
+
+    for (const p of [host, a, b]) {
+      await expect.poll(() => rosterCount(p), POLL).toBe(3);
+    }
+
+    await Promise.all([speak(host), speak(a), speak(b)]);
+
+    // Wait until our mic is reaching both remote peers, then bound the count.
+    for (const p of [host, a, b]) {
+      await expect
+        .poll(async () => {
+          const counts = Object.values(await outgoingAudioSenderCounts(p));
+          return counts.length === 2 && counts.every((n) => n >= 1);
+        }, POLL)
+        .toBe(true);
+      Object.values(await outgoingAudioSenderCounts(p)).forEach((n) => {
+        expect(n).toBeLessThanOrEqual(2); // …over at most the two links
+      });
+    }
+
+    // Re-running the pass must not add links — the audioMediaOut guard holds.
+    const before = await Promise.all([host, a, b].map(outgoingAudioSenderCounts));
+    await Promise.all([host, a, b].map((p) => p.evaluate(() => window.connectOutgoingAudioToPeers())));
+    const after = await Promise.all([host, a, b].map(outgoingAudioSenderCounts));
+    expect(after).toEqual(before);
+  });
+
+  test('audio links negotiate Opus with in-band FEC and DTX off', async ({ makePeer }) => {
+    const host = await makePeer({ pseudo: 'Hostie' });
+    const code = await createRoom(host);
+    const a = await makePeer({ pseudo: 'Alice' });
+    await joinRoom(a, code);
+    await Promise.all([speak(host), speak(a)]);
+
+    for (const p of [host, a]) {
+      await expect.poll(async () => (await negotiatedOpusFmtp(p)).length, POLL).toBeGreaterThanOrEqual(1);
+      for (const line of await negotiatedOpusFmtp(p)) {
+        // FEC lets the decoder rebuild isolated lost packets instead of
+        // dropping them; DTX off keeps the jitter buffer warm between presses.
+        expect(line).toContain('useinbandfec=1');
+        expect(line).toContain('usedtx=0');
+        expect(line).toContain('stereo=0');
+      }
     }
   });
 

@@ -165,4 +165,51 @@ memory on the iOS/Android *native* apps still fall back to web APIs. Adding
 rebuild (not OTA). Battery low-power mode and connection type on iOS/desktop
 WebKit remain unavailable regardless — the panel renders "—" for them.
 
+## 🔊 Anonymous rooms still have no dependable TURN relay
+
+**Goal:** Stop anonymous (no-org) rooms falling back to a relay that is shared,
+rate-limited and possibly dead, since that is what turns a firewalled peer's
+audio to mush for everyone else.
+
+`fetchIceServers()` step 3 returns `DEFAULT_FALLBACK_TURN` — four allocations
+against `openrelay.metered.ca` with public credentials Open Relay has been
+retiring in favour of per-account keys. Nothing verifies they still work, and a
+peer that genuinely needs a relay has no alternative.
+
+The outgoing-audio tuning work mitigates the symptoms (a relayed path
+immediately gets the wide jitter buffer, Opus FEC is on, the uplink is no longer
+wasted on duplicate streams) but cannot manufacture relay capacity.
+
+Exit criteria:
+- Either a self-hosted coturn behind a rate-limited short-lived-credential
+  endpoint, or a funded metered.ca tier, reachable without a Voxal account
+- `DEFAULT_FALLBACK_TURN` points at it (TCP/443 + `turns:` included)
+- A liveness probe so a dead relay is visible in the TURN badge instead of
+  silently degrading calls
+
+---
+
+## 🎙️ Eliminate the audio-connection glare duplicate (3+ peer rooms)
+
+**Goal:** Exactly one MediaConnection carrying our mic per remote peer, always.
+
+`connectOutgoingAudioToPeers` skips a peer that can already be *seen* to receive
+our mic, but when two peers call each other simultaneously neither has answered
+yet, so both connections survive and that speaker uploads twice to that peer.
+Bounded at one outgoing call per peer, so it is waste rather than a leak.
+
+The fix is a deterministic tie-break (lower peer ID closes its own redundant
+`audioMediaOut`), but it is **blocked on audio continuity**: closing it fires the
+remote's `clearPeerMedia`, which `detachAudio`s the peer and nulls `media`,
+killing playback the surviving connection had already attached. So:
+
+Exit criteria:
+- `clearPeerMedia` re-attaches from the surviving connection's remote stream
+  (needs the remote stream kept on the connection entry) instead of detaching
+- Lower-ID-closes tie-break added to the stats reconciliation pass
+- The `@mesh` case `a speaker opens at most one outgoing audio call per listener`
+  tightened from "at most 2 senders" back to "exactly 1"
+
+---
+
 _Add new items above this line._
