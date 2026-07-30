@@ -107,6 +107,7 @@ Always call `getMicStream()`, not `navigator.mediaDevices.getUserMedia` directly
 | `metered-app-name` | `METERED_APP_STORE_KEY` | metered.ca TURN app name |
 | `metered-api-key` | `METERED_API_STORE_KEY` | metered.ca TURN API key |
 | `turn-fallback` | `TURN_FALLBACK_KEY` | Fallback relay override: JSON `RTCIceServer[]`, or `[]` to disable (Settings → Advanced → Fallback relay) |
+| `jitter-buffer` | `JITTER_BUFFER_KEY` | Playout jitter buffer: `auto` (adaptive) or 0–500 ms (Settings → Advanced → Jitter buffer) |
 | `peerjs-server` | — | PeerJS broker override (`peerServerOptions()`); test/self-host only |
 | `theme` | `THEME_KEY` | `dark` / `light` / `system` |
 

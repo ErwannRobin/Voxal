@@ -61,6 +61,7 @@ const METERED_COUNT_STORE_KEY   = 'metered-count';   // number of servers when o
 const METERED_SERVERS_STORE_KEY = 'metered-servers'; // JSON array of ICE server objects
 const TURN_FALLBACK_KEY         = 'turn-fallback';   // JSON RTCIceServer[] override for the free relay fallback ('[]' disables)
 
+const JITTER_BUFFER_KEY     = 'jitter-buffer';     // 'auto' | milliseconds as a string ('0' = browser default)
 const NOISE_SUPPRESSION_KEY = 'noise-suppression'; // 'rnnoise' | 'browser' | 'off'
 const MIC_DEVICE_KEY        = 'mic-device-id';
 const CAMERA_DEVICE_KEY     = 'camera-device-id';
@@ -561,6 +562,35 @@ function relayStateToStorage(mode, url, username, credential) {
   var u = (username || '').trim(); if (u) server.username = u;
   var p = (credential || '').trim(); if (p) server.credential = p;
   localStorage.setItem(TURN_FALLBACK_KEY, JSON.stringify([server]));
+}
+
+// Populate the advanced "Jitter buffer" controls from storage.
+function loadJitterControls() {
+  var st = jitterBufferSetting();
+  document.querySelectorAll('input[name="jitter-mode"]').forEach(function(r) { r.checked = (r.value === st.mode); });
+  var slider = $('input-jitter-ms');
+  // Seed the slider from the adaptive baseline so switching to Manual starts
+  // from what auto would have used, rather than snapping to 0.
+  if (slider) slider.value = String(st.mode === 'manual' ? st.ms : Math.round(AUDIO_PLAYOUT_DELAY_BASE * 1000));
+  var out = $('jitter-ms-value');
+  if (out && slider) out.textContent = slider.value + ' ms';
+  var manual = $('jitter-manual');
+  if (manual) manual.classList.toggle('hidden', st.mode !== 'manual');
+}
+
+// Persist the jitter choice from the advanced controls and apply it live.
+function syncJitterFromControls() {
+  var checked = document.querySelector('input[name="jitter-mode"]:checked');
+  var mode = checked ? checked.value : 'auto';
+  var manual = $('jitter-manual');
+  if (manual) manual.classList.toggle('hidden', mode !== 'manual');
+  var slider = $('input-jitter-ms');
+  var out = $('jitter-ms-value');
+  if (out && slider) out.textContent = slider.value + ' ms';
+  setJitterBufferSetting(mode, slider ? slider.value : 0);
+  // A host changing the room-wide value must republish it immediately rather
+  // than waiting for the next heartbeat.
+  if (inRoom && isHost) broadcastHostPeerLists();
 }
 
 // Populate the advanced "Fallback relay" controls from storage.
@@ -2791,7 +2821,8 @@ function tuneAudioReceivers(pc, delaySeconds) {
 }
 
 // A relayed path is the anonymous-room default (shared public TURN), so treat it
-// as poor up front rather than waiting for loss to show up.
+// as poor up front rather than waiting for loss to show up. This is the
+// *adaptive* value; `effectivePlayoutDelay` layers the manual overrides on top.
 function audioPlayoutDelayFor(stats) {
   if (!stats) return AUDIO_PLAYOUT_DELAY_BASE;
   var poor = stats.iceType === 'relay'
@@ -2801,11 +2832,76 @@ function audioPlayoutDelayFor(stats) {
   return poor ? AUDIO_PLAYOUT_DELAY_POOR : AUDIO_PLAYOUT_DELAY_BASE;
 }
 
+// --- Jitter buffer override (Settings → Advanced, + host push in dev mode) ---
+//
+// `playoutDelayHint` is a RECEIVER-side knob: it changes how much audio *we*
+// buffer before playing what a peer sends. So a host wanting to smooth out a
+// choppy room has to have the *listeners* widen their buffers — which is why the
+// host can push a room-wide value (below) rather than only setting its own.
+
+const JITTER_BUFFER_MAX_MS = 500;
+
+// { mode: 'auto' | 'manual', ms: number }. Anything unparseable reads as auto,
+// so a corrupt value can never wedge audio at a silly buffer size.
+function jitterBufferSetting() {
+  var raw = localStorage.getItem(JITTER_BUFFER_KEY);
+  if (raw === null || raw === 'auto') return { mode: 'auto', ms: 0 };
+  var ms = parseInt(raw, 10);
+  if (!isFinite(ms) || ms < 0) return { mode: 'auto', ms: 0 };
+  return { mode: 'manual', ms: Math.min(ms, JITTER_BUFFER_MAX_MS) };
+}
+
+function setJitterBufferSetting(mode, ms) {
+  if (mode !== 'manual') { localStorage.removeItem(JITTER_BUFFER_KEY); }
+  else {
+    var n = Math.max(0, Math.min(parseInt(ms, 10) || 0, JITTER_BUFFER_MAX_MS));
+    localStorage.setItem(JITTER_BUFFER_KEY, String(n));
+  }
+  reapplyAudioTuningToAllPeers();
+}
+
+// The host's room-wide value, mirrored from peer-list/heartbeat. Only set while
+// the host has dev mode on; `null` means "no override in effect".
+var _hostJitterMs = null;
+
+// Treat it as untrusted input like every other host-supplied field: a peer drives
+// this channel, so clamp before it reaches a live PeerConnection.
+function sanitizeJitterMs(value) {
+  if (typeof value !== 'number' || !isFinite(value)) return null;
+  return Math.max(0, Math.min(Math.round(value), JITTER_BUFFER_MAX_MS));
+}
+
+// The value this host wants every listener in the room to use, or null. Gated on
+// dev mode so a stale manual setting can't quietly govern other people's audio.
+function hostJitterBroadcastMs() {
+  if (!isHost || !isDevModeEnabled()) return null;
+  var setting = jitterBufferSetting();
+  return setting.mode === 'manual' ? setting.ms : null;
+}
+
+// Precedence: an explicit local choice wins, then the host's room-wide push,
+// then the adaptive value. Local-first keeps the host from silently overriding
+// someone who deliberately set their own buffer.
+function effectivePlayoutDelay(stats) {
+  var local = jitterBufferSetting();
+  if (local.mode === 'manual') return local.ms / 1000;
+  if (!isHost && typeof _hostJitterMs === 'number') return _hostJitterMs / 1000;
+  return audioPlayoutDelayFor(stats);
+}
+
+// Which source is deciding the buffer right now — shown in the stats popover so
+// "is my override actually applied?" is answerable.
+function playoutDelaySource() {
+  if (jitterBufferSetting().mode === 'manual') return 'manual';
+  if (!isHost && typeof _hostJitterMs === 'number') return 'host';
+  return 'auto';
+}
+
 // Idempotent — safe to call on every stats tick and whenever a stream arrives.
 function applyAudioTuning(conn, delaySeconds) {
   var delay = typeof delaySeconds === 'number'
     ? delaySeconds
-    : audioPlayoutDelayFor(conn && conn.webrtcStats);
+    : effectivePlayoutDelay(conn && conn.webrtcStats);
   audioPeerConnections(conn).forEach(function(pc) {
     tuneAudioSenders(pc);
     tuneAudioReceivers(pc, delay);
@@ -2816,9 +2912,28 @@ function applyAudioTuningToPeer(peerId) {
   applyAudioTuning(connections.get(peerId));
 }
 
+// Push the current buffer choice to every live link at once — used when the
+// setting changes locally and when the host's pushed value arrives.
+function reapplyAudioTuningToAllPeers() {
+  connections.forEach(function(conn) { applyAudioTuning(conn); });
+  if (typeof _refreshOpenStatsPopover === 'function') _refreshOpenStatsPopover();
+}
+
 // --- WebRTC stats helpers ----------------------------------------------------
 
 function _round1(n) { return Math.round(n * 10) / 10; }
+
+// How many 5s samples of loss history to keep per peer (~5 minutes). A single
+// percentage from the last window hides brief dropouts entirely, which is what
+// made "it cut out for a second" impossible to confirm.
+const LOSS_HISTORY_MAX = 60;
+
+function _pushLossHistory(prevHistory, value) {
+  var history = (prevHistory || []).slice();
+  history.push(typeof value === 'number' ? value : 0);
+  if (history.length > LOSS_HISTORY_MAX) history = history.slice(history.length - LOSS_HISTORY_MAX);
+  return history;
+}
 
 async function _collectPeerStats(peerId, conn) {
   var pcs = audioPeerConnections(conn);
@@ -2900,11 +3015,26 @@ async function _collectPeerStats(peerId, conn) {
     }
     stats._outboundRaw = outRaw;
 
+    // Cumulative totals + peaks + a rolling window, so a brief dropout is still
+    // visible minutes later instead of being averaged away by the next sample.
+    stats.packetsLostTotal     = inRaw.packetsLost;
+    stats.packetsReceivedTotal = inRaw.packetsReceived;
+    stats.outPacketsLostTotal  = outRaw.packetsLost;
+    stats.outPacketsSentTotal  = outRaw.packetsSent;
+    stats.peakLossPercent = Math.max(prev.peakLossPercent || 0, stats.lossPercent || 0);
+    stats.peakOutLossPercent = Math.max(prev.peakOutLossPercent || 0, stats.outLossPercent || 0);
+    stats.lossHistory    = _pushLossHistory(prev.lossHistory, stats.lossPercent);
+    stats.outLossHistory = _pushLossHistory(prev.outLossHistory, stats.outLossPercent);
+
+    // The buffer actually in force on this link, for the popover readout.
+    stats.playoutDelayMs = Math.round(effectivePlayoutDelay(stats) * 1000);
+    stats.playoutDelaySource = playoutDelaySource();
+
     conn.webrtcStats = stats;
 
     // Re-apply tuning with the freshly measured quality — this is what widens
     // the jitter buffer once a link turns out to be lossy or relayed.
-    applyAudioTuning(conn, audioPlayoutDelayFor(stats));
+    applyAudioTuning(conn, effectivePlayoutDelay(stats));
   } catch (_) {}
 }
 
@@ -3006,6 +3136,92 @@ function _refreshOpenStatsPopover() {
     return;
   }
   body.appendChild(_buildStatsBadge(conn.webrtcStats));
+  body.appendChild(_buildLossDetail(conn.webrtcStats));
+}
+
+// A compact SVG sparkline of recent loss samples. Scaled to the worst sample in
+// the window (min 5%) so a flat-but-nonzero line still reads as "some loss"
+// rather than being squashed against the axis.
+function _buildLossSparkline(history, className) {
+  var W = 132, H = 22;
+  var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  svg.setAttribute('class', 'loss-spark ' + (className || ''));
+  svg.setAttribute('preserveAspectRatio', 'none');
+  var samples = history && history.length ? history : [0];
+  var peak = Math.max(5, Math.max.apply(null, samples));
+  var step = samples.length > 1 ? W / (samples.length - 1) : W;
+
+  var points = samples.map(function(v, i) {
+    var x = samples.length > 1 ? i * step : W / 2;
+    var y = H - (Math.min(v, peak) / peak) * (H - 2) - 1;
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+
+  // Filled area under the line reads better at this size than a bare stroke.
+  var area = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+  area.setAttribute('points', '0,' + H + ' ' + points + ' ' + W + ',' + H);
+  area.setAttribute('class', 'loss-spark-area');
+  svg.appendChild(area);
+
+  var line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+  line.setAttribute('points', points);
+  line.setAttribute('class', 'loss-spark-line');
+  svg.appendChild(line);
+  return svg;
+}
+
+function _lossDetailRow(label, value) {
+  var row = document.createElement('div');
+  row.className = 'stats-row';
+  var k = document.createElement('span');
+  k.className = 'stats-row-key';
+  k.textContent = label;
+  var v = document.createElement('span');
+  v.className = 'stats-row-val';
+  v.textContent = value == null ? '—' : value;
+  row.appendChild(k);
+  row.appendChild(v);
+  return row;
+}
+
+// Dropped packets in detail: totals since the link came up (a brief dropout
+// stays on the record), the worst sample seen, and the recent trend.
+function _buildLossDetail(stats) {
+  var wrap = document.createElement('div');
+  wrap.className = 'stats-detail';
+
+  // `expected` is the denominator the percentage is taken against: packets we
+  // should have received (received + lost) inbound, packets we sent outbound.
+  function direction(title, cls, pct, peak, lost, expected, history) {
+    if (typeof pct !== 'number' && !lost) return;
+    var head = document.createElement('div');
+    head.className = 'stats-detail-head';
+    head.textContent = title;
+    wrap.appendChild(head);
+    wrap.appendChild(_buildLossSparkline(history, cls));
+    wrap.appendChild(_lossDetailRow('Now / peak',
+      (typeof pct === 'number' ? pct.toFixed(1) : '—') + '% / ' +
+      (typeof peak === 'number' ? peak.toFixed(1) : '—') + '%'));
+    wrap.appendChild(_lossDetailRow('Dropped',
+      (lost || 0).toLocaleString() + ' of ' + (expected || 0).toLocaleString()));
+  }
+
+  direction('↓ Incoming', 'loss-spark-in', stats.lossPercent, stats.peakLossPercent,
+    stats.packetsLostTotal, (stats.packetsReceivedTotal || 0) + (stats.packetsLostTotal || 0),
+    stats.lossHistory);
+  direction('↑ Outgoing (reported by peer)', 'loss-spark-out', stats.outLossPercent, stats.peakOutLossPercent,
+    stats.outPacketsLostTotal, stats.outPacketsSentTotal, stats.outLossHistory);
+
+  if (typeof stats.playoutDelayMs === 'number') {
+    var srcLabel = { manual: 'manual', host: 'set by host', auto: 'auto' }[stats.playoutDelaySource] || 'auto';
+    var head = document.createElement('div');
+    head.className = 'stats-detail-head';
+    head.textContent = 'Jitter buffer';
+    wrap.appendChild(head);
+    wrap.appendChild(_lossDetailRow('Target', stats.playoutDelayMs + ' ms (' + srcLabel + ')'));
+  }
+  return wrap;
 }
 
 function showStatsPopover(peerId, anchorEl) {
@@ -3038,6 +3254,12 @@ function showStatsPopover(peerId, anchorEl) {
   if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
   popover.style.top = top + 'px';
   popover.style.left = left + 'px';
+  // The loss detail makes this panel tall enough to run off the bottom; flip it
+  // above the anchor when it would, and never start it off-screen.
+  var ph = popover.getBoundingClientRect().height;
+  if (top + ph > window.innerHeight - 8) {
+    popover.style.top = Math.max(8, rect.top + window.scrollY - ph - 4) + 'px';
+  }
 
   // Collect fresh stats then render
   _collectPeerStats(peerId, conn).then(function() { _refreshOpenStatsPopover(); });
@@ -5686,6 +5908,7 @@ function leaveRoom() {
   closeStatsPopover();
   closeDeviceInfoPopover();
   _hostDebugMode = false;
+  _hostJitterMs = null;
   updateDebugConsentBanner();
   stopHostHeartbeat();
   stopHostHeartbeatMonitor();
@@ -6280,6 +6503,7 @@ function sendHostPeerList(dataConn, excludedPeerId) {
     hostScreenActive: localScreenActive,
     videoModeEnabled: videoModeEnabled,
     debugMode: isDevModeEnabled(),
+    jitterMs: hostJitterBroadcastMs(),
     deputyId: successorIds[0] || null,
     successorIds: successorIds,
     protocolVersion: PROTOCOL_VERSION,
@@ -6289,6 +6513,7 @@ function sendHostPeerList(dataConn, excludedPeerId) {
     type: 'heartbeat',
     at: Date.now(),
     debugMode: isDevModeEnabled(),
+    jitterMs: hostJitterBroadcastMs(),
     deputyId: successorIds[0] || null,
     successorIds: successorIds
   });
@@ -6660,6 +6885,15 @@ function handleHostMessage(msg) {
   if (typeof msg.debugMode === 'boolean' && _hostDebugMode !== msg.debugMode) {
     _hostDebugMode = msg.debugMode;
     if (inRoom && !isHost) { updatePeerList(); updateDebugConsentBanner(); }
+  }
+  // Room-wide jitter buffer pushed by a host that is debugging. Carried in
+  // peer-list + heartbeat like debugMode; absent (or null) clears the override.
+  if ('jitterMs' in msg) {
+    var pushed = sanitizeJitterMs(msg.jitterMs);
+    if (pushed !== _hostJitterMs) {
+      _hostJitterMs = pushed;
+      if (inRoom && !isHost) reapplyAudioTuningToAllPeers();
+    }
   }
   if (msg.type === 'heartbeat') return;
   if (msg.type === 'device-info-request') {
@@ -7833,6 +8067,7 @@ window.addEventListener('DOMContentLoaded', function() {
     $('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
     $('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
     loadRelayControls();
+    loadJitterControls();
     syncNoiseSuppressionControls();
     refreshMediaDeviceSelectors();
     $('input-presence-token').value = presenceToken();
@@ -7967,6 +8202,11 @@ window.addEventListener('DOMContentLoaded', function() {
     var el = $(id);
     if (el) el.addEventListener('input', syncRelayFromControls);
   });
+  document.querySelectorAll('input[name="jitter-mode"]').forEach(function(r) {
+    r.addEventListener('change', syncJitterFromControls);
+  });
+  var jitterSlider = $('input-jitter-ms');
+  if (jitterSlider) jitterSlider.addEventListener('input', syncJitterFromControls);
   document.querySelectorAll('input[name="noise-suppression-mode"]').forEach(function(input) {
     input.addEventListener('change', function(e) {
       if (!e.target.checked) return;
@@ -8175,12 +8415,22 @@ window.addEventListener('DOMContentLoaded', function() {
     }
     var relevantKeys = [PRESENCE_TOKEN_KEY, PRESENCE_ORG_KEY, METERED_APP_STORE_KEY,
                           METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY,
-                          SPEAKER_DEVICE_KEY];
+                          SPEAKER_DEVICE_KEY, JITTER_BUFFER_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
+    if (e.key === JITTER_BUFFER_KEY) {
+      // Changed from the desktop preferences window — apply it to live links.
+      loadJitterControls();
+      reapplyAudioTuningToAllPeers();
+      if (inRoom && isHost) broadcastHostPeerLists();
+      return;
+    }
     if (e.key === DEV_MODE_KEY) {
       updateDevLogPanel();
       if (inRoom) {
-        if (isDevModeEnabled()) startStatsPolling(); else stopStatsPolling();
+        // Keep polling regardless of dev mode: the adaptive jitter buffer and
+        // the peer dot's ICE colour both feed off these samples, and the poll
+        // already gates the dev-only badge rendering internally.
+        startStatsPolling();
         updateVideoModeUI();
         updatePeerList();
         if (isHost) broadcastHostPeerLists();

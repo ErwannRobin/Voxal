@@ -378,6 +378,35 @@
                     <button class="input-clear" data-target="input-service-url" aria-label="Clear">✕</button>
                   </div>
                 </div>
+                <p class="settings-sublabel" style="margin-top:16px">Jitter buffer</p>
+                <p class="settings-hint">
+                  How much incoming audio to buffer before playing it. Higher values
+                  smooth out choppy audio on a lossy or relayed connection, at the
+                  cost of a little delay. Automatic raises it on its own when a link
+                  starts dropping packets.
+                </p>
+                <div class="relay-modes">
+                  <label class="relay-opt">
+                    <input type="radio" name="jitter-mode" value="auto" />
+                    <span>Automatic <em>(recommended)</em></span>
+                  </label>
+                  <label class="relay-opt">
+                    <input type="radio" name="jitter-mode" value="manual" />
+                    <span>Manual</span>
+                  </label>
+                </div>
+                <div id="jitter-manual" class="jitter-manual hidden">
+                  <div class="jitter-slider-row">
+                    <input id="input-jitter-ms" type="range" min="0" max="500" step="10" value="80"
+                           aria-label="Jitter buffer target in milliseconds" />
+                    <output id="jitter-ms-value" for="input-jitter-ms">80 ms</output>
+                  </div>
+                  <p class="settings-hint" id="jitter-host-hint">
+                    0 ms leaves it to the browser. While Dev mode is on and you are
+                    the room host, this value is also pushed to everyone in the room
+                    (peers who set their own value keep theirs).
+                  </p>
+                </div>
                 <div class="settings-field settings-inline-toggle" style="margin-top:16px">
                   <label for="toggle-dev-mode-modal" style="flex:1">Dev mode</label>
                   <button id="toggle-dev-mode-modal" class="toggle-btn" role="switch" aria-checked="false"
