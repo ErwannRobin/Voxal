@@ -22,6 +22,10 @@
  *   video-mode   { enabled }                    host -> peer (toggle video mode, dev only)
  *   video-offer  { peerId }                     peer -> host (relayed) — peer started camera
  *   video-stop   { peerId }                     peer -> host (relayed) — peer stopped camera
+ *   audio-check-request  { peerId, from,        viewer -> host (relayed to target); dev only
+ *                          durationMs }
+ *   audio-check-response { peerId, report,       target -> host (relayed to requester); dev only
+ *                          declined, from }
  *   device-info-request  { peerId, from }       viewer -> host (relayed to target); dev only
  *   device-info-response { peerId, info,        target -> host (relayed to requester); dev only
  *                          declined, from }
@@ -3567,6 +3571,115 @@ function onDeviceInfoResponse(peerId, info, declined) {
   if (_deviceInfoPeerId && _deviceInfoPeerId === peerId) _refreshDeviceInfoPopover();
 }
 
+// --- Audio check plumbing (mirrors the device-info relay) --------------------
+
+// A peer answers an audio check: sample, wait out the window, sample again.
+// Gated on the same sharing consent as device info — it reports on this
+// device's playback state, so it is the same promise to the user.
+function respondToAudioCheckRequest(from, durationMs) {
+  var requesterId = from || roomCode;
+  var reply = function(report, declined) {
+    var msg = { type: 'audio-check-response', peerId: peer && peer.id, report: report,
+                declined: !!declined, from: from || null };
+    if (isHost) {
+      var rc = connections.get(requesterId);
+      if (rc && rc.data) sendDataIfOpen(rc.data, msg);
+    } else {
+      _sendToHostData(msg);
+    }
+  };
+  if (!isDeviceInfoSharingEnabled()) { reply(null, true); return; }
+
+  var window = Math.max(500, Math.min(Number(durationMs) || AUDIO_CHECK_WINDOW_MS, 10000));
+  sampleInboundAudio(requesterId).then(function(before) {
+    setTimeout(function() {
+      sampleInboundAudio(requesterId).then(function(after) {
+        reply(buildAudioCheckReport(before, after), false);
+      }).catch(function() { reply({ ok: false, reason: 'sample-failed' }, false); });
+    }, window);
+  }).catch(function() { reply({ ok: false, reason: 'sample-failed' }, false); });
+}
+
+// Host receives an audio-check request from `requesterId` about `targetId`.
+function handleAudioCheckRequestAtHost(requesterId, targetId, durationMs) {
+  if (!targetId || targetId === (peer && peer.id)) {
+    respondToAudioCheckRequest(requesterId, durationMs);
+    return;
+  }
+  var tc = connections.get(targetId);
+  if (tc && tc.data) {
+    sendDataIfOpen(tc.data, { type: 'audio-check-request', peerId: targetId, from: requesterId, durationMs: durationMs });
+  }
+}
+
+// Kick off a check against one peer: ask them to measure, and transmit for the
+// same window so there is something to measure.
+function startAudioCheck(peerId) {
+  if (!inRoom || !peerId || (_audioCheck && _audioCheck.peerId === peerId)) return;
+  cancelAudioCheck();
+
+  _audioCheck = { peerId: peerId, startedAt: Date.now(), localEnergyStart: null, timer: null };
+
+  if (isHost) {
+    var c = connections.get(peerId);
+    if (c && c.data) sendDataIfOpen(c.data, { type: 'audio-check-request', durationMs: AUDIO_CHECK_WINDOW_MS });
+  } else {
+    _sendToHostData({ type: 'audio-check-request', peerId: peerId, durationMs: AUDIO_CHECK_WINDOW_MS });
+  }
+
+  // Transmit through the normal talking path so the mic is acquired exactly as a
+  // real press would, and measure our own energy across the same window. The
+  // peer's reply cannot be scored until this resolves, so hold it as a promise
+  // rather than a field the response might race.
+  var check = _audioCheck;
+  check.localEnergyPromise = new Promise(function(resolve) {
+    sampleLocalMicEnergy().then(function(start) {
+      setTalking(true);
+      setTimeout(function() {
+        setTalking(false);
+        sampleLocalMicEnergy().then(function(end) {
+          resolve((typeof end === 'number' && typeof start === 'number') ? Math.max(0, end - start) : null);
+        }).catch(function() { resolve(null); });
+      }, AUDIO_CHECK_WINDOW_MS);
+    }).catch(function() { resolve(null); });
+  });
+
+  _audioCheck.timer = setTimeout(function() {
+    if (!_audioCheck) return;
+    _audioCheck.result = { status: 'error', headline: 'No response',
+                           detail: 'That peer did not answer the check.' };
+    _refreshDeviceInfoPopover();
+  }, AUDIO_CHECK_TIMEOUT_MS);
+
+  _refreshDeviceInfoPopover();
+}
+
+function cancelAudioCheck() {
+  if (_audioCheck && _audioCheck.timer) clearTimeout(_audioCheck.timer);
+  _audioCheck = null;
+}
+
+function onAudioCheckResponse(peerId, report, declined) {
+  var check = _audioCheck;
+  if (!check || check.peerId !== peerId) return;
+  if (check.timer) clearTimeout(check.timer);
+  check.report = report || null;
+
+  if (declined) {
+    check.result = { status: 'error', headline: 'Declined',
+                     detail: 'That peer has diagnostics sharing turned off.' };
+    _refreshDeviceInfoPopover();
+    return;
+  }
+  // Score only once our own mic energy for the window is known.
+  Promise.resolve(check.localEnergyPromise).then(function(localEnergy) {
+    if (_audioCheck !== check) return; // superseded or cancelled
+    check.localEnergy = localEnergy;
+    check.result = summarizeAudioCheck(report, localEnergy);
+    _refreshDeviceInfoPopover();
+  });
+}
+
 // Ask a remote peer for its device info. Host asks the peer directly; a non-host
 // viewer routes the request through the host (which answers or relays).
 function requestDeviceInfo(peerId) {
@@ -3576,6 +3689,176 @@ function requestDeviceInfo(peerId) {
   } else {
     _sendToHostData({ type: 'device-info-request', peerId: peerId });
   }
+}
+
+// --- "Can you hear me?" audio check (dev mode) -------------------------------
+//
+// `remote-inbound-rtp` proves our packets ARRIVED at a peer; it cannot prove the
+// peer HEARD them. Whether audio was decoded, whether their <audio> element is
+// actually playing, and how much of it NetEq had to fabricate are all
+// receiver-side facts, so the peer has to measure and report them.
+//
+// The check: we transmit for a fixed window while the peer samples its own
+// inbound stats across the same window and sends back the deltas. Deltas (not
+// absolutes) because the link may have been up for minutes.
+
+const AUDIO_CHECK_WINDOW_MS = 2500;
+const AUDIO_CHECK_TIMEOUT_MS = 8000;
+// Energy is Σ(sample²)·duration; even quiet speech clears this comfortably,
+// while a muted or disconnected mic sits at ~0.
+const AUDIO_CHECK_MIN_ENERGY = 0.0005;
+// Fraction of samples NetEq had to invent. This is measured AFTER FEC recovery
+// and jitter-buffer success, so it tracks what was actually heard far better
+// than packet loss does.
+const AUDIO_CHECK_CONCEAL_GOOD = 0.02;
+const AUDIO_CHECK_CONCEAL_POOR = 0.10;
+
+var _audioCheck = null; // { peerId, startedAt, timer, localEnergyStart }
+
+// Read the inbound audio counters for one peer, plus how its playback element is
+// configured. `null` when there is no audio link to sample.
+async function sampleInboundAudio(peerId) {
+  var conn = connections.get(peerId);
+  var pcs = audioPeerConnections(conn);
+  if (!pcs.length) return null;
+
+  var sample = {
+    at: Date.now(),
+    energy: 0, samples: 0, concealed: 0, silentConcealed: 0, concealmentEvents: 0,
+    packets: 0, packetsLost: 0, jbDelay: 0, jbEmitted: 0,
+    synthesizedMs: 0, playoutSamples: 0
+  };
+  var sawInbound = false;
+
+  for (var i = 0; i < pcs.length; i++) {
+    var reports = await pcs[i].getStats();
+    reports.forEach(function(r) {
+      if (r.type === 'inbound-rtp' && r.kind === 'audio') {
+        sawInbound = true;
+        sample.energy            += r.totalAudioEnergy || 0;
+        sample.samples           += r.totalSamplesReceived || 0;
+        sample.concealed         += r.concealedSamples || 0;
+        sample.silentConcealed   += r.silentConcealedSamples || 0;
+        sample.concealmentEvents += r.concealmentEvents || 0;
+        sample.packets           += r.packetsReceived || 0;
+        sample.packetsLost       += r.packetsLost || 0;
+        sample.jbDelay           += r.jitterBufferDelay || 0;
+        sample.jbEmitted         += r.jitterBufferEmittedCount || 0;
+      }
+      // What the speaker actually rendered — one step past decode.
+      if (r.type === 'media-playout') {
+        sample.synthesizedMs  += (r.synthesizedSamplesDuration || 0) * 1000;
+        sample.playoutSamples += r.totalSamplesCount || 0;
+      }
+    });
+  }
+  if (!sawInbound) return null;
+
+  // Element state catches autoplay blocks and a dead output device, which no RTP
+  // statistic can see. The sink id itself is a device identifier, so only report
+  // whether one is set — never the value.
+  var el = document.getElementById('audio-' + peerId);
+  sample.playback = el
+    ? { present: true, paused: !!el.paused, muted: !!el.muted, volume: typeof el.volume === 'number' ? el.volume : 1,
+        customSink: !!selectedSpeakerDeviceId() }
+    : { present: false };
+  return sample;
+}
+
+// Our own microphone energy over the window, so "you were silent" is
+// distinguishable from "your audio never arrived".
+async function sampleLocalMicEnergy() {
+  var conn = null;
+  var pcs = [];
+  connections.forEach(function(c) { pcs = pcs.concat(audioPeerConnections(c)); });
+  for (var i = 0; i < pcs.length; i++) {
+    var reports = await pcs[i].getStats();
+    var energy = null;
+    reports.forEach(function(r) {
+      if (r.type === 'media-source' && r.kind === 'audio' && typeof r.totalAudioEnergy === 'number') {
+        energy = r.totalAudioEnergy;
+      }
+    });
+    if (energy !== null) return energy;
+  }
+  return null;
+}
+
+function _delta(b, a, key) { return Math.max(0, (b[key] || 0) - (a[key] || 0)); }
+
+// Turn two samples into the report we send back to the requester.
+//
+// A null `before` with a live `after` means the audio link came up *during* the
+// window — which is normal, since the requester starts transmitting as it asks,
+// and that may be what creates the connection. Everything `after` counted
+// accumulated inside the window, so a zero baseline is exactly right; treating
+// it as "no link" would report a false negative on a perfectly healthy peer.
+function buildAudioCheckReport(before, after) {
+  if (!after) return { ok: false, reason: 'no-audio-link' };
+  if (!before) before = { at: after.at - AUDIO_CHECK_WINDOW_MS };
+  var samples = _delta(after, before, 'samples');
+  var jbEmitted = _delta(after, before, 'jbEmitted');
+  var jbDelay = _delta(after, before, 'jbDelay');
+  return {
+    ok: true,
+    windowMs: Math.max(0, after.at - before.at),
+    energy: _delta(after, before, 'energy'),
+    samples: samples,
+    concealed: _delta(after, before, 'concealed'),
+    silentConcealed: _delta(after, before, 'silentConcealed'),
+    concealmentEvents: _delta(after, before, 'concealmentEvents'),
+    packets: _delta(after, before, 'packets'),
+    packetsLost: _delta(after, before, 'packetsLost'),
+    jitterBufferMs: jbEmitted > 0 ? Math.round((jbDelay / jbEmitted) * 1000) : null,
+    synthesizedMs: Math.round(_delta(after, before, 'synthesizedMs')),
+    playback: after.playback || null
+  };
+}
+
+// Verdict, computed by the requester. `localEnergy` is our own mic energy over
+// the same window — without it, "nothing arrived" and "you said nothing" look
+// identical from the peer's report.
+//
+// Returns { status: 'good'|'choppy'|'bad'|'silent'|'unheard'|'error', … }.
+function summarizeAudioCheck(report, localEnergy) {
+  if (!report || !report.ok) {
+    return { status: 'error', headline: 'No audio link to that peer',
+             detail: 'They have no audio connection from you to measure.' };
+  }
+  var pb = report.playback || {};
+  if (pb.present === false) {
+    return { status: 'unheard', headline: 'Not being played',
+             detail: 'Your stream reached them but is not attached to any audio output.' };
+  }
+  if (pb.paused || pb.muted || pb.volume === 0) {
+    var why = pb.muted ? 'muted' : pb.paused ? 'paused' : 'at zero volume';
+    return { status: 'unheard', headline: 'Their playback is ' + why,
+             detail: 'Audio is arriving, but their end is not playing it' +
+                     (pb.paused ? ' — often a blocked autoplay.' : '.') };
+  }
+  var weSpoke = typeof localEnergy !== 'number' || localEnergy > AUDIO_CHECK_MIN_ENERGY;
+  if (report.energy <= AUDIO_CHECK_MIN_ENERGY) {
+    if (!weSpoke) {
+      return { status: 'silent', headline: 'No sound was sent',
+               detail: 'Your microphone picked up nothing — try again and speak during the test.' };
+    }
+    return { status: 'unheard', headline: 'They received silence',
+             detail: 'You were speaking, but no audio energy reached them.' };
+  }
+  var conceal = report.samples > 0 ? report.concealed / report.samples : 0;
+  var pct = (conceal * 100).toFixed(1);
+  if (conceal < AUDIO_CHECK_CONCEAL_GOOD) {
+    return { status: 'good', headline: 'They hear you clearly',
+             detail: 'Only ' + pct + '% of audio needed filling in.', concealPercent: conceal * 100 };
+  }
+  if (conceal < AUDIO_CHECK_CONCEAL_POOR) {
+    return { status: 'choppy', headline: 'They hear you, but it is choppy',
+             detail: pct + '% of audio had to be filled in across ' + report.concealmentEvents + ' dropout(s).',
+             concealPercent: conceal * 100 };
+  }
+  return { status: 'bad', headline: 'They hear you badly',
+           detail: pct + '% of audio had to be filled in across ' + report.concealmentEvents + ' dropout(s).',
+           concealPercent: conceal * 100 };
 }
 
 // The self row has no single peer link, so summarize the WebRTC link stats
@@ -3728,6 +4011,62 @@ function _refreshDeviceInfoPopover() {
     el.textContent = note;
     body.appendChild(el);
   }
+
+  body.appendChild(_buildAudioCheckSection(_deviceInfoPeerId));
+}
+
+// "Can you hear me?" — the one thing local stats can never answer.
+function _buildAudioCheckSection(peerId) {
+  var wrap = document.createElement('div');
+  wrap.className = 'audio-check';
+
+  var head = document.createElement('div');
+  head.className = 'di-section';
+  head.textContent = '🔊 Can they hear me?';
+  wrap.appendChild(head);
+
+  var active = _audioCheck && _audioCheck.peerId === peerId;
+  var result = active ? _audioCheck.result : null;
+
+  if (active && !result) {
+    var pending = document.createElement('div');
+    pending.className = 'audio-check-pending';
+    pending.textContent = 'Speak now — testing…';
+    wrap.appendChild(pending);
+    return wrap;
+  }
+
+  var btn = document.createElement('button');
+  btn.className = 'audio-check-btn';
+  btn.textContent = result ? 'Test again' : 'Run check';
+  btn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    startAudioCheck(peerId);
+  });
+  wrap.appendChild(btn);
+
+  if (result) {
+    var verdict = document.createElement('div');
+    verdict.className = 'audio-check-verdict ac-' + result.status;
+    var icon = { good: '✓', choppy: '⚠', bad: '✕', unheard: '✕', silent: '⚠', error: '—' }[result.status] || '—';
+    verdict.textContent = icon + ' ' + result.headline;
+    wrap.appendChild(verdict);
+
+    var detail = document.createElement('div');
+    detail.className = 'audio-check-detail';
+    detail.textContent = result.detail;
+    wrap.appendChild(detail);
+
+    // The raw numbers behind the verdict, so it can be second-guessed.
+    var r = _audioCheck && _audioCheck.report;
+    if (r && r.ok) {
+      wrap.appendChild(_diRow('Filled in', r.samples ? (r.concealed / r.samples * 100).toFixed(1) + '%' : null));
+      wrap.appendChild(_diRow('Dropouts', r.concealmentEvents != null ? String(r.concealmentEvents) : null));
+      wrap.appendChild(_diRow('Their buffer', r.jitterBufferMs != null ? r.jitterBufferMs + ' ms' : null));
+      wrap.appendChild(_diRow('Packets', r.packets != null ? r.packets + ' (' + (r.packetsLost || 0) + ' lost)' : null));
+    }
+  }
+  return wrap;
 }
 
 function showDeviceInfoPopover(peerId, anchorEl, isSelf) {
@@ -5909,6 +6248,7 @@ function leaveRoom() {
   closeDeviceInfoPopover();
   _hostDebugMode = false;
   _hostJitterMs = null;
+  cancelAudioCheck();
   updateDebugConsentBanner();
   stopHostHeartbeat();
   stopHostHeartbeatMonitor();
@@ -6705,6 +7045,17 @@ function handleJoinerDataConnection(dataConn) {
       connections.forEach(function(c, id) {
         if (id !== joinerId && c.data) sendDataIfOpen(c.data, { type: 'screen-stop', peerId: joinerId });
       });
+    } else if (msg.type === 'audio-check-request') {
+      handleAudioCheckRequestAtHost(joinerId, msg.peerId || null, msg.durationMs);
+    } else if (msg.type === 'audio-check-response') {
+      if (msg.from && msg.from !== (peer && peer.id)) {
+        var acReq = connections.get(msg.from);
+        if (acReq && acReq.data) sendDataIfOpen(acReq.data, {
+          type: 'audio-check-response', peerId: joinerId, report: msg.report, declined: msg.declined
+        });
+      } else {
+        onAudioCheckResponse(joinerId, msg.report, msg.declined);
+      }
     } else if (msg.type === 'device-info-request') {
       // A peer wants someone's device info: answer for the host, else relay to the target.
       handleDeviceInfoRequestAtHost(joinerId, msg.peerId);
@@ -6896,6 +7247,14 @@ function handleHostMessage(msg) {
     }
   }
   if (msg.type === 'heartbeat') return;
+  if (msg.type === 'audio-check-request') {
+    respondToAudioCheckRequest(msg.from || null, msg.durationMs);
+    return;
+  }
+  if (msg.type === 'audio-check-response') {
+    onAudioCheckResponse(msg.peerId, msg.report, msg.declined);
+    return;
+  }
   if (msg.type === 'device-info-request') {
     respondToDeviceInfoRequest(msg.from || null);
     return;

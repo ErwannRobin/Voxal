@@ -147,6 +147,91 @@ test.describe('mesh @mesh', () => {
     }
   });
 
+  // The "can they hear me?" round trip, over real WebRTC. This is the only check
+  // that can distinguish "packets arrived" from "audio was actually heard".
+  test('audio check reports a peer really hearing us', async ({ makePeer }) => {
+    const host = await makePeer({ pseudo: 'Hostie' });
+    const code = await createRoom(host);
+    const a = await makePeer({ pseudo: 'Alice' });
+    await joinRoom(a, code);
+
+    for (const p of [host, a]) {
+      await expect.poll(() => rosterCount(p), POLL).toBe(2);
+      // The check reports on playback state, so it needs sharing consent.
+      await p.evaluate(() => {
+        localStorage.setItem('dev-mode', 'true');
+        localStorage.setItem('debug-share-device-info', 'accepted');
+      });
+    }
+    await Promise.all([speak(host), speak(a)]);
+    for (const p of [host, a]) {
+      await expect.poll(async () => (await getState(p)).incomingAudio, POLL).toBeGreaterThanOrEqual(1);
+    }
+
+    const alice = await a.evaluate(() => peer.id);
+    await host.evaluate((id) => window.startAudioCheck(id), alice);
+
+    const result = await host.evaluate(async () => {
+      for (let i = 0; i < 100; i++) {
+        if (window._audioCheck && window._audioCheck.result) return window._audioCheck.result;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      return null;
+    });
+
+    expect(result).toBeTruthy();
+    // Chromium's fake device emits a continuous tone, so a healthy loopback link
+    // must come back as audible — never "silent" or "unheard".
+    expect(['good', 'choppy', 'bad']).toContain(result.status);
+
+    const report = await host.evaluate(() => window._audioCheck.report);
+    expect(report.ok).toBe(true);
+    expect(report.samples).toBeGreaterThan(0);   // audio was decoded
+    expect(report.energy).toBeGreaterThan(0);    // …and it was not silence
+    expect(report.playback.present).toBe(true);  // …attached to an output
+    expect(report.playback.muted).toBe(false);
+  });
+
+  test('audio check reports a peer whose playback is muted', async ({ makePeer }) => {
+    const host = await makePeer({ pseudo: 'Hostie' });
+    const code = await createRoom(host);
+    const a = await makePeer({ pseudo: 'Alice' });
+    await joinRoom(a, code);
+    for (const p of [host, a]) {
+      await expect.poll(() => rosterCount(p), POLL).toBe(2);
+      await p.evaluate(() => {
+        localStorage.setItem('dev-mode', 'true');
+        localStorage.setItem('debug-share-device-info', 'accepted');
+      });
+    }
+    await Promise.all([speak(host), speak(a)]);
+    for (const p of [host, a]) {
+      await expect.poll(async () => (await getState(p)).incomingAudio, POLL).toBeGreaterThanOrEqual(1);
+    }
+
+    const hostId = await host.evaluate(() => peer.id);
+    // Alice mutes the element carrying the host's audio: packets keep arriving
+    // perfectly, but she hears nothing — invisible to the host's own stats.
+    await a.evaluate((id) => {
+      const el = document.getElementById('audio-' + id);
+      if (el) el.muted = true;
+    }, hostId);
+
+    const alice = await a.evaluate(() => peer.id);
+    await host.evaluate((id) => window.startAudioCheck(id), alice);
+    const result = await host.evaluate(async () => {
+      for (let i = 0; i < 100; i++) {
+        if (window._audioCheck && window._audioCheck.result) return window._audioCheck.result;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      return null;
+    });
+
+    expect(result).toBeTruthy();
+    expect(result.status).toBe('unheard');
+    expect(result.headline).toContain('muted');
+  });
+
   test('host migration: the lone survivor takes over when the host crashes', async ({ makePeer }) => {
     const host = await makePeer({ pseudo: 'Hostie' });
     const code = await createRoom(host);

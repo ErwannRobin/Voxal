@@ -497,3 +497,142 @@ test.describe('jitter buffer settings control', () => {
     expect(await page.evaluate(() => window.effectivePlayoutDelay({ iceType: 'relay' }))).toBe(0.2);
   });
 });
+
+test.describe('audio check — buildAudioCheckReport', () => {
+  const before = {
+    at: 1000, energy: 5, samples: 48000, concealed: 100, silentConcealed: 40,
+    concealmentEvents: 2, packets: 500, packetsLost: 5, jbDelay: 4, jbEmitted: 40000,
+    synthesizedMs: 10, playoutSamples: 48000,
+  };
+  const after = {
+    at: 3500, energy: 5.6, samples: 168000, concealed: 1300, silentConcealed: 140,
+    concealmentEvents: 5, packets: 625, packetsLost: 12, jbDelay: 12004, jbEmitted: 160000,
+    synthesizedMs: 40, playoutSamples: 168000,
+    playback: { present: true, paused: false, muted: false, volume: 1, customSink: false },
+  };
+
+  test('reports deltas across the window, not absolute counters', async ({ page }) => {
+    await page.goto('/');
+    const r = await page.evaluate(([b, a]) => window.buildAudioCheckReport(b, a), [before, after]);
+    expect(r.ok).toBe(true);
+    expect(r.windowMs).toBe(2500);
+    expect(r.samples).toBe(120000);
+    expect(r.concealed).toBe(1200);
+    expect(r.concealmentEvents).toBe(3);
+    expect(r.packets).toBe(125);
+    expect(r.packetsLost).toBe(7);
+    expect(r.energy).toBeCloseTo(0.6, 5);
+    // Mean jitter-buffer delay = accumulated delay / emitted samples:
+    // 12000 s across 120000 emitted samples = 0.1 s = 100 ms.
+    expect(r.jitterBufferMs).toBe(100);
+    expect(r.playback).toEqual(after.playback);
+  });
+
+  test('clamps counter resets to zero instead of reporting negatives', async ({ page }) => {
+    await page.goto('/');
+    const r = await page.evaluate(([b, a]) => window.buildAudioCheckReport(b, a),
+      [after, { ...before, at: 6000, playback: { present: true } }]);
+    expect(r.samples).toBe(0);
+    expect(r.concealed).toBe(0);
+    expect(r.energy).toBe(0);
+  });
+
+  test('flags a peer with no audio link to measure', async ({ page }) => {
+    await page.goto('/');
+    const r = await page.evaluate(() => window.buildAudioCheckReport(null, null));
+    expect(r).toEqual({ ok: false, reason: 'no-audio-link' });
+  });
+
+  test('handles a window with no emitted samples without dividing by zero', async ({ page }) => {
+    await page.goto('/');
+    const r = await page.evaluate(() => window.buildAudioCheckReport(
+      { at: 0, jbDelay: 0, jbEmitted: 0 }, { at: 2500, jbDelay: 0, jbEmitted: 0 }));
+    expect(r.jitterBufferMs).toBe(null);
+  });
+});
+
+test.describe('audio check — summarizeAudioCheck verdicts', () => {
+  const clean = {
+    ok: true, windowMs: 2500, energy: 0.6, samples: 120000, concealed: 600,
+    concealmentEvents: 1, packets: 125, packetsLost: 0, jitterBufferMs: 80,
+    playback: { present: true, paused: false, muted: false, volume: 1 },
+  };
+  const summarize = (page, report, localEnergy) =>
+    page.evaluate(([r, e]) => window.summarizeAudioCheck(r, e), [report, localEnergy]);
+
+  test('good when audio arrived and little had to be filled in', async ({ page }) => {
+    await page.goto('/');
+    const v = await summarize(page, clean, 0.6);
+    expect(v.status).toBe('good');
+    expect(v.headline).toBe('They hear you clearly');
+  });
+
+  test('choppy between 2% and 10% filled in', async ({ page }) => {
+    await page.goto('/');
+    const v = await summarize(page, { ...clean, concealed: 6000, concealmentEvents: 4 }, 0.6);
+    expect(v.status).toBe('choppy');
+    expect(v.detail).toContain('5.0%');
+    expect(v.detail).toContain('4 dropout(s)');
+  });
+
+  test('bad above 10% filled in', async ({ page }) => {
+    await page.goto('/');
+    const v = await summarize(page, { ...clean, concealed: 30000 }, 0.6);
+    expect(v.status).toBe('bad');
+    expect(v.concealPercent).toBeCloseTo(25, 5);
+  });
+
+  // The distinction local stats can never make on their own.
+  test('silent when OUR mic captured nothing — not blamed on the link', async ({ page }) => {
+    await page.goto('/');
+    const v = await summarize(page, { ...clean, energy: 0 }, 0);
+    expect(v.status).toBe('silent');
+    expect(v.headline).toBe('No sound was sent');
+  });
+
+  test('unheard when we did speak but no energy reached them', async ({ page }) => {
+    await page.goto('/');
+    const v = await summarize(page, { ...clean, energy: 0 }, 0.6);
+    expect(v.status).toBe('unheard');
+    expect(v.headline).toBe('They received silence');
+  });
+
+  test('assumes we spoke when our own mic energy is unavailable', async ({ page }) => {
+    await page.goto('/');
+    // Without a local reading, blaming the user for silence would be wrong.
+    const v = await summarize(page, { ...clean, energy: 0 }, null);
+    expect(v.status).toBe('unheard');
+  });
+
+  // Playback faults outrank everything: packets can be perfect and still silent.
+  test('detects muted, paused and zero-volume playback', async ({ page }) => {
+    await page.goto('/');
+    const muted  = await summarize(page, { ...clean, playback: { present: true, muted: true, volume: 1 } }, 0.6);
+    const paused = await summarize(page, { ...clean, playback: { present: true, paused: true, volume: 1 } }, 0.6);
+    const zero   = await summarize(page, { ...clean, playback: { present: true, volume: 0 } }, 0.6);
+    expect(muted.status).toBe('unheard');
+    expect(muted.headline).toContain('muted');
+    expect(paused.headline).toContain('paused');
+    expect(paused.detail).toContain('autoplay');
+    expect(zero.headline).toContain('zero volume');
+  });
+
+  test('detects a stream that is not attached to any output', async ({ page }) => {
+    await page.goto('/');
+    const v = await summarize(page, { ...clean, playback: { present: false } }, 0.6);
+    expect(v.status).toBe('unheard');
+    expect(v.headline).toBe('Not being played');
+  });
+
+  test('a playback fault wins even when the stream itself was perfect', async ({ page }) => {
+    await page.goto('/');
+    const v = await summarize(page, { ...clean, concealed: 0, playback: { present: true, muted: true } }, 0.6);
+    expect(v.status).toBe('unheard');
+  });
+
+  test('errors on a missing or failed report', async ({ page }) => {
+    await page.goto('/');
+    expect((await summarize(page, null, 0.6)).status).toBe('error');
+    expect((await summarize(page, { ok: false, reason: 'no-audio-link' }, 0.6)).status).toBe('error');
+  });
+});

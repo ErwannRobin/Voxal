@@ -816,6 +816,61 @@ html[data-theme="light"] .debug-consent-text strong { color: #b45309; }
   user-select: text;
   -webkit-user-select: text;
 }
+/* "Can they hear me?" audio check (dev mode) */
+.device-info-popover .audio-check { margin-top: 10px; }
+.device-info-popover .audio-check-btn {
+  width: 100%;
+  margin: 2px 0 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  color: var(--text);
+  cursor: pointer;
+}
+.device-info-popover .audio-check-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.device-info-popover .audio-check-pending {
+  font-size: 11.5px;
+  color: var(--accent);
+  padding: 6px 0;
+  text-align: center;
+}
+.device-info-popover .audio-check-verdict {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 7px;
+  border-radius: 5px;
+  margin-bottom: 4px;
+}
+.device-info-popover .audio-check-detail {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-bottom: 4px;
+}
+/* Dark is the base here, as elsewhere in this file; light overrides below. */
+.ac-good    { background: rgba(74, 222, 128, 0.15); color: var(--green); }
+.ac-choppy,
+.ac-silent  { background: rgba(250, 204, 21, 0.15); color: #fbbf24; }
+.ac-bad,
+.ac-unheard { background: rgba(248, 113, 113, 0.15); color: #f87171; }
+.ac-error   { background: var(--bg-raised); color: var(--text-muted); }
+html[data-theme="light"] .ac-choppy,
+html[data-theme="light"] .ac-silent  { color: #b45309; }
+html[data-theme="light"] .ac-bad,
+html[data-theme="light"] .ac-unheard { color: #dc2626; }
+@media (prefers-color-scheme: light) {
+  html[data-theme="system"] .ac-choppy,
+  html[data-theme="system"] .ac-silent  { color: #b45309; }
+  html[data-theme="system"] .ac-bad,
+  html[data-theme="system"] .ac-unheard { color: #dc2626; }
+}
+
 .device-info-popover .di-empty {
   font-size: 11.5px;
   color: var(--text-muted);
