@@ -189,6 +189,24 @@ Exit criteria:
 
 ---
 
+## 🖥️ Network echo test is missing from the Tauri preferences window
+
+**Goal:** Offer Settings → Audio → *Test over network* on the desktop app's
+standalone preferences window, not just the in-page modal.
+
+`settings.html` duplicates its logic by hand (no module system) and has none of
+`fetchIceServers()`, `opusSdpTransform()` or the RNNoise capture path — porting
+the echo test means ~400 duplicated lines including a WASM worklet, into the
+file that already caused the noise-suppression default to drift. For now it
+shows a hint pointing at the main window.
+
+Exit criteria (either):
+- `settings.html` and `main.js` share a real module for ICE + Opus + capture, or
+- the preferences window can ask the main window to run the test and show the
+  result where the user is looking
+
+---
+
 ## 🎙️ Eliminate the audio-connection glare duplicate (3+ peer rooms)
 
 **Goal:** Exactly one MediaConnection carrying our mic per remote peer, always.

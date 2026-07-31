@@ -219,6 +219,16 @@
                 <span class="media-level hidden"><span id="mic-test-level-fill" class="media-level-fill"></span></span>
                 <audio id="mic-test-playback" class="mic-test-playback hidden" controls preload="none"></audio>
               </div>
+              <div class="settings-test-row echo-test-row">
+                <button id="btn-test-echo" type="button" class="btn btn-secondary btn-sm">Test over network</button>
+                <span class="media-level hidden"><span id="echo-test-level-fill" class="media-level-fill"></span></span>
+              </div>
+              <p class="settings-hint">
+                Sends your voice out over the network and back through a relay, then
+                replays what came back — so you hear what others actually hear, not
+                just your raw microphone.
+              </p>
+              <div id="echo-test-status" class="echo-test-status hidden"></div>
             </div>
             <p class="settings-subtitle">Noise suppression</p>
             <div class="noise-card-group" id="noise-suppression-group" role="radiogroup" aria-label="Noise suppression mode">

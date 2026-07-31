@@ -3721,6 +3721,14 @@ async function sampleInboundAudio(peerId) {
   var conn = connections.get(peerId);
   var pcs = audioPeerConnections(conn);
   if (!pcs.length) return null;
+  return sampleInboundFromPeerConnections(pcs, document.getElementById('audio-' + peerId));
+}
+
+// The stats walk itself, over an arbitrary set of PeerConnections — shared by
+// the per-peer audio check and the loopback echo test, which measure the same
+// things over different plumbing.
+async function sampleInboundFromPeerConnections(pcs, audioEl) {
+  if (!pcs || !pcs.length) return null;
 
   var sample = {
     at: Date.now(),
@@ -3757,7 +3765,7 @@ async function sampleInboundAudio(peerId) {
   // Element state catches autoplay blocks and a dead output device, which no RTP
   // statistic can see. The sink id itself is a device identifier, so only report
   // whether one is set — never the value.
-  var el = document.getElementById('audio-' + peerId);
+  var el = audioEl;
   sample.playback = el
     ? { present: true, paused: !!el.paused, muted: !!el.muted, volume: typeof el.volume === 'number' ? el.volume : 1,
         customSink: !!selectedSpeakerDeviceId() }
@@ -5262,8 +5270,295 @@ async function startMicTest() {
 async function toggleMicTest() {
   if (_micTestStream) await stopMicTest({ replay: true });
   else {
+    await stopEchoTest();  // the two tests share the mic and the playback element
     try { await startMicTest(); }
     catch (e) { showCopyToast('Microphone test failed'); console.warn('[Mic test]', e.message); }
+  }
+}
+
+// --- Network echo test -------------------------------------------------------
+//
+// The mic test above records the RAW microphone, so it proves capture works and
+// nothing else. This one sends the audio out over the real network and records
+// what comes BACK: mic -> Opus -> NAT -> TURN relay -> decode. That round trip is
+// what a remote listener actually hears, so replaying it answers "what do I
+// sound like to other people?" without needing a second person.
+//
+// Both PeerConnections are forced to `relay`, so ICE cannot shortcut through
+// host candidates and quietly test nothing. That also makes the test a genuine
+// probe of the relay path anonymous rooms fall back to.
+
+const ECHO_MAX_RECORD_MS = 15000;
+const ECHO_RELAY_TIMEOUT_MS = 8000;
+// RMS below this in the returned audio means nothing audible came back.
+const ECHO_MIN_RMS = 0.005;
+
+var _echo = null; // { pcs, stream, recorder, chunks, ctx, analyser, raf, audioEl, … }
+
+function echoStatus(text, kind) {
+  var el = document.getElementById('echo-test-status');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = 'echo-test-status' + (kind ? ' ac-' + kind : '');
+  el.classList.toggle('hidden', !text);
+}
+
+function echoTestRunning() { return !!_echo; }
+
+// Verdict for the loopback. Shares the peer check's concealment thresholds — the
+// same measurement means the same thing — but not its wording, since here the
+// listener is you. The playback branch is skipped: it is meaningless on a sink
+// we muted ourselves.
+function summarizeEchoTest(report, rms) {
+  if (!report || !report.ok) {
+    return { status: 'error', headline: 'No audio came back',
+             detail: 'The loopback connected but no audio was received.' };
+  }
+  if (typeof rms === 'number' && rms < ECHO_MIN_RMS) {
+    return { status: 'silent', headline: 'Nothing was heard',
+             detail: 'The round trip worked but carried silence — check your microphone and speak during the test.' };
+  }
+  var conceal = report.samples > 0 ? report.concealed / report.samples : 0;
+  var pct = (conceal * 100).toFixed(1);
+  if (conceal < AUDIO_CHECK_CONCEAL_GOOD) {
+    return { status: 'good', headline: 'You would sound clear',
+             detail: 'Only ' + pct + '% of audio needed filling in.', concealPercent: conceal * 100 };
+  }
+  if (conceal < AUDIO_CHECK_CONCEAL_POOR) {
+    return { status: 'choppy', headline: 'You would sound choppy',
+             detail: pct + '% of audio had to be filled in across ' + report.concealmentEvents + ' dropout(s).',
+             concealPercent: conceal * 100 };
+  }
+  return { status: 'bad', headline: 'You would sound badly broken',
+           detail: pct + '% of audio had to be filled in across ' + report.concealmentEvents + ' dropout(s).',
+           concealPercent: conceal * 100 };
+}
+
+// Which ICE path the loopback actually took, so the verdict can say whether this
+// really exercised the relay.
+async function echoSelectedIceType(pc) {
+  try {
+    var reports = await pc.getStats();
+    var pairs = {}, locals = {}, chosen = null;
+    reports.forEach(function(r) {
+      if (r.type === 'candidate-pair' && r.nominated) {
+        pairs[r.id] = r;
+        if (!chosen || r.state === 'succeeded') chosen = r.id;
+      }
+      if (r.type === 'local-candidate') locals[r.id] = r;
+    });
+    var pair = chosen ? pairs[chosen] : null;
+    var cand = pair ? locals[pair.localCandidateId] : null;
+    return cand ? cand.candidateType : null;
+  } catch (_) { return null; }
+}
+
+async function startEchoTest(options) {
+  options = options || {};
+  if (_echo) return;
+  if (inRoom) {
+    // applyRNNoise shares one AudioContext + worklet node, so a second mic
+    // source would mix into the live call. Use the per-peer audio check instead.
+    echoStatus('Leave the room first — use the “Can they hear me?” check while in a call.', 'error');
+    return;
+  }
+  await stopMicTest();
+  clearMicTestPlayback();
+  echoStatus('Connecting…');
+
+  var iceServers = await fetchIceServers();
+  // 'relay' in production; tests drive the same code path with 'all' because CI
+  // has no TURN server.
+  var policy = options.iceTransportPolicy || 'relay';
+  var cfg = { iceServers: iceServers, iceTransportPolicy: policy };
+  var sender = new RTCPeerConnection(cfg);
+  var receiver = new RTCPeerConnection(cfg);
+
+  _echo = { sender: sender, receiver: receiver, chunks: [], relayCandidates: 0 };
+  var echo = _echo;
+
+  sender.onicecandidate = function(e) {
+    if (!e.candidate) return;
+    if (e.candidate.candidate.indexOf('typ relay') !== -1) echo.relayCandidates++;
+    receiver.addIceCandidate(e.candidate).catch(function() {});
+  };
+  receiver.onicecandidate = function(e) {
+    if (e.candidate) sender.addIceCandidate(e.candidate).catch(function() {});
+  };
+
+  var returned = new Promise(function(resolve) { receiver.ontrack = function(e) { resolve(e.streams[0]); }; });
+
+  try {
+    echo.stream = await getMicStream();
+    echo.stream.getAudioTracks().forEach(function(t) { sender.addTrack(t, echo.stream); });
+
+    var offer = await sender.createOffer();
+    offer.sdp = opusSdpTransform(offer.sdp);
+    await sender.setLocalDescription(offer);
+    await receiver.setRemoteDescription(offer);
+    var answer = await receiver.createAnswer();
+    answer.sdp = opusSdpTransform(answer.sdp);
+    await receiver.setLocalDescription(answer);
+    await sender.setRemoteDescription(answer);
+  } catch (err) {
+    await stopEchoTest();
+    echoStatus('Could not start the test: ' + err.message, 'error');
+    return;
+  }
+
+  // `ontrack` fires on NEGOTIATION, not on media flow — it resolves even when
+  // ICE never connects and not one packet is ever exchanged. So the stream alone
+  // proves nothing; wait until packets actually arrive. That also covers the
+  // relay-only-with-no-relay case, which gathers zero candidates and sits in
+  // 'new' forever without ever firing 'failed'.
+  var stream = await Promise.race([
+    returned,
+    new Promise(function(resolve) { setTimeout(function() { resolve(null); }, ECHO_RELAY_TIMEOUT_MS); })
+  ]);
+  if (_echo !== echo) return; // cancelled while connecting
+
+  var flowing = false;
+  if (stream) {
+    var deadline = Date.now() + ECHO_RELAY_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      var probe = await sampleInboundFromPeerConnections([receiver], null);
+      if (_echo !== echo) return;
+      if (probe && probe.packets > 0) { flowing = true; break; }
+      await new Promise(function(r) { setTimeout(r, 250); });
+    }
+  }
+
+  if (!flowing) {
+    var noRelay = policy === 'relay' && echo.relayCandidates === 0;
+    await stopEchoTest();
+    echoStatus(noRelay
+      ? 'No TURN relay reachable — audio never left the device. Peers behind strict firewalls cannot reach you either. Check Settings → Advanced → Fallback relay.'
+      : 'The test connected but no audio came back.', 'error');
+    return;
+  }
+
+  // A muted sink still drives decoding (so inbound-rtp fills) without feeding
+  // the speakers back into the mic. It does zero totalAudioEnergy, though, so
+  // loudness is measured from an AnalyserNode below instead.
+  var audioEl = new Audio();
+  audioEl.srcObject = stream;
+  audioEl.muted = true;
+  audioEl.autoplay = true;
+  echo.audioEl = audioEl;
+
+  echo.ctx = new (window.AudioContext || window.webkitAudioContext)();
+  var source = echo.ctx.createMediaStreamSource(stream);
+  echo.analyser = echo.ctx.createAnalyser();
+  echo.analyser.fftSize = 1024;
+  source.connect(echo.analyser); // analyser only — never to destination, or it howls
+  echo.peakRms = 0;
+
+  echo.before = await sampleInboundFromPeerConnections([receiver], null);
+
+  if (typeof window.MediaRecorder === 'function') {
+    try {
+      echo.recorder = new MediaRecorder(stream);
+      echo.recorder.ondataavailable = function(ev) { if (ev.data && ev.data.size) echo.chunks.push(ev.data); };
+      echo.recorder.start();
+    } catch (e) {
+      echo.recorder = null;
+      console.warn('[Echo test] recorder unavailable:', e.message);
+    }
+  }
+
+  echoStatus('Speak now — recording…');
+  var btn = document.getElementById('btn-test-echo');
+  if (btn) btn.textContent = 'Stop & Replay';
+  var meter = document.getElementById('echo-test-level-fill');
+  if (meter && meter.closest('.media-level')) meter.closest('.media-level').classList.remove('hidden');
+
+  var data = new Uint8Array(echo.analyser.fftSize);
+  var tick = function() {
+    if (_echo !== echo || !echo.analyser) return;
+    echo.analyser.getByteTimeDomainData(data);
+    var sum = 0;
+    for (var i = 0; i < data.length; i++) {
+      var centered = (data[i] - 128) / 128;
+      sum += centered * centered;
+    }
+    var rms = Math.sqrt(sum / data.length);
+    if (rms > echo.peakRms) echo.peakRms = rms;
+    if (meter) meter.style.width = Math.max(0, Math.min(100, Math.round(rms * 220))) + '%';
+    echo.raf = requestAnimationFrame(tick);
+  };
+  tick();
+
+  echo.autoStop = setTimeout(function() { if (_echo === echo) stopEchoTest({ replay: true }); }, ECHO_MAX_RECORD_MS);
+}
+
+async function stopEchoTest(options) {
+  options = options || {};
+  var echo = _echo;
+  if (!echo) return;
+  _echo = null;
+
+  if (echo.autoStop) clearTimeout(echo.autoStop);
+  if (echo.raf) cancelAnimationFrame(echo.raf);
+
+  var blob = null;
+  if (echo.recorder && echo.recorder.state !== 'inactive') {
+    blob = await new Promise(function(resolve) {
+      echo.recorder.onstop = function() {
+        resolve(echo.chunks.length ? new Blob(echo.chunks, { type: echo.recorder.mimeType || 'audio/webm' }) : null);
+      };
+      echo.recorder.stop();
+    });
+  }
+
+  var verdict = null;
+  if (options.replay) {
+    var after = await sampleInboundFromPeerConnections([echo.receiver], null);
+    var report = buildAudioCheckReport(echo.before, after);
+    verdict = summarizeEchoTest(report, echo.peakRms);
+    verdict.iceType = await echoSelectedIceType(echo.receiver);
+    echo.report = report;
+  }
+
+  try { echo.sender.close(); } catch (_) {}
+  try { echo.receiver.close(); } catch (_) {}
+  if (echo.stream) echo.stream.getTracks().forEach(function(t) { t.stop(); });
+  if (echo.ctx) echo.ctx.close().catch(function() {});
+  if (echo.audioEl) { echo.audioEl.srcObject = null; }
+
+  var btn = document.getElementById('btn-test-echo');
+  if (btn) btn.textContent = 'Test over network';
+  var meter = document.getElementById('echo-test-level-fill');
+  if (meter) {
+    meter.style.width = '0%';
+    if (meter.closest('.media-level')) meter.closest('.media-level').classList.add('hidden');
+  }
+
+  if (options.replay) {
+    renderEchoVerdict(verdict, echo.report);
+    if (blob) renderMicTestPlayback(blob);
+  } else {
+    echoStatus('');
+  }
+}
+
+function renderEchoVerdict(verdict, report) {
+  if (!verdict) { echoStatus(''); return; }
+  var suffix = '';
+  if (verdict.iceType === 'relay') suffix = ' · via TURN relay';
+  else if (verdict.iceType) suffix = ' · direct (' + verdict.iceType + '), not relayed';
+  if (report && report.ok && report.jitterBufferMs != null) suffix += ' · ' + report.jitterBufferMs + ' ms buffer';
+  echoStatus(verdict.headline + ' — ' + verdict.detail + suffix, verdict.status);
+}
+
+async function toggleEchoTest() {
+  if (_echo) await stopEchoTest({ replay: true });
+  else {
+    try { await startEchoTest(); }
+    catch (e) {
+      await stopEchoTest();
+      echoStatus('Network test failed: ' + e.message, 'error');
+      console.warn('[Echo test]', e.message);
+    }
   }
 }
 
@@ -8622,6 +8917,8 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-test-turn').addEventListener('click', testTurnCredentials);
   var btnMicTest = $('btn-test-mic');
   if (btnMicTest) btnMicTest.addEventListener('click', toggleMicTest);
+  var btnEchoTest = $('btn-test-echo');
+  if (btnEchoTest) btnEchoTest.addEventListener('click', toggleEchoTest);
   var btnSpeakerTest = $('btn-test-speaker');
   if (btnSpeakerTest) btnSpeakerTest.addEventListener('click', function() { testSpeakerOutput().catch(function(e) { console.warn('[Speaker test]', e.message); }); });
   var btnCameraPreview = $('btn-preview-camera');

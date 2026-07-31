@@ -209,6 +209,16 @@
             <span class="media-level hidden"><span id="mic-test-level-fill" class="media-level-fill"></span></span>
             <audio id="mic-test-playback" class="mic-test-playback hidden" controls preload="none"></audio>
           </div>
+          <!-- The network echo test needs fetchIceServers(), opusSdpTransform()
+               and the RNNoise capture path, none of which exist in this window
+               (no module system — everything here is duplicated by hand). Rather
+               than fork ~400 lines including a WASM worklet, point at the main
+               window, which has the real implementation. -->
+          <p class="settings-hint" style="margin-top:10px">
+            <strong>Test over network</strong> — hear what you actually sound like
+            to others, after Opus encoding and a round trip through the relay. Run
+            it from the main Voxal window (⚙ → Audio).
+          </p>
         </div>
         <p class="settings-subtitle">Noise suppression</p>
         <div class="noise-card-group" id="noise-suppression-group" role="radiogroup" aria-label="Noise suppression mode">

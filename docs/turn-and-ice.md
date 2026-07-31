@@ -42,6 +42,43 @@ You can also set `localStorage['turn-fallback']` directly to a JSON
 > toward per-account API keys). For anything production-grade, use your own
 > relay (below), org/metered TURN, or the embed `config` channel.
 
+## Testing the relay: Settings → Audio → *Test over network*
+
+The **Test** button next to the microphone records the **raw mic** and replays it,
+so it only proves capture works. **Test over network** proves the rest: it opens
+two `RTCPeerConnection`s in the page, both forced to `iceTransportPolicy: 'relay'`,
+and connects them through whatever `fetchIceServers()` resolved. Your audio is
+Opus-encoded, leaves the device, transits the TURN relay, comes back, is decoded,
+and **the returned audio is what gets recorded and replayed** — so you hear what a
+remote listener actually hears, without needing a second person.
+
+It reports the concealment ratio (how much audio the jitter buffer had to
+fabricate — a better measure of what was heard than packet loss, since it is
+counted *after* FEC recovery), the negotiated jitter buffer, and whether the run
+genuinely went through a relay.
+
+Two outcomes are worth knowing:
+
+- **“No TURN relay reachable — audio never left the device.”** Relay-only ICE
+  gathered no candidates. This is a real diagnostic, not a bug in the test: it
+  means peers behind strict firewalls cannot reach you either. Check the
+  *Fallback relay* setting above, or configure org/metered/custom TURN.
+- **“… not relayed.”** The loopback connected over a direct/host path instead of
+  the relay. The quality figures are still valid, but they did not exercise TURN.
+
+The test is unavailable while you are in a room (the RNNoise capture graph is
+shared with the live call) — use the per-peer **“Can they hear me?”** check in
+dev mode instead. On the Tauri desktop **preferences window** the test is not
+available; run it from the main window.
+
+> **Why not a server-side echo service?** Cloudflare **Workers** cannot do this:
+> they are V8 isolates with no UDP sockets, no ICE agent and no DTLS/SRTP stack,
+> so they cannot terminate WebRTC media at all. The only way to build a real
+> remote echo is an **SFU** (e.g. Cloudflare Realtime), and an SFU **decrypts**
+> media — which would break the guarantee at the top of this document that a
+> relay never has access to your audio. The loopback keeps that guarantee and
+> tests the path Voxal actually uses.
+
 ## Self-hosting a TURN relay (coturn)
 
 For reliable traversal, run your own [coturn](https://github.com/coturn/coturn).

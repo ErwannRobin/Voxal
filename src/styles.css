@@ -816,6 +816,25 @@ html[data-theme="light"] .debug-consent-text strong { color: #b45309; }
   user-select: text;
   -webkit-user-select: text;
 }
+/* Network echo test (Settings → Audio) */
+.echo-test-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.echo-test-row .media-level { flex: 1; min-width: 0; }
+.echo-test-status {
+  font-size: 11.5px;
+  line-height: 1.45;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bg-raised);
+  color: var(--text-muted);
+}
+.echo-test-status.hidden { display: none; }
+
 /* "Can they hear me?" audio check (dev mode) */
 .device-info-popover .audio-check { margin-top: 10px; }
 .device-info-popover .audio-check-btn {

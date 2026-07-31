@@ -232,6 +232,69 @@ test.describe('mesh @mesh', () => {
     expect(result.headline).toContain('muted');
   });
 
+  // The network echo test, driven for real: mic -> Opus -> loopback -> decode ->
+  // recorded -> replayed. CI has no TURN server, so the policy is relaxed to
+  // 'all'; everything else is the production code path.
+  test('echo test records the returned audio and scores it', async ({ makePeer }) => {
+    const p = await makePeer({ pseudo: 'Solo' });
+
+    const out = await p.evaluate(async () => {
+      await window.startEchoTest({ iceTransportPolicy: 'all' });
+      if (!window.echoTestRunning()) {
+        return { failed: document.getElementById('echo-test-status').textContent };
+      }
+      const midStatus = document.getElementById('echo-test-status').textContent;
+      await new Promise((r) => setTimeout(r, 4000));
+      await window.stopEchoTest({ replay: true });
+      const audio = document.getElementById('mic-test-playback');
+      return {
+        midStatus,
+        finalStatus: document.getElementById('echo-test-status').textContent,
+        statusClass: document.getElementById('echo-test-status').className,
+        // The replay element is fed from the RETURNED stream, not the raw mic.
+        replayed: !!audio.src && !audio.classList.contains('hidden'),
+        stillRunning: window.echoTestRunning(),
+        button: document.getElementById('btn-test-echo').textContent,
+      };
+    });
+
+    expect(out.failed).toBeUndefined();
+    expect(out.midStatus).toContain('Speak now');
+    expect(out.replayed).toBe(true);
+    // Audio genuinely made the round trip, so it must be scored, never "silent".
+    expect(out.statusClass).toMatch(/ac-(good|choppy|bad)/);
+    expect(out.finalStatus).toContain('You would sound');
+    // A loopback that did not use a relay must say so rather than implying it did.
+    expect(out.finalStatus).toContain('not relayed');
+    // Everything is torn down afterwards.
+    expect(out.stillRunning).toBe(false);
+    expect(out.button).toBe('Test over network');
+  });
+
+  // Guards the bug where `ontrack` (which fires on NEGOTIATION, not media flow)
+  // was treated as success: the test reported "recording" with no relay, no ICE
+  // connection and not one packet exchanged.
+  test('echo test reports no relay instead of pretending to work', async ({ makePeer }) => {
+    const p = await makePeer({ pseudo: 'Solo' });
+    // Fallback relay → Off, so relay-only ICE can gather nothing at all.
+    await p.evaluate(() => localStorage.setItem('turn-fallback', '[]'));
+
+    const out = await p.evaluate(async () => {
+      await window.startEchoTest(); // real 'relay' policy
+      return {
+        status: document.getElementById('echo-test-status').textContent,
+        cls: document.getElementById('echo-test-status').className,
+        running: window.echoTestRunning(),
+        button: document.getElementById('btn-test-echo').textContent,
+      };
+    });
+
+    expect(out.running).toBe(false);
+    expect(out.cls).toContain('ac-error');
+    expect(out.status).toContain('No TURN relay reachable');
+    expect(out.button).toBe('Test over network');
+  });
+
   test('host migration: the lone survivor takes over when the host crashes', async ({ makePeer }) => {
     const host = await makePeer({ pseudo: 'Hostie' });
     const code = await createRoom(host);
