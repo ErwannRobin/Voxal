@@ -54,3 +54,25 @@ For production-grade deployments:
 - Browser keyboard PTT only works while the tab is focused.
 - PeerJS public infrastructure has free-tier limits; self-host for larger scale.
 - TURN is recommended for reliability across restrictive enterprise networks.
+
+## Voxal Connect (account sign-in)
+
+Web sign-in returns over **https**, not the `voxal://` custom scheme:
+
+```
+app  → voxal.app/connect?state=…&responseMode=redirect&redirect_uri=https://ptt.voxal.app/auth/callback
+     ← 302 https://ptt.voxal.app/auth/callback?token=…&state=…
+```
+
+The token is validated against the stored `state`, then stripped from the URL
+with `history.replaceState` so it never lingers in history or the `Referer`
+header. `/auth/callback` is served by the app itself via a `vercel.json` rewrite.
+
+Native (Tauri desktop, iOS/Android) sends `responseMode=deep-link` and keeps
+using `voxal://auth` — that is how the OS routes back into the app.
+
+The server side lives in **`ErwannRobin/voxal-presence`**
+(`src/pages/ConnectPage.tsx` + `src/lib/authCallback.ts`). Any new web origin
+must be added to the redirect allowlist there — `DEFAULT_ALLOWED_REDIRECT_ORIGINS`,
+or `VITE_AUTH_REDIRECT_ORIGINS` for preview/dev deployments — otherwise
+`/connect` refuses to redirect to it.
