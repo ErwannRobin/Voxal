@@ -706,6 +706,31 @@ async function fetchAnonymousIceServers() {
   return servers.slice();
 }
 
+// What fetchIceServers() actually resolved, last time it ran.
+//
+// The connection-status badge used to read localStorage['metered-status'], which
+// only the ORG path ever writes — so an anonymous user with a perfectly working
+// relay was told "TURN not configured". It was also persisted, so it could go on
+// claiming "ok" long after a credential died. Deriving the status from the live
+// resolution fixes both directions.
+var _lastIceResolution = null; // { source, relayCount, at }
+
+// Set when a Test-over-network run genuinely completed over a relay. That round
+// trip is the only actual PROOF a relay works, as opposed to being configured.
+var _relayVerifiedAt = null;
+
+function noteIceResolution(source, servers) {
+  _lastIceResolution = {
+    source: source,
+    relayCount: countRelayServers(servers),
+    at: Date.now(),
+  };
+  // The badge lives in the bootstrap scope and is published on window, so it may
+  // not exist yet when ICE is prefetched at startup.
+  if (typeof updateTurnBadge === 'function') updateTurnBadge();
+  return servers;
+}
+
 // 0. Iframe-provided ICE servers (postMessage 'config') — highest precedence
 // 1. Try org TURN (backend-managed, short-lived credentials — preferred)
 // 2. Try locally configured metered.ca credentials (manual fallback)
@@ -714,7 +739,7 @@ async function fetchIceServers() {
   // --- 0. ICE servers supplied by the embedding page ---
   if (_iframeIceServers && _iframeIceServers.length) {
     devLog('[ICE] Using ' + _iframeIceServers.length + ' embed-provided server(s)');
-    return _iframeIceServers.slice();
+    return noteIceResolution('embed', _iframeIceServers.slice());
   }
 
   // --- 1. Org ICE servers from Voxal backend ---
@@ -735,7 +760,7 @@ async function fetchIceServers() {
           localStorage.setItem(METERED_COUNT_STORE_KEY, String(ice_servers.length));
           localStorage.setItem(METERED_SERVERS_STORE_KEY, JSON.stringify(ice_servers));
           if (typeof updateTurnBadge === 'function') updateTurnBadge();
-          return ice_servers;
+          return noteIceResolution('org', ice_servers);
         }
         console.log('[TURN] No org ICE servers, falling through');
         devLog('[ICE] Org: no servers configured, trying next…', 'warn');
@@ -767,7 +792,7 @@ async function fetchIceServers() {
       if (Array.isArray(servers) && servers.length > 0) {
         console.log('[TURN] Using', servers.length, 'ICE servers from local metered.ca config');
         devLog('[ICE] metered.ca: ' + servers.length + ' server(s) ✓');
-        return servers;
+        return noteIceResolution('metered', servers);
       }
     } catch (e) {
       console.warn('[TURN] Local metered.ca fetch failed, falling back to STUN:', e.message);
@@ -785,7 +810,7 @@ async function fetchIceServers() {
     if (anon && anon.length) {
       console.log('[TURN] Using', anon.length, 'anonymous ICE server(s)');
       devLog('[ICE] Anonymous TURN: ' + anon.length + ' server(s) ✓');
-      return FALLBACK_STUN.concat(anon);
+      return noteIceResolution('anonymous', FALLBACK_STUN.concat(anon));
     }
     _anonTurnError = 'no servers returned';
     devLog('[ICE] Anonymous TURN: none available, trying next…', 'warn');
@@ -799,7 +824,7 @@ async function fetchIceServers() {
   var fb = fallbackIceServers();
   var relays = fb.filter(function(s) { return /^turns?:/.test(s.urls); }).length;
   devLog('[ICE] Using public fallback: ' + fb.length + ' server(s), ' + relays + ' relay(s)', 'warn');
-  return fb;
+  return noteIceResolution('fallback', fb);
 }
 
 // --- State -------------------------------------------------------------------
@@ -5698,6 +5723,10 @@ async function stopEchoTest(options) {
   }
 
   if (options.replay) {
+    if (verdict && verdict.iceType === 'relay') {
+      _relayVerifiedAt = Date.now();
+      if (typeof updateTurnBadge === 'function') updateTurnBadge();
+    }
     renderEchoVerdict(verdict, echo.report);
     if (blob) renderMicTestPlayback(blob);
   } else {
@@ -8633,15 +8662,54 @@ window.addEventListener('DOMContentLoaded', function() {
     }
   }
 
+  // Where the relay currently comes from, in words the user can act on. Derived
+  // from the live resolution, NOT from the persisted org-only metered-status key
+  // — that key is blank for anonymous users with a perfectly working relay.
+  // No parentheses in these — they are rendered inside a "(…)" already.
+  const ICE_SOURCE_LABELS = {
+    embed:     'provided by this site',
+    org:       'your Voxal organisation',
+    metered:   'metered.ca',
+    anonymous: 'Cloudflare, anonymous',
+  };
+
+  // { state: 'ok' | 'warn' | 'none' | 'pending', text }
+  function turnStatusSummary() {
+    if (!_lastIceResolution) return { state: 'pending', text: 'Checking relay…' };
+
+    const { source, relayCount } = _lastIceResolution;
+    if (!relayCount) {
+      return { state: 'none', text: 'TURN not configured' };
+    }
+
+    // The built-in public relay is retired and does not work. Reporting it as
+    // "configured" just because servers were returned would be a lie with a
+    // green tick on it.
+    if (source === 'fallback') {
+      if (usingDefaultFallbackRelay(fallbackIceServers())) {
+        return { state: 'warn', text: 'TURN — built-in public relay (retired, unlikely to work)' };
+      }
+      return { state: 'ok', text: 'TURN — ' + relayCount + ' server' + (relayCount === 1 ? '' : 's') + ' (custom relay)' };
+    }
+
+    const label = ICE_SOURCE_LABELS[source];
+    return {
+      state: 'ok',
+      text: 'TURN — ' + relayCount + ' server' + (relayCount === 1 ? '' : 's') +
+            (label ? ' (' + label + ')' : ''),
+    };
+  }
+
   // TURN settings modal
   function connStatusHTML() {
-    const turnStatus = localStorage.getItem(METERED_STATUS_STORE_KEY);
-    const turnCount  = localStorage.getItem(METERED_COUNT_STORE_KEY);
-    const turnLine = turnStatus === 'ok'
-      ? '<span class="cs-ok">✓</span> TURN — ' + (turnCount ? turnCount + ' servers' : 'configured')
-      : turnStatus === 'error'
-      ? '<span class="cs-err">✕</span> TURN error'
-      : '<span class="cs-muted">—</span> TURN not configured';
+    const turn = turnStatusSummary();
+    // A relayed round trip is the only actual proof, as opposed to "configured".
+    const verified = turn.state === 'ok' && _relayVerifiedAt ? ' · verified' : '';
+    const turnLine =
+      turn.state === 'ok'   ? '<span class="cs-ok">✓</span> ' + turn.text + verified
+      : turn.state === 'warn' ? '<span class="cs-err">⚠</span> ' + turn.text
+      : turn.state === 'pending' ? '<span class="cs-muted">…</span> ' + turn.text
+      : '<span class="cs-muted">—</span> ' + turn.text;
 
     const voxalLine = presenceToken()
       ? '<span class="cs-ok">✓</span> Voxal Connect — ' + (function() {
@@ -8657,14 +8725,14 @@ window.addEventListener('DOMContentLoaded', function() {
   }
 
   window.updateTurnBadge = function updateTurnBadge() {
-    const online     = navigator.onLine;
-    const turnStatus = localStorage.getItem(METERED_STATUS_STORE_KEY);
-    const badge      = $('turn-badge');
+    const online = navigator.onLine;
+    const badge  = $('turn-badge');
+    if (!badge) return;
     badge.classList.remove('ok', 'partial');
     if (!online) {
       // red (default) — no connection possible
-    } else if (turnStatus === 'ok') {
-      badge.classList.add('ok');      // green — STUN + TURN
+    } else if (turnStatusSummary().state === 'ok') {
+      badge.classList.add('ok');      // green — STUN + a relay we believe in
     } else {
       badge.classList.add('partial'); // orange — STUN only
     }
