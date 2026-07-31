@@ -165,4 +165,84 @@ memory on the iOS/Android *native* apps still fall back to web APIs. Adding
 rebuild (not OTA). Battery low-power mode and connection type on iOS/desktop
 WebKit remain unavailable regardless — the panel renders "—" for them.
 
+## 🔊 CONFIRMED DEAD: the built-in fallback TURN relay (high priority)
+
+**Goal:** Ship a default relay that actually works, or stop pretending to have one.
+
+**Status: confirmed broken.** metered.ca has **retired** the shared
+`openrelayproject` credentials in favour of per-account API keys, so every entry
+in `DEFAULT_FALLBACK_TURN` fails. Anonymous users have **no working TURN at
+all** — direct/STUN peers connect, but anyone behind symmetric NAT or a strict
+firewall cannot. Surfaced by Settings → Audio → *Test over network*, which now
+names the retired default explicitly.
+
+**Mitigated:** `api/ice-servers.js` now mints short-lived Cloudflare TURN
+credentials for anonymous users (step 2.5 of `fetchIceServers()`). Set
+`CF_TURN_TOKEN_ID` and `CF_TURN_TOKEN_SECRET` on the deployment and anonymous
+users have a working relay again — see `docs/turn-and-ice.md`.
+
+**Still open:** `DEFAULT_FALLBACK_TURN` remains in the code as a last resort even
+though it is known dead, so every peer that reaches step 3 still spends ICE
+gathering time on four corpses. Decide whether to drop it entirely now that a
+working path exists.
+
+`fetchIceServers()` step 3 returns `DEFAULT_FALLBACK_TURN` — four allocations
+against `openrelay.metered.ca` with public credentials Open Relay has been
+retiring in favour of per-account keys. Nothing verifies they still work, and a
+peer that genuinely needs a relay has no alternative.
+
+The outgoing-audio tuning work mitigates the symptoms (a relayed path
+immediately gets the wide jitter buffer, Opus FEC is on, the uplink is no longer
+wasted on duplicate streams) but cannot manufacture relay capacity.
+
+Exit criteria:
+- Either a self-hosted coturn behind a rate-limited short-lived-credential
+  endpoint, or a funded metered.ca tier, reachable without a Voxal account
+- `DEFAULT_FALLBACK_TURN` points at it (TCP/443 + `turns:` included)
+- A liveness probe so a dead relay is visible in the TURN badge instead of
+  silently degrading calls
+
+---
+
+## 🖥️ Network echo test is missing from the Tauri preferences window
+
+**Goal:** Offer Settings → Audio → *Test over network* on the desktop app's
+standalone preferences window, not just the in-page modal.
+
+`settings.html` duplicates its logic by hand (no module system) and has none of
+`fetchIceServers()`, `opusSdpTransform()` or the RNNoise capture path — porting
+the echo test means ~400 duplicated lines including a WASM worklet, into the
+file that already caused the noise-suppression default to drift. For now it
+shows a hint pointing at the main window.
+
+Exit criteria (either):
+- `settings.html` and `main.js` share a real module for ICE + Opus + capture, or
+- the preferences window can ask the main window to run the test and show the
+  result where the user is looking
+
+---
+
+## 🎙️ Eliminate the audio-connection glare duplicate (3+ peer rooms)
+
+**Goal:** Exactly one MediaConnection carrying our mic per remote peer, always.
+
+`connectOutgoingAudioToPeers` skips a peer that can already be *seen* to receive
+our mic, but when two peers call each other simultaneously neither has answered
+yet, so both connections survive and that speaker uploads twice to that peer.
+Bounded at one outgoing call per peer, so it is waste rather than a leak.
+
+The fix is a deterministic tie-break (lower peer ID closes its own redundant
+`audioMediaOut`), but it is **blocked on audio continuity**: closing it fires the
+remote's `clearPeerMedia`, which `detachAudio`s the peer and nulls `media`,
+killing playback the surviving connection had already attached. So:
+
+Exit criteria:
+- `clearPeerMedia` re-attaches from the surviving connection's remote stream
+  (needs the remote stream kept on the connection entry) instead of detaching
+- Lower-ID-closes tie-break added to the stats reconciliation pass
+- The `@mesh` case `a speaker opens at most one outgoing audio call per listener`
+  tightened from "at most 2 senders" back to "exactly 1"
+
+---
+
 _Add new items above this line._

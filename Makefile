@@ -1,5 +1,5 @@
 .PHONY: help run run-web dev debug build build-debug build-signed build-web install clean lint check test \
-        test-rust test-e2e test-mesh coverage coverage-rust coverage-e2e \
+        test-rust test-api test-e2e test-mesh coverage coverage-rust coverage-e2e \
         cap-sync cap-ios cap-android build-android docs release
 
 # Default target
@@ -248,10 +248,13 @@ release:
 check:
 	cd src-tauri && cargo check
 
-test: check test-rust test-e2e
+test: check test-rust test-api test-e2e
 
 test-rust:
 	npm run test:rust
+
+test-api:
+	npm run test:api
 
 test-e2e:
 	npm run test:e2e

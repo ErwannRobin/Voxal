@@ -219,6 +219,16 @@
                 <span class="media-level hidden"><span id="mic-test-level-fill" class="media-level-fill"></span></span>
                 <audio id="mic-test-playback" class="mic-test-playback hidden" controls preload="none"></audio>
               </div>
+              <div class="settings-test-row echo-test-row">
+                <button id="btn-test-echo" type="button" class="btn btn-secondary btn-sm">Test over network</button>
+                <span class="media-level hidden"><span id="echo-test-level-fill" class="media-level-fill"></span></span>
+              </div>
+              <p class="settings-hint">
+                Sends your voice out over the network and back through a relay, then
+                replays what came back — so you hear what others actually hear, not
+                just your raw microphone.
+              </p>
+              <div id="echo-test-status" class="echo-test-status hidden"></div>
             </div>
             <p class="settings-subtitle">Noise suppression</p>
             <div class="noise-card-group" id="noise-suppression-group" role="radiogroup" aria-label="Noise suppression mode">
@@ -377,6 +387,35 @@
                            spellcheck="false" autocomplete="off" />
                     <button class="input-clear" data-target="input-service-url" aria-label="Clear">✕</button>
                   </div>
+                </div>
+                <p class="settings-sublabel" style="margin-top:16px">Jitter buffer</p>
+                <p class="settings-hint">
+                  How much incoming audio to buffer before playing it. Higher values
+                  smooth out choppy audio on a lossy or relayed connection, at the
+                  cost of a little delay. Automatic raises it on its own when a link
+                  starts dropping packets.
+                </p>
+                <div class="relay-modes">
+                  <label class="relay-opt">
+                    <input type="radio" name="jitter-mode" value="auto" />
+                    <span>Automatic <em>(recommended)</em></span>
+                  </label>
+                  <label class="relay-opt">
+                    <input type="radio" name="jitter-mode" value="manual" />
+                    <span>Manual</span>
+                  </label>
+                </div>
+                <div id="jitter-manual" class="jitter-manual hidden">
+                  <div class="jitter-slider-row">
+                    <input id="input-jitter-ms" type="range" min="0" max="500" step="10" value="80"
+                           aria-label="Jitter buffer target in milliseconds" />
+                    <output id="jitter-ms-value" for="input-jitter-ms">80 ms</output>
+                  </div>
+                  <p class="settings-hint" id="jitter-host-hint">
+                    0 ms leaves it to the browser. While Dev mode is on and you are
+                    the room host, this value is also pushed to everyone in the room
+                    (peers who set their own value keep theirs).
+                  </p>
                 </div>
                 <div class="settings-field settings-inline-toggle" style="margin-top:16px">
                   <label for="toggle-dev-mode-modal" style="flex:1">Dev mode</label>

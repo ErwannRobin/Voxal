@@ -22,6 +22,10 @@
  *   video-mode   { enabled }                    host -> peer (toggle video mode, dev only)
  *   video-offer  { peerId }                     peer -> host (relayed) — peer started camera
  *   video-stop   { peerId }                     peer -> host (relayed) — peer stopped camera
+ *   audio-check-request  { peerId, from,        viewer -> host (relayed to target); dev only
+ *                          durationMs }
+ *   audio-check-response { peerId, report,       target -> host (relayed to requester); dev only
+ *                          declined, from }
  *   device-info-request  { peerId, from }       viewer -> host (relayed to target); dev only
  *   device-info-response { peerId, info,        target -> host (relayed to requester); dev only
  *                          declined, from }
@@ -60,7 +64,9 @@ const METERED_STATUS_STORE_KEY  = 'metered-status';  // 'ok' | 'error' | null
 const METERED_COUNT_STORE_KEY   = 'metered-count';   // number of servers when ok
 const METERED_SERVERS_STORE_KEY = 'metered-servers'; // JSON array of ICE server objects
 const TURN_FALLBACK_KEY         = 'turn-fallback';   // JSON RTCIceServer[] override for the free relay fallback ('[]' disables)
+const ANON_TURN_URL_KEY         = 'anon-turn-url';   // override for the anonymous TURN credential endpoint
 
+const JITTER_BUFFER_KEY     = 'jitter-buffer';     // 'auto' | milliseconds as a string ('0' = browser default)
 const NOISE_SUPPRESSION_KEY = 'noise-suppression'; // 'rnnoise' | 'browser' | 'off'
 const MIC_DEVICE_KEY        = 'mic-device-id';
 const CAMERA_DEVICE_KEY     = 'camera-device-id';
@@ -563,6 +569,35 @@ function relayStateToStorage(mode, url, username, credential) {
   localStorage.setItem(TURN_FALLBACK_KEY, JSON.stringify([server]));
 }
 
+// Populate the advanced "Jitter buffer" controls from storage.
+function loadJitterControls() {
+  var st = jitterBufferSetting();
+  document.querySelectorAll('input[name="jitter-mode"]').forEach(function(r) { r.checked = (r.value === st.mode); });
+  var slider = $('input-jitter-ms');
+  // Seed the slider from the adaptive baseline so switching to Manual starts
+  // from what auto would have used, rather than snapping to 0.
+  if (slider) slider.value = String(st.mode === 'manual' ? st.ms : Math.round(AUDIO_PLAYOUT_DELAY_BASE * 1000));
+  var out = $('jitter-ms-value');
+  if (out && slider) out.textContent = slider.value + ' ms';
+  var manual = $('jitter-manual');
+  if (manual) manual.classList.toggle('hidden', st.mode !== 'manual');
+}
+
+// Persist the jitter choice from the advanced controls and apply it live.
+function syncJitterFromControls() {
+  var checked = document.querySelector('input[name="jitter-mode"]:checked');
+  var mode = checked ? checked.value : 'auto';
+  var manual = $('jitter-manual');
+  if (manual) manual.classList.toggle('hidden', mode !== 'manual');
+  var slider = $('input-jitter-ms');
+  var out = $('jitter-ms-value');
+  if (out && slider) out.textContent = slider.value + ' ms';
+  setJitterBufferSetting(mode, slider ? slider.value : 0);
+  // A host changing the room-wide value must republish it immediately rather
+  // than waiting for the next heartbeat.
+  if (inRoom && isHost) broadcastHostPeerLists();
+}
+
 // Populate the advanced "Fallback relay" controls from storage.
 function loadRelayControls() {
   var st = relayStateFromStorage();
@@ -608,6 +643,67 @@ function applyIframeConfig(msg) {
   var n = _iframeIceServers ? _iframeIceServers.length : 0;
   devLog('[ICE] Applied ' + n + ' ICE server(s) from the embedding page');
   iframeEmit({ type: 'config-applied', iceServers: n });
+}
+
+// --- Anonymous TURN credentials ----------------------------------------------
+//
+// A relay API key can never ship in the client: src/ is static files, so anyone
+// could read it and drain the quota. Instead a small server endpoint holds the
+// secret and hands out SHORT-LIVED credentials (see api/ice-servers.js). This is
+// what gives users with no account a working relay.
+
+const DEFAULT_ANON_TURN_URL = 'https://ptt.voxal.app/api/ice-servers';
+
+// Where to ask for anonymous credentials.
+//   - explicit override wins (self-hosters, tests);
+//   - on plain web over http(s) use a SAME-ORIGIN path, so a self-hosted deploy
+//     automatically uses its own endpoint rather than ptt.voxal.app's quota;
+//   - native (Capacitor/Tauri) has no same-origin server — the page is loaded
+//     from capacitor:// or the Tauri asset protocol — so it needs the absolute URL.
+function anonymousTurnUrl() {
+  var override = localStorage.getItem(ANON_TURN_URL_KEY);
+  if (override) return override.trim();
+  if (IS_PLAIN_WEB && /^https?:$/.test(location.protocol)) return '/api/ice-servers';
+  return DEFAULT_ANON_TURN_URL;
+}
+
+// Credentials are time-boxed, so keep them only until they expire.
+var _anonIceCache = null; // { servers, expiresAt }
+// Why the last anonymous-credential attempt failed, so the echo test can say
+// so instead of blaming the retired built-in relay.
+var _anonTurnError = null;
+
+function _anonIceCacheValid(now) {
+  return !!(_anonIceCache && _anonIceCache.expiresAt > (now || Date.now()));
+}
+
+async function fetchAnonymousIceServers() {
+  var now = Date.now();
+  if (_anonIceCacheValid(now)) return _anonIceCache.servers.slice();
+
+  var url = anonymousTurnUrl();
+  if (!url) return null;
+
+  // `no-store` is not optional: KNOWLEDGE/learning.md records the browser HTTP
+  // cache replaying stale anonymous-rooms GETs for days, and a cached credential
+  // is one that outlives its own expiry. tauriFetch goes through Rust, which is
+  // immune, and falls back to plain fetch elsewhere.
+  var res = window.__TAURI__
+    ? await tauriFetch(url)
+    : await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+
+  var data = await res.json();
+  var servers = data && Array.isArray(data.ice_servers) ? data.ice_servers : null;
+  if (!servers || !servers.length) return null;
+
+  var expiresAt = data.expires_at ? Date.parse(data.expires_at) : NaN;
+  // Expire slightly early rather than handing out a credential about to die.
+  _anonIceCache = {
+    servers: servers,
+    expiresAt: isFinite(expiresAt) ? expiresAt - 60000 : now + 10 * 60 * 1000,
+  };
+  return servers.slice();
 }
 
 // 0. Iframe-provided ICE servers (postMessage 'config') — highest precedence
@@ -677,6 +773,26 @@ async function fetchIceServers() {
       console.warn('[TURN] Local metered.ca fetch failed, falling back to STUN:', e.message);
       devLog('[ICE] metered.ca failed: ' + e.message, 'warn');
     }
+  }
+
+  // --- 2.5. Anonymous TURN credentials from our own endpoint ---
+  // This is the path that gives account-less users a working relay. It comes
+  // after any explicitly configured source, so an org or custom relay still wins.
+  _anonTurnError = null;
+  try {
+    devLog('[ICE] Requesting anonymous TURN credentials…');
+    var anon = await fetchAnonymousIceServers();
+    if (anon && anon.length) {
+      console.log('[TURN] Using', anon.length, 'anonymous ICE server(s)');
+      devLog('[ICE] Anonymous TURN: ' + anon.length + ' server(s) ✓');
+      return FALLBACK_STUN.concat(anon);
+    }
+    _anonTurnError = 'no servers returned';
+    devLog('[ICE] Anonymous TURN: none available, trying next…', 'warn');
+  } catch (e) {
+    _anonTurnError = e.message;
+    console.warn('[TURN] Anonymous TURN fetch failed:', e.message);
+    devLog('[ICE] Anonymous TURN failed: ' + e.message, 'warn');
   }
 
   // --- 3. Public STUN + best-effort free TURN relay ---
@@ -2677,55 +2793,334 @@ function removeRecentRoom(code) {
   if (window._updateRecentRooms) window._updateRecentRooms();
 }
 
+// --- Audio quality tuning ----------------------------------------------------
+//
+// Voxal is a push-to-talk walkie-talkie over a full audio mesh, so a speaker
+// uploads one Opus stream per listener and anonymous rooms have no org TURN —
+// they fall back to a shared, rate-limited public relay. Both make the outgoing
+// stream the fragile part, and untuned WebRTC defaults turn a lossy uplink into
+// chopped ("robotic") audio on the *listener's* side. Three knobs fix that:
+//
+//   1. Opus fmtp: in-band FEC on, DTX off, mono, capped bitrate (below).
+//   2. Sender: an explicit bitrate cap + high network priority (DSCP), so one
+//      speaker's N uploads don't congest each other.
+//   3. Receiver: a jitter-buffer floor via `playoutDelayHint`. Chromium's
+//      default target delay is tiny; a few tens of ms of jitter then produce
+//      audible chopping. Trading ~80 ms of latency for smoothness is the right
+//      call for PTT, and lossy/relayed links get a bigger buffer still.
+
+// Speech at 16 kHz mono is transparent well under this; the cap matters because
+// the mesh multiplies it by the number of listeners.
+const OPUS_MAX_BITRATE = 32000;
+
+// Jitter-buffer targets (seconds). Base applies to every link; poor kicks in on
+// measurable loss/jitter or a relayed path.
+const AUDIO_PLAYOUT_DELAY_BASE = 0.08;
+const AUDIO_PLAYOUT_DELAY_POOR = 0.20;
+const AUDIO_POOR_LOSS_PERCENT  = 3;
+const AUDIO_POOR_JITTER_MS     = 30;
+
+// Opus parameters we force into every audio offer/answer. `useinbandfec=1`
+// lets the decoder reconstruct isolated lost packets instead of dropping them;
+// `usedtx=0` keeps packets flowing while PTT is released (the mic track is
+// disabled, not removed) so the receiver's jitter buffer stays warm and the
+// first word after a press isn't clipped.
+const OPUS_FMTP_PARAMS = {
+  stereo: '0',
+  'sprop-stereo': '0',
+  useinbandfec: '1',
+  usedtx: '0',
+  maxaveragebitrate: String(OPUS_MAX_BITRATE)
+};
+
+// PeerJS `sdpTransform` hook — rewrites (or adds) the Opus fmtp line.
+function opusSdpTransform(sdp) {
+  if (typeof sdp !== 'string' || !sdp) return sdp;
+  try {
+    var rtpmap = /^a=rtpmap:(\d+)[ \t]+opus\/48000[^\r\n]*/im.exec(sdp);
+    if (!rtpmap) return sdp;
+    var pt = rtpmap[1];
+    var fmtpRe = new RegExp('^a=fmtp:' + pt + '[ \\t]+([^\\r\\n]*)', 'im');
+    var existing = fmtpRe.exec(sdp);
+
+    var params = {};
+    if (existing) {
+      existing[1].split(';').forEach(function(kv) {
+        var eq = kv.indexOf('=');
+        if (eq > 0) params[kv.slice(0, eq).trim()] = kv.slice(eq + 1).trim();
+        else if (kv.trim()) params[kv.trim()] = null;
+      });
+    }
+    Object.keys(OPUS_FMTP_PARAMS).forEach(function(k) { params[k] = OPUS_FMTP_PARAMS[k]; });
+
+    var line = 'a=fmtp:' + pt + ' ' + Object.keys(params).map(function(k) {
+      return params[k] === null ? k : k + '=' + params[k];
+    }).join(';');
+
+    return existing ? sdp.replace(fmtpRe, line) : sdp.replace(rtpmap[0], rtpmap[0] + '\r\n' + line);
+  } catch (_) {
+    return sdp; // never break call setup over a tuning nicety
+  }
+}
+
+// Options passed to every audio `peer.call()` / `call.answer()`.
+function audioCallOptions() {
+  return { sdpTransform: opusSdpTransform };
+}
+
+// The two MediaConnections that can carry audio for a peer: the one we answered
+// (`media`) and the one we opened (`audioMediaOut`).
+function audioPeerConnections(conn) {
+  if (!conn) return [];
+  return [conn.media, conn.audioMediaOut]
+    .filter(function(mc) { return mc && !mc.closed && mc.peerConnection; })
+    .map(function(mc) { return mc.peerConnection; });
+}
+
+function tuneAudioSenders(pc) {
+  if (!pc || typeof pc.getSenders !== 'function') return;
+  pc.getSenders().forEach(function(sender) {
+    if (!sender.track || sender.track.kind !== 'audio') return;
+    if (typeof sender.getParameters !== 'function' || typeof sender.setParameters !== 'function') return;
+    try {
+      var params = sender.getParameters();
+      if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+      var enc = params.encodings[0];
+      if (enc.maxBitrate === OPUS_MAX_BITRATE && enc.networkPriority === 'high') return; // already tuned
+      enc.maxBitrate = OPUS_MAX_BITRATE;
+      enc.networkPriority = 'high';
+      enc.priority = 'high';
+      var res = sender.setParameters(params);
+      if (res && typeof res.catch === 'function') res.catch(function() {});
+    } catch (_) {}
+  });
+}
+
+function tuneAudioReceivers(pc, delaySeconds) {
+  if (!pc || typeof pc.getReceivers !== 'function') return;
+  pc.getReceivers().forEach(function(receiver) {
+    if (!receiver.track || receiver.track.kind !== 'audio') return;
+    // Chromium-only; absent on WebKit (Safari, Tauri's WKWebView) — skip there.
+    if (!('playoutDelayHint' in receiver)) return;
+    try { receiver.playoutDelayHint = delaySeconds; } catch (_) {}
+  });
+}
+
+// A relayed path is the anonymous-room default (shared public TURN), so treat it
+// as poor up front rather than waiting for loss to show up. This is the
+// *adaptive* value; `effectivePlayoutDelay` layers the manual overrides on top.
+function audioPlayoutDelayFor(stats) {
+  if (!stats) return AUDIO_PLAYOUT_DELAY_BASE;
+  var poor = stats.iceType === 'relay'
+    || (typeof stats.lossPercent === 'number' && stats.lossPercent >= AUDIO_POOR_LOSS_PERCENT)
+    || (typeof stats.outLossPercent === 'number' && stats.outLossPercent >= AUDIO_POOR_LOSS_PERCENT)
+    || (typeof stats.jitterMs === 'number' && stats.jitterMs >= AUDIO_POOR_JITTER_MS);
+  return poor ? AUDIO_PLAYOUT_DELAY_POOR : AUDIO_PLAYOUT_DELAY_BASE;
+}
+
+// --- Jitter buffer override (Settings → Advanced, + host push in dev mode) ---
+//
+// `playoutDelayHint` is a RECEIVER-side knob: it changes how much audio *we*
+// buffer before playing what a peer sends. So a host wanting to smooth out a
+// choppy room has to have the *listeners* widen their buffers — which is why the
+// host can push a room-wide value (below) rather than only setting its own.
+
+const JITTER_BUFFER_MAX_MS = 500;
+
+// { mode: 'auto' | 'manual', ms: number }. Anything unparseable reads as auto,
+// so a corrupt value can never wedge audio at a silly buffer size.
+function jitterBufferSetting() {
+  var raw = localStorage.getItem(JITTER_BUFFER_KEY);
+  if (raw === null || raw === 'auto') return { mode: 'auto', ms: 0 };
+  var ms = parseInt(raw, 10);
+  if (!isFinite(ms) || ms < 0) return { mode: 'auto', ms: 0 };
+  return { mode: 'manual', ms: Math.min(ms, JITTER_BUFFER_MAX_MS) };
+}
+
+function setJitterBufferSetting(mode, ms) {
+  if (mode !== 'manual') { localStorage.removeItem(JITTER_BUFFER_KEY); }
+  else {
+    var n = Math.max(0, Math.min(parseInt(ms, 10) || 0, JITTER_BUFFER_MAX_MS));
+    localStorage.setItem(JITTER_BUFFER_KEY, String(n));
+  }
+  reapplyAudioTuningToAllPeers();
+}
+
+// The host's room-wide value, mirrored from peer-list/heartbeat. Only set while
+// the host has dev mode on; `null` means "no override in effect".
+var _hostJitterMs = null;
+
+// Treat it as untrusted input like every other host-supplied field: a peer drives
+// this channel, so clamp before it reaches a live PeerConnection.
+function sanitizeJitterMs(value) {
+  if (typeof value !== 'number' || !isFinite(value)) return null;
+  return Math.max(0, Math.min(Math.round(value), JITTER_BUFFER_MAX_MS));
+}
+
+// The value this host wants every listener in the room to use, or null. Gated on
+// dev mode so a stale manual setting can't quietly govern other people's audio.
+function hostJitterBroadcastMs() {
+  if (!isHost || !isDevModeEnabled()) return null;
+  var setting = jitterBufferSetting();
+  return setting.mode === 'manual' ? setting.ms : null;
+}
+
+// Precedence: an explicit local choice wins, then the host's room-wide push,
+// then the adaptive value. Local-first keeps the host from silently overriding
+// someone who deliberately set their own buffer.
+function effectivePlayoutDelay(stats) {
+  var local = jitterBufferSetting();
+  if (local.mode === 'manual') return local.ms / 1000;
+  if (!isHost && typeof _hostJitterMs === 'number') return _hostJitterMs / 1000;
+  return audioPlayoutDelayFor(stats);
+}
+
+// Which source is deciding the buffer right now — shown in the stats popover so
+// "is my override actually applied?" is answerable.
+function playoutDelaySource() {
+  if (jitterBufferSetting().mode === 'manual') return 'manual';
+  if (!isHost && typeof _hostJitterMs === 'number') return 'host';
+  return 'auto';
+}
+
+// Idempotent — safe to call on every stats tick and whenever a stream arrives.
+function applyAudioTuning(conn, delaySeconds) {
+  var delay = typeof delaySeconds === 'number'
+    ? delaySeconds
+    : effectivePlayoutDelay(conn && conn.webrtcStats);
+  audioPeerConnections(conn).forEach(function(pc) {
+    tuneAudioSenders(pc);
+    tuneAudioReceivers(pc, delay);
+  });
+}
+
+function applyAudioTuningToPeer(peerId) {
+  applyAudioTuning(connections.get(peerId));
+}
+
+// Push the current buffer choice to every live link at once — used when the
+// setting changes locally and when the host's pushed value arrives.
+function reapplyAudioTuningToAllPeers() {
+  connections.forEach(function(conn) { applyAudioTuning(conn); });
+  if (typeof _refreshOpenStatsPopover === 'function') _refreshOpenStatsPopover();
+}
+
 // --- WebRTC stats helpers ----------------------------------------------------
 
+function _round1(n) { return Math.round(n * 10) / 10; }
+
+// How many 5s samples of loss history to keep per peer (~5 minutes). A single
+// percentage from the last window hides brief dropouts entirely, which is what
+// made "it cut out for a second" impossible to confirm.
+const LOSS_HISTORY_MAX = 60;
+
+function _pushLossHistory(prevHistory, value) {
+  var history = (prevHistory || []).slice();
+  history.push(typeof value === 'number' ? value : 0);
+  if (history.length > LOSS_HISTORY_MAX) history = history.slice(history.length - LOSS_HISTORY_MAX);
+  return history;
+}
+
 async function _collectPeerStats(peerId, conn) {
-  if (!conn || !conn.media || !conn.media.peerConnection) return;
+  var pcs = audioPeerConnections(conn);
+  if (!pcs.length) return;
   try {
-    var reports = await conn.media.peerConnection.getStats();
-    var selectedPairId = null;
-    var pairs = {};
-    var localCandidates = {};
-    var inboundRtp = null;
-
-    reports.forEach(function(report) {
-      if (report.type === 'candidate-pair' && report.nominated) {
-        pairs[report.id] = report;
-        if (!selectedPairId || report.state === 'succeeded') selectedPairId = report.id;
-      }
-      if (report.type === 'local-candidate') localCandidates[report.id] = report;
-      if (report.type === 'inbound-rtp' && report.kind === 'audio') inboundRtp = report;
-    });
-
     var stats = {};
+    // Deltas are computed against the previous tick, so raw counters are summed
+    // across every audio link to this peer (a mesh peer can have two).
+    var inRaw  = { packetsLost: 0, packetsReceived: 0 };
+    var outRaw = { packetsLost: 0, packetsSent: 0 };
+    var rtts = [], jitters = [], iceTypes = [];
 
-    var pair = selectedPairId ? pairs[selectedPairId] : null;
-    if (pair) {
-      if (typeof pair.currentRoundTripTime === 'number') {
-        stats.rttMs = Math.round(pair.currentRoundTripTime * 1000);
-      }
-      var localCand = localCandidates[pair.localCandidateId];
-      if (localCand) {
-        stats.iceType = localCand.candidateType; // 'host', 'srflx', 'relay'
+    for (var i = 0; i < pcs.length; i++) {
+      var reports = await pcs[i].getStats();
+      var selectedPairId = null;
+      var pairs = {};
+      var localCandidates = {};
+
+      reports.forEach(function(report) {
+        if (report.type === 'candidate-pair' && report.nominated) {
+          pairs[report.id] = report;
+          if (!selectedPairId || report.state === 'succeeded') selectedPairId = report.id;
+        }
+        if (report.type === 'local-candidate') localCandidates[report.id] = report;
+
+        if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+          inRaw.packetsLost     += report.packetsLost || 0;
+          inRaw.packetsReceived += report.packetsReceived || 0;
+          if (typeof report.jitter === 'number') jitters.push(report.jitter * 1000);
+        }
+        if (report.type === 'outbound-rtp' && report.kind === 'audio') {
+          outRaw.packetsSent += report.packetsSent || 0;
+        }
+        // What the remote peer reports about the stream *we* send it. Without
+        // this there is no way to see "they can't hear me" from our own side —
+        // inbound-rtp only ever describes the direction we receive.
+        if (report.type === 'remote-inbound-rtp' && report.kind === 'audio') {
+          outRaw.packetsLost += report.packetsLost || 0;
+          if (typeof report.roundTripTime === 'number') rtts.push(report.roundTripTime * 1000);
+        }
+      });
+
+      var pair = selectedPairId ? pairs[selectedPairId] : null;
+      if (pair) {
+        if (typeof pair.currentRoundTripTime === 'number') rtts.push(pair.currentRoundTripTime * 1000);
+        var localCand = localCandidates[pair.localCandidateId];
+        if (localCand && localCand.candidateType) iceTypes.push(localCand.candidateType);
       }
     }
 
-    if (inboundRtp) {
-      var prev = (conn.webrtcStats && conn.webrtcStats._inboundRaw) || {};
-      var lostDelta  = (inboundRtp.packetsLost || 0) - (prev.packetsLost || 0);
-      var recvDelta  = (inboundRtp.packetsReceived || 0) - (prev.packetsReceived || 0);
-      if (recvDelta + lostDelta > 0) {
-        stats.lossPercent = Math.round((lostDelta / (recvDelta + lostDelta)) * 1000) / 10;
-      } else if (conn.webrtcStats) {
-        stats.lossPercent = conn.webrtcStats.lossPercent; // carry forward
-      }
-      if (typeof inboundRtp.jitter === 'number') {
-        stats.jitterMs = Math.round(inboundRtp.jitter * 1000);
-      }
-      stats._inboundRaw = { packetsLost: inboundRtp.packetsLost || 0, packetsReceived: inboundRtp.packetsReceived || 0 };
+    // Report the worst link to this peer — that is the one degrading the call.
+    if (iceTypes.length) {
+      stats.iceType = iceTypes.indexOf('relay') !== -1 ? 'relay'
+        : iceTypes.indexOf('srflx') !== -1 ? 'srflx'
+        : iceTypes[0]; // 'host', 'prflx', …
     }
+    if (rtts.length)    stats.rttMs    = Math.round(Math.max.apply(null, rtts));
+    if (jitters.length) stats.jitterMs = Math.round(Math.max.apply(null, jitters));
+
+    var prev = conn.webrtcStats || {};
+
+    var prevIn   = prev._inboundRaw || {};
+    var lostDelta = Math.max(0, inRaw.packetsLost - (prevIn.packetsLost || 0));
+    var recvDelta = Math.max(0, inRaw.packetsReceived - (prevIn.packetsReceived || 0));
+    if (recvDelta + lostDelta > 0) {
+      stats.lossPercent = _round1((lostDelta / (recvDelta + lostDelta)) * 100);
+    } else if (typeof prev.lossPercent === 'number') {
+      stats.lossPercent = prev.lossPercent; // carry forward
+    }
+    stats._inboundRaw = inRaw;
+
+    var prevOut   = prev._outboundRaw || {};
+    var outLostDelta = Math.max(0, outRaw.packetsLost - (prevOut.packetsLost || 0));
+    var outSentDelta = Math.max(0, outRaw.packetsSent - (prevOut.packetsSent || 0));
+    if (outSentDelta > 0) {
+      stats.outLossPercent = _round1(Math.min(100, (outLostDelta / outSentDelta) * 100));
+    } else if (typeof prev.outLossPercent === 'number') {
+      stats.outLossPercent = prev.outLossPercent; // carry forward
+    }
+    stats._outboundRaw = outRaw;
+
+    // Cumulative totals + peaks + a rolling window, so a brief dropout is still
+    // visible minutes later instead of being averaged away by the next sample.
+    stats.packetsLostTotal     = inRaw.packetsLost;
+    stats.packetsReceivedTotal = inRaw.packetsReceived;
+    stats.outPacketsLostTotal  = outRaw.packetsLost;
+    stats.outPacketsSentTotal  = outRaw.packetsSent;
+    stats.peakLossPercent = Math.max(prev.peakLossPercent || 0, stats.lossPercent || 0);
+    stats.peakOutLossPercent = Math.max(prev.peakOutLossPercent || 0, stats.outLossPercent || 0);
+    stats.lossHistory    = _pushLossHistory(prev.lossHistory, stats.lossPercent);
+    stats.outLossHistory = _pushLossHistory(prev.outLossHistory, stats.outLossPercent);
+
+    // The buffer actually in force on this link, for the popover readout.
+    stats.playoutDelayMs = Math.round(effectivePlayoutDelay(stats) * 1000);
+    stats.playoutDelaySource = playoutDelaySource();
 
     conn.webrtcStats = stats;
+
+    // Re-apply tuning with the freshly measured quality — this is what widens
+    // the jitter buffer once a link turns out to be lossy or relayed.
+    applyAudioTuning(conn, effectivePlayoutDelay(stats));
   } catch (_) {}
 }
 
@@ -2790,8 +3185,16 @@ function _buildStatsBadge(stats) {
   if (typeof stats.lossPercent === 'number') {
     var loss = document.createElement('span');
     loss.className = 'stat-badge ' + (stats.lossPercent > 5 ? 'stat-warn' : 'stat-neutral');
-    loss.textContent = stats.lossPercent.toFixed(1) + '% loss';
+    loss.textContent = '↓ ' + stats.lossPercent.toFixed(1) + '% loss';
     wrap.appendChild(loss);
+  }
+  // Loss on the stream we send, as reported back by the peer — the only way to
+  // see "they can't hear me" (a chopped uplink) from this side.
+  if (typeof stats.outLossPercent === 'number') {
+    var outLoss = document.createElement('span');
+    outLoss.className = 'stat-badge ' + (stats.outLossPercent > 5 ? 'stat-warn' : 'stat-neutral');
+    outLoss.textContent = '↑ ' + stats.outLossPercent.toFixed(1) + '% loss';
+    wrap.appendChild(outLoss);
   }
   if (typeof stats.jitterMs === 'number') {
     var jitter = document.createElement('span');
@@ -2819,6 +3222,92 @@ function _refreshOpenStatsPopover() {
     return;
   }
   body.appendChild(_buildStatsBadge(conn.webrtcStats));
+  body.appendChild(_buildLossDetail(conn.webrtcStats));
+}
+
+// A compact SVG sparkline of recent loss samples. Scaled to the worst sample in
+// the window (min 5%) so a flat-but-nonzero line still reads as "some loss"
+// rather than being squashed against the axis.
+function _buildLossSparkline(history, className) {
+  var W = 132, H = 22;
+  var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  svg.setAttribute('class', 'loss-spark ' + (className || ''));
+  svg.setAttribute('preserveAspectRatio', 'none');
+  var samples = history && history.length ? history : [0];
+  var peak = Math.max(5, Math.max.apply(null, samples));
+  var step = samples.length > 1 ? W / (samples.length - 1) : W;
+
+  var points = samples.map(function(v, i) {
+    var x = samples.length > 1 ? i * step : W / 2;
+    var y = H - (Math.min(v, peak) / peak) * (H - 2) - 1;
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+
+  // Filled area under the line reads better at this size than a bare stroke.
+  var area = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+  area.setAttribute('points', '0,' + H + ' ' + points + ' ' + W + ',' + H);
+  area.setAttribute('class', 'loss-spark-area');
+  svg.appendChild(area);
+
+  var line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+  line.setAttribute('points', points);
+  line.setAttribute('class', 'loss-spark-line');
+  svg.appendChild(line);
+  return svg;
+}
+
+function _lossDetailRow(label, value) {
+  var row = document.createElement('div');
+  row.className = 'stats-row';
+  var k = document.createElement('span');
+  k.className = 'stats-row-key';
+  k.textContent = label;
+  var v = document.createElement('span');
+  v.className = 'stats-row-val';
+  v.textContent = value == null ? '—' : value;
+  row.appendChild(k);
+  row.appendChild(v);
+  return row;
+}
+
+// Dropped packets in detail: totals since the link came up (a brief dropout
+// stays on the record), the worst sample seen, and the recent trend.
+function _buildLossDetail(stats) {
+  var wrap = document.createElement('div');
+  wrap.className = 'stats-detail';
+
+  // `expected` is the denominator the percentage is taken against: packets we
+  // should have received (received + lost) inbound, packets we sent outbound.
+  function direction(title, cls, pct, peak, lost, expected, history) {
+    if (typeof pct !== 'number' && !lost) return;
+    var head = document.createElement('div');
+    head.className = 'stats-detail-head';
+    head.textContent = title;
+    wrap.appendChild(head);
+    wrap.appendChild(_buildLossSparkline(history, cls));
+    wrap.appendChild(_lossDetailRow('Now / peak',
+      (typeof pct === 'number' ? pct.toFixed(1) : '—') + '% / ' +
+      (typeof peak === 'number' ? peak.toFixed(1) : '—') + '%'));
+    wrap.appendChild(_lossDetailRow('Dropped',
+      (lost || 0).toLocaleString() + ' of ' + (expected || 0).toLocaleString()));
+  }
+
+  direction('↓ Incoming', 'loss-spark-in', stats.lossPercent, stats.peakLossPercent,
+    stats.packetsLostTotal, (stats.packetsReceivedTotal || 0) + (stats.packetsLostTotal || 0),
+    stats.lossHistory);
+  direction('↑ Outgoing (reported by peer)', 'loss-spark-out', stats.outLossPercent, stats.peakOutLossPercent,
+    stats.outPacketsLostTotal, stats.outPacketsSentTotal, stats.outLossHistory);
+
+  if (typeof stats.playoutDelayMs === 'number') {
+    var srcLabel = { manual: 'manual', host: 'set by host', auto: 'auto' }[stats.playoutDelaySource] || 'auto';
+    var head = document.createElement('div');
+    head.className = 'stats-detail-head';
+    head.textContent = 'Jitter buffer';
+    wrap.appendChild(head);
+    wrap.appendChild(_lossDetailRow('Target', stats.playoutDelayMs + ' ms (' + srcLabel + ')'));
+  }
+  return wrap;
 }
 
 function showStatsPopover(peerId, anchorEl) {
@@ -2851,6 +3340,12 @@ function showStatsPopover(peerId, anchorEl) {
   if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
   popover.style.top = top + 'px';
   popover.style.left = left + 'px';
+  // The loss detail makes this panel tall enough to run off the bottom; flip it
+  // above the anchor when it would, and never start it off-screen.
+  var ph = popover.getBoundingClientRect().height;
+  if (top + ph > window.innerHeight - 8) {
+    popover.style.top = Math.max(8, rect.top + window.scrollY - ph - 4) + 'px';
+  }
 
   // Collect fresh stats then render
   _collectPeerStats(peerId, conn).then(function() { _refreshOpenStatsPopover(); });
@@ -3158,6 +3653,115 @@ function onDeviceInfoResponse(peerId, info, declined) {
   if (_deviceInfoPeerId && _deviceInfoPeerId === peerId) _refreshDeviceInfoPopover();
 }
 
+// --- Audio check plumbing (mirrors the device-info relay) --------------------
+
+// A peer answers an audio check: sample, wait out the window, sample again.
+// Gated on the same sharing consent as device info — it reports on this
+// device's playback state, so it is the same promise to the user.
+function respondToAudioCheckRequest(from, durationMs) {
+  var requesterId = from || roomCode;
+  var reply = function(report, declined) {
+    var msg = { type: 'audio-check-response', peerId: peer && peer.id, report: report,
+                declined: !!declined, from: from || null };
+    if (isHost) {
+      var rc = connections.get(requesterId);
+      if (rc && rc.data) sendDataIfOpen(rc.data, msg);
+    } else {
+      _sendToHostData(msg);
+    }
+  };
+  if (!isDeviceInfoSharingEnabled()) { reply(null, true); return; }
+
+  var window = Math.max(500, Math.min(Number(durationMs) || AUDIO_CHECK_WINDOW_MS, 10000));
+  sampleInboundAudio(requesterId).then(function(before) {
+    setTimeout(function() {
+      sampleInboundAudio(requesterId).then(function(after) {
+        reply(buildAudioCheckReport(before, after), false);
+      }).catch(function() { reply({ ok: false, reason: 'sample-failed' }, false); });
+    }, window);
+  }).catch(function() { reply({ ok: false, reason: 'sample-failed' }, false); });
+}
+
+// Host receives an audio-check request from `requesterId` about `targetId`.
+function handleAudioCheckRequestAtHost(requesterId, targetId, durationMs) {
+  if (!targetId || targetId === (peer && peer.id)) {
+    respondToAudioCheckRequest(requesterId, durationMs);
+    return;
+  }
+  var tc = connections.get(targetId);
+  if (tc && tc.data) {
+    sendDataIfOpen(tc.data, { type: 'audio-check-request', peerId: targetId, from: requesterId, durationMs: durationMs });
+  }
+}
+
+// Kick off a check against one peer: ask them to measure, and transmit for the
+// same window so there is something to measure.
+function startAudioCheck(peerId) {
+  if (!inRoom || !peerId || (_audioCheck && _audioCheck.peerId === peerId)) return;
+  cancelAudioCheck();
+
+  _audioCheck = { peerId: peerId, startedAt: Date.now(), localEnergyStart: null, timer: null };
+
+  if (isHost) {
+    var c = connections.get(peerId);
+    if (c && c.data) sendDataIfOpen(c.data, { type: 'audio-check-request', durationMs: AUDIO_CHECK_WINDOW_MS });
+  } else {
+    _sendToHostData({ type: 'audio-check-request', peerId: peerId, durationMs: AUDIO_CHECK_WINDOW_MS });
+  }
+
+  // Transmit through the normal talking path so the mic is acquired exactly as a
+  // real press would, and measure our own energy across the same window. The
+  // peer's reply cannot be scored until this resolves, so hold it as a promise
+  // rather than a field the response might race.
+  var check = _audioCheck;
+  check.localEnergyPromise = new Promise(function(resolve) {
+    sampleLocalMicEnergy().then(function(start) {
+      setTalking(true);
+      setTimeout(function() {
+        setTalking(false);
+        sampleLocalMicEnergy().then(function(end) {
+          resolve((typeof end === 'number' && typeof start === 'number') ? Math.max(0, end - start) : null);
+        }).catch(function() { resolve(null); });
+      }, AUDIO_CHECK_WINDOW_MS);
+    }).catch(function() { resolve(null); });
+  });
+
+  _audioCheck.timer = setTimeout(function() {
+    if (!_audioCheck) return;
+    _audioCheck.result = { status: 'error', headline: 'No response',
+                           detail: 'That peer did not answer the check.' };
+    _refreshDeviceInfoPopover();
+  }, AUDIO_CHECK_TIMEOUT_MS);
+
+  _refreshDeviceInfoPopover();
+}
+
+function cancelAudioCheck() {
+  if (_audioCheck && _audioCheck.timer) clearTimeout(_audioCheck.timer);
+  _audioCheck = null;
+}
+
+function onAudioCheckResponse(peerId, report, declined) {
+  var check = _audioCheck;
+  if (!check || check.peerId !== peerId) return;
+  if (check.timer) clearTimeout(check.timer);
+  check.report = report || null;
+
+  if (declined) {
+    check.result = { status: 'error', headline: 'Declined',
+                     detail: 'That peer has diagnostics sharing turned off.' };
+    _refreshDeviceInfoPopover();
+    return;
+  }
+  // Score only once our own mic energy for the window is known.
+  Promise.resolve(check.localEnergyPromise).then(function(localEnergy) {
+    if (_audioCheck !== check) return; // superseded or cancelled
+    check.localEnergy = localEnergy;
+    check.result = summarizeAudioCheck(report, localEnergy);
+    _refreshDeviceInfoPopover();
+  });
+}
+
 // Ask a remote peer for its device info. Host asks the peer directly; a non-host
 // viewer routes the request through the host (which answers or relays).
 function requestDeviceInfo(peerId) {
@@ -3169,20 +3773,200 @@ function requestDeviceInfo(peerId) {
   }
 }
 
+// --- "Can you hear me?" audio check (dev mode) -------------------------------
+//
+// `remote-inbound-rtp` proves our packets ARRIVED at a peer; it cannot prove the
+// peer HEARD them. Whether audio was decoded, whether their <audio> element is
+// actually playing, and how much of it NetEq had to fabricate are all
+// receiver-side facts, so the peer has to measure and report them.
+//
+// The check: we transmit for a fixed window while the peer samples its own
+// inbound stats across the same window and sends back the deltas. Deltas (not
+// absolutes) because the link may have been up for minutes.
+
+const AUDIO_CHECK_WINDOW_MS = 2500;
+const AUDIO_CHECK_TIMEOUT_MS = 8000;
+// Energy is Σ(sample²)·duration; even quiet speech clears this comfortably,
+// while a muted or disconnected mic sits at ~0.
+const AUDIO_CHECK_MIN_ENERGY = 0.0005;
+// Fraction of samples NetEq had to invent. This is measured AFTER FEC recovery
+// and jitter-buffer success, so it tracks what was actually heard far better
+// than packet loss does.
+const AUDIO_CHECK_CONCEAL_GOOD = 0.02;
+const AUDIO_CHECK_CONCEAL_POOR = 0.10;
+
+var _audioCheck = null; // { peerId, startedAt, timer, localEnergyStart }
+
+// Read the inbound audio counters for one peer, plus how its playback element is
+// configured. `null` when there is no audio link to sample.
+async function sampleInboundAudio(peerId) {
+  var conn = connections.get(peerId);
+  var pcs = audioPeerConnections(conn);
+  if (!pcs.length) return null;
+  return sampleInboundFromPeerConnections(pcs, document.getElementById('audio-' + peerId));
+}
+
+// The stats walk itself, over an arbitrary set of PeerConnections — shared by
+// the per-peer audio check and the loopback echo test, which measure the same
+// things over different plumbing.
+async function sampleInboundFromPeerConnections(pcs, audioEl) {
+  if (!pcs || !pcs.length) return null;
+
+  var sample = {
+    at: Date.now(),
+    energy: 0, samples: 0, concealed: 0, silentConcealed: 0, concealmentEvents: 0,
+    packets: 0, packetsLost: 0, jbDelay: 0, jbEmitted: 0,
+    synthesizedMs: 0, playoutSamples: 0
+  };
+  var sawInbound = false;
+
+  for (var i = 0; i < pcs.length; i++) {
+    var reports = await pcs[i].getStats();
+    reports.forEach(function(r) {
+      if (r.type === 'inbound-rtp' && r.kind === 'audio') {
+        sawInbound = true;
+        sample.energy            += r.totalAudioEnergy || 0;
+        sample.samples           += r.totalSamplesReceived || 0;
+        sample.concealed         += r.concealedSamples || 0;
+        sample.silentConcealed   += r.silentConcealedSamples || 0;
+        sample.concealmentEvents += r.concealmentEvents || 0;
+        sample.packets           += r.packetsReceived || 0;
+        sample.packetsLost       += r.packetsLost || 0;
+        sample.jbDelay           += r.jitterBufferDelay || 0;
+        sample.jbEmitted         += r.jitterBufferEmittedCount || 0;
+      }
+      // What the speaker actually rendered — one step past decode.
+      if (r.type === 'media-playout') {
+        sample.synthesizedMs  += (r.synthesizedSamplesDuration || 0) * 1000;
+        sample.playoutSamples += r.totalSamplesCount || 0;
+      }
+    });
+  }
+  if (!sawInbound) return null;
+
+  // Element state catches autoplay blocks and a dead output device, which no RTP
+  // statistic can see. The sink id itself is a device identifier, so only report
+  // whether one is set — never the value.
+  var el = audioEl;
+  sample.playback = el
+    ? { present: true, paused: !!el.paused, muted: !!el.muted, volume: typeof el.volume === 'number' ? el.volume : 1,
+        customSink: !!selectedSpeakerDeviceId() }
+    : { present: false };
+  return sample;
+}
+
+// Our own microphone energy over the window, so "you were silent" is
+// distinguishable from "your audio never arrived".
+async function sampleLocalMicEnergy() {
+  var conn = null;
+  var pcs = [];
+  connections.forEach(function(c) { pcs = pcs.concat(audioPeerConnections(c)); });
+  for (var i = 0; i < pcs.length; i++) {
+    var reports = await pcs[i].getStats();
+    var energy = null;
+    reports.forEach(function(r) {
+      if (r.type === 'media-source' && r.kind === 'audio' && typeof r.totalAudioEnergy === 'number') {
+        energy = r.totalAudioEnergy;
+      }
+    });
+    if (energy !== null) return energy;
+  }
+  return null;
+}
+
+function _delta(b, a, key) { return Math.max(0, (b[key] || 0) - (a[key] || 0)); }
+
+// Turn two samples into the report we send back to the requester.
+//
+// A null `before` with a live `after` means the audio link came up *during* the
+// window — which is normal, since the requester starts transmitting as it asks,
+// and that may be what creates the connection. Everything `after` counted
+// accumulated inside the window, so a zero baseline is exactly right; treating
+// it as "no link" would report a false negative on a perfectly healthy peer.
+function buildAudioCheckReport(before, after) {
+  if (!after) return { ok: false, reason: 'no-audio-link' };
+  if (!before) before = { at: after.at - AUDIO_CHECK_WINDOW_MS };
+  var samples = _delta(after, before, 'samples');
+  var jbEmitted = _delta(after, before, 'jbEmitted');
+  var jbDelay = _delta(after, before, 'jbDelay');
+  return {
+    ok: true,
+    windowMs: Math.max(0, after.at - before.at),
+    energy: _delta(after, before, 'energy'),
+    samples: samples,
+    concealed: _delta(after, before, 'concealed'),
+    silentConcealed: _delta(after, before, 'silentConcealed'),
+    concealmentEvents: _delta(after, before, 'concealmentEvents'),
+    packets: _delta(after, before, 'packets'),
+    packetsLost: _delta(after, before, 'packetsLost'),
+    jitterBufferMs: jbEmitted > 0 ? Math.round((jbDelay / jbEmitted) * 1000) : null,
+    synthesizedMs: Math.round(_delta(after, before, 'synthesizedMs')),
+    playback: after.playback || null
+  };
+}
+
+// Verdict, computed by the requester. `localEnergy` is our own mic energy over
+// the same window — without it, "nothing arrived" and "you said nothing" look
+// identical from the peer's report.
+//
+// Returns { status: 'good'|'choppy'|'bad'|'silent'|'unheard'|'error', … }.
+function summarizeAudioCheck(report, localEnergy) {
+  if (!report || !report.ok) {
+    return { status: 'error', headline: 'No audio link to that peer',
+             detail: 'They have no audio connection from you to measure.' };
+  }
+  var pb = report.playback || {};
+  if (pb.present === false) {
+    return { status: 'unheard', headline: 'Not being played',
+             detail: 'Your stream reached them but is not attached to any audio output.' };
+  }
+  if (pb.paused || pb.muted || pb.volume === 0) {
+    var why = pb.muted ? 'muted' : pb.paused ? 'paused' : 'at zero volume';
+    return { status: 'unheard', headline: 'Their playback is ' + why,
+             detail: 'Audio is arriving, but their end is not playing it' +
+                     (pb.paused ? ' — often a blocked autoplay.' : '.') };
+  }
+  var weSpoke = typeof localEnergy !== 'number' || localEnergy > AUDIO_CHECK_MIN_ENERGY;
+  if (report.energy <= AUDIO_CHECK_MIN_ENERGY) {
+    if (!weSpoke) {
+      return { status: 'silent', headline: 'No sound was sent',
+               detail: 'Your microphone picked up nothing — try again and speak during the test.' };
+    }
+    return { status: 'unheard', headline: 'They received silence',
+             detail: 'You were speaking, but no audio energy reached them.' };
+  }
+  var conceal = report.samples > 0 ? report.concealed / report.samples : 0;
+  var pct = (conceal * 100).toFixed(1);
+  if (conceal < AUDIO_CHECK_CONCEAL_GOOD) {
+    return { status: 'good', headline: 'They hear you clearly',
+             detail: 'Only ' + pct + '% of audio needed filling in.', concealPercent: conceal * 100 };
+  }
+  if (conceal < AUDIO_CHECK_CONCEAL_POOR) {
+    return { status: 'choppy', headline: 'They hear you, but it is choppy',
+             detail: pct + '% of audio had to be filled in across ' + report.concealmentEvents + ' dropout(s).',
+             concealPercent: conceal * 100 };
+  }
+  return { status: 'bad', headline: 'They hear you badly',
+           detail: pct + '% of audio had to be filled in across ' + report.concealmentEvents + ' dropout(s).',
+           concealPercent: conceal * 100 };
+}
+
 // The self row has no single peer link, so summarize the WebRTC link stats
 // across all current connections (mean RTT, worst packet loss) — this is what
 // lets the Network section show latency/loss on your own row too.
 function _aggregateLinkStats() {
-  var rtts = [], losses = [];
+  var rtts = [], losses = [], outLosses = [];
   connections.forEach(function(c) {
     if (!c || !c.webrtcStats) return;
     if (typeof c.webrtcStats.rttMs === 'number') rtts.push(c.webrtcStats.rttMs);
     if (typeof c.webrtcStats.lossPercent === 'number') losses.push(c.webrtcStats.lossPercent);
+    if (typeof c.webrtcStats.outLossPercent === 'number') outLosses.push(c.webrtcStats.outLossPercent);
   });
-  if (!rtts.length && !losses.length) return null;
+  if (!rtts.length && !losses.length && !outLosses.length) return null;
   var stats = {};
   if (rtts.length) stats.rttMs = Math.round(rtts.reduce(function(a, b) { return a + b; }, 0) / rtts.length);
   if (losses.length) stats.lossPercent = Math.max.apply(null, losses);
+  if (outLosses.length) stats.outLossPercent = Math.max.apply(null, outLosses);
   return stats;
 }
 
@@ -3252,7 +4036,12 @@ function _renderDeviceInfo(container, info, wstats) {
   var latency = (wstats && typeof wstats.rttMs === 'number') ? wstats.rttMs + ' ms (link)'
     : (typeof n.rttMs === 'number' ? n.rttMs + ' ms' : null);
   container.appendChild(_diRow('Latency', latency));
-  container.appendChild(_diRow('Packet loss', (wstats && typeof wstats.lossPercent === 'number') ? wstats.lossPercent.toFixed(1) + '%' : null));
+  // Both directions: "in" is what we fail to receive, "out" is what the peer
+  // reports missing from the stream we send it (i.e. why they can't hear us).
+  var lossParts = [];
+  if (wstats && typeof wstats.lossPercent === 'number') lossParts.push('↓ ' + wstats.lossPercent.toFixed(1) + '%');
+  if (wstats && typeof wstats.outLossPercent === 'number') lossParts.push('↑ ' + wstats.outLossPercent.toFixed(1) + '%');
+  container.appendChild(_diRow('Packet loss', lossParts.length ? lossParts.join(' · ') : null));
   var batStr = null;
   if (bat.present) {
     batStr = bat.level + '%' + (bat.charging ? ' ⚡ charging' : '')
@@ -3312,6 +4101,62 @@ function _refreshDeviceInfoPopover() {
     el.textContent = note;
     body.appendChild(el);
   }
+
+  body.appendChild(_buildAudioCheckSection(_deviceInfoPeerId));
+}
+
+// "Can you hear me?" — the one thing local stats can never answer.
+function _buildAudioCheckSection(peerId) {
+  var wrap = document.createElement('div');
+  wrap.className = 'audio-check';
+
+  var head = document.createElement('div');
+  head.className = 'di-section';
+  head.textContent = '🔊 Can they hear me?';
+  wrap.appendChild(head);
+
+  var active = _audioCheck && _audioCheck.peerId === peerId;
+  var result = active ? _audioCheck.result : null;
+
+  if (active && !result) {
+    var pending = document.createElement('div');
+    pending.className = 'audio-check-pending';
+    pending.textContent = 'Speak now — testing…';
+    wrap.appendChild(pending);
+    return wrap;
+  }
+
+  var btn = document.createElement('button');
+  btn.className = 'audio-check-btn';
+  btn.textContent = result ? 'Test again' : 'Run check';
+  btn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    startAudioCheck(peerId);
+  });
+  wrap.appendChild(btn);
+
+  if (result) {
+    var verdict = document.createElement('div');
+    verdict.className = 'audio-check-verdict ac-' + result.status;
+    var icon = { good: '✓', choppy: '⚠', bad: '✕', unheard: '✕', silent: '⚠', error: '—' }[result.status] || '—';
+    verdict.textContent = icon + ' ' + result.headline;
+    wrap.appendChild(verdict);
+
+    var detail = document.createElement('div');
+    detail.className = 'audio-check-detail';
+    detail.textContent = result.detail;
+    wrap.appendChild(detail);
+
+    // The raw numbers behind the verdict, so it can be second-guessed.
+    var r = _audioCheck && _audioCheck.report;
+    if (r && r.ok) {
+      wrap.appendChild(_diRow('Filled in', r.samples ? (r.concealed / r.samples * 100).toFixed(1) + '%' : null));
+      wrap.appendChild(_diRow('Dropouts', r.concealmentEvents != null ? String(r.concealmentEvents) : null));
+      wrap.appendChild(_diRow('Their buffer', r.jitterBufferMs != null ? r.jitterBufferMs + ' ms' : null));
+      wrap.appendChild(_diRow('Packets', r.packets != null ? r.packets + ' (' + (r.packetsLost || 0) + ' lost)' : null));
+    }
+  }
+  return wrap;
 }
 
 function showDeviceInfoPopover(peerId, anchorEl, isSelf) {
@@ -4507,8 +5352,377 @@ async function startMicTest() {
 async function toggleMicTest() {
   if (_micTestStream) await stopMicTest({ replay: true });
   else {
+    await stopEchoTest();  // the two tests share the mic and the playback element
     try { await startMicTest(); }
     catch (e) { showCopyToast('Microphone test failed'); console.warn('[Mic test]', e.message); }
+  }
+}
+
+// --- Network echo test -------------------------------------------------------
+//
+// The mic test above records the RAW microphone, so it proves capture works and
+// nothing else. This one sends the audio out over the real network and records
+// what comes BACK: mic -> Opus -> NAT -> TURN relay -> decode. That round trip is
+// what a remote listener actually hears, so replaying it answers "what do I
+// sound like to other people?" without needing a second person.
+//
+// Both PeerConnections are forced to `relay`, so ICE cannot shortcut through
+// host candidates and quietly test nothing. That also makes the test a genuine
+// probe of the relay path anonymous rooms fall back to.
+
+const ECHO_MAX_RECORD_MS = 15000;
+const ECHO_RELAY_TIMEOUT_MS = 8000;
+// RMS below this in the returned audio means nothing audible came back.
+const ECHO_MIN_RMS = 0.005;
+
+var _echo = null; // { pcs, stream, recorder, chunks, ctx, analyser, raf, audioEl, … }
+
+function echoStatus(text, kind) {
+  var el = document.getElementById('echo-test-status');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = 'echo-test-status' + (kind ? ' ac-' + kind : '');
+  el.classList.toggle('hidden', !text);
+}
+
+function echoTestRunning() { return !!_echo; }
+
+function countRelayServers(iceServers) {
+  return (iceServers || []).filter(function(s) {
+    var urls = s && s.urls;
+    if (Array.isArray(urls)) return urls.some(function(u) { return /^turns?:/.test(u); });
+    return typeof urls === 'string' && /^turns?:/.test(urls);
+  }).length;
+}
+
+// "No relay" has several very different causes, and telling them apart is the
+// difference between "change a setting" and "the relay is gone". The STUN/TURN
+// error code from `onicecandidateerror` is what distinguishes them:
+//   401/403 — the relay answered and REJECTED us: credentials dead or revoked.
+//   701     — could not even establish the connection: server down or blocked.
+//   nothing — packets vanished with no reply, which is what a UDP block looks like.
+function diagnoseRelayFailure(relayServerCount, iceErrors, usingDefaultRelay) {
+  if (!relayServerCount) {
+    return 'No relay server is configured. Set Fallback relay to Automatic or Custom in Settings → Advanced.';
+  }
+  var errors = iceErrors || [];
+  var codes = errors.map(function(e) { return e.code; });
+  var plural = relayServerCount === 1 ? '1 relay server' : relayServerCount + ' relay servers';
+
+  // If we fell through to the built-in relay because our own credential endpoint
+  // failed, that is the actual fault and the actual fix — say that first.
+  if (usingDefaultRelay && _anonTurnError) {
+    return 'Could not reach the TURN credential service (' + _anonTurnError + '), so the ' +
+      'app fell back to the retired public relay. If you self-host, check that ' +
+      '/api/ice-servers is deployed and CF_TURN_TOKEN_ID / CF_TURN_TOKEN_SECRET are set.';
+  }
+  // The built-in fallback is Open Relay's shared `openrelayproject` credentials,
+  // which metered.ca has RETIRED in favour of per-account API keys. That is a
+  // known-dead default, so say so outright instead of blaming the network.
+  if (usingDefaultRelay) {
+    return 'The built-in public relay no longer works — its shared credentials have been ' +
+      'retired. Add free metered.ca credentials (20 GB/month) or your own relay under ' +
+      'Settings → Advanced.';
+  }
+  if (codes.indexOf(401) !== -1 || codes.indexOf(403) !== -1) {
+    return 'Tried ' + plural + '; the relay rejected our credentials (error ' +
+      (codes.indexOf(401) !== -1 ? '401' : '403') + '). Check the username and password ' +
+      'under Settings → Advanced → Fallback relay.';
+  }
+  if (codes.indexOf(701) !== -1) {
+    return 'Tried ' + plural + '; could not connect to the relay (error 701). It may be ' +
+      'down, or your network blocks it. A relay on TCP/443 or TLS usually gets through.';
+  }
+  if (errors.length) {
+    var first = errors[0];
+    return 'Tried ' + plural + '; the relay returned error ' + first.code +
+      (first.text ? ' (' + first.text + ')' : '') + '.';
+  }
+  return 'Tried ' + plural + ' with no reply at all — UDP is most likely blocked on ' +
+    'this network. A relay reachable over TCP/443 or TLS is needed.';
+}
+
+// True when the relays in play are the built-in (retired) public ones rather
+// than anything the user or their org configured.
+function usingDefaultFallbackRelay(iceServers) {
+  var configured = (iceServers || []).filter(function(s) {
+    var u = s && s.urls;
+    return typeof u === 'string' && /^turns?:/.test(u);
+  }).map(function(s) { return s.urls; });
+  if (!configured.length) return false;
+  var defaults = DEFAULT_FALLBACK_TURN.map(function(s) { return s.urls; });
+  return configured.every(function(u) { return defaults.indexOf(u) !== -1; });
+}
+
+// Verdict for the loopback. Shares the peer check's concealment thresholds — the
+// same measurement means the same thing — but not its wording, since here the
+// listener is you. The playback branch is skipped: it is meaningless on a sink
+// we muted ourselves.
+function summarizeEchoTest(report, rms) {
+  if (!report || !report.ok) {
+    return { status: 'error', headline: 'No audio came back',
+             detail: 'The loopback connected but no audio was received.' };
+  }
+  if (typeof rms === 'number' && rms < ECHO_MIN_RMS) {
+    return { status: 'silent', headline: 'Nothing was heard',
+             detail: 'The round trip worked but carried silence — check your microphone and speak during the test.' };
+  }
+  var conceal = report.samples > 0 ? report.concealed / report.samples : 0;
+  var pct = (conceal * 100).toFixed(1);
+  if (conceal < AUDIO_CHECK_CONCEAL_GOOD) {
+    return { status: 'good', headline: 'You would sound clear',
+             detail: 'Only ' + pct + '% of audio needed filling in.', concealPercent: conceal * 100 };
+  }
+  if (conceal < AUDIO_CHECK_CONCEAL_POOR) {
+    return { status: 'choppy', headline: 'You would sound choppy',
+             detail: pct + '% of audio had to be filled in across ' + report.concealmentEvents + ' dropout(s).',
+             concealPercent: conceal * 100 };
+  }
+  return { status: 'bad', headline: 'You would sound badly broken',
+           detail: pct + '% of audio had to be filled in across ' + report.concealmentEvents + ' dropout(s).',
+           concealPercent: conceal * 100 };
+}
+
+// Which ICE path the loopback actually took, so the verdict can say whether this
+// really exercised the relay.
+async function echoSelectedIceType(pc) {
+  try {
+    var reports = await pc.getStats();
+    var pairs = {}, locals = {}, chosen = null;
+    reports.forEach(function(r) {
+      if (r.type === 'candidate-pair' && r.nominated) {
+        pairs[r.id] = r;
+        if (!chosen || r.state === 'succeeded') chosen = r.id;
+      }
+      if (r.type === 'local-candidate') locals[r.id] = r;
+    });
+    var pair = chosen ? pairs[chosen] : null;
+    var cand = pair ? locals[pair.localCandidateId] : null;
+    return cand ? cand.candidateType : null;
+  } catch (_) { return null; }
+}
+
+async function startEchoTest(options) {
+  options = options || {};
+  if (_echo) return;
+  if (inRoom) {
+    // applyRNNoise shares one AudioContext + worklet node, so a second mic
+    // source would mix into the live call. Use the per-peer audio check instead.
+    echoStatus('Leave the room first — use the “Can they hear me?” check while in a call.', 'error');
+    return;
+  }
+  await stopMicTest();
+  clearMicTestPlayback();
+  echoStatus('Connecting…');
+
+  var iceServers = await fetchIceServers();
+  // 'relay' in production; tests drive the same code path with 'all' because CI
+  // has no TURN server.
+  var policy = options.iceTransportPolicy || 'relay';
+  var cfg = { iceServers: iceServers, iceTransportPolicy: policy };
+  var sender = new RTCPeerConnection(cfg);
+  var receiver = new RTCPeerConnection(cfg);
+
+  _echo = { sender: sender, receiver: receiver, chunks: [], relayCandidates: 0,
+            relayServers: countRelayServers(iceServers),
+            usingDefaultRelay: usingDefaultFallbackRelay(iceServers), iceErrors: [] };
+  var echo = _echo;
+
+  // The STUN/TURN error code is the only thing that says WHY no relay appeared;
+  // without it "no relay reachable" is unactionable. Chromium-only, so guard.
+  var noteIceError = function(e) {
+    if (!e || typeof e.errorCode !== 'number') return;
+    var already = echo.iceErrors.some(function(x) { return x.code === e.errorCode && x.url === e.url; });
+    if (!already) echo.iceErrors.push({ url: e.url, code: e.errorCode, text: e.errorText || '' });
+  };
+  sender.onicecandidateerror = noteIceError;
+  receiver.onicecandidateerror = noteIceError;
+
+  sender.onicecandidate = function(e) {
+    if (!e.candidate) return;
+    if (e.candidate.candidate.indexOf('typ relay') !== -1) echo.relayCandidates++;
+    receiver.addIceCandidate(e.candidate).catch(function() {});
+  };
+  receiver.onicecandidate = function(e) {
+    if (e.candidate) sender.addIceCandidate(e.candidate).catch(function() {});
+  };
+
+  var returned = new Promise(function(resolve) { receiver.ontrack = function(e) { resolve(e.streams[0]); }; });
+
+  try {
+    echo.stream = await getMicStream();
+    echo.stream.getAudioTracks().forEach(function(t) { sender.addTrack(t, echo.stream); });
+
+    var offer = await sender.createOffer();
+    offer.sdp = opusSdpTransform(offer.sdp);
+    await sender.setLocalDescription(offer);
+    await receiver.setRemoteDescription(offer);
+    var answer = await receiver.createAnswer();
+    answer.sdp = opusSdpTransform(answer.sdp);
+    await receiver.setLocalDescription(answer);
+    await sender.setRemoteDescription(answer);
+  } catch (err) {
+    await stopEchoTest();
+    echoStatus('Could not start the test: ' + err.message, 'error');
+    return;
+  }
+
+  // `ontrack` fires on NEGOTIATION, not on media flow — it resolves even when
+  // ICE never connects and not one packet is ever exchanged. So the stream alone
+  // proves nothing; wait until packets actually arrive. That also covers the
+  // relay-only-with-no-relay case, which gathers zero candidates and sits in
+  // 'new' forever without ever firing 'failed'.
+  var stream = await Promise.race([
+    returned,
+    new Promise(function(resolve) { setTimeout(function() { resolve(null); }, ECHO_RELAY_TIMEOUT_MS); })
+  ]);
+  if (_echo !== echo) return; // cancelled while connecting
+
+  var flowing = false;
+  if (stream) {
+    var deadline = Date.now() + ECHO_RELAY_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      var probe = await sampleInboundFromPeerConnections([receiver], null);
+      if (_echo !== echo) return;
+      if (probe && probe.packets > 0) { flowing = true; break; }
+      await new Promise(function(r) { setTimeout(r, 250); });
+    }
+  }
+
+  if (!flowing) {
+    var noRelay = policy === 'relay' && echo.relayCandidates === 0;
+    var diagnosis = noRelay
+      ? diagnoseRelayFailure(echo.relayServers, echo.iceErrors, echo.usingDefaultRelay) : '';
+    await stopEchoTest();
+    echoStatus(noRelay
+      ? 'No TURN relay reachable — audio never left the device. ' + diagnosis +
+        ' Peers behind strict firewalls cannot reach you either.'
+      : 'The test connected but no audio came back.', 'error');
+    return;
+  }
+
+  // A muted sink still drives decoding (so inbound-rtp fills) without feeding
+  // the speakers back into the mic. It does zero totalAudioEnergy, though, so
+  // loudness is measured from an AnalyserNode below instead.
+  var audioEl = new Audio();
+  audioEl.srcObject = stream;
+  audioEl.muted = true;
+  audioEl.autoplay = true;
+  echo.audioEl = audioEl;
+
+  echo.ctx = new (window.AudioContext || window.webkitAudioContext)();
+  var source = echo.ctx.createMediaStreamSource(stream);
+  echo.analyser = echo.ctx.createAnalyser();
+  echo.analyser.fftSize = 1024;
+  source.connect(echo.analyser); // analyser only — never to destination, or it howls
+  echo.peakRms = 0;
+
+  echo.before = await sampleInboundFromPeerConnections([receiver], null);
+
+  if (typeof window.MediaRecorder === 'function') {
+    try {
+      echo.recorder = new MediaRecorder(stream);
+      echo.recorder.ondataavailable = function(ev) { if (ev.data && ev.data.size) echo.chunks.push(ev.data); };
+      echo.recorder.start();
+    } catch (e) {
+      echo.recorder = null;
+      console.warn('[Echo test] recorder unavailable:', e.message);
+    }
+  }
+
+  echoStatus('Speak now — recording…');
+  var btn = document.getElementById('btn-test-echo');
+  if (btn) btn.textContent = 'Stop & Replay';
+  var meter = document.getElementById('echo-test-level-fill');
+  if (meter && meter.closest('.media-level')) meter.closest('.media-level').classList.remove('hidden');
+
+  var data = new Uint8Array(echo.analyser.fftSize);
+  var tick = function() {
+    if (_echo !== echo || !echo.analyser) return;
+    echo.analyser.getByteTimeDomainData(data);
+    var sum = 0;
+    for (var i = 0; i < data.length; i++) {
+      var centered = (data[i] - 128) / 128;
+      sum += centered * centered;
+    }
+    var rms = Math.sqrt(sum / data.length);
+    if (rms > echo.peakRms) echo.peakRms = rms;
+    if (meter) meter.style.width = Math.max(0, Math.min(100, Math.round(rms * 220))) + '%';
+    echo.raf = requestAnimationFrame(tick);
+  };
+  tick();
+
+  echo.autoStop = setTimeout(function() { if (_echo === echo) stopEchoTest({ replay: true }); }, ECHO_MAX_RECORD_MS);
+}
+
+async function stopEchoTest(options) {
+  options = options || {};
+  var echo = _echo;
+  if (!echo) return;
+  _echo = null;
+
+  if (echo.autoStop) clearTimeout(echo.autoStop);
+  if (echo.raf) cancelAnimationFrame(echo.raf);
+
+  var blob = null;
+  if (echo.recorder && echo.recorder.state !== 'inactive') {
+    blob = await new Promise(function(resolve) {
+      echo.recorder.onstop = function() {
+        resolve(echo.chunks.length ? new Blob(echo.chunks, { type: echo.recorder.mimeType || 'audio/webm' }) : null);
+      };
+      echo.recorder.stop();
+    });
+  }
+
+  var verdict = null;
+  if (options.replay) {
+    var after = await sampleInboundFromPeerConnections([echo.receiver], null);
+    var report = buildAudioCheckReport(echo.before, after);
+    verdict = summarizeEchoTest(report, echo.peakRms);
+    verdict.iceType = await echoSelectedIceType(echo.receiver);
+    echo.report = report;
+  }
+
+  try { echo.sender.close(); } catch (_) {}
+  try { echo.receiver.close(); } catch (_) {}
+  if (echo.stream) echo.stream.getTracks().forEach(function(t) { t.stop(); });
+  if (echo.ctx) echo.ctx.close().catch(function() {});
+  if (echo.audioEl) { echo.audioEl.srcObject = null; }
+
+  var btn = document.getElementById('btn-test-echo');
+  if (btn) btn.textContent = 'Test over network';
+  var meter = document.getElementById('echo-test-level-fill');
+  if (meter) {
+    meter.style.width = '0%';
+    if (meter.closest('.media-level')) meter.closest('.media-level').classList.add('hidden');
+  }
+
+  if (options.replay) {
+    renderEchoVerdict(verdict, echo.report);
+    if (blob) renderMicTestPlayback(blob);
+  } else {
+    echoStatus('');
+  }
+}
+
+function renderEchoVerdict(verdict, report) {
+  if (!verdict) { echoStatus(''); return; }
+  var suffix = '';
+  if (verdict.iceType === 'relay') suffix = ' · via TURN relay';
+  else if (verdict.iceType) suffix = ' · direct (' + verdict.iceType + '), not relayed';
+  if (report && report.ok && report.jitterBufferMs != null) suffix += ' · ' + report.jitterBufferMs + ' ms buffer';
+  echoStatus(verdict.headline + ' — ' + verdict.detail + suffix, verdict.status);
+}
+
+async function toggleEchoTest() {
+  if (_echo) await stopEchoTest({ replay: true });
+  else {
+    try { await startEchoTest(); }
+    catch (e) {
+      await stopEchoTest();
+      echoStatus('Network test failed: ' + e.message, 'error');
+      console.warn('[Echo test]', e.message);
+    }
   }
 }
 
@@ -4607,15 +5821,31 @@ function broadcastTalkingState(active) {
   }
 }
 
+// True when the MediaConnection this peer opened to us is already carrying our
+// current mic track, because `handleIncomingCall` answered it with a live
+// `stream`. That connection is full duplex, so opening a second one would make
+// us upload the same mic twice to the same peer — the speaker's uplink is the
+// mesh's real ceiling, so that alone can chop the audio the peer hears.
+function peerAlreadyReceivesOurAudio(conn) {
+  var mc = conn && conn.media;
+  var pc = mc && !mc.closed ? mc.peerConnection : null;
+  if (!pc || typeof pc.getSenders !== 'function') return false;
+  var track = stream && stream.getAudioTracks ? stream.getAudioTracks()[0] : null;
+  if (!track || track.readyState !== 'live') return false;
+  return pc.getSenders().some(function(sender) { return sender.track === track; });
+}
+
 function connectOutgoingAudioToPeers() {
   if (!inRoom || !peer || !stream) return;
   connections.forEach(function(conn, peerId) {
     if (!peerId || peerId === peer.id) return;
     if (conn && conn.audioMediaOut && !conn.audioMediaOut.closed) return;
-    var call = peer.call(peerId, stream);
+    if (peerAlreadyReceivesOurAudio(conn)) { applyAudioTuning(conn); return; }
+    var call = peer.call(peerId, stream, audioCallOptions());
     if (!call) return;
     call.on('stream', function(remote) {
       attachAudio(peerId, remote);
+      applyAudioTuningToPeer(peerId);
     });
     call.on('close', function() {
       var current = connections.get(peerId);
@@ -5476,6 +6706,8 @@ function leaveRoom() {
   closeStatsPopover();
   closeDeviceInfoPopover();
   _hostDebugMode = false;
+  _hostJitterMs = null;
+  cancelAudioCheck();
   updateDebugConsentBanner();
   stopHostHeartbeat();
   stopHostHeartbeatMonitor();
@@ -6039,11 +7271,12 @@ function handleIncomingCall(call) {
     handleIncomingScreenCall(call);
     return;
   }
-  call.answer(stream || new MediaStream());
+  call.answer(stream || new MediaStream(), audioCallOptions());
   call.on('stream', function(remote) {
     attachAudio(call.peer, remote);
     const prev = connections.get(call.peer) || { data: null, pseudo: shortId(call.peer), pseudoColor: null, talking: false };
     connections.set(call.peer, Object.assign({}, prev, { media: call }));
+    applyAudioTuningToPeer(call.peer);
     updatePeerList();
   });
   call.on('close', function() { clearPeerMedia(call.peer); });
@@ -6069,6 +7302,7 @@ function sendHostPeerList(dataConn, excludedPeerId) {
     hostScreenActive: localScreenActive,
     videoModeEnabled: videoModeEnabled,
     debugMode: isDevModeEnabled(),
+    jitterMs: hostJitterBroadcastMs(),
     deputyId: successorIds[0] || null,
     successorIds: successorIds,
     protocolVersion: PROTOCOL_VERSION,
@@ -6078,6 +7312,7 @@ function sendHostPeerList(dataConn, excludedPeerId) {
     type: 'heartbeat',
     at: Date.now(),
     debugMode: isDevModeEnabled(),
+    jitterMs: hostJitterBroadcastMs(),
     deputyId: successorIds[0] || null,
     successorIds: successorIds
   });
@@ -6269,6 +7504,17 @@ function handleJoinerDataConnection(dataConn) {
       connections.forEach(function(c, id) {
         if (id !== joinerId && c.data) sendDataIfOpen(c.data, { type: 'screen-stop', peerId: joinerId });
       });
+    } else if (msg.type === 'audio-check-request') {
+      handleAudioCheckRequestAtHost(joinerId, msg.peerId || null, msg.durationMs);
+    } else if (msg.type === 'audio-check-response') {
+      if (msg.from && msg.from !== (peer && peer.id)) {
+        var acReq = connections.get(msg.from);
+        if (acReq && acReq.data) sendDataIfOpen(acReq.data, {
+          type: 'audio-check-response', peerId: joinerId, report: msg.report, declined: msg.declined
+        });
+      } else {
+        onAudioCheckResponse(joinerId, msg.report, msg.declined);
+      }
     } else if (msg.type === 'device-info-request') {
       // A peer wants someone's device info: answer for the host, else relay to the target.
       handleDeviceInfoRequestAtHost(joinerId, msg.peerId);
@@ -6450,7 +7696,24 @@ function handleHostMessage(msg) {
     _hostDebugMode = msg.debugMode;
     if (inRoom && !isHost) { updatePeerList(); updateDebugConsentBanner(); }
   }
+  // Room-wide jitter buffer pushed by a host that is debugging. Carried in
+  // peer-list + heartbeat like debugMode; absent (or null) clears the override.
+  if ('jitterMs' in msg) {
+    var pushed = sanitizeJitterMs(msg.jitterMs);
+    if (pushed !== _hostJitterMs) {
+      _hostJitterMs = pushed;
+      if (inRoom && !isHost) reapplyAudioTuningToAllPeers();
+    }
+  }
   if (msg.type === 'heartbeat') return;
+  if (msg.type === 'audio-check-request') {
+    respondToAudioCheckRequest(msg.from || null, msg.durationMs);
+    return;
+  }
+  if (msg.type === 'audio-check-response') {
+    onAudioCheckResponse(msg.peerId, msg.report, msg.declined);
+    return;
+  }
   if (msg.type === 'device-info-request') {
     respondToDeviceInfoRequest(msg.from || null);
     return;
@@ -7622,6 +8885,7 @@ window.addEventListener('DOMContentLoaded', function() {
     $('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
     $('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
     loadRelayControls();
+    loadJitterControls();
     syncNoiseSuppressionControls();
     refreshMediaDeviceSelectors();
     $('input-presence-token').value = presenceToken();
@@ -7756,6 +9020,11 @@ window.addEventListener('DOMContentLoaded', function() {
     var el = $(id);
     if (el) el.addEventListener('input', syncRelayFromControls);
   });
+  document.querySelectorAll('input[name="jitter-mode"]').forEach(function(r) {
+    r.addEventListener('change', syncJitterFromControls);
+  });
+  var jitterSlider = $('input-jitter-ms');
+  if (jitterSlider) jitterSlider.addEventListener('input', syncJitterFromControls);
   document.querySelectorAll('input[name="noise-suppression-mode"]').forEach(function(input) {
     input.addEventListener('change', function(e) {
       if (!e.target.checked) return;
@@ -7812,6 +9081,8 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-test-turn').addEventListener('click', testTurnCredentials);
   var btnMicTest = $('btn-test-mic');
   if (btnMicTest) btnMicTest.addEventListener('click', toggleMicTest);
+  var btnEchoTest = $('btn-test-echo');
+  if (btnEchoTest) btnEchoTest.addEventListener('click', toggleEchoTest);
   var btnSpeakerTest = $('btn-test-speaker');
   if (btnSpeakerTest) btnSpeakerTest.addEventListener('click', function() { testSpeakerOutput().catch(function(e) { console.warn('[Speaker test]', e.message); }); });
   var btnCameraPreview = $('btn-preview-camera');
@@ -7964,12 +9235,22 @@ window.addEventListener('DOMContentLoaded', function() {
     }
     var relevantKeys = [PRESENCE_TOKEN_KEY, PRESENCE_ORG_KEY, METERED_APP_STORE_KEY,
                           METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY,
-                          SPEAKER_DEVICE_KEY];
+                          SPEAKER_DEVICE_KEY, JITTER_BUFFER_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
+    if (e.key === JITTER_BUFFER_KEY) {
+      // Changed from the desktop preferences window — apply it to live links.
+      loadJitterControls();
+      reapplyAudioTuningToAllPeers();
+      if (inRoom && isHost) broadcastHostPeerLists();
+      return;
+    }
     if (e.key === DEV_MODE_KEY) {
       updateDevLogPanel();
       if (inRoom) {
-        if (isDevModeEnabled()) startStatsPolling(); else stopStatsPolling();
+        // Keep polling regardless of dev mode: the adaptive jitter buffer and
+        // the peer dot's ICE colour both feed off these samples, and the poll
+        // already gates the dev-only badge rendering internally.
+        startStatsPolling();
         updateVideoModeUI();
         updatePeerList();
         if (isHost) broadcastHostPeerLists();

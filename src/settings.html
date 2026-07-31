@@ -209,6 +209,16 @@
             <span class="media-level hidden"><span id="mic-test-level-fill" class="media-level-fill"></span></span>
             <audio id="mic-test-playback" class="mic-test-playback hidden" controls preload="none"></audio>
           </div>
+          <!-- The network echo test needs fetchIceServers(), opusSdpTransform()
+               and the RNNoise capture path, none of which exist in this window
+               (no module system — everything here is duplicated by hand). Rather
+               than fork ~400 lines including a WASM worklet, point at the main
+               window, which has the real implementation. -->
+          <p class="settings-hint" style="margin-top:10px">
+            <strong>Test over network</strong> — hear what you actually sound like
+            to others, after Opus encoding and a round trip through the relay. Run
+            it from the main Voxal window (⚙ → Audio).
+          </p>
         </div>
         <p class="settings-subtitle">Noise suppression</p>
         <div class="noise-card-group" id="noise-suppression-group" role="radiogroup" aria-label="Noise suppression mode">
@@ -361,6 +371,35 @@
                 <button class="input-clear" data-target="input-service-url" aria-label="Clear">✕</button>
               </div>
             </div>
+            <p class="settings-sublabel" style="margin-top:16px">Jitter buffer</p>
+            <p class="settings-hint">
+              How much incoming audio to buffer before playing it. Higher values
+              smooth out choppy audio on a lossy or relayed connection, at the cost
+              of a little delay. Automatic raises it on its own when a link starts
+              dropping packets.
+            </p>
+            <div class="relay-modes">
+              <label class="relay-opt">
+                <input type="radio" name="jitter-mode" value="auto" />
+                <span>Automatic <em>(recommended)</em></span>
+              </label>
+              <label class="relay-opt">
+                <input type="radio" name="jitter-mode" value="manual" />
+                <span>Manual</span>
+              </label>
+            </div>
+            <div id="jitter-manual" class="jitter-manual hidden">
+              <div class="jitter-slider-row">
+                <input id="input-jitter-ms" type="range" min="0" max="500" step="10" value="80"
+                       aria-label="Jitter buffer target in milliseconds" />
+                <output id="jitter-ms-value" for="input-jitter-ms">80 ms</output>
+              </div>
+              <p class="settings-hint">
+                0 ms leaves it to the browser. While Dev mode is on and you are the
+                room host, this value is also pushed to everyone in the room (peers
+                who set their own value keep theirs).
+              </p>
+            </div>
             <div class="settings-field settings-inline-toggle" style="margin-top:16px">
               <label for="toggle-dev-mode" style="flex:1">Dev mode</label>
               <button id="toggle-dev-mode" class="toggle-btn" role="switch" aria-checked="false"
@@ -439,6 +478,39 @@
         var p = ($id('input-relay-pass').value || '').trim(); if (p) server.credential = p;
         localStorage.setItem(TURN_FALLBACK_KEY, JSON.stringify([server]));
       }
+      // Jitter buffer — duplicated from main.js (this window has no module
+      // system). The main window applies it live via the `storage` event.
+      function jitterBufferSetting() {
+        var raw = localStorage.getItem(JITTER_BUFFER_KEY);
+        if (raw === null || raw === 'auto') return { mode: 'auto', ms: 0 };
+        var ms = parseInt(raw, 10);
+        if (!isFinite(ms) || ms < 0) return { mode: 'auto', ms: 0 };
+        return { mode: 'manual', ms: Math.min(ms, JITTER_BUFFER_MAX_MS) };
+      }
+      function loadJitterControls() {
+        var st = jitterBufferSetting();
+        document.querySelectorAll('input[name="jitter-mode"]').forEach(function(r) { r.checked = (r.value === st.mode); });
+        var slider = $id('input-jitter-ms');
+        if (slider) slider.value = String(st.mode === 'manual' ? st.ms : JITTER_BUFFER_BASE_MS);
+        var out = $id('jitter-ms-value');
+        if (out && slider) out.textContent = slider.value + ' ms';
+        var manual = $id('jitter-manual');
+        if (manual) manual.classList.toggle('hidden', st.mode !== 'manual');
+      }
+      function syncJitterFromControls() {
+        var checked = document.querySelector('input[name="jitter-mode"]:checked');
+        var mode = checked ? checked.value : 'auto';
+        var manual = $id('jitter-manual'); if (manual) manual.classList.toggle('hidden', mode !== 'manual');
+        var slider = $id('input-jitter-ms');
+        var out = $id('jitter-ms-value');
+        if (out && slider) out.textContent = slider.value + ' ms';
+        if (mode !== 'manual') { localStorage.removeItem(JITTER_BUFFER_KEY); return; }
+        var n = Math.max(0, Math.min(parseInt(slider ? slider.value : 0, 10) || 0, JITTER_BUFFER_MAX_MS));
+        localStorage.setItem(JITTER_BUFFER_KEY, String(n));
+      }
+      const JITTER_BUFFER_KEY       = 'jitter-buffer';
+      const JITTER_BUFFER_MAX_MS    = 500;
+      const JITTER_BUFFER_BASE_MS   = 80; // AUDIO_PLAYOUT_DELAY_BASE in main.js
       const NOISE_SUPPRESSION_KEY   = 'noise-suppression';
       const MIC_DEVICE_KEY          = 'mic-device-id';
       const CAMERA_DEVICE_KEY       = 'camera-device-id';
@@ -657,6 +729,7 @@
       $id('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
       $id('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
       loadRelayControls();
+      loadJitterControls();
       syncNoiseSuppressionControls();
       initAboutSection();
 
@@ -1190,6 +1263,10 @@
       document.querySelectorAll('input[name="relay-mode"]').forEach(function(r) {
         r.addEventListener('change', syncRelayFromControls);
       });
+      document.querySelectorAll('input[name="jitter-mode"]').forEach(function(r) {
+        r.addEventListener('change', syncJitterFromControls);
+      });
+      if ($id('input-jitter-ms')) $id('input-jitter-ms').addEventListener('input', syncJitterFromControls);
       ['input-relay-url', 'input-relay-user', 'input-relay-pass'].forEach(function(id) {
         var el = $id(id);
         if (el) el.addEventListener('input', syncRelayFromControls);

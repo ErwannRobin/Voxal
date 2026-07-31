@@ -4,10 +4,11 @@
   "type": "module",
   "scripts": {
     "tauri": "tauri",
-    "test": "npm run test:rust && npm run test:e2e",
+    "test": "npm run test:rust && npm run test:api && npm run test:e2e",
     "test:rust": "cd src-tauri && cargo test",
     "test:e2e": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test --project=unit",
-    "test:mesh": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test --project=mesh"
+    "test:mesh": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test --project=mesh",
+    "test:api": "node --test \"api/*.test.js\""
   },
   "devDependencies": {
     "@playwright/test": "^1.62.0",
