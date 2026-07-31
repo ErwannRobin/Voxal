@@ -56,6 +56,23 @@ You can also set `localStorage['turn-fallback']` directly to a JSON
 > *Settings → Audio → Test over network* will tell you which of these is in play —
 > it names the retired default explicitly rather than blaming your network.
 
+## What the status badge means
+
+The dot at the top-right, and the popover behind it, report **which source
+supplied your relay** — derived from the last `fetchIceServers()` resolution, not
+from any stored flag:
+
+| Shown | Meaning |
+|---|---|
+| `✓ TURN — N servers (Cloudflare, anonymous)` | The `/api/ice-servers` endpoint below. This is the normal state for a user with no account. |
+| `✓ TURN — N servers (your Voxal organisation / metered.ca / provided by this site / custom relay)` | An explicitly configured source won. |
+| `⚠ TURN — built-in public relay (retired, unlikely to work)` | Fell through to the dead default. Amber, deliberately: those servers exist but do not work. |
+| `— TURN not configured` | No relay at all (e.g. *Fallback relay → Off*). Direct/STUN only. |
+| `… Checking relay` | ICE has not resolved yet. |
+
+`· verified` is appended only after a *Test over network* run that actually
+completed **through a relay** — configured and working are different claims.
+
 ## Testing the relay: Settings → Audio → *Test over network*
 
 The **Test** button next to the microphone records the **raw mic** and replays it,
