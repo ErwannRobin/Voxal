@@ -385,42 +385,110 @@ function handleAuthCallbackToken(token, state) {
   selectOrgAndStartPolling();
 }
 
-async function connectWithVoxalAccount() {
+// Where the auth server sends a web browser back to. A fixed, allowlistable
+// path on our own origin — the same shape Google and Facebook use. Custom
+// schemes (voxal://) are for native apps only: handing one to a browser
+// dead-ends at the OS ("no application is configured to open this URL") and the
+// user is never signed in.
+const AUTH_CALLBACK_PATH = '/auth/callback';
+
+function authRedirectUri() {
+  return window.location.origin + AUTH_CALLBACK_PATH;
+}
+
+// Native (Tauri desktop, Capacitor mobile) round-trips through the OS via the
+// custom scheme; everything else comes back over https.
+function authUsesDeepLink() {
+  return IS_TAURI_DESKTOP || IS_NATIVE_MOBILE;
+}
+
+// Builds the /connect URL and records the state we will validate on return.
+// Split out from the navigation so it can be asserted directly — location.assign
+// is not reliably stubbable in a real browser.
+function buildConnectUrl() {
   const state = generateState();
   sessionStorage.setItem('voxal-auth-state', state);
   const connectUrl = new URL(voxalConnectUrl() + '/connect');
   connectUrl.searchParams.set('state', state);
-  connectUrl.searchParams.set('caller', IS_TAURI_DESKTOP ? 'desktop' : 'web');
-  connectUrl.searchParams.set('responseMode', IS_TAURI_DESKTOP ? 'deep-link' : 'post-message');
-  if (!IS_TAURI_DESKTOP) {
-    connectUrl.searchParams.set('callbackOrigin', window.location.origin);
+  connectUrl.searchParams.set('caller', IS_TAURI_DESKTOP ? 'desktop' : IS_NATIVE_MOBILE ? 'mobile' : 'web');
+  connectUrl.searchParams.set('responseMode', authUsesDeepLink() ? 'deep-link' : 'redirect');
+  if (!authUsesDeepLink()) {
+    connectUrl.searchParams.set('redirect_uri', authRedirectUri());
   }
+  return connectUrl.toString();
+}
+
+async function connectWithVoxalAccount() {
+  // A same-tab redirect leaves the page, which would tear down an active call.
+  if (!authUsesDeepLink() && inRoom) {
+    showError('Leave the room before connecting your account — signing in reloads the page.');
+    return false;
+  }
+
+  const connectUrl = buildConnectUrl();
 
   if (window.__TAURI__) {
     // Desktop: open in system browser; deep link fires 'deep-link://new-url'
-    try { await window.__TAURI__.shell.open(connectUrl.toString()); } catch(e) {
+    try { await window.__TAURI__.shell.open(connectUrl); } catch(e) {
       // fallback: shell plugin may not be available yet
-      window.open(connectUrl.toString(), '_blank');
+      window.open(connectUrl, '_blank');
     }
     window.__TAURI__.event.once('deep-link://new-url', function(e) {
       var urls = Array.isArray(e.payload) ? e.payload : [e.payload];
       if (urls[0]) handleDeepLink(urls[0]);
     });
-  } else if (window.Capacitor && window.Capacitor.isNativePlatform()) {
-    // iOS: open in system browser; appUrlOpen fires when OS routes voxal:// back
-    window.open(connectUrl.toString(), '_system');
+  } else if (IS_NATIVE_MOBILE) {
+    // iOS/Android: open in system browser; appUrlOpen fires when the OS routes
+    // voxal:// back into the app.
+    window.open(connectUrl, '_system');
   } else {
-    // Web: popup + postMessage
-    var popup = window.open(connectUrl.toString(), 'voxal-auth', 'width=520,height=720,left=200,top=100');
-    function onMessage(e) {
-      if (e.origin !== voxalConnectUrl() && e.origin !== window.location.origin) return;
-      if (!e.data || !e.data.token) return;
-      window.removeEventListener('message', onMessage);
-      if (popup && !popup.closed) popup.close();
-      handleDeepLink('voxal://auth?token=' + encodeURIComponent(e.data.token) + '&state=' + encodeURIComponent(e.data.state || state));
-    }
-    window.addEventListener('message', onMessage);
+    // Web: navigate this tab. No popup — popups get blocked, and the
+    // Cross-Origin-Opener-Policy: same-origin header this app needs for RNNoise
+    // severs window.opener, so a popup could never post the token back anyway.
+    sessionStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
+    window.location.assign(connectUrl);
   }
+  return true;
+}
+
+// Marks that we navigated away to sign in, so a return with no token can be
+// reported instead of silently doing nothing.
+const AUTH_PENDING_KEY = 'voxal-auth-pending';
+
+// Handle https://<origin>/auth/callback?token=…&state=… on load.
+//
+// Returns true when a token was consumed. The token is stripped from the URL
+// immediately: left in the address bar it leaks through history, screenshots
+// and the Referer header on the next navigation.
+function consumeAuthCallbackFromUrl() {
+  var params;
+  try { params = new URLSearchParams(window.location.search || ''); } catch (_) { return false; }
+  var token = params.get('token');
+  var state = params.get('state');
+  if (!token) return false;
+
+  sessionStorage.removeItem(AUTH_PENDING_KEY);
+  handleAuthCallbackToken(token, state);
+
+  params.delete('token');
+  params.delete('state');
+  var query = params.toString();
+  try {
+    window.history.replaceState({}, '',
+      window.location.pathname.replace(/^\/auth\/callback$/, '/') + (query ? '?' + query : ''));
+  } catch (_) {}
+  return true;
+}
+
+// If we come back from the auth server with nothing, say so. Without this the
+// user just lands on the home screen still signed out, with no explanation —
+// which is exactly how the voxal:// dead end presented.
+function reportAbandonedAuth() {
+  if (!sessionStorage.getItem(AUTH_PENDING_KEY)) return;
+  sessionStorage.removeItem(AUTH_PENDING_KEY);
+  if (presenceToken()) return; // it worked after all
+  showError('Sign-in did not complete. If your browser offered to open a "voxal://" link, ' +
+            'the auth server still needs to be updated to redirect back to the web app.');
 }
 
 // Route presence API calls through Rust to bypass CORS.
@@ -8389,6 +8457,8 @@ window.addEventListener('DOMContentLoaded', function() {
   }
 
   applyPopoutIdentityFromUrl();
+  // Voxal Connect returns here as https://<origin>/auth/callback?token=…&state=…
+  if (!consumeAuthCallbackFromUrl()) reportAbandonedAuth();
   applyEmbedHeaderMode();
   applyTinyEmbedMode();
 
