@@ -37,10 +37,20 @@ what the step-3 fallback does:
 You can also set `localStorage['turn-fallback']` directly to a JSON
 `RTCIceServer[]` (e.g. multiple servers) — the UI handles the single-server case.
 
-> **The default public relay is best-effort.** It uses shared, rate-limited
-> public Open Relay credentials that are **not guaranteed** (Open Relay has moved
-> toward per-account API keys). For anything production-grade, use your own
-> relay (below), org/metered TURN, or the embed `config` channel.
+> **⚠️ The default public relay no longer works.** metered.ca has **retired** the
+> shared `openrelayproject` credentials in favour of per-account API keys, so the
+> built-in step-3 relay fails for everyone. Until a replacement default is chosen,
+> anonymous users have **no working TURN at all** — direct/STUN connections still
+> work, but peers behind symmetric NAT or a strict firewall cannot connect.
+>
+> **To get a working relay today**, pick one:
+> - **metered.ca free tier** (20 GB/month) — sign up, create an app, then paste the
+>   app name + API key into *Settings → Advanced* (step 2 above). No rebuild needed.
+> - **Your own coturn** (below) — enter it under *Fallback relay → Custom relay server*.
+> - **Org TURN** via a signed-in Voxal account (step 1).
+>
+> *Settings → Audio → Test over network* will tell you which of these is in play —
+> it names the retired default explicitly rather than blaming your network.
 
 ## Testing the relay: Settings → Audio → *Test over network*
 

@@ -5305,6 +5305,66 @@ function echoStatus(text, kind) {
 
 function echoTestRunning() { return !!_echo; }
 
+function countRelayServers(iceServers) {
+  return (iceServers || []).filter(function(s) {
+    var urls = s && s.urls;
+    if (Array.isArray(urls)) return urls.some(function(u) { return /^turns?:/.test(u); });
+    return typeof urls === 'string' && /^turns?:/.test(urls);
+  }).length;
+}
+
+// "No relay" has several very different causes, and telling them apart is the
+// difference between "change a setting" and "the relay is gone". The STUN/TURN
+// error code from `onicecandidateerror` is what distinguishes them:
+//   401/403 — the relay answered and REJECTED us: credentials dead or revoked.
+//   701     — could not even establish the connection: server down or blocked.
+//   nothing — packets vanished with no reply, which is what a UDP block looks like.
+function diagnoseRelayFailure(relayServerCount, iceErrors, usingDefaultRelay) {
+  if (!relayServerCount) {
+    return 'No relay server is configured. Set Fallback relay to Automatic or Custom in Settings → Advanced.';
+  }
+  var errors = iceErrors || [];
+  var codes = errors.map(function(e) { return e.code; });
+  var plural = relayServerCount === 1 ? '1 relay server' : relayServerCount + ' relay servers';
+
+  // The built-in fallback is Open Relay's shared `openrelayproject` credentials,
+  // which metered.ca has RETIRED in favour of per-account API keys. That is a
+  // known-dead default, so say so outright instead of blaming the network.
+  if (usingDefaultRelay) {
+    return 'The built-in public relay no longer works — its shared credentials have been ' +
+      'retired. Add free metered.ca credentials (20 GB/month) or your own relay under ' +
+      'Settings → Advanced.';
+  }
+  if (codes.indexOf(401) !== -1 || codes.indexOf(403) !== -1) {
+    return 'Tried ' + plural + '; the relay rejected our credentials (error ' +
+      (codes.indexOf(401) !== -1 ? '401' : '403') + '). Check the username and password ' +
+      'under Settings → Advanced → Fallback relay.';
+  }
+  if (codes.indexOf(701) !== -1) {
+    return 'Tried ' + plural + '; could not connect to the relay (error 701). It may be ' +
+      'down, or your network blocks it. A relay on TCP/443 or TLS usually gets through.';
+  }
+  if (errors.length) {
+    var first = errors[0];
+    return 'Tried ' + plural + '; the relay returned error ' + first.code +
+      (first.text ? ' (' + first.text + ')' : '') + '.';
+  }
+  return 'Tried ' + plural + ' with no reply at all — UDP is most likely blocked on ' +
+    'this network. A relay reachable over TCP/443 or TLS is needed.';
+}
+
+// True when the relays in play are the built-in (retired) public ones rather
+// than anything the user or their org configured.
+function usingDefaultFallbackRelay(iceServers) {
+  var configured = (iceServers || []).filter(function(s) {
+    var u = s && s.urls;
+    return typeof u === 'string' && /^turns?:/.test(u);
+  }).map(function(s) { return s.urls; });
+  if (!configured.length) return false;
+  var defaults = DEFAULT_FALLBACK_TURN.map(function(s) { return s.urls; });
+  return configured.every(function(u) { return defaults.indexOf(u) !== -1; });
+}
+
 // Verdict for the loopback. Shares the peer check's concealment thresholds — the
 // same measurement means the same thing — but not its wording, since here the
 // listener is you. The playback branch is skipped: it is meaningless on a sink
@@ -5374,8 +5434,20 @@ async function startEchoTest(options) {
   var sender = new RTCPeerConnection(cfg);
   var receiver = new RTCPeerConnection(cfg);
 
-  _echo = { sender: sender, receiver: receiver, chunks: [], relayCandidates: 0 };
+  _echo = { sender: sender, receiver: receiver, chunks: [], relayCandidates: 0,
+            relayServers: countRelayServers(iceServers),
+            usingDefaultRelay: usingDefaultFallbackRelay(iceServers), iceErrors: [] };
   var echo = _echo;
+
+  // The STUN/TURN error code is the only thing that says WHY no relay appeared;
+  // without it "no relay reachable" is unactionable. Chromium-only, so guard.
+  var noteIceError = function(e) {
+    if (!e || typeof e.errorCode !== 'number') return;
+    var already = echo.iceErrors.some(function(x) { return x.code === e.errorCode && x.url === e.url; });
+    if (!already) echo.iceErrors.push({ url: e.url, code: e.errorCode, text: e.errorText || '' });
+  };
+  sender.onicecandidateerror = noteIceError;
+  receiver.onicecandidateerror = noteIceError;
 
   sender.onicecandidate = function(e) {
     if (!e.candidate) return;
@@ -5430,9 +5502,12 @@ async function startEchoTest(options) {
 
   if (!flowing) {
     var noRelay = policy === 'relay' && echo.relayCandidates === 0;
+    var diagnosis = noRelay
+      ? diagnoseRelayFailure(echo.relayServers, echo.iceErrors, echo.usingDefaultRelay) : '';
     await stopEchoTest();
     echoStatus(noRelay
-      ? 'No TURN relay reachable — audio never left the device. Peers behind strict firewalls cannot reach you either. Check Settings → Advanced → Fallback relay.'
+      ? 'No TURN relay reachable — audio never left the device. ' + diagnosis +
+        ' Peers behind strict firewalls cannot reach you either.'
       : 'The test connected but no audio came back.', 'error');
     return;
   }

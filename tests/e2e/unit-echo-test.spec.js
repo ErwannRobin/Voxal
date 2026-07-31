@@ -154,3 +154,93 @@ test.describe('settings UI', () => {
     await expect(page.locator('#echo-test-status')).toBeHidden();
   });
 });
+
+test.describe('relay failure diagnosis', () => {
+  const diagnose = (page, count, errors, isDefault) =>
+    page.evaluate(([c, e, d]) => window.diagnoseRelayFailure(c, e, d), [count, errors, isDefault]);
+
+  test('names the retired built-in relay outright instead of blaming the network', async ({ page }) => {
+    await page.goto('/');
+    // metered.ca retired the shared `openrelayproject` credentials in favour of
+    // per-account API keys, so this default is known-dead — say so.
+    const msg = await diagnose(page, 4, [{ code: 701, text: 'Failed to establish connection' }], true);
+    expect(msg).toContain('no longer works');
+    expect(msg).toContain('retired');
+    expect(msg).toContain('metered.ca');
+    expect(msg).not.toContain('701');
+  });
+
+  test('distinguishes rejected credentials from an unreachable relay', async ({ page }) => {
+    await page.goto('/');
+    const rejected = await diagnose(page, 1, [{ code: 401, text: 'Unauthorized' }], false);
+    const unreachable = await diagnose(page, 2, [{ code: 701, text: 'Failed to establish connection' }], false);
+    expect(rejected).toContain('rejected our credentials');
+    expect(rejected).toContain('401');
+    expect(unreachable).toContain('could not connect');
+    expect(unreachable).toContain('701');
+    expect(unreachable).toContain('TCP/443');
+  });
+
+  test('reads total silence as a likely UDP block', async ({ page }) => {
+    await page.goto('/');
+    const msg = await diagnose(page, 2, [], false);
+    expect(msg).toContain('no reply at all');
+    expect(msg).toContain('UDP');
+  });
+
+  test('tells you when no relay is configured at all', async ({ page }) => {
+    await page.goto('/');
+    const msg = await diagnose(page, 0, [], false);
+    expect(msg).toContain('No relay server is configured');
+    expect(msg).toContain('Fallback relay');
+  });
+
+  test('falls back to reporting an unrecognised error code verbatim', async ({ page }) => {
+    await page.goto('/');
+    const msg = await diagnose(page, 1, [{ code: 600, text: 'Weird' }], false);
+    expect(msg).toContain('600');
+    expect(msg).toContain('Weird');
+  });
+
+  test('counts only turn:/turns: entries as relays, not STUN', async ({ page }) => {
+    await page.goto('/');
+    const counts = await page.evaluate(() => ({
+      stunOnly: window.countRelayServers([{ urls: 'stun:stun.l.google.com:19302' }]),
+      mixed: window.countRelayServers([
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'turn:a.example:3478' },
+        { urls: 'turns:b.example:443?transport=tcp' },
+      ]),
+      arrayUrls: window.countRelayServers([{ urls: ['stun:x:1', 'turn:y:2'] }]),
+      empty: window.countRelayServers(null),
+    }));
+    expect(counts.stunOnly).toBe(0);
+    expect(counts.mixed).toBe(2);
+    expect(counts.arrayUrls).toBe(1);
+    expect(counts.empty).toBe(0);
+  });
+
+  test('only calls it the default relay when every relay is a built-in one', async ({ page }) => {
+    await page.goto('/');
+    // DEFAULT_FALLBACK_TURN is a top-level `const`, so it is NOT on `window`
+    // (only `var`/function declarations are). Spell the built-ins out here —
+    // which also documents what the shipped default actually is.
+    const BUILT_IN = [
+      { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turns:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+    ];
+    const r = await page.evaluate((builtIn) => ({
+      allDefault: window.usingDefaultFallbackRelay([{ urls: 'stun:s:1' }].concat(builtIn)),
+      custom: window.usingDefaultFallbackRelay([{ urls: 'turn:my.relay:443', username: 'u', credential: 'p' }]),
+      mixed: window.usingDefaultFallbackRelay(builtIn.concat([{ urls: 'turn:my.relay:443' }])),
+      none: window.usingDefaultFallbackRelay([{ urls: 'stun:s:1' }]),
+    }), BUILT_IN);
+    expect(r.allDefault).toBe(true);
+    // A user who configured their own relay must not be told theirs is retired.
+    expect(r.custom).toBe(false);
+    expect(r.mixed).toBe(false);
+    expect(r.none).toBe(false);
+  });
+});

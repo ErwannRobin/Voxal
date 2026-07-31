@@ -165,11 +165,22 @@ memory on the iOS/Android *native* apps still fall back to web APIs. Adding
 rebuild (not OTA). Battery low-power mode and connection type on iOS/desktop
 WebKit remain unavailable regardless — the panel renders "—" for them.
 
-## 🔊 Anonymous rooms still have no dependable TURN relay
+## 🔊 CONFIRMED DEAD: the built-in fallback TURN relay (high priority)
 
-**Goal:** Stop anonymous (no-org) rooms falling back to a relay that is shared,
-rate-limited and possibly dead, since that is what turns a firewalled peer's
-audio to mush for everyone else.
+**Goal:** Ship a default relay that actually works, or stop pretending to have one.
+
+**Status: confirmed broken.** metered.ca has **retired** the shared
+`openrelayproject` credentials in favour of per-account API keys, so every entry
+in `DEFAULT_FALLBACK_TURN` fails. Anonymous users have **no working TURN at
+all** — direct/STUN peers connect, but anyone behind symmetric NAT or a strict
+firewall cannot. Surfaced by Settings → Audio → *Test over network*, which now
+names the retired default explicitly.
+
+**Decision needed** (product call, not a code fix):
+- host a coturn behind a rate-limited short-lived-credential endpoint, or
+- ship metered.ca free-tier credentials in the build, or
+- drop `DEFAULT_FALLBACK_TURN` entirely so the app stops spending ICE-gathering
+  time on four dead servers and tells the user plainly to configure one.
 
 `fetchIceServers()` step 3 returns `DEFAULT_FALLBACK_TURN` — four allocations
 against `openrelay.metered.ca` with public credentials Open Relay has been
