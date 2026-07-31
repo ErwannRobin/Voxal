@@ -64,6 +64,7 @@ const METERED_STATUS_STORE_KEY  = 'metered-status';  // 'ok' | 'error' | null
 const METERED_COUNT_STORE_KEY   = 'metered-count';   // number of servers when ok
 const METERED_SERVERS_STORE_KEY = 'metered-servers'; // JSON array of ICE server objects
 const TURN_FALLBACK_KEY         = 'turn-fallback';   // JSON RTCIceServer[] override for the free relay fallback ('[]' disables)
+const ANON_TURN_URL_KEY         = 'anon-turn-url';   // override for the anonymous TURN credential endpoint
 
 const JITTER_BUFFER_KEY     = 'jitter-buffer';     // 'auto' | milliseconds as a string ('0' = browser default)
 const NOISE_SUPPRESSION_KEY = 'noise-suppression'; // 'rnnoise' | 'browser' | 'off'
@@ -644,6 +645,67 @@ function applyIframeConfig(msg) {
   iframeEmit({ type: 'config-applied', iceServers: n });
 }
 
+// --- Anonymous TURN credentials ----------------------------------------------
+//
+// A relay API key can never ship in the client: src/ is static files, so anyone
+// could read it and drain the quota. Instead a small server endpoint holds the
+// secret and hands out SHORT-LIVED credentials (see api/ice-servers.js). This is
+// what gives users with no account a working relay.
+
+const DEFAULT_ANON_TURN_URL = 'https://ptt.voxal.app/api/ice-servers';
+
+// Where to ask for anonymous credentials.
+//   - explicit override wins (self-hosters, tests);
+//   - on plain web over http(s) use a SAME-ORIGIN path, so a self-hosted deploy
+//     automatically uses its own endpoint rather than ptt.voxal.app's quota;
+//   - native (Capacitor/Tauri) has no same-origin server — the page is loaded
+//     from capacitor:// or the Tauri asset protocol — so it needs the absolute URL.
+function anonymousTurnUrl() {
+  var override = localStorage.getItem(ANON_TURN_URL_KEY);
+  if (override) return override.trim();
+  if (IS_PLAIN_WEB && /^https?:$/.test(location.protocol)) return '/api/ice-servers';
+  return DEFAULT_ANON_TURN_URL;
+}
+
+// Credentials are time-boxed, so keep them only until they expire.
+var _anonIceCache = null; // { servers, expiresAt }
+// Why the last anonymous-credential attempt failed, so the echo test can say
+// so instead of blaming the retired built-in relay.
+var _anonTurnError = null;
+
+function _anonIceCacheValid(now) {
+  return !!(_anonIceCache && _anonIceCache.expiresAt > (now || Date.now()));
+}
+
+async function fetchAnonymousIceServers() {
+  var now = Date.now();
+  if (_anonIceCacheValid(now)) return _anonIceCache.servers.slice();
+
+  var url = anonymousTurnUrl();
+  if (!url) return null;
+
+  // `no-store` is not optional: KNOWLEDGE/learning.md records the browser HTTP
+  // cache replaying stale anonymous-rooms GETs for days, and a cached credential
+  // is one that outlives its own expiry. tauriFetch goes through Rust, which is
+  // immune, and falls back to plain fetch elsewhere.
+  var res = window.__TAURI__
+    ? await tauriFetch(url)
+    : await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+
+  var data = await res.json();
+  var servers = data && Array.isArray(data.ice_servers) ? data.ice_servers : null;
+  if (!servers || !servers.length) return null;
+
+  var expiresAt = data.expires_at ? Date.parse(data.expires_at) : NaN;
+  // Expire slightly early rather than handing out a credential about to die.
+  _anonIceCache = {
+    servers: servers,
+    expiresAt: isFinite(expiresAt) ? expiresAt - 60000 : now + 10 * 60 * 1000,
+  };
+  return servers.slice();
+}
+
 // 0. Iframe-provided ICE servers (postMessage 'config') — highest precedence
 // 1. Try org TURN (backend-managed, short-lived credentials — preferred)
 // 2. Try locally configured metered.ca credentials (manual fallback)
@@ -711,6 +773,26 @@ async function fetchIceServers() {
       console.warn('[TURN] Local metered.ca fetch failed, falling back to STUN:', e.message);
       devLog('[ICE] metered.ca failed: ' + e.message, 'warn');
     }
+  }
+
+  // --- 2.5. Anonymous TURN credentials from our own endpoint ---
+  // This is the path that gives account-less users a working relay. It comes
+  // after any explicitly configured source, so an org or custom relay still wins.
+  _anonTurnError = null;
+  try {
+    devLog('[ICE] Requesting anonymous TURN credentials…');
+    var anon = await fetchAnonymousIceServers();
+    if (anon && anon.length) {
+      console.log('[TURN] Using', anon.length, 'anonymous ICE server(s)');
+      devLog('[ICE] Anonymous TURN: ' + anon.length + ' server(s) ✓');
+      return FALLBACK_STUN.concat(anon);
+    }
+    _anonTurnError = 'no servers returned';
+    devLog('[ICE] Anonymous TURN: none available, trying next…', 'warn');
+  } catch (e) {
+    _anonTurnError = e.message;
+    console.warn('[TURN] Anonymous TURN fetch failed:', e.message);
+    devLog('[ICE] Anonymous TURN failed: ' + e.message, 'warn');
   }
 
   // --- 3. Public STUN + best-effort free TURN relay ---
@@ -5327,6 +5409,13 @@ function diagnoseRelayFailure(relayServerCount, iceErrors, usingDefaultRelay) {
   var codes = errors.map(function(e) { return e.code; });
   var plural = relayServerCount === 1 ? '1 relay server' : relayServerCount + ' relay servers';
 
+  // If we fell through to the built-in relay because our own credential endpoint
+  // failed, that is the actual fault and the actual fix — say that first.
+  if (usingDefaultRelay && _anonTurnError) {
+    return 'Could not reach the TURN credential service (' + _anonTurnError + '), so the ' +
+      'app fell back to the retired public relay. If you self-host, check that ' +
+      '/api/ice-servers is deployed and CF_TURN_TOKEN_ID / CF_TURN_TOKEN_SECRET are set.';
+  }
   // The built-in fallback is Open Relay's shared `openrelayproject` credentials,
   // which metered.ca has RETIRED in favour of per-account API keys. That is a
   // known-dead default, so say so outright instead of blaming the network.

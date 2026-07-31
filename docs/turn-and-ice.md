@@ -21,7 +21,8 @@ candidates** and pick a path:
 | 0 | **Embed-provided** ICE servers | Embedding page posts `{ type: 'config', iceServers }` — see [iframe embedding](iframe-embed.md#4--providing-your-own-turn-relay). Highest precedence; in-memory only. |
 | 1 | **Org / presence** TURN | Backend-managed, short-lived credentials fetched when signed in (or after an `auth` postMessage with `token` + `orgId`). Preferred for quality. |
 | 2 | **metered.ca** credentials | Settings → Advanced → *metered.ca app name* + *API key* (`localStorage`: `metered-app-name`, `metered-api-key`). |
-| 3 | **Public STUN + free relay fallback** | Default. Google STUN plus a best-effort public TURN relay, configurable below. |
+| 2.5 | **Anonymous TURN credentials** | Short-lived credentials from this deployment's own `/api/ice-servers` endpoint — **this is what gives account-less users a relay**. See below. |
+| 3 | **Public STUN + free relay fallback** | Last resort. Google STUN plus the (retired, see warning) public relay. |
 
 ## Fallback relay (Settings → Advanced)
 
@@ -39,11 +40,14 @@ You can also set `localStorage['turn-fallback']` directly to a JSON
 
 > **⚠️ The default public relay no longer works.** metered.ca has **retired** the
 > shared `openrelayproject` credentials in favour of per-account API keys, so the
-> built-in step-3 relay fails for everyone. Until a replacement default is chosen,
-> anonymous users have **no working TURN at all** — direct/STUN connections still
-> work, but peers behind symmetric NAT or a strict firewall cannot connect.
+> built-in step-3 relay fails for everyone. **The fix is step 2.5 below** —
+> configure `/api/ice-servers` and anonymous users get a working relay again.
+> Until then, direct/STUN connections still work, but peers behind symmetric NAT
+> or a strict firewall cannot connect.
 >
 > **To get a working relay today**, pick one:
+> - **[Anonymous TURN credentials](#anonymous-turn-credentials-apiice-servers)** —
+>   the built-in path; set two env vars and every anonymous user is covered.
 > - **metered.ca free tier** (20 GB/month) — sign up, create an app, then paste the
 >   app name + API key into *Settings → Advanced* (step 2 above). No rebuild needed.
 > - **Your own coturn** (below) — enter it under *Fallback relay → Custom relay server*.
@@ -88,6 +92,54 @@ available; run it from the main window.
 > media — which would break the guarantee at the top of this document that a
 > relay never has access to your audio. The loopback keeps that guarantee and
 > tests the path Voxal actually uses.
+
+## Anonymous TURN credentials (`/api/ice-servers`)
+
+**You cannot ship a relay API key in the app.** `src/` is static files served to
+the browser, so anything embedded is readable by anyone and your quota gets
+drained. Instead this repo ships a serverless function that holds the secret and
+hands out **short-lived** credentials to anonymous callers.
+
+Backed by [Cloudflare's TURN service](https://developers.cloudflare.com/realtime/turn/):
+**1,000 GB/month free**, which is on the order of 30,000 relayed call-hours (a
+relayed 2-peer call costs roughly 29 MB/hour). This is Cloudflare's *TURN*
+service, **not** its SFU — it relays encrypted DTLS-SRTP and cannot hear the
+audio, so the guarantee at the top of this document still holds.
+
+### Setup
+
+1. Cloudflare dashboard → **Realtime** → **TURN Server** → **Create**. Note the
+   **TURN Token ID** and **API Token**.
+2. Set them as environment variables on the deployment (Vercel → Settings →
+   Environment Variables):
+
+   | Variable | Required | Meaning |
+   |---|---|---|
+   | `CF_TURN_TOKEN_ID` | yes | TURN key id |
+   | `CF_TURN_TOKEN_SECRET` | yes | TURN key secret — never logged or returned |
+   | `CF_TURN_TTL` | no | Credential lifetime in seconds (default `3600`) |
+   | `ICE_RATE_LIMIT` | no | Requests per IP per minute (default `30`) |
+
+3. Redeploy. `Settings → Audio → Test over network` should now report
+   **“via TURN relay”**.
+
+Without the variables the endpoint returns `503 not_configured` and the app falls
+through to the public fallback, exactly as before — so this is safe to deploy
+before the account exists.
+
+### How it behaves
+
+- The minted credential is **cached server-side** for ~80% of its TTL and shared
+  by all callers, so request volume costs no extra Cloudflare API calls.
+- Per-IP rate limiting is **best-effort**: serverless instances are ephemeral and
+  plural, so it throttles a hot instance rather than a distributed attack. Move
+  it to a real store (Vercel KV / Upstash) if you ever see quota burn.
+- Clients resolve the endpoint as **same-origin `/api/ice-servers`** on the web —
+  so a self-hosted deployment automatically uses its own, not `ptt.voxal.app`'s —
+  and the absolute URL on native, which has no same-origin server. Override with
+  `localStorage['anon-turn-url']`.
+- A public endpoint is inherently harvestable. Short TTLs bound the damage from a
+  leaked credential to one window; watch the Cloudflare dashboard after launch.
 
 ## Self-hosting a TURN relay (coturn)
 

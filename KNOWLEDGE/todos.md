@@ -176,11 +176,15 @@ all** — direct/STUN peers connect, but anyone behind symmetric NAT or a strict
 firewall cannot. Surfaced by Settings → Audio → *Test over network*, which now
 names the retired default explicitly.
 
-**Decision needed** (product call, not a code fix):
-- host a coturn behind a rate-limited short-lived-credential endpoint, or
-- ship metered.ca free-tier credentials in the build, or
-- drop `DEFAULT_FALLBACK_TURN` entirely so the app stops spending ICE-gathering
-  time on four dead servers and tells the user plainly to configure one.
+**Mitigated:** `api/ice-servers.js` now mints short-lived Cloudflare TURN
+credentials for anonymous users (step 2.5 of `fetchIceServers()`). Set
+`CF_TURN_TOKEN_ID` and `CF_TURN_TOKEN_SECRET` on the deployment and anonymous
+users have a working relay again — see `docs/turn-and-ice.md`.
+
+**Still open:** `DEFAULT_FALLBACK_TURN` remains in the code as a last resort even
+though it is known dead, so every peer that reaches step 3 still spends ICE
+gathering time on four corpses. Decide whether to drop it entirely now that a
+working path exists.
 
 `fetchIceServers()` step 3 returns `DEFAULT_FALLBACK_TURN` — four allocations
 against `openrelay.metered.ca` with public credentials Open Relay has been
