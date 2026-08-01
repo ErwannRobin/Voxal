@@ -1,6 +1,6 @@
-.PHONY: help run run-web dev debug build build-debug build-signed build-web install clean lint check test \
+.PHONY: help run run-web gen-build-info dev debug build build-debug build-signed build-web install clean lint check test \
         test-rust test-api test-e2e test-mesh coverage coverage-rust coverage-e2e \
-        cap-sync cap-ios cap-android build-android docs release
+        cap-sync cap-ios cap-android build-android docs release release-official release-core
 
 # Default target
 help:
@@ -19,7 +19,8 @@ help:
 	@echo "  cap-android  Open Android Studio"
 	@echo "  build-android Build signed release AAB for Google Play"
 	@echo "  install      Check prereqs, then install npm + Rust dependencies"
-	@echo "  release      Build signed release and publish to GitHub (requires gh CLI)"
+	@echo "  release      Build signed release and publish to GitHub (ad-hoc DMG signature allowed)"
+	@echo "  release-official Same as release, but refuses an ad-hoc-signed DMG (requires Developer ID)"
 	@echo "  docs         Serve architecture flow docs on http://localhost:8090"
 	@echo "  check        Run Rust type-check (no binary)"
 	@echo "  test         Run all test suites (check + Rust tests + Playwright)"
@@ -90,7 +91,14 @@ build-debug:
 
 # ── Web ───────────────────────────────────────────────────────────────────────
 
-run-web:
+# Mirrors the build-info.js Vercel generates via vercel.json's buildCommand
+# (deployed src/ is served as-is, with no `make` step — see vercel.json).
+gen-build-info:
+	@COMMIT=$$(git rev-parse --short HEAD); \
+	BUILD_DATE=$$(date -u +%FT%TZ); \
+	echo "window.VOXAL_COMMIT='$$COMMIT';window.VOXAL_WEB_BUILD_DATE='$$BUILD_DATE';" > src/build-info.js
+
+run-web: gen-build-info
 	@command -v npx >/dev/null 2>&1 || { echo "npx not found — install Node.js"; exit 1; }
 	@mkdir -p src/.well-known/appspecific
 	@[ -f .devtools-workspace-uuid ] || uuidgen > .devtools-workspace-uuid
@@ -99,7 +107,7 @@ run-web:
 	@echo "Serving web app on http://localhost:8080"
 	npx --yes serve src -l 8080
 
-build-web:
+build-web: gen-build-info
 	mkdir -p dist
 	cp -r src/* dist/
 	@echo "Web app copied to dist/"
@@ -107,6 +115,7 @@ build-web:
 # ── Mobile (Capacitor) ────────────────────────────────────────────────────────
 
 cap-sync:
+	@rm -f src/build-info.js
 	npx cap sync
 
 cap-ios: cap-sync
@@ -162,8 +171,22 @@ install:
 # - android/app/build.gradle versionName
 # and increments android/app/build.gradle versionCode by 1.
 # Without VERSION, it auto-bumps patch version from tauri.conf.json.
+#
+# "release" allows an ad-hoc-signed DMG (ALLOW_ADHOC_DMG=1 by default).
+# "release-official" refuses ad-hoc signing — use it once Developer ID
+# signing/notarization is configured.
 release:
+	@$(MAKE) release-core ALLOW_ADHOC_DMG=1
+
+release-official:
+	@$(MAKE) release-core ALLOW_ADHOC_DMG=
+
+release-core:
 	@command -v gh >/dev/null 2>&1 || { echo "Error: gh CLI not installed (https://cli.github.com)"; exit 1; }
+	@git diff --quiet && git diff --cached --quiet || { \
+		echo "Error: working tree has uncommitted changes. Commit or stash before releasing."; \
+		exit 1; \
+	}
 	@if [ -z "$$TAURI_SIGNING_PRIVATE_KEY" ] && [ ! -f ~/.tauri/voxal.key ]; then \
 		echo "Error: No signing key found."; \
 		echo "Set TAURI_SIGNING_PRIVATE_KEY or place key at ~/.tauri/voxal.key"; \
@@ -198,6 +221,12 @@ release:
 	fi; \
 	echo "→ Updated package.json, tauri.conf.json, Cargo.toml, version.js, and Android version fields"; \
 	VERSION="$$NEW_VERSION"; \
+	if ! git diff --quiet -- package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src/version.js android/app/build.gradle; then \
+		echo "→ Committing and pushing version bump…"; \
+		git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src/version.js android/app/build.gradle; \
+		git commit -m "publish new release $$VERSION"; \
+		git push; \
+	fi; \
 	echo "→ Building Voxal v$$VERSION (signed release)…"; \
 	export TAURI_SIGNING_PRIVATE_KEY="$${TAURI_SIGNING_PRIVATE_KEY:-$$(cat ~/.tauri/voxal.key)}"; \
 	if [ -z "$$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]; then \
