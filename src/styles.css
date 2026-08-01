@@ -716,8 +716,13 @@ html[data-theme="light"] .debug-consent-text strong { color: #b45309; }
   padding: 8px 10px;
   min-width: 160px;
   max-width: 240px;
+  /* Fallback only — showStatsPopover sets an inline max-height from the space
+     actually available beside the anchor. */
   max-height: 60vh;
   overflow-y: auto;
+  /* Don't hand the scroll on to the page once the panel hits its end. */
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   box-shadow: 0 4px 16px rgba(0,0,0,0.35);
 }
 .stats-popover-title {
@@ -816,8 +821,14 @@ html[data-theme="light"] .debug-consent-text strong { color: #b45309; }
   padding: 10px 12px;
   width: 260px;
   max-width: calc(100vw - 16px);
+  /* Fallback only — showDeviceInfoPopover sets an inline max-height from the
+     space actually available beside the anchor, so this panel scrolls within
+     the viewport instead of overflowing it on a phone. */
   max-height: 70vh;
   overflow-y: auto;
+  /* Don't hand the scroll on to the room behind once the panel hits its end. */
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   box-shadow: 0 4px 16px rgba(0,0,0,0.35);
 }
 .device-info-popover .di-title {

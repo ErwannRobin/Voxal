@@ -446,6 +446,90 @@ test.describe('device-info popover integration', () => {
     await expect(panel).toBeHidden();
   });
 
+  // The panel now carries device + audio + network + audio check + debug logs.
+  // On a phone that is taller than the space beside the roster row it is
+  // anchored to, so it must scroll inside the viewport rather than overflow it.
+  test.describe('the panel stays inside a phone viewport and scrolls', () => {
+    async function openSelfPanel(page) {
+      await seedRoom(page, {
+        selfId: 'host', isHost: true, roomCode: 'host',
+        connections: [{ id: 'peer-a', pseudo: 'Alice' }],
+      });
+      await page.evaluate(() => {
+        localStorage.setItem('dev-mode', 'true');
+        localStorage.setItem('debug-share-device-info', 'accepted');
+        showScreen('room');
+        updatePeerList();
+      });
+    }
+
+    test('opened from a row near the bottom, it fits above the fold', async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 664 }); // iPhone-ish
+      await openSelfPanel(page);
+      await page.locator('#peer-item-peer-a .peer-info-btn').click();
+
+      const pop = page.locator('#device-info-popover');
+      await expect(pop).toBeVisible();
+      const box = await pop.boundingBox();
+      const vh = await page.evaluate(() => window.innerHeight);
+      const vw = await page.evaluate(() => window.innerWidth);
+      expect(box.y).toBeGreaterThanOrEqual(0);
+      expect(box.y + box.height).toBeLessThanOrEqual(vh);
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(vw);
+    });
+
+    test('the overflow scrolls inside the panel', async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 664 });
+      await openSelfPanel(page);
+      await page.locator('#peer-item-peer-a .peer-info-btn').click();
+      const pop = page.locator('#device-info-popover');
+      await expect(pop).toBeVisible();
+
+      // Whatever the content height, the element is a scroll container capped to
+      // the room beside its anchor — never a flat 70vh that ignores placement.
+      const m = await pop.evaluate((el) => ({
+        overflowY: getComputedStyle(el).overflowY,
+        maxHeight: parseFloat(getComputedStyle(el).maxHeight),
+        clientHeight: el.clientHeight,
+        scrollHeight: el.scrollHeight,
+        inlineMax: el.style.maxHeight,
+      }));
+      expect(m.overflowY).toBe('auto');
+      expect(m.inlineMax).not.toBe('');
+      expect(m.maxHeight).toBeLessThanOrEqual(664);
+      expect(m.clientHeight).toBeLessThanOrEqual(m.maxHeight + 1);
+      // If the content does overflow, the container can actually scroll it.
+      if (m.scrollHeight > m.clientHeight) {
+        const scrolled = await pop.evaluate((el) => { el.scrollTop = 9999; return el.scrollTop; });
+        expect(scrolled).toBeGreaterThan(0);
+      }
+    });
+
+    test('a fixed popover is not offset by page scroll', async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 664 });
+      await openSelfPanel(page);
+      // position:fixed is viewport-relative; adding scrollY once pushed the
+      // panel off the screen by the scroll offset.
+      const r = await page.evaluate(() => {
+        const anchor = document.querySelector('#peer-item-peer-a .peer-info-btn');
+        const el = document.createElement('div');
+        el.style.cssText = 'position:fixed;width:260px;height:40px';
+        document.body.appendChild(el);
+        Object.defineProperty(window, 'scrollY', { value: 500, configurable: true });
+        _positionAnchoredPopover(el, anchor, 260);
+        const top = el.getBoundingClientRect().top;
+        const anchorRect = anchor.getBoundingClientRect();
+        el.remove();
+        return { top, anchorBottom: anchorRect.bottom, anchorTop: anchorRect.top };
+      });
+      // Placed against the anchor itself, either just below or just above it.
+      const nearBelow = Math.abs(r.top - (r.anchorBottom + 4)) < 2;
+      const nearAbove = r.top < r.anchorTop;
+      expect(nearBelow || nearAbove).toBe(true);
+    });
+  });
+
   test('leaving the room clears every session and panel', async ({ page }) => {
     await seedRoom(page, {
       selfId: 'host', isHost: true, roomCode: 'host',

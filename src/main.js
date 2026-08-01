@@ -3456,6 +3456,46 @@ function _buildLossDetail(stats) {
   return wrap;
 }
 
+// Place a body-appended popover against its anchor without ever running off the
+// screen. Both popovers are `position: fixed`, so getBoundingClientRect's
+// viewport coordinates are used as-is — adding scrollY (as this once did) pushes
+// them off by the scroll offset.
+//
+// The height cap is computed from the space actually available on the chosen
+// side rather than a flat `Nvh`, which is what made the device panel overflow on
+// a phone: the content grew past what fits below a roster row near the bottom of
+// the screen, and a 70vh cap knows nothing about where the anchor is. Anchoring
+// the *bottom* edge when opening upwards means async content grows away from the
+// anchor, so a panel that fills in later still cannot escape the viewport — it
+// scrolls instead.
+function _positionAnchoredPopover(popover, anchorEl, width) {
+  var MARGIN = 8;   // keep clear of the viewport edges
+  var GAP    = 4;   // between the anchor and the panel
+  var MIN_H  = 120; // below this a panel is useless, so allow it to overlap a little
+  var rect = anchorEl.getBoundingClientRect();
+
+  var left = rect.left;
+  if (left + width > window.innerWidth - MARGIN) left = window.innerWidth - width - MARGIN;
+  if (left < MARGIN) left = MARGIN;
+  popover.style.left = left + 'px';
+
+  var below = window.innerHeight - rect.bottom - GAP - MARGIN;
+  var above = rect.top - GAP - MARGIN;
+  // Open downwards by default; flip up only when below is genuinely cramped and
+  // above is roomier — not merely because the content happens to be tall.
+  var useAbove = below < 200 && above > below;
+
+  if (useAbove) {
+    popover.style.top    = 'auto';
+    popover.style.bottom = (window.innerHeight - rect.top + GAP) + 'px';
+    popover.style.maxHeight = Math.max(MIN_H, above) + 'px';
+  } else {
+    popover.style.bottom = 'auto';
+    popover.style.top    = (rect.bottom + GAP) + 'px';
+    popover.style.maxHeight = Math.max(MIN_H, below) + 'px';
+  }
+}
+
 function showStatsPopover(peerId, anchorEl) {
   closeStatsPopover();
   _statsPopoverPeerId = peerId;
@@ -3477,21 +3517,8 @@ function showStatsPopover(peerId, anchorEl) {
 
   document.body.appendChild(popover);
 
-  // Position near the anchor dot
-  var rect = anchorEl.getBoundingClientRect();
-  var top = rect.bottom + window.scrollY + 4;
-  var left = rect.left + window.scrollX;
-  // Clamp to viewport
-  var pw = 200; // min-width from CSS
-  if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
-  popover.style.top = top + 'px';
-  popover.style.left = left + 'px';
-  // The loss detail makes this panel tall enough to run off the bottom; flip it
-  // above the anchor when it would, and never start it off-screen.
-  var ph = popover.getBoundingClientRect().height;
-  if (top + ph > window.innerHeight - 8) {
-    popover.style.top = Math.max(8, rect.top + window.scrollY - ph - 4) + 'px';
-  }
+  // Position near the anchor dot (200px = min-width from CSS).
+  _positionAnchoredPopover(popover, anchorEl, 200);
 
   // Collect fresh stats then render
   _collectPeerStats(peerId, conn).then(function() { _refreshOpenStatsPopover(); });
@@ -4918,15 +4945,11 @@ function showDeviceInfoPopover(peerId, anchorEl, isSelf) {
 
   document.body.appendChild(popover);
 
-  // Position under the anchor, clamped to the viewport.
-  var rect = anchorEl.getBoundingClientRect();
-  var pw = 260;
-  var top = rect.bottom + window.scrollY + 4;
-  var left = rect.left + window.scrollX;
-  if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
-  if (left < 8) left = 8;
-  popover.style.top = top + 'px';
-  popover.style.left = left + 'px';
+  // Position against the anchor, capped to the space actually available there
+  // (260px = width from CSS). This panel keeps growing — device + audio +
+  // network + audio check + debug logs — so it must scroll inside the viewport
+  // rather than run off the bottom of a phone screen.
+  _positionAnchoredPopover(popover, anchorEl, 260);
 
   _refreshDeviceInfoPopover();
   if (!isSelf) {
