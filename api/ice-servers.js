@@ -29,6 +29,9 @@ import {
 const DEFAULT_TTL = 3600;
 const RATE_WINDOW_MS = 60 * 1000;
 const DEFAULT_RATE_LIMIT = 30;
+// How long the CDN may serve one mint. Short relative to CF_TURN_TTL (3600s)
+// so an edge hit always has plenty of credential life left.
+const EDGE_CACHE_SECONDS = 300;
 
 // Module scope: survives between invocations on a warm instance, resets on a
 // cold start. Both of these are caches, so losing them is never incorrect.
@@ -64,9 +67,18 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'content-type');
-  // A cached credential is a credential that outlives its own expiry — the exact
-  // failure KNOWLEDGE/learning.md records for the anonymous-rooms GETs.
+  // The BROWSER must never cache this: a cached credential is one that outlives
+  // its own expiry, the exact failure KNOWLEDGE/learning.md records for the
+  // anonymous-rooms GETs. The client keeps its own in-memory copy and checks
+  // expires_at explicitly.
   res.setHeader('Cache-Control', 'no-store');
+  // The EDGE may, and should. Every caller already receives the same credential
+  // — the module cache below hands out one mint for ~80% of its TTL — so edge
+  // caching changes only WHO serves it, not what. It removes the cold-start
+  // latency that was showing up as a slow relay resolve on the welcome screen.
+  // Well under the TTL, so a client never receives one close to expiry.
+  res.setHeader('Vercel-CDN-Cache-Control', `max-age=${EDGE_CACHE_SECONDS}`);
+  res.setHeader('CDN-Cache-Control', `max-age=${EDGE_CACHE_SECONDS}`);
 
   if (req.method === 'OPTIONS') { res.status(204).end(); return; }
   if (req.method !== 'GET') { res.status(405).json({ error: 'method_not_allowed' }); return; }

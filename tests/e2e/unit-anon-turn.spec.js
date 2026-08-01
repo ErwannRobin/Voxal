@@ -161,3 +161,62 @@ test.describe('fetchIceServers precedence', () => {
     expect(msg).not.toContain('shared credentials have been retired');
   });
 });
+
+test.describe('startup prefetch', () => {
+  // The regression: both prefetch sites were inside `if (presenceConfigured())`,
+  // so an ANONYMOUS visitor never resolved ICE until createRoom()/joinRoom()
+  // awaited it. That put the credential endpoint's latency — plus a cold
+  // serverless start — on the critical path of joining, and left the relay badge
+  // stuck on "Checking relay…" on the welcome screen.
+  function stubIce(page, delayMs = 0) {
+    const hits = [];
+    return page.route('**/api/ice-servers', async (route) => {
+      hits.push(Date.now());
+      if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+      return route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({
+          ice_servers: [{ urls: ['turn:cf:3478?transport=tcp'], username: 'u', credential: 'c' }],
+          expires_at: new Date(Date.now() + 3600e3).toISOString(),
+        }),
+      });
+    }).then(() => hits);
+  }
+
+  test('an anonymous visitor prefetches ICE on load', async ({ page }) => {
+    const hits = await stubIce(page);
+    await page.goto('/');
+    await page.waitForFunction(() => window._lastIceResolution !== null);
+    expect(hits.length).toBe(1);
+    expect(await page.evaluate(() => window._lastIceResolution.source)).toBe('anonymous');
+  });
+
+  test('the relay badge resolves without the user doing anything', async ({ page }) => {
+    await stubIce(page);
+    await page.goto('/');
+    await page.waitForFunction(() => window._lastIceResolution !== null);
+    const text = await page.evaluate(() => document.getElementById('conn-status-content').textContent);
+    // It used to sit on "Checking relay…" forever on the welcome screen.
+    expect(text).not.toContain('Checking relay');
+    expect(text).toContain('TURN — 1 server');
+  });
+
+  test('the prefetch does not block the page', async ({ page }) => {
+    await stubIce(page, 1500);
+    const t0 = Date.now();
+    await page.goto('/');
+    // Fire-and-forget: load must not wait on a slow/cold endpoint.
+    expect(Date.now() - t0).toBeLessThan(1500);
+  });
+
+  test('joining afterwards costs no extra request — the cache is warm', async ({ page }) => {
+    const hits = await stubIce(page);
+    await page.goto('/');
+    await page.waitForFunction(() => window._lastIceResolution !== null);
+    const before = hits.length;
+
+    const servers = await page.evaluate(() => window.fetchIceServers());
+    expect(hits.length).toBe(before);
+    expect(servers.some((s) => String(s.urls).includes('turn:'))).toBe(true);
+  });
+});

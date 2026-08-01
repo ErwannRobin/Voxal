@@ -48,6 +48,10 @@ export function isCacheFresh(cache, now, refreshRatio = 0.8) {
  * own module scope, so this throttles a single hot instance rather than a
  * distributed attack. It exists to stop one client hammering the endpoint, not
  * to be a security boundary. Move to Vercel KV / Upstash if quota burn appears.
+ *
+ * Note it now only sees CDN cache misses — edge-cached responses never reach the
+ * function. That is fine: the point was to bound provider API calls, and edge
+ * caching bounds them harder. The credential TTL remains what limits abuse.
  */
 export function rateLimit(hits, key, now, limit, windowMs) {
   const recent = (hits.get(key) || []).filter((t) => now - t < windowMs);

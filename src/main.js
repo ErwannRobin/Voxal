@@ -736,6 +736,11 @@ function anonymousTurnUrl() {
 }
 
 // Credentials are time-boxed, so keep them only until they expire.
+// A cold serverless start plus the provider round trip can exceed 5s; aborting
+// there would silently drop us onto the retired public relay. The prefetch is
+// off the critical path, so a longer ceiling costs nothing.
+const ANON_TURN_TIMEOUT_MS = 8000;
+
 var _anonIceCache = null; // { servers, expiresAt }
 // Why the last anonymous-credential attempt failed, so the echo test can say
 // so instead of blaming the retired built-in relay.
@@ -758,7 +763,7 @@ async function fetchAnonymousIceServers() {
   // immune, and falls back to plain fetch elsewhere.
   var res = window.__TAURI__
     ? await tauriFetch(url)
-    : await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+    : await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(ANON_TURN_TIMEOUT_MS) });
   if (!res.ok) throw new Error('HTTP ' + res.status);
 
   var data = await res.json();
@@ -9512,6 +9517,19 @@ window.addEventListener('DOMContentLoaded', function() {
 
   // Start presence polling on load (if configured)
   startPresencePolling();
+
+  // Warm the ICE cache as soon as the app loads, for EVERY user.
+  //
+  // This used to run only inside `if (presenceConfigured())` — i.e. signed-in
+  // org users — so an anonymous visitor never resolved ICE until createRoom() /
+  // joinRoom() awaited it. That put the credential endpoint's latency (plus a
+  // cold serverless start) directly on the critical path of joining, and left
+  // the relay badge stuck on "Checking relay…" on the welcome screen.
+  //
+  // Fire-and-forget: nothing on the home screen waits for it, and by the time
+  // the user creates or joins a room the in-memory cache is already warm.
+  fetchIceServers().catch(function(e) { console.warn('[ICE] prefetch failed:', e.message); });
+
   $('btn-copy').addEventListener('click', function() {
     var text = roomDisplayCode();
     if (!text) return;
