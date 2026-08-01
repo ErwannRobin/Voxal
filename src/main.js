@@ -7442,7 +7442,7 @@ function openVideoViewer(peerId) {
   vid.srcObject = conn.remoteVideoStream;
   var title = document.getElementById('video-viewer-title');
   if (title) title.textContent = '📹 ' + (conn.pseudo || 'Camera');
-  panel.classList.remove('hidden');
+  panel.classList.remove('hidden', 'pip-active');
   _videoFpsIntervalId = _stopFpsOverlay(_videoFpsIntervalId, 'video-viewer-fps');
   _videoFpsIntervalId = _startFpsOverlay('video-viewer-element', 'video-viewer-fps');
   if (!IS_NATIVE_MOBILE && /Mobi|Android/i.test(navigator.userAgent)) {
@@ -7467,7 +7467,7 @@ function openScreenViewer(peerId) {
   vid.srcObject = conn.remoteScreenStream;
   var title = document.getElementById('screen-viewer-title');
   if (title) title.textContent = '🖥 ' + (conn.pseudo || 'Screen');
-  panel.classList.remove('hidden');
+  panel.classList.remove('hidden', 'pip-active');
   _screenFpsIntervalId = _stopFpsOverlay(_screenFpsIntervalId, 'screen-viewer-fps');
   _screenFpsIntervalId = _startFpsOverlay('screen-viewer-element', 'screen-viewer-fps');
   if (!IS_NATIVE_MOBILE && /Mobi|Android/i.test(navigator.userAgent)) {
@@ -7491,7 +7491,7 @@ function popOutVideoViewer() {
       if (document.pictureInPictureEnabled && vid.requestPictureInPicture) {
         vid.requestPictureInPicture().then(function() {
           var panel = document.getElementById('video-viewer-panel');
-          if (panel) panel.classList.add('hidden');
+          if (panel) panel.classList.add('pip-active');
         }).catch(function(e) {
           console.warn('[video] PiP failed:', e.message);
           showCopyToast('Picture-in-Picture not available');
@@ -7499,7 +7499,7 @@ function popOutVideoViewer() {
       } else if (vid.webkitSetPresentationMode) {
         vid.webkitSetPresentationMode('picture-in-picture');
         var panel = document.getElementById('video-viewer-panel');
-        if (panel) panel.classList.add('hidden');
+        if (panel) panel.classList.add('pip-active');
       } else {
         showCopyToast('Picture-in-Picture not available');
       }
@@ -7594,7 +7594,7 @@ function popOutScreenViewer() {
       if (document.pictureInPictureEnabled && vid.requestPictureInPicture) {
         vid.requestPictureInPicture().then(function() {
           var panel = document.getElementById('screen-viewer-panel');
-          if (panel) panel.classList.add('hidden');
+          if (panel) panel.classList.add('pip-active');
         }).catch(function(e) {
           showCopyToast('Picture-in-Picture not available');
         });
@@ -7691,7 +7691,7 @@ function closeVideoViewer() {
   _videoFpsIntervalId = _stopFpsOverlay(_videoFpsIntervalId, 'video-viewer-fps');
   var panel = document.getElementById('video-viewer-panel');
   var vid   = document.getElementById('video-viewer-element');
-  if (panel) panel.classList.add('hidden');
+  if (panel) { panel.classList.add('hidden'); panel.classList.remove('pip-active'); }
   if (vid) vid.srcObject = null;
   if (document.pictureInPictureElement) {
     document.exitPictureInPicture().catch(function() {});
@@ -7710,7 +7710,7 @@ function closeScreenViewer() {
   _screenFpsIntervalId = _stopFpsOverlay(_screenFpsIntervalId, 'screen-viewer-fps');
   var panel = document.getElementById('screen-viewer-panel');
   var vid   = document.getElementById('screen-viewer-element');
-  if (panel) panel.classList.add('hidden');
+  if (panel) { panel.classList.add('hidden'); panel.classList.remove('pip-active'); }
   if (vid) vid.srcObject = null;
   if (_screenPopoutWindow && !_screenPopoutWindow.closed) {
     _screenPopoutWindow.close();
@@ -10809,6 +10809,14 @@ window.addEventListener('DOMContentLoaded', function() {
     viewerVid.addEventListener('webkitendfullscreen', function() {
       var panel = document.getElementById('video-viewer-panel');
       if (panel) panel.classList.add('hidden');
+    });
+  }
+
+  // Return from PiP to integrated panel (screen share)
+  var screenViewerVid = document.getElementById('screen-viewer-element');
+  if (screenViewerVid) {
+    screenViewerVid.addEventListener('leavepictureinpicture', function() {
+      if (_screenViewerPeerId) openScreenViewer(_screenViewerPeerId);
     });
   }
 
