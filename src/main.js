@@ -66,6 +66,11 @@ const METERED_SERVERS_STORE_KEY = 'metered-servers'; // JSON array of ICE server
 const TURN_FALLBACK_KEY         = 'turn-fallback';   // JSON RTCIceServer[] override for the free relay fallback ('[]' disables)
 const ANON_TURN_URL_KEY         = 'anon-turn-url';   // override for the anonymous TURN credential endpoint
 
+// How many separate times the browser has made the user answer a microphone
+// prompt, and whether they have told us they know how to stop it.
+const MIC_PROMPT_COUNT_KEY   = 'mic-prompt-count';
+const MIC_HINT_DISMISSED_KEY = 'mic-hint-dismissed';
+
 const JITTER_BUFFER_KEY     = 'jitter-buffer';     // 'auto' | milliseconds as a string ('0' = browser default)
 const NOISE_SUPPRESSION_KEY = 'noise-suppression'; // 'rnnoise' | 'browser' | 'off'
 const MIC_DEVICE_KEY        = 'mic-device-id';
@@ -4833,6 +4838,8 @@ function updatePeerList() {
     list.appendChild(nudge);
   }
 
+  appendMicPermissionHint(list);
+
   // Notify the parent iframe of the current peer list
   if (_isIframe && inRoom) {
     var peers = [{
@@ -5125,6 +5132,208 @@ async function refreshMediaDeviceSelectors() {
   }
 }
 
+// --- Microphone permission persistence hint ----------------------------------
+//
+// A web page CANNOT persist a getUserMedia grant: the browser owns it, keyed by
+// origin, and there is no API to extend or restore it. All we can usefully do is
+// name the exact control that makes it stick — "check your browser settings" is
+// what the user already tried.
+//
+// iOS is the sharp case and the one this was reported on. WebKit scopes the
+// grant to the DOCUMENT, so a reload always re-prompts regardless of what was
+// chosen; the per-site Website Settings toggle is the only thing that survives.
+
+// Last-resort signal only — see micPermissionState() for the real ones. A grant
+// the browser already remembered resolves in milliseconds; one that needed a
+// human to find and tap "Allow" cannot. Threshold set deliberately high:
+// nagging someone whose browser IS remembering is the bad failure.
+const MIC_PROMPT_MIN_MS = 800;
+
+// Will the next getUserMedia() put a prompt on screen, or be granted silently?
+//
+// Two signals, best first:
+//
+//  1. navigator.permissions.query({name:'microphone'}) — exact, but Chromium
+//     only. WebKit and Firefox both reject the descriptor, and WebKit is where
+//     this actually matters.
+//
+//  2. Device LABELS. enumerateDevices() only exposes a label when the document
+//     holds a capture permission, so an unlabelled microphone means no grant yet
+//     and therefore a prompt. This works on Safari — and on iOS the labels go
+//     back to empty after every reload, exactly mirroring the document-scoped
+//     grant that causes the re-prompting in the first place.
+//
+// Returns 'granted' | 'prompt' | 'denied' | 'unknown'. Never throws: this runs
+// on the critical path of acquiring the mic and must not be able to break it.
+async function micPermissionState() {
+  try {
+    var status = await navigator.permissions.query({ name: 'microphone' });
+    if (status && status.state) return status.state;
+  } catch (_) { /* not supported here — fall through to the label probe */ }
+  try {
+    var devices = await navigator.mediaDevices.enumerateDevices();
+    var mics = devices.filter(function(d) { return d.kind === 'audioinput'; });
+    // No microphone at all says nothing about permission.
+    if (!mics.length) return 'unknown';
+    return mics.some(function(d) { return !!d.label; }) ? 'granted' : 'prompt';
+  } catch (_) {}
+  return 'unknown';
+}
+
+function micPermissionHint() {
+  // Native builds hold an OS-level permission that already persists. Pointing
+  // at browser settings there would be advice about a browser not in use.
+  if (!IS_PLAIN_WEB) return null;
+
+  var ua = navigator.userAgent || '';
+  // The Mac+touch test catches iPadOS Safari, whose default UA claims macOS.
+  var isIOS = /iPad|iPhone|iPod/.test(ua) ||
+    (/Mac/.test(navigator.platform || '') && (navigator.maxTouchPoints || 0) > 1);
+
+  // Every browser on iOS is WebKit underneath, so they all behave like Safari
+  // and all expose the same control. Check this before the Safari branch.
+  if (isIOS) {
+    return {
+      platform: 'ios',
+      html: 'Tap <strong>aA</strong> in the address bar → <strong>Website Settings</strong> → ' +
+            '<strong>Microphone</strong> → <strong>Allow</strong>.',
+    };
+  }
+  if (/Firefox\//.test(ua)) {
+    return {
+      platform: 'firefox',
+      html: 'Tick <strong>Remember this decision</strong> in the permission prompt.',
+    };
+  }
+  // Chromium browsers put "Safari" in their UA too, so desktop Safari can only
+  // be identified by the ABSENCE of the Chromium markers.
+  if (/Safari\//.test(ua) && !/Chrome|Chromium|Edg\//.test(ua)) {
+    return {
+      platform: 'safari',
+      html: 'Safari menu → <strong>Settings for This Website…</strong> → ' +
+            '<strong>Microphone</strong> → <strong>Allow</strong>.',
+    };
+  }
+  if (/Chrome|Chromium|Edg\//.test(ua)) {
+    if (/Android/.test(ua)) {
+      return {
+        platform: 'chromium-android',
+        html: 'Tap the icon left of the address bar → <strong>Permissions</strong> → ' +
+              '<strong>Microphone</strong> → <strong>Allow</strong>.',
+      };
+    }
+    return {
+      platform: 'chromium',
+      html: 'Choose <strong>Allow on every visit</strong> in the prompt, or click the icon left ' +
+            'of the address bar → <strong>Microphone</strong> → <strong>Allow</strong>.',
+    };
+  }
+  return {
+    platform: 'unknown',
+    html: 'Look for a “remember” or “always allow” option in your browser’s microphone prompt, ' +
+          'or in its site settings for this page.',
+  };
+}
+
+function micPromptCount() {
+  return parseInt(localStorage.getItem(MIC_PROMPT_COUNT_KEY), 10) || 0;
+}
+
+function shouldShowMicPermissionHint() {
+  if (!micPermissionHint()) return false;
+  if (IS_TINY_EMBED) return false; // nowhere to put it, and not the embedder's problem
+  if (localStorage.getItem(MIC_HINT_DISMISSED_KEY)) return false;
+  // One prompt is just a first visit working as designed. Two separate ones mean
+  // the browser is not keeping the grant, which is the only case worth a word.
+  return micPromptCount() >= 2;
+}
+
+// Called after every successful acquisition, with how long it took and what the
+// permission state was BEFORE the call. Only a real prompt counts — a silent
+// re-grant means the browser is doing its job and there is nothing to advise.
+function noteMicAcquisition(elapsedMs, stateBefore) {
+  if (!IS_PLAIN_WEB) return;
+
+  var prompted;
+  if (stateBefore === 'granted')     prompted = false; // no prompt was possible
+  else if (stateBefore === 'prompt') prompted = true;  // it had to ask
+  else prompted = elapsedMs >= MIC_PROMPT_MIN_MS;      // 'unknown' → guess from timing
+
+  if (!prompted) return;
+  localStorage.setItem(MIC_PROMPT_COUNT_KEY, String(micPromptCount() + 1));
+  renderMicPermissionHint();
+}
+
+// Appended to the peer list, next to the invite nudge — the room's existing home
+// for a line of advice. It started life in the PTT column, where it pushed the
+// talk button out of place; the peer list has room and is already where
+// transient guidance lives.
+function appendMicPermissionHint(list) {
+  if (!shouldShowMicPermissionHint()) return;
+
+  var row = document.createElement('div');
+  row.id = 'mic-hint-banner';
+  row.className = 'room-invite-nudge mic-hint-row';
+  row.setAttribute('role', 'status');
+
+  var text = document.createElement('span');
+  text.className = 'room-invite-nudge-text mic-hint-text';
+  // Every string in micPermissionHint() is a literal authored above — no user
+  // input is interpolated, so the markup is safe to assign.
+  text.innerHTML = '<span class="mic-hint-lead">💡always allow microphone:</span> ' +
+                   micPermissionHint().html;
+  row.appendChild(text);
+
+  var close = document.createElement('button');
+  close.id = 'btn-dismiss-mic-hint';
+  close.className = 'btn-icon mic-hint-close';
+  close.textContent = '✕';
+  close.title = 'Dismiss';
+  close.setAttribute('aria-label', 'Dismiss');
+  close.addEventListener('click', dismissMicPermissionHint);
+  row.appendChild(close);
+
+  list.appendChild(row);
+}
+
+// The hint is rebuilt as part of the peer list, so refreshing it means
+// re-rendering that list rather than toggling a static element.
+function renderMicPermissionHint() {
+  if (inRoom) updatePeerList();
+}
+
+// The ✕ on the hint and the Advanced toggle are the same preference, so both go
+// through here rather than each writing the key themselves.
+function micHintEnabled() { return !localStorage.getItem(MIC_HINT_DISMISSED_KEY); }
+
+function setMicHintEnabled(on) {
+  if (on) localStorage.removeItem(MIC_HINT_DISMISSED_KEY);
+  else localStorage.setItem(MIC_HINT_DISMISSED_KEY, '1');
+  syncMicHintToggle();
+  renderMicPermissionHint();
+}
+
+function syncMicHintToggle() {
+  // No hint for this platform means no preference worth offering — a native
+  // build's OS permission persists, so there is nothing to advise about.
+  var applicable = !!micPermissionHint();
+  var row  = document.getElementById('mic-hint-toggle-row');
+  var note = document.getElementById('mic-hint-toggle-note');
+  if (row)  row.classList.toggle('hidden', !applicable);
+  if (note) note.classList.toggle('hidden', !applicable);
+
+  var btn = document.getElementById('toggle-mic-hint-modal');
+  if (!btn) return;
+  var on = micHintEnabled();
+  btn.setAttribute('aria-checked', String(on));
+  btn.classList.toggle('active', on);
+  btn.textContent = on ? 'ON' : 'OFF';
+}
+
+function dismissMicPermissionHint() {
+  setMicHintEnabled(false);
+}
+
 async function getMicStream() {
   // Normalise legacy webkit prefix (some older iOS/Android WebViews)
   const getUserMedia = (
@@ -5153,10 +5362,15 @@ async function getMicStream() {
   };
   Object.assign(audioConstraints, selectedMicConstraints());
 
+  // Has to be sampled BEFORE the call — afterwards the state is 'granted' either
+  // way and the distinction is gone.
+  const stateBefore = await micPermissionState();
+  const askedAt = Date.now();
   const rawStream = await getUserMedia({
     audio: audioConstraints,
     video: false,
   });
+  noteMicAcquisition(Date.now() - askedAt, stateBefore);
 
   if (useRNNoise) {
     const ok = await initRNNoise();
@@ -9142,6 +9356,7 @@ window.addEventListener('DOMContentLoaded', function() {
       shareBtn.textContent = shareOn ? 'ON' : 'OFF';
     }
     updateVideoModeUI();
+    syncMicHintToggle();
     stopMicTest();
     stopCameraPreview();
     initModalSettingsSidebar();
@@ -9336,6 +9551,13 @@ window.addEventListener('DOMContentLoaded', function() {
         // Let peers learn the host's debug state so their "i" button toggles too.
         if (isHost) broadcastHostPeerLists();
       }
+    });
+  }
+
+  var micHintToggle = document.getElementById('toggle-mic-hint-modal');
+  if (micHintToggle) {
+    micHintToggle.addEventListener('click', function() {
+      setMicHintEnabled(!micHintEnabled());
     });
   }
 

@@ -417,6 +417,15 @@
                     (peers who set their own value keep theirs).
                   </p>
                 </div>
+                <!-- Only meaningful where a browser owns the microphone grant.
+                     Hidden by syncMicHintToggle() on native, whose OS-level
+                     permission persists and has no such advice to give. -->
+                <div id="mic-hint-toggle-row" class="settings-field settings-inline-toggle hidden" style="margin-top:16px">
+                  <label for="toggle-mic-hint-modal" style="flex:1">Microphone permission tip</label>
+                  <button id="toggle-mic-hint-modal" class="toggle-btn" role="switch" aria-checked="true"
+                          title="Show how to stop your browser asking for the microphone on every visit">ON</button>
+                </div>
+                <p class="settings-hint" id="mic-hint-toggle-note" style="margin-top:6px">Shown in the room once your browser has asked for the microphone on two separate visits — it cannot remember the grant for you, so the tip names the setting that makes it stick.</p>
                 <div class="settings-field settings-inline-toggle" style="margin-top:16px">
                   <label for="toggle-dev-mode-modal" style="flex:1">Dev mode</label>
                   <button id="toggle-dev-mode-modal" class="toggle-btn" role="switch" aria-checked="false"

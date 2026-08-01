@@ -385,6 +385,42 @@ html[data-theme="light"] .debug-consent-text strong { color: #b45309; }
 .debug-consent-actions .btn { flex: 0 0 auto; }
 .debug-consent-note { font-size: 11px; color: var(--text-muted); }
 
+/* "How to stop the microphone prompt coming back" (web only).
+   A row in the peer list, sharing .room-invite-nudge's layout — same place, same
+   dashed separator, one notch quieter since it is advice rather than an action. */
+/* Qualified with .room-invite-nudge because that rule is declared LATER in this
+   file and would otherwise win the margin-top at equal specificity. */
+.room-invite-nudge.mic-hint-row {
+  align-items: flex-start;
+  gap: 6px;
+  /* .peers-list is a flex column, so an auto top margin pushes this to the
+     bottom of the list instead of trailing whatever peers happen to be there.
+     It collapses to 0 on its own once the list is full enough to scroll. */
+  margin-top: auto;
+  /* …and it stays put while a long list scrolls past. The background must match
+     .peers-list exactly, or peer rows show through underneath. */
+  position: sticky;
+  bottom: -8px;   /* cancel .peers-list's 8px bottom padding so it sits flush */
+  background: var(--bg-surface);
+  padding-bottom: 10px;
+}
+.mic-hint-text {
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+/* The lead-in stays unbolded so it does not compete with the step keywords,
+   which are the part worth scanning for. */
+.mic-hint-lead { color: var(--text); }
+.mic-hint-text strong { color: var(--text); font-weight: 600; }
+/* .btn-icon (font-size 28px) is declared later in this file, so an equally
+   specific selector would lose to it. */
+.btn-icon.mic-hint-close {
+  font-size: 12px;
+  padding: 0 2px;
+  flex: 0 0 auto;
+  align-self: center;
+}
+
 .room-meta {
   display: flex;
   align-items: center;
