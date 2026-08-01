@@ -159,3 +159,38 @@ test.describe('abandoned sign-in', () => {
     expect(shown).toBe(null);
   });
 });
+
+test.describe('/auth/callback is actually served', () => {
+  // It 404'd in production: vercel.json rewrote it to /index.html, but with
+  // cleanUrls Vercel redirects /index.html -> / so the rewrite never resolved.
+  // It is now a real file (src/auth/callback.html), which also means it works
+  // on any static host rather than depending on Vercel rewrite semantics.
+  test('the path exists and is not a 404', async ({ page }) => {
+    const res = await page.goto('/auth/callback?token=tok-123&state=st-abc');
+    expect(res.status()).toBe(200);
+  });
+
+  test('forwards into the app, which consumes the token and scrubs the URL', async ({ page }) => {
+    // Seed the state on the origin before the callback lands.
+    await page.goto('/');
+    await page.evaluate(() => sessionStorage.setItem('voxal-auth-state', 'st-abc'));
+
+    await page.goto('/auth/callback?token=tok-123&state=st-abc');
+    await page.waitForFunction(() => window.location.pathname === '/');
+
+    expect(await page.evaluate(() => localStorage.getItem('presence-api-token'))).toBe('tok-123');
+    expect(new URL(page.url()).search).toBe('');
+    expect(new URL(page.url()).pathname).toBe('/');
+  });
+
+  test('the hop does not leave a token-bearing history entry', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(() => sessionStorage.setItem('voxal-auth-state', 'st-abc'));
+    await page.goto('/auth/callback?token=tok-123&state=st-abc');
+    await page.waitForFunction(() => window.location.pathname === '/');
+
+    // location.replace() means going back must not land on the callback URL.
+    await page.goBack();
+    expect(page.url()).not.toContain('token=');
+  });
+});

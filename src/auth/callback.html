@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Signing in — Voxal</title>
+    <meta name="robots" content="noindex" />
+    <script>
+      // Voxal Connect lands here: /auth/callback?token=…&state=…
+      //
+      // This is a REAL FILE rather than a vercel.json rewrite to /index.html.
+      // With `cleanUrls: true` Vercel redirects /index.html → /, so a rewrite
+      // whose destination is /index.html does not resolve and the path 404s —
+      // which is exactly what happened on web.voxal.app. A file also means the
+      // callback works on any static host (Netlify, GitHub Pages, `npx serve`),
+      // not just Vercel.
+      //
+      // It forwards straight into the app rather than handling the token here,
+      // so there is one implementation: main.js's consumeAuthCallbackFromUrl()
+      // validates `state`, stores the token, kicks off org selection, and strips
+      // the credentials out of the URL. Duplicating any of that is how the
+      // settings.html constants drifted.
+      //
+      // `replace()` keeps this hop out of session history, so Back does not
+      // return to a URL carrying the token.
+      location.replace('/' + (location.search || ''));
+    </script>
+  </head>
+  <body>
+    <noscript>
+      Voxal needs JavaScript to finish signing in.
+      <a href="/">Continue to Voxal</a>.
+    </noscript>
+  </body>
+</html>
