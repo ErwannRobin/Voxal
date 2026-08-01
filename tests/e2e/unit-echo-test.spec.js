@@ -159,8 +159,20 @@ test.describe('relay failure diagnosis', () => {
   const diagnose = (page, count, errors, isDefault) =>
     page.evaluate(([c, e, d]) => window.diagnoseRelayFailure(c, e, d), [count, errors, isDefault]);
 
-  test('names the retired built-in relay outright instead of blaming the network', async ({ page }) => {
+  // The startup ICE prefetch races every test in this block: the static test
+  // server has no /api/ice-servers, so the prefetch 404s and leaves
+  // _anonTurnError set — which correctly routes diagnoseRelayFailure() down the
+  // "credential service is down" branch (asserted in unit-anon-turn.spec.js).
+  // These tests are about the OTHER branches, so settle the prefetch and then
+  // clear the error rather than letting timing decide which one runs.
+  async function withReachableCredentialService(page) {
     await page.goto('/');
+    await page.waitForFunction(() => window._lastIceResolution !== null);
+    await page.evaluate(() => { _anonTurnError = null; });
+  }
+
+  test('names the retired built-in relay outright instead of blaming the network', async ({ page }) => {
+    await withReachableCredentialService(page);
     // metered.ca retired the shared `openrelayproject` credentials in favour of
     // per-account API keys, so this default is known-dead — say so.
     const msg = await diagnose(page, 4, [{ code: 701, text: 'Failed to establish connection' }], true);

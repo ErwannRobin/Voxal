@@ -900,6 +900,39 @@ async function fetchIceServers() {
   return noteIceResolution('fallback', fb);
 }
 
+// Re-resolve ICE because the identity changed (Voxal Connect sign-in, sign-out,
+// or an org switch).
+//
+// Which source wins depends on who you are: an org relay outranks the anonymous
+// one. Without this, signing in kept using the anonymous credential until the
+// next room, and signing out left the status menu naming an org relay we can no
+// longer mint credentials for — stale in the direction that matters, because it
+// claims a relay is available when it is not.
+//
+// The anonymous cache is deliberately NOT dropped: those credentials are not
+// tied to the account, they stay valid across a sign-in/out, and discarding them
+// would buy nothing but an extra round trip.
+function refreshIceServers() {
+  // These three are written only by the org leg of fetchIceServers() (and by the
+  // manual metered.ca test). Clearing them on the way out of an org stops the
+  // settings panel reporting servers that belonged to the previous session.
+  if (_lastIceResolution && _lastIceResolution.source === 'org') {
+    localStorage.removeItem(METERED_STATUS_STORE_KEY);
+    localStorage.removeItem(METERED_COUNT_STORE_KEY);
+    localStorage.removeItem(METERED_SERVERS_STORE_KEY);
+  }
+  // Back to "Checking relay…" rather than the previous identity's answer, which
+  // would otherwise sit there looking authoritative for the whole round trip.
+  _lastIceResolution = null;
+  // A verified round trip proved the OLD relay worked; it says nothing about the
+  // new one.
+  _relayVerifiedAt = null;
+  if (typeof updateTurnBadge === 'function') updateTurnBadge();
+  return fetchIceServers().catch(function(e) {
+    console.warn('[ICE] refresh after identity change failed:', e.message);
+  });
+}
+
 // --- State -------------------------------------------------------------------
 
 const IS_TAURI_DESKTOP = !!window.__TAURI__;
@@ -5475,7 +5508,40 @@ const ECHO_MIN_RMS = 0.005;
 
 var _echo = null; // { pcs, stream, recorder, chunks, ctx, analyser, raf, audioEl, … }
 
+// --- Network-test bridge (desktop preferences window) -------------------------
+//
+// On Tauri, settings are a SEPARATE WebviewWindow loading settings.html, and the
+// main window's settings modal is unreachable — so "Test over network" simply
+// did not exist on desktop. settings.html cannot run the test itself: it has no
+// module system, so fetchIceServers(), opusSdpTransform() and the RNNoise
+// capture path would all have to be duplicated by hand (~400 lines plus a WASM
+// worklet), and the duplicated copies are exactly how settings.html's constants
+// drifted from main.js before.
+//
+// Instead the preferences window asks THIS window to run the real thing, over
+// the localStorage + `storage` event channel already used to sync settings
+// between the two. Request in, state out; one implementation.
+const ECHO_BRIDGE_REQUEST_KEY = 'echo-test-request'; // {action:'start'|'stop', at}
+const ECHO_BRIDGE_STATE_KEY   = 'echo-test-state';   // {running, text, kind, at}
+
+// Only desktop has a second window to talk to; everywhere else this would be
+// writes nobody reads.
+function echoBridgeActive() { return !!window.__TAURI__; }
+
+function publishEchoBridgeState(text, kind) {
+  if (!echoBridgeActive()) return;
+  try {
+    localStorage.setItem(ECHO_BRIDGE_STATE_KEY, JSON.stringify({
+      running: echoTestRunning(),
+      text: text || '',
+      kind: kind || '',
+      at: Date.now(),
+    }));
+  } catch (_) {}
+}
+
 function echoStatus(text, kind) {
+  publishEchoBridgeState(text, kind);
   var el = document.getElementById('echo-test-status');
   if (!el) return;
   el.textContent = text || '';
@@ -5625,6 +5691,10 @@ async function startEchoTest(options) {
             relayServers: countRelayServers(iceServers),
             usingDefaultRelay: usingDefaultFallbackRelay(iceServers), iceErrors: [] };
   var echo = _echo;
+  // Re-announce now that _echo exists: the 'Connecting…' above was published
+  // with running:false, which would leave the remote button labelled "Test over
+  // network" while a test was in fact starting.
+  publishEchoBridgeState('Connecting…');
 
   // The STUN/TURN error code is the only thing that says WHY no relay appeared;
   // without it "no relay reachable" is unactionable. Chromium-only, so guard.
@@ -8245,8 +8315,11 @@ async function selectOrgAndStartPolling() {
     if (presenceConfigured()) {
       stopPresencePolling();
       startPresencePolling();
-      fetchIceServers().catch(function(e) { console.warn('[ICE] prefetch failed:', e.message); });
     }
+    // Outside the guard on purpose: signing into an account with no usable org
+    // still changes which relay we should be on, and the previous resolution
+    // must not survive it.
+    refreshIceServers();
   } catch (e) {
     console.error('[Auth] selectOrgAndStartPolling failed:', e.message);
   }
@@ -8996,6 +9069,10 @@ window.addEventListener('DOMContentLoaded', function() {
   }
 
   function openSettings() {
+    // The connection-status popover is anchored to the topbar the modal is about
+    // to cover. Leaving it open left it floating over the settings dialog with
+    // no way to dismiss it — the badge that toggles it is now behind the modal.
+    hideConnPopover();
     // On Tauri desktop: try to open / focus a dedicated preferences window
     if (window.__TAURI__) {
       try {
@@ -9094,6 +9171,9 @@ window.addEventListener('DOMContentLoaded', function() {
     stopPresencePolling();
     renderPresenceChannels([]);
     updateDisconnectVisibility(); updateConnectVisibility();
+    // The org relay went away with the account — re-resolve so we fall back to
+    // the anonymous credential now, not on the next room.
+    refreshIceServers();
     // Stay in settings — navigate home in background
     var tinyRoomId = _invitePendingRoomId;
     var tinyPeerCount = _invitePendingPeerCount;
@@ -9217,6 +9297,11 @@ window.addEventListener('DOMContentLoaded', function() {
     if (gearIcon) gearIcon.style.display = 'none';
     $('btn-open-settings').style.cursor = 'default';
     $('btn-open-settings').title = '';
+    // Same reasoning for the in-room gear, and here the button can go entirely:
+    // unlike the home one it carries no status LED, so nothing is lost. Settings
+    // are already one click away in the menu bar (Voxal → Preferences, ⌘,).
+    var roomGear = $('btn-open-settings-room');
+    if (roomGear) roomGear.classList.add('hidden');
   }
   $('btn-close-settings').addEventListener('click', closeSettings);
   $('btn-close-settings-footer').addEventListener('click', closeSettings);
@@ -9378,7 +9463,7 @@ window.addEventListener('DOMContentLoaded', function() {
     }
     var relevantKeys = [PRESENCE_TOKEN_KEY, PRESENCE_ORG_KEY, METERED_APP_STORE_KEY,
                           METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY,
-                          SPEAKER_DEVICE_KEY, JITTER_BUFFER_KEY];
+                          SPEAKER_DEVICE_KEY, JITTER_BUFFER_KEY, ECHO_BRIDGE_REQUEST_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
     if (e.key === JITTER_BUFFER_KEY) {
       // Changed from the desktop preferences window — apply it to live links.
@@ -9404,9 +9489,26 @@ window.addEventListener('DOMContentLoaded', function() {
       applySpeakerSinkToAllAudio();
       return;
     }
+    if (e.key === ECHO_BRIDGE_REQUEST_KEY) {
+      // The preferences window cannot run the network test itself — see the
+      // bridge notes above echoStatus(). Run it here and report back.
+      var req = null;
+      try { req = JSON.parse(e.newValue || 'null'); } catch (_) {}
+      if (!req) return;
+      if (req.action === 'stop' && echoTestRunning()) stopEchoTest({ replay: true });
+      else if (req.action === 'start' && !echoTestRunning()) toggleEchoTest();
+      // Nothing to do means the two windows disagree about what is running (a
+      // reopened preferences window starts from a blank slate). Re-publish so
+      // the remote button snaps back instead of sitting on "Stopping…".
+      else publishEchoBridgeState('');
+      return;
+    }
     updateTurnBadge();
     if (e.key === PRESENCE_TOKEN_KEY || e.key === PRESENCE_ORG_KEY) {
       updateDisconnectVisibility(); updateConnectVisibility();
+      // Signed in or out from the desktop preferences window — the main window
+      // owns the ICE state, so it has to re-resolve here too.
+      refreshIceServers();
       stopPresencePolling();
       if (presenceConfigured()) {
         startPresencePolling();
@@ -9512,6 +9614,9 @@ window.addEventListener('DOMContentLoaded', function() {
   });
   $('select-presence-org').addEventListener('change', function(e) {
     localStorage.setItem(PRESENCE_ORG_KEY, e.target.value);
+    // Each org has its own relay configuration — one may have TURN where the
+    // other has none.
+    refreshIceServers();
   });
   $('btn-refresh-presence').addEventListener('click', refreshPresence);
 

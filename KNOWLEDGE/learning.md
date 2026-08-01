@@ -264,3 +264,24 @@ Use Python string replacement scripts for multi-line patches to avoid manual err
 - Records expire **1 h** after last POST; the host heartbeat re-POST (`PUBLISH_HEARTBEAT_MS` = 50 min) renews `expires_at` and **rotates the secret**. Only ~10 min slack: laptop sleep / tab suspension past that lets a live room's record expire. After host migration the new host has no `_publishSecret`, so nobody heartbeats and the record rots.
 - Expired-but-unpurged rows are inconsistent: GET → `410 Gone`, but POST re-claim of the same slug → `409` (uniqueness still counts the expired row) — a temporary dead zone for the name. DELETE is clean (GET → 404, re-claim OK).
 - Presence-path room creation (`joinChannel` → `createRoom(postPresence)`) registers the room **only in org presence, never in anonymous-rooms** — so org-created named rooms are invisible to anonymous joiners (reverse of the bug fixed in PR #63).
+
+## Cross-window features on desktop: settings.html cannot borrow main.js
+
+- On Tauri, settings are a **separate `WebviewWindow` loading `settings.html`**, which has no module system and duplicates its constants/helpers from `main.js` by hand. Anything in settings that needs real app machinery (`fetchIceServers()`, `opusSdpTransform()`, the RNNoise capture path) therefore **cannot be implemented there** — the honest options are to fork hundreds of lines (which is how settings.html's constants drifted before) or to **ask the main window to do it**.
+- The working pattern is the **localStorage command bridge**: one key carries the request (`echo-test-request`), another carries the state (`echo-test-state`); the main window's existing `storage` listener executes and re-publishes. Two gotchas that bite:
+  - A `storage` event **does not fire in the window that wrote the value** — the writer must render optimistically or it gets no feedback at all.
+  - Writing an **identical value fires nothing**. Include a timestamp (`at`) so consecutive identical commands still dispatch.
+  - The two windows can disagree about what is running (a reopened preferences window starts blank), so a command that turns out to be a no-op must still **re-publish current state** or the remote UI sticks on "Stopping…".
+- **Do not "solve" a desktop gap by pointing the user at the main window's settings UI.** On Tauri that gear is deliberately hidden (the menu bar owns Preferences), so "run it from ⚙ → Audio" described a control that does not exist on that platform, and the network test was simply unreachable there.
+
+## z-index: `document.body`-appended popovers are siblings of `.modal`
+
+- `.conn-status-popover` (200) outranked `.modal` (100), so on web it painted **through** the settings dialog — and because the badge that toggles it sits *behind* the modal, it could not then be dismissed. The modal is now **400**, and `openSettings()` closes the popover outright.
+- The trap when raising a modal: `showTurnServersPopover()` appends its element to **`document.body`**, so despite being *anchored* to `#turn-test-status` inside the modal it is a **sibling** of `.modal`, not a descendant. Raising `.modal` above it made it invisible. Any body-appended popover that belongs to modal content must outrank the modal (it is now 500). Check for `document.body.appendChild` before changing a modal's z-index.
+
+## ICE resolution is identity-scoped — re-resolve on sign-in/sign-out
+
+- `fetchIceServers()` picks its source by **who you are** (embed > org > local metered.ca > anonymous > public fallback). Signing in, signing out, or switching org therefore invalidates the previous answer. `refreshIceServers()` clears `_lastIceResolution` (badge returns to "Checking relay…" rather than asserting the old identity's result), clears `_relayVerifiedAt` (a verified round trip proved the *old* relay worked), and re-runs the resolution.
+- The `metered-status` / `metered-count` / `metered-servers` keys are written by **both** the org leg and the manual metered.ca test button. Clear them on refresh **only when the previous resolution was `source === 'org'`**, or signing out wipes a user's unrelated manual test result.
+- The **anonymous credential cache is deliberately kept** across identity changes: those credentials are not bound to an account, so dropping them buys nothing but an extra round trip.
+- Watch out in tests: the unconditional startup prefetch means `_anonTurnError` is **already set** by the time a test body runs (the static test server 404s `/api/ice-servers`), which silently routes `diagnoseRelayFailure()` down the "credential service is down" branch. Tests targeting the other branches must wait for `_lastIceResolution !== null` and then clear `_anonTurnError`.
