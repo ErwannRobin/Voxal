@@ -1,6 +1,6 @@
 {
   "name": "voxal",
-  "version": "0.9.5",
+  "version": "0.9.7",
   "type": "module",
   "scripts": {
     "tauri": "tauri",
