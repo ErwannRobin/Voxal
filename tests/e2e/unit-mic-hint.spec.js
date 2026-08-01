@@ -239,3 +239,97 @@ test.describe('counting prompts', () => {
     expect(await note(page, 5000)).toBe(null);
   });
 });
+
+test.describe('the Advanced settings toggle', () => {
+  // The X on the hint and this toggle are the same preference, so they must
+  // agree in both directions — that is the whole reason both route through
+  // setMicHintEnabled() rather than writing the key themselves.
+  const openAdvanced = async (page) => {
+    // The home gear is hidden once the room screen is up; the room header has
+    // its own.
+    const roomGear = page.locator('#btn-open-settings-room');
+    const gear = (await roomGear.isVisible()) ? roomGear : page.locator('#btn-open-settings');
+    await gear.click();
+    await page.locator('.prefs-nav-btn[data-target="settings-advanced"], [data-target="settings-advanced"]').first().click();
+  };
+
+  test('is on by default and offered on the web', async ({ page }) => {
+    await spoof(page, UA.iphone);
+    await page.goto('/');
+    await openAdvanced(page);
+    const btn = page.locator('#toggle-mic-hint-modal');
+    await expect(page.locator('#mic-hint-toggle-row')).toBeVisible();
+    await expect(btn).toHaveText('ON');
+    await expect(btn).toHaveAttribute('aria-checked', 'true');
+  });
+
+  test('turning it off suppresses the hint in the room', async ({ page }) => {
+    await spoof(page, UA.iphone);
+    await page.goto('/');
+    await seedRoom(page, { isHost: true, roomCode: 'abc-def' });
+    await page.evaluate(() => {
+      localStorage.setItem('mic-prompt-count', '3');
+      showScreen('room');
+      updatePeerList();
+    });
+    await expect(page.locator('#mic-hint-banner')).toBeVisible();
+
+    await page.evaluate(() => window.setMicHintEnabled(false));
+    await expect(page.locator('#mic-hint-banner')).toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem('mic-hint-dismissed'))).toBe('1');
+  });
+
+  test('turning it back on brings the hint back', async ({ page }) => {
+    await spoof(page, UA.iphone);
+    await page.goto('/');
+    await seedRoom(page, { isHost: true, roomCode: 'abc-def' });
+    await page.evaluate(() => {
+      localStorage.setItem('mic-prompt-count', '3');
+      localStorage.setItem('mic-hint-dismissed', '1');
+      showScreen('room');
+      updatePeerList();
+    });
+    await expect(page.locator('#mic-hint-banner')).toHaveCount(0);
+
+    await page.evaluate(() => window.setMicHintEnabled(true));
+    // Re-enabling must actually clear the key, not just flip a flag.
+    expect(await page.evaluate(() => localStorage.getItem('mic-hint-dismissed'))).toBe(null);
+    await expect(page.locator('#mic-hint-banner')).toBeVisible();
+  });
+
+  test('dismissing with the X flips the toggle to OFF', async ({ page }) => {
+    await spoof(page, UA.iphone);
+    await page.goto('/');
+    await seedRoom(page, { isHost: true, roomCode: 'abc-def' });
+    await page.evaluate(() => {
+      localStorage.setItem('mic-prompt-count', '3');
+      showScreen('room');
+      updatePeerList();
+    });
+    await page.locator('#btn-dismiss-mic-hint').click();
+    await openAdvanced(page);
+    await expect(page.locator('#toggle-mic-hint-modal')).toHaveText('OFF');
+  });
+
+  test('clicking the toggle round-trips the preference', async ({ page }) => {
+    await spoof(page, UA.iphone);
+    await page.goto('/');
+    await openAdvanced(page);
+    const btn = page.locator('#toggle-mic-hint-modal');
+    await btn.click();
+    await expect(btn).toHaveText('OFF');
+    expect(await page.evaluate(() => localStorage.getItem('mic-hint-dismissed'))).toBe('1');
+    await btn.click();
+    await expect(btn).toHaveText('ON');
+    expect(await page.evaluate(() => localStorage.getItem('mic-hint-dismissed'))).toBe(null);
+  });
+
+  test('the row is hidden on native, where there is nothing to advise', async ({ page }) => {
+    await spoof(page, UA.iphone, { capacitor: true });
+    await page.goto('/');
+    await openAdvanced(page);
+    // A control for a hint that can never appear is just clutter.
+    await expect(page.locator('#mic-hint-toggle-row')).toBeHidden();
+    await expect(page.locator('#mic-hint-toggle-note')).toBeHidden();
+  });
+});

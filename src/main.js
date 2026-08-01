@@ -5265,9 +5265,36 @@ function renderMicPermissionHint() {
   if (inRoom) updatePeerList();
 }
 
-function dismissMicPermissionHint() {
-  localStorage.setItem(MIC_HINT_DISMISSED_KEY, '1');
+// The ✕ on the hint and the Advanced toggle are the same preference, so both go
+// through here rather than each writing the key themselves.
+function micHintEnabled() { return !localStorage.getItem(MIC_HINT_DISMISSED_KEY); }
+
+function setMicHintEnabled(on) {
+  if (on) localStorage.removeItem(MIC_HINT_DISMISSED_KEY);
+  else localStorage.setItem(MIC_HINT_DISMISSED_KEY, '1');
+  syncMicHintToggle();
   renderMicPermissionHint();
+}
+
+function syncMicHintToggle() {
+  // No hint for this platform means no preference worth offering — a native
+  // build's OS permission persists, so there is nothing to advise about.
+  var applicable = !!micPermissionHint();
+  var row  = document.getElementById('mic-hint-toggle-row');
+  var note = document.getElementById('mic-hint-toggle-note');
+  if (row)  row.classList.toggle('hidden', !applicable);
+  if (note) note.classList.toggle('hidden', !applicable);
+
+  var btn = document.getElementById('toggle-mic-hint-modal');
+  if (!btn) return;
+  var on = micHintEnabled();
+  btn.setAttribute('aria-checked', String(on));
+  btn.classList.toggle('active', on);
+  btn.textContent = on ? 'ON' : 'OFF';
+}
+
+function dismissMicPermissionHint() {
+  setMicHintEnabled(false);
 }
 
 async function getMicStream() {
@@ -9289,6 +9316,7 @@ window.addEventListener('DOMContentLoaded', function() {
       shareBtn.textContent = shareOn ? 'ON' : 'OFF';
     }
     updateVideoModeUI();
+    syncMicHintToggle();
     stopMicTest();
     stopCameraPreview();
     initModalSettingsSidebar();
@@ -9483,6 +9511,13 @@ window.addEventListener('DOMContentLoaded', function() {
         // Let peers learn the host's debug state so their "i" button toggles too.
         if (isHost) broadcastHostPeerLists();
       }
+    });
+  }
+
+  var micHintToggle = document.getElementById('toggle-mic-hint-modal');
+  if (micHintToggle) {
+    micHintToggle.addEventListener('click', function() {
+      setMicHintEnabled(!micHintEnabled());
     });
   }
 
