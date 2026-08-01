@@ -111,6 +111,8 @@ Always call `getMicStream()`, not `navigator.mediaDevices.getUserMedia` directly
 | `anon-turn-url` | `ANON_TURN_URL_KEY` | Override for the anonymous TURN credential endpoint (default: same-origin `/api/ice-servers` on web) |
 | `peerjs-server` | — | PeerJS broker override (`peerServerOptions()`); test/self-host only |
 | `theme` | `THEME_KEY` | `dark` / `light` / `system` |
+| `mic-prompt-count` | `MIC_PROMPT_COUNT_KEY` | How many separate visits made the user answer a mic prompt (drives the persistence hint) |
+| `mic-hint-dismissed` | `MIC_HINT_DISMISSED_KEY` | Set once the user dismisses that hint |
 | `echo-test-request` | `ECHO_BRIDGE_REQUEST_KEY` | Transient. Desktop preferences window → main window: `{action:'start'\|'stop', at}` (see below) |
 | `echo-test-state` | `ECHO_BRIDGE_STATE_KEY` | Transient. Main window → preferences window: `{running, text, kind, at}` |
 

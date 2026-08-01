@@ -66,6 +66,11 @@ const METERED_SERVERS_STORE_KEY = 'metered-servers'; // JSON array of ICE server
 const TURN_FALLBACK_KEY         = 'turn-fallback';   // JSON RTCIceServer[] override for the free relay fallback ('[]' disables)
 const ANON_TURN_URL_KEY         = 'anon-turn-url';   // override for the anonymous TURN credential endpoint
 
+// How many separate times the browser has made the user answer a microphone
+// prompt, and whether they have told us they know how to stop it.
+const MIC_PROMPT_COUNT_KEY   = 'mic-prompt-count';
+const MIC_HINT_DISMISSED_KEY = 'mic-hint-dismissed';
+
 const JITTER_BUFFER_KEY     = 'jitter-buffer';     // 'auto' | milliseconds as a string ('0' = browser default)
 const NOISE_SUPPRESSION_KEY = 'noise-suppression'; // 'rnnoise' | 'browser' | 'off'
 const MIC_DEVICE_KEY        = 'mic-device-id';
@@ -5125,6 +5130,117 @@ async function refreshMediaDeviceSelectors() {
   }
 }
 
+// --- Microphone permission persistence hint ----------------------------------
+//
+// A web page CANNOT persist a getUserMedia grant: the browser owns it, keyed by
+// origin, and there is no API to extend or restore it. All we can usefully do is
+// name the exact control that makes it stick — "check your browser settings" is
+// what the user already tried.
+//
+// iOS is the sharp case and the one this was reported on. WebKit scopes the
+// grant to the DOCUMENT, so a reload always re-prompts regardless of what was
+// chosen; the per-site Website Settings toggle is the only thing that survives.
+
+// A grant the browser already remembered resolves in milliseconds. One that
+// needed a human to find and tap "Allow" cannot. That round trip is the only
+// signal available, because neither Safari nor Firefox exposes `microphone` to
+// navigator.permissions.query() — the obvious API is Chromium-only. Threshold
+// set deliberately high: nagging someone whose browser IS remembering is the
+// bad failure; missing the occasional prompt is not.
+const MIC_PROMPT_MIN_MS = 800;
+
+function micPermissionHint() {
+  // Native builds hold an OS-level permission that already persists. Pointing
+  // at browser settings there would be advice about a browser not in use.
+  if (!IS_PLAIN_WEB) return null;
+
+  var ua = navigator.userAgent || '';
+  // The Mac+touch test catches iPadOS Safari, whose default UA claims macOS.
+  var isIOS = /iPad|iPhone|iPod/.test(ua) ||
+    (/Mac/.test(navigator.platform || '') && (navigator.maxTouchPoints || 0) > 1);
+
+  // Every browser on iOS is WebKit underneath, so they all behave like Safari
+  // and all expose the same control. Check this before the Safari branch.
+  if (isIOS) {
+    return {
+      platform: 'ios',
+      html: 'Tap <strong>aA</strong> in the address bar → <strong>Website Settings</strong> → ' +
+            '<strong>Microphone</strong> → <strong>Allow</strong>.',
+    };
+  }
+  if (/Firefox\//.test(ua)) {
+    return {
+      platform: 'firefox',
+      html: 'Tick <strong>Remember this decision</strong> in the permission prompt.',
+    };
+  }
+  // Chromium browsers put "Safari" in their UA too, so desktop Safari can only
+  // be identified by the ABSENCE of the Chromium markers.
+  if (/Safari\//.test(ua) && !/Chrome|Chromium|Edg\//.test(ua)) {
+    return {
+      platform: 'safari',
+      html: 'Safari menu → <strong>Settings for This Website…</strong> → ' +
+            '<strong>Microphone</strong> → <strong>Allow</strong>.',
+    };
+  }
+  if (/Chrome|Chromium|Edg\//.test(ua)) {
+    if (/Android/.test(ua)) {
+      return {
+        platform: 'chromium-android',
+        html: 'Tap the icon left of the address bar → <strong>Permissions</strong> → ' +
+              '<strong>Microphone</strong> → <strong>Allow</strong>.',
+      };
+    }
+    return {
+      platform: 'chromium',
+      html: 'Choose <strong>Allow on every visit</strong> in the prompt, or click the icon left ' +
+            'of the address bar → <strong>Microphone</strong> → <strong>Allow</strong>.',
+    };
+  }
+  return {
+    platform: 'unknown',
+    html: 'Look for a “remember” or “always allow” option in your browser’s microphone prompt, ' +
+          'or in its site settings for this page.',
+  };
+}
+
+function micPromptCount() {
+  return parseInt(localStorage.getItem(MIC_PROMPT_COUNT_KEY), 10) || 0;
+}
+
+function shouldShowMicPermissionHint() {
+  if (!micPermissionHint()) return false;
+  if (IS_TINY_EMBED) return false; // nowhere to put it, and not the embedder's problem
+  if (localStorage.getItem(MIC_HINT_DISMISSED_KEY)) return false;
+  // One prompt is just a first visit working as designed. Two separate ones mean
+  // the browser is not keeping the grant, which is the only case worth a word.
+  return micPromptCount() >= 2;
+}
+
+// Called after every successful acquisition, with how long it took.
+function noteMicAcquisition(elapsedMs) {
+  if (!IS_PLAIN_WEB) return;
+  if (elapsedMs < MIC_PROMPT_MIN_MS) return; // silently re-granted — nothing to say
+  localStorage.setItem(MIC_PROMPT_COUNT_KEY, String(micPromptCount() + 1));
+  renderMicPermissionHint();
+}
+
+function renderMicPermissionHint() {
+  var banner = document.getElementById('mic-hint-banner');
+  if (!banner) return;
+  var show = shouldShowMicPermissionHint();
+  banner.classList.toggle('hidden', !show);
+  if (!show) return;
+  var steps = document.getElementById('mic-hint-steps');
+  // Every string here is a literal authored above — no user input is interpolated.
+  if (steps) steps.innerHTML = micPermissionHint().html;
+}
+
+function dismissMicPermissionHint() {
+  localStorage.setItem(MIC_HINT_DISMISSED_KEY, '1');
+  renderMicPermissionHint();
+}
+
 async function getMicStream() {
   // Normalise legacy webkit prefix (some older iOS/Android WebViews)
   const getUserMedia = (
@@ -5153,10 +5269,12 @@ async function getMicStream() {
   };
   Object.assign(audioConstraints, selectedMicConstraints());
 
+  const askedAt = Date.now();
   const rawStream = await getUserMedia({
     audio: audioConstraints,
     video: false,
   });
+  noteMicAcquisition(Date.now() - askedAt);
 
   if (useRNNoise) {
     const ok = await initRNNoise();
@@ -9364,6 +9482,13 @@ window.addEventListener('DOMContentLoaded', function() {
       syncDeviceShareToggles();
     });
   }
+
+  var micHintBtn = document.getElementById('btn-dismiss-mic-hint');
+  if (micHintBtn) micHintBtn.addEventListener('click', dismissMicPermissionHint);
+  // The mic is usually acquired on join, before the room screen paints; render
+  // once at startup so a hint earned on a previous visit is not withheld until
+  // the next prompt.
+  renderMicPermissionHint();
 
   // iOS/Android: deep links come back via @capacitor/app appUrlOpen.
   // Handles both voxal:// custom scheme and https://ptt.voxal.app App Links.
