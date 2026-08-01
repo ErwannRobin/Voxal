@@ -66,7 +66,9 @@ app  → voxal.app/connect?state=…&responseMode=redirect&redirect_uri=https://
 
 The token is validated against the stored `state`, then stripped from the URL
 with `history.replaceState` so it never lingers in history or the `Referer`
-header. `/auth/callback` is served by the app itself via a `vercel.json` rewrite.
+header. `/auth/callback` is a real file (`src/auth/callback.html`) that forwards
+into the app — **not** a rewrite: with `cleanUrls` a rewrite to `/index.html`
+404s, and a file works on any static host.
 
 Native (Tauri desktop, iOS/Android) sends `responseMode=deep-link` and keeps
 using `voxal://auth` — that is how the OS routes back into the app.
