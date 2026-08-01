@@ -6880,6 +6880,111 @@ function connectOutgoingAudioToPeers() {
   });
 }
 
+// The tiny embed shows the mic spinner on the self chip rather than in the PTT
+// column, which it does not render.
+function setTinyMicAcquiring(on) {
+  if (!IS_TINY_EMBED) return;
+  var selfChip = document.getElementById('peer-item-self');
+  if (selfChip) selfChip.classList.toggle('acquiring-mic', !!on);
+}
+
+// The ONE place the room's microphone is acquired — both the first PTT press and
+// the join-time auto-acquire go through here. They must share
+// `_micAcquirePromise`: a press landing while a join-time acquisition is still
+// in flight would otherwise start a second getUserMedia and leave the room with
+// two live capture tracks.
+//
+// `reason` is 'press' when the user is waiting on the mic and 'join' when we
+// went and got it on their behalf. It only governs how failure is reported: a
+// press that fails owes the user an explanation, while a background acquisition
+// that fails simply falls back to acquiring on the next press.
+//
+// A press arriving mid-flight is still honoured — setTalking() has already set
+// `_pendingTalkingStart`, and the completion below reads it whichever path
+// started the acquisition.
+function acquireMicForRoom(reason) {
+  if (_micAcquirePromise) return _micAcquirePromise;
+
+  $('ptt-status').textContent = '\u25cf Requesting microphone…';
+  if (reason === 'press') setTinyMicAcquiring(true);
+
+  _micAcquirePromise = (async function() {
+    var micStream = await getMicStream();
+    if (!inRoom || stream) {
+      micStream.getTracks().forEach(function(t) { t.stop(); });
+      return false;
+    }
+    stream = micStream;
+    audioTrack = stream.getAudioTracks()[0];
+    if (audioTrack) audioTrack.enabled = false;
+    connectOutgoingAudioToPeers();
+    return true;
+  })().then(function(ok) {
+    _micAcquirePromise = null;
+    setTinyMicAcquiring(false);
+    // Cleared unconditionally: a press released before the mic arrived would
+    // otherwise leave "Requesting microphone…" on screen for good.
+    $('ptt-status').textContent = '';
+    if (!ok || !_pendingTalkingStart || !inRoom || freeHandMode) return false;
+    applyTalkingState(true);
+    return true;
+  }).catch(function(err) {
+    _micAcquirePromise = null;
+    var wanted = _pendingTalkingStart;
+    _pendingTalkingStart = false;
+    setTinyMicAcquiring(false);
+    $('ptt-status').textContent = '';
+    // Nobody asked for this one, so nobody gets an error dialog about it; the
+    // next press will try again and report properly if it fails too.
+    if (!wanted) {
+      console.warn('[auto-mic] Failed to acquire mic: ' + err.message);
+      return false;
+    }
+    if (isMicDeniedError(err)) {
+      showMicDeniedError(function() { setTalking(true); });
+    } else {
+      showError(err.message);
+    }
+    return false;
+  });
+
+  return _micAcquirePromise;
+}
+
+// Should we go and get the microphone as soon as we are in the room?
+//
+// Full-size Voxal always does: the user opened the app themselves, so a prompt
+// is expected, and holding the track means the first press transmits from its
+// first syllable instead of losing a word to device start-up.
+//
+// A tiny embed deliberately does not — an iframe the user never interacted with
+// throwing a permission prompt at them is hostile, so it waits for the first
+// press. But that trade only buys something while a prompt is actually
+// possible. Once the browser holds a persisted grant ("Allow on every visit",
+// or iOS's per-site Website Settings toggle), getUserMedia() resolves silently
+// and staying lazy costs the start of the first press for nothing. So ask what
+// the next call would do, and acquire eagerly when nothing would be shown.
+//
+// Only a definite 'granted' qualifies: 'unknown' (no Permissions API and no
+// labelled device to probe) must stay lazy, because guessing wrong there
+// produces exactly the unprompted prompt this is avoiding.
+async function shouldAcquireMicOnJoin() {
+  if (!IS_TINY_EMBED) return true;
+  return (await micPermissionState()) === 'granted';
+}
+
+// Called from both join paths (create and join). Fire-and-forget: nothing in the
+// room waits on the microphone.
+function autoAcquireMicOnJoin() {
+  if (stream || _micAcquirePromise) return;
+  shouldAcquireMicOnJoin().then(function(eager) {
+    // Re-checked after the await: the user may have left, or pressed the talk
+    // button and started the acquisition themselves, while we were probing.
+    if (!eager || !inRoom || stream || _micAcquirePromise) return;
+    acquireMicForRoom('join');
+  });
+}
+
 function setTalking(active) {
   if (!inRoom || freeHandMode) return;
   _pendingTalkingStart = !!active;
@@ -6901,56 +7006,13 @@ function setTalking(active) {
     applyTalkingState(true);
     return;
   }
-  if (_micAcquirePromise) return;
-  $('ptt-status').textContent = '\u25cf Requesting microphone…';
-  
-  // Show spinner in tiny mode while acquiring mic
-  if (IS_TINY_EMBED) {
-    var selfChip = document.getElementById('peer-item-self');
-    if (selfChip) selfChip.classList.add('acquiring-mic');
+  // Already in flight (a join-time acquire, or an earlier press) — that promise
+  // reads `_pendingTalkingStart` when it settles, so this press is not lost.
+  if (_micAcquirePromise) {
+    setTinyMicAcquiring(true);
+    return;
   }
-  
-  _micAcquirePromise = (async function() {
-    var micStream = await getMicStream();
-    if (!inRoom) {
-      micStream.getTracks().forEach(function(t) { t.stop(); });
-      return false;
-    }
-    stream = micStream;
-    audioTrack = stream.getAudioTracks()[0];
-    if (audioTrack) audioTrack.enabled = false;
-    connectOutgoingAudioToPeers();
-    return true;
-  })().then(function(ok) {
-    _micAcquirePromise = null;
-    
-    // Hide spinner in tiny mode
-    if (IS_TINY_EMBED) {
-      var selfChip = document.getElementById('peer-item-self');
-      if (selfChip) selfChip.classList.remove('acquiring-mic');
-    }
-    
-    if (!ok || !_pendingTalkingStart || !inRoom || freeHandMode) return false;
-    applyTalkingState(true);
-    return true;
-  }).catch(function(err) {
-    _micAcquirePromise = null;
-    _pendingTalkingStart = false;
-    $('ptt-status').textContent = '';
-    
-    // Hide spinner in tiny mode on error
-    if (IS_TINY_EMBED) {
-      var selfChip = document.getElementById('peer-item-self');
-      if (selfChip) selfChip.classList.remove('acquiring-mic');
-    }
-    
-    if (isMicDeniedError(err)) {
-      showMicDeniedError(function() { setTalking(true); });
-    } else {
-      showError(err.message);
-    }
-    return false;
-  });
+  acquireMicForRoom('press');
 }
 
 function applyTalkingState(active) {
@@ -8670,23 +8732,7 @@ async function createRoom(onJoined) {
       iframeEmit({ type: 'joined', roomCode: id, peerId: id });
       if (onJoined) onJoined(id);
 
-      // Auto-acquire mic in non-tiny mode (direct permission request on join).
-      // In tiny mode, delay mic permission until first speak.
-      if (!IS_TINY_EMBED && !stream) {
-        $('ptt-status').textContent = '\u25cf Requesting microphone…';
-        getMicStream().then(function(micStream) {
-          if (inRoom && !stream) {
-            stream = micStream;
-            audioTrack = stream.getAudioTracks()[0];
-            if (audioTrack) audioTrack.enabled = false;
-            $('ptt-status').textContent = '';
-            connectOutgoingAudioToPeers();
-          }
-        }).catch(function(err) {
-          $('ptt-status').textContent = '';
-          console.warn('[auto-mic] Failed to acquire mic: ' + err.message);
-        });
-      }
+      autoAcquireMicOnJoin();
 
       settle(resolve, id);
     });
@@ -9072,23 +9118,7 @@ function finishJoin(targetHostId, hostData) {
   startStatsPolling();
   iframeEmit({ type: 'joined', roomCode: targetHostId, peerId: peer.id });
 
-  // Auto-acquire mic in non-tiny mode (direct permission request on join).
-  // In tiny mode, delay mic permission until first speak.
-  if (!IS_TINY_EMBED && !stream) {
-    $('ptt-status').textContent = '\u25cf Requesting microphone…';
-    getMicStream().then(function(micStream) {
-      if (inRoom && !stream) {
-        stream = micStream;
-        audioTrack = stream.getAudioTracks()[0];
-        if (audioTrack) audioTrack.enabled = false;
-        $('ptt-status').textContent = '';
-        connectOutgoingAudioToPeers();
-      }
-    }).catch(function(err) {
-      $('ptt-status').textContent = '';
-      console.warn('[auto-mic] Failed to acquire mic: ' + err.message);
-    });
-  }
+  autoAcquireMicOnJoin();
 }
 
 // --- Presence UI ------------------------------------------------------------
