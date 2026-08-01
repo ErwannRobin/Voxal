@@ -5243,7 +5243,7 @@ function appendMicPermissionHint(list) {
   text.className = 'room-invite-nudge-text mic-hint-text';
   // Every string in micPermissionHint() is a literal authored above — no user
   // input is interpolated, so the markup is safe to assign.
-  text.innerHTML = '<span class="mic-hint-lead">Asked for the microphone every time?</span> ' +
+  text.innerHTML = '<span class="mic-hint-lead">💡always allow microphone:</span> ' +
                    micPermissionHint().html;
   row.appendChild(text);
 

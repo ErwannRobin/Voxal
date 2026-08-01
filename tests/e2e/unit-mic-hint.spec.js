@@ -139,6 +139,34 @@ test.describe('when the hint appears', () => {
     expect(parent).toBe('peers-list');
   });
 
+  test('is pinned to the bottom of the list, not left trailing the peers', async ({ page }) => {
+    await inRoom(page, { count: 2 });
+    const box = await page.evaluate(() => {
+      const list = document.getElementById('peers-list');
+      const row = document.getElementById('mic-hint-banner');
+      const self = document.querySelector('#peers-list .peer-item');
+      return {
+        gap: list.getBoundingClientRect().bottom - row.getBoundingClientRect().bottom,
+        belowPeers: row.getBoundingClientRect().top > self.getBoundingClientRect().bottom,
+        sticky: getComputedStyle(row).position,
+      };
+    });
+    // Flush with the list's bottom padding rather than floating mid-panel.
+    expect(box.gap).toBeLessThanOrEqual(10);
+    expect(box.belowPeers).toBe(true);
+    // Stays visible when a long list scrolls underneath it.
+    expect(box.sticky).toBe('sticky');
+  });
+
+  test('the sticky row is opaque, so peers cannot show through it', async ({ page }) => {
+    await inRoom(page, { count: 2 });
+    const c = await page.evaluate(() => ({
+      row: getComputedStyle(document.getElementById('mic-hint-banner')).backgroundColor,
+      list: getComputedStyle(document.getElementById('peers-list')).backgroundColor,
+    }));
+    expect(c.row).toBe(c.list);
+  });
+
   test('does not displace the talk button', async ({ page }) => {
     await spoof(page, UA.iphone);
     await page.goto('/');
