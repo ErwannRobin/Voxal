@@ -159,6 +159,13 @@ peer can opt out (`debug-share-device-info`, default on). Regression-tested in
 system CPU %, and battery level/charging on the desktop app (WKWebView exposes
 none of these). `collectDeviceInfo()` merges it in.
 
+**Remote debug logs:** ✅ Done — the same "i" panel can ask a peer for its live
+log stream (`log-session-request` → explicit prompt on that device → backfilled
+ring buffer + captured console/errors streamed back into `#remote-log-panel`).
+Authorization is per session, never implicit, auto-expires after 10 minutes and
+is revocable from a banner on the sharing device. Tested in
+`tests/e2e/unit-remote-logs.spec.js`.
+
 **Remaining follow-up (Capacitor native mobile):** connection type, battery, and
 memory on the iOS/Android *native* apps still fall back to web APIs. Adding
 `@capacitor/device` + `@capacitor/network` would fill these, but needs a native

@@ -716,8 +716,13 @@ html[data-theme="light"] .debug-consent-text strong { color: #b45309; }
   padding: 8px 10px;
   min-width: 160px;
   max-width: 240px;
+  /* Fallback only — showStatsPopover sets an inline max-height from the space
+     actually available beside the anchor. */
   max-height: 60vh;
   overflow-y: auto;
+  /* Don't hand the scroll on to the page once the panel hits its end. */
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   box-shadow: 0 4px 16px rgba(0,0,0,0.35);
 }
 .stats-popover-title {
@@ -816,8 +821,14 @@ html[data-theme="light"] .debug-consent-text strong { color: #b45309; }
   padding: 10px 12px;
   width: 260px;
   max-width: calc(100vw - 16px);
+  /* Fallback only — showDeviceInfoPopover sets an inline max-height from the
+     space actually available beside the anchor, so this panel scrolls within
+     the viewport instead of overflowing it on a phone. */
   max-height: 70vh;
   overflow-y: auto;
+  /* Don't hand the scroll on to the room behind once the panel hits its end. */
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   box-shadow: 0 4px 16px rgba(0,0,0,0.35);
 }
 .device-info-popover .di-title {
@@ -3133,4 +3144,141 @@ details.turn-section .turn-inner {
 }
 .about-link:hover {
   background: var(--bg-raised);
+}
+
+/* ── Remote debug logs (dev mode) ───────────────────────────────────
+   Declared last on purpose: .audio-check-btn and .dev-log-entries are
+   declared earlier in this file, and these modifiers must win the ties. */
+
+/* Authorization prompt on the device being asked. Fixed and high in the stack
+   because it is a consent decision — it must not be hidden behind a popover,
+   a modal, or the landscape room grid. Below the toast (9999) so a copy
+   confirmation still reads over it. */
+.log-consent-prompt {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 9500;
+  width: min(420px, calc(100vw - 24px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--bg-raised);
+  border: 1px solid rgba(245, 158, 11, 0.55);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+.log-consent-prompt.hidden { display: none; }
+.log-consent-text {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text);
+}
+.log-consent-text strong { color: #fbbf24; font-weight: 600; }
+html[data-theme="light"] .log-consent-text strong { color: #b45309; }
+@media (prefers-color-scheme: light) {
+  html[data-theme="system"] .log-consent-text strong { color: #b45309; }
+}
+.log-consent-actions { display: flex; gap: 8px; }
+.log-consent-actions .btn { flex: 0 0 auto; }
+.log-consent-note { font-size: 11px; color: var(--text-muted); }
+
+/* Persistent reminder that this device is streaming its log, with the way out. */
+.log-share-indicator {
+  position: fixed;
+  left: 50%;
+  top: 8px;
+  transform: translateX(-50%);
+  z-index: 9400;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 24px);
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--bg-raised);
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  color: var(--text);
+}
+.log-share-indicator.hidden { display: none; }
+.log-share-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f59e0b;
+  flex-shrink: 0;
+  animation: log-share-pulse 1.6s ease-in-out infinite;
+}
+@keyframes log-share-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.log-share-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.log-share-indicator .btn { flex: 0 0 auto; padding: 2px 10px; }
+
+/* Viewer panel. Floats over the room so a live stream survives the roster
+   being rebuilt (updatePeerList closes the device-info popover every time). */
+.remote-log-panel {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 9100;
+  display: flex;
+  flex-direction: column;
+  width: min(460px, calc(100vw - 24px));
+  max-height: min(45vh, 360px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-raised);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.remote-log-panel.hidden { display: none; }
+.remote-log-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.remote-log-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.remote-log-status {
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-right: auto;
+  white-space: nowrap;
+}
+.remote-log-status.live { color: #22c55e; }
+.remote-log-actions { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
+.remote-log-actions .btn-icon { font-size: 16px; }
+.dev-log-entries.remote-log-entries {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+
+/* Log controls inside the device-info popover. */
+.device-info-popover .remote-log { margin-top: 10px; }
+.device-info-popover .audio-check-btn.remote-log-btn { margin: 2px 0 4px; }
+.device-info-popover .remote-log-live {
+  font-size: 11.5px;
+  color: #22c55e;
+  padding: 4px 0;
+  text-align: center;
+}
+.device-info-popover .remote-log-hint {
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  margin-top: 2px;
 }
