@@ -4838,6 +4838,8 @@ function updatePeerList() {
     list.appendChild(nudge);
   }
 
+  appendMicPermissionHint(list);
+
   // Notify the parent iframe of the current peer list
   if (_isIframe && inRoom) {
     var peers = [{
@@ -5225,15 +5227,42 @@ function noteMicAcquisition(elapsedMs) {
   renderMicPermissionHint();
 }
 
+// Appended to the peer list, next to the invite nudge — the room's existing home
+// for a line of advice. It started life in the PTT column, where it pushed the
+// talk button out of place; the peer list has room and is already where
+// transient guidance lives.
+function appendMicPermissionHint(list) {
+  if (!shouldShowMicPermissionHint()) return;
+
+  var row = document.createElement('div');
+  row.id = 'mic-hint-banner';
+  row.className = 'room-invite-nudge mic-hint-row';
+  row.setAttribute('role', 'status');
+
+  var text = document.createElement('span');
+  text.className = 'room-invite-nudge-text mic-hint-text';
+  // Every string in micPermissionHint() is a literal authored above — no user
+  // input is interpolated, so the markup is safe to assign.
+  text.innerHTML = '<span class="mic-hint-lead">Asked for the microphone every time?</span> ' +
+                   micPermissionHint().html;
+  row.appendChild(text);
+
+  var close = document.createElement('button');
+  close.id = 'btn-dismiss-mic-hint';
+  close.className = 'btn-icon mic-hint-close';
+  close.textContent = '✕';
+  close.title = 'Dismiss';
+  close.setAttribute('aria-label', 'Dismiss');
+  close.addEventListener('click', dismissMicPermissionHint);
+  row.appendChild(close);
+
+  list.appendChild(row);
+}
+
+// The hint is rebuilt as part of the peer list, so refreshing it means
+// re-rendering that list rather than toggling a static element.
 function renderMicPermissionHint() {
-  var banner = document.getElementById('mic-hint-banner');
-  if (!banner) return;
-  var show = shouldShowMicPermissionHint();
-  banner.classList.toggle('hidden', !show);
-  if (!show) return;
-  var steps = document.getElementById('mic-hint-steps');
-  // Every string here is a literal authored above — no user input is interpolated.
-  if (steps) steps.innerHTML = micPermissionHint().html;
+  if (inRoom) updatePeerList();
 }
 
 function dismissMicPermissionHint() {
@@ -9482,13 +9511,6 @@ window.addEventListener('DOMContentLoaded', function() {
       syncDeviceShareToggles();
     });
   }
-
-  var micHintBtn = document.getElementById('btn-dismiss-mic-hint');
-  if (micHintBtn) micHintBtn.addEventListener('click', dismissMicPermissionHint);
-  // The mic is usually acquired on join, before the room screen paints; render
-  // once at startup so a hint earned on a previous visit is not withheld until
-  // the next prompt.
-  renderMicPermissionHint();
 
   // iOS/Android: deep links come back via @capacitor/app appUrlOpen.
   // Handles both voxal:// custom scheme and https://ptt.voxal.app App Links.

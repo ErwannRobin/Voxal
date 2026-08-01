@@ -528,18 +528,6 @@
             <button id="btn-cancel-shortcut" class="btn-icon" title="Cancel">✕</button>
           </div>
           <p id="ptt-status" class="ptt-status"></p>
-          <!-- Shown only once the browser has made the user answer a microphone
-               prompt on two separate visits — i.e. it is demonstrably not
-               keeping the grant. The steps are filled in per platform by
-               micPermissionHint(); iOS is the case that cannot be fixed any
-               other way, since WebKit scopes the grant to the document. -->
-          <div id="mic-hint-banner" class="mic-hint-banner hidden" role="status" aria-live="polite">
-            <p class="mic-hint-text">
-              <strong>Tired of allowing the microphone every time?</strong>
-              <span id="mic-hint-steps"></span>
-            </p>
-            <button id="btn-dismiss-mic-hint" class="btn btn-secondary btn-sm">Got it</button>
-          </div>
         </div>
         <button id="btn-leave-tiny" class="btn-icon tiny-leave-btn" title="Leave room">
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures.js';
+import { seedRoom } from './_helpers.js';
 
 // A web page cannot persist a getUserMedia grant — the browser owns it, keyed by
 // origin, with no API to extend or restore it. All the app can do is name the
@@ -99,58 +100,98 @@ test.describe('micPermissionHint — per platform', () => {
 });
 
 test.describe('when the hint appears', () => {
-  const setup = async (page, { count, dismissed } = {}) => {
-    await spoof(page, UA.iphone);
+  // The hint is a row in the PEER LIST, next to the invite nudge — not a banner
+  // in the PTT column, where it displaced the talk button. So it is built with
+  // the list and simply absent when it should not show.
+  async function inRoom(page, { count, dismissed, ua = UA.iphone } = {}) {
+    await spoof(page, ua);
     await page.goto('/');
-    return page.evaluate(([c, d]) => {
+    await seedRoom(page, { isHost: true, roomCode: 'abc-def' });
+    await page.evaluate(([c, d]) => {
       if (c === null) localStorage.removeItem('mic-prompt-count');
       else localStorage.setItem('mic-prompt-count', String(c));
       if (d) localStorage.setItem('mic-hint-dismissed', '1');
       else localStorage.removeItem('mic-hint-dismissed');
-      window.renderMicPermissionHint();
-      return !document.getElementById('mic-hint-banner').classList.contains('hidden');
+      showScreen('room');
+      updatePeerList();
     }, [count === undefined ? null : count, !!dismissed]);
-  };
+  }
 
   test('stays hidden on a first visit — one prompt is normal', async ({ page }) => {
-    expect(await setup(page, { count: 1 })).toBe(false);
+    await inRoom(page, { count: 1 });
+    await expect(page.locator('#mic-hint-banner')).toHaveCount(0);
   });
 
   test('appears once the browser has asked on two separate visits', async ({ page }) => {
-    expect(await setup(page, { count: 2 })).toBe(true);
+    await inRoom(page, { count: 2 });
+    await expect(page.locator('#mic-hint-banner')).toBeVisible();
   });
 
   test('stays hidden once dismissed, however many prompts follow', async ({ page }) => {
-    expect(await setup(page, { count: 9, dismissed: true })).toBe(false);
+    await inRoom(page, { count: 9, dismissed: true });
+    await expect(page.locator('#mic-hint-banner')).toHaveCount(0);
   });
 
-  test('the dismiss button hides it and the choice survives a reload', async ({ page }) => {
+  test('sits inside the peer list, beside the invite nudge', async ({ page }) => {
+    await inRoom(page, { count: 2 });
+    const parent = await page.evaluate(() =>
+      document.getElementById('mic-hint-banner').parentElement.id);
+    expect(parent).toBe('peers-list');
+  });
+
+  test('does not displace the talk button', async ({ page }) => {
     await spoof(page, UA.iphone);
     await page.goto('/');
-    await page.evaluate(() => {
-      // The banner lives in the room screen — that is where the mic is acquired.
+    await seedRoom(page, { isHost: true, roomCode: 'abc-def' });
+    const before = await page.evaluate(() => {
+      localStorage.removeItem('mic-prompt-count');
       showScreen('room');
-      localStorage.setItem('mic-prompt-count', '3');
-      window.renderMicPermissionHint();
+      updatePeerList();
+      return document.getElementById('ptt-btn').getBoundingClientRect().top;
     });
+    const after = await page.evaluate(() => {
+      localStorage.setItem('mic-prompt-count', '3');
+      updatePeerList();
+      return document.getElementById('ptt-btn').getBoundingClientRect().top;
+    });
+    // The whole point of moving it out of the PTT column.
+    expect(after).toBe(before);
+  });
+
+  test('closes with an X, not a button labelled "Got it"', async ({ page }) => {
+    await inRoom(page, { count: 3 });
+    const close = page.locator('#btn-dismiss-mic-hint');
+    await expect(close).toHaveText('✕');
+    await expect(close).toHaveAttribute('aria-label', 'Dismiss');
+  });
+
+  test('the close button hides it and the choice survives a reload', async ({ page }) => {
+    await inRoom(page, { count: 3 });
     await expect(page.locator('#mic-hint-banner')).toBeVisible();
     await page.locator('#btn-dismiss-mic-hint').click();
-    await expect(page.locator('#mic-hint-banner')).toBeHidden();
+    await expect(page.locator('#mic-hint-banner')).toHaveCount(0);
 
     await page.reload();
-    await page.evaluate(() => { showScreen('room'); window.renderMicPermissionHint(); });
-    await expect(page.locator('#mic-hint-banner')).toBeHidden();
+    await seedRoom(page, { isHost: true, roomCode: 'abc-def' });
+    await page.evaluate(() => { showScreen('room'); updatePeerList(); });
+    await expect(page.locator('#mic-hint-banner')).toHaveCount(0);
   });
 
   test('renders the steps for the platform actually in use', async ({ page }) => {
-    await spoof(page, UA.firefox);
-    await page.goto('/');
-    const text = await page.evaluate(() => {
-      localStorage.setItem('mic-prompt-count', '2');
-      window.renderMicPermissionHint();
-      return document.getElementById('mic-hint-steps').textContent;
+    await inRoom(page, { count: 2, ua: UA.firefox });
+    await expect(page.locator('#mic-hint-banner')).toContainText('Remember this decision');
+  });
+
+  test('is kept out of tiny embeds, which have no room for it', async ({ page }) => {
+    await spoof(page, UA.iphone);
+    await page.goto('/?tiny=1');
+    await seedRoom(page, { isHost: true, roomCode: 'abc-def' });
+    await page.evaluate(() => {
+      localStorage.setItem('mic-prompt-count', '5');
+      showScreen('room');
+      updatePeerList();
     });
-    expect(text).toContain('Remember this decision');
+    await expect(page.locator('#mic-hint-banner')).toHaveCount(0);
   });
 });
 
@@ -179,6 +220,7 @@ test.describe('counting prompts', () => {
   test('counts accumulate across visits, which is what makes it meaningful', async ({ page }) => {
     await spoof(page, UA.iphone);
     await page.goto('/');
+    await seedRoom(page, { isHost: true, roomCode: 'abc-def' });
     const n = await page.evaluate(() => {
       showScreen('room');
       localStorage.removeItem('mic-prompt-count');
@@ -187,10 +229,11 @@ test.describe('counting prompts', () => {
       return localStorage.getItem('mic-prompt-count');
     });
     expect(n).toBe('2');
+    // The second one re-rendered the peer list, so it is on screen already.
     await expect(page.locator('#mic-hint-banner')).toBeVisible();
   });
 
-  test('native never counts, so the banner can never surface there', async ({ page }) => {
+  test('native never counts, so the hint can never surface there', async ({ page }) => {
     await spoof(page, UA.iphone, { capacitor: true });
     await page.goto('/');
     expect(await note(page, 5000)).toBe(null);

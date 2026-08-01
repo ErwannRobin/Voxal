@@ -385,33 +385,28 @@ html[data-theme="light"] .debug-consent-text strong { color: #b45309; }
 .debug-consent-actions .btn { flex: 0 0 auto; }
 .debug-consent-note { font-size: 11px; color: var(--text-muted); }
 
-/* "How to stop the microphone prompt coming back" (web only) */
-.mic-hint-banner {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  max-width: 380px;
-  margin: 10px auto 0;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
+/* "How to stop the microphone prompt coming back" (web only).
+   A row in the peer list, sharing .room-invite-nudge's layout — same place, same
+   dashed separator, one notch quieter since it is advice rather than an action. */
+.mic-hint-row {
+  align-items: flex-start;
+  gap: 6px;
 }
-.mic-hint-banner.hidden { display: none; }
 .mic-hint-text {
-  margin: 0;
-  font-size: 12px;
+  font-size: 10.5px;
   line-height: 1.45;
-  text-align: center;
-  color: var(--text-muted);
 }
-.mic-hint-text strong { display: block; margin-bottom: 2px; color: var(--text); font-weight: 600; }
-.mic-hint-text #mic-hint-steps strong {
-  display: inline;
-  margin: 0;
-  color: var(--text);
-  font-weight: 600;
+/* The lead-in stays unbolded so it does not compete with the step keywords,
+   which are the part worth scanning for. */
+.mic-hint-lead { color: var(--text); }
+.mic-hint-text strong { color: var(--text); font-weight: 600; }
+/* .btn-icon (font-size 28px) is declared later in this file, so an equally
+   specific selector would lose to it. */
+.btn-icon.mic-hint-close {
+  font-size: 12px;
+  padding: 0 2px;
+  flex: 0 0 auto;
+  align-self: center;
 }
 
 .room-meta {
