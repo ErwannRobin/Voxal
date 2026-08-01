@@ -2933,6 +2933,19 @@ details.turn-section .turn-inner {
   resize: none;
 }
 .video-viewer-panel.hidden { display: none; }
+/* Stays in the render tree (no display:none) so Chromium/WebKit keep compositing
+   the source <video> — hiding via display:none freezes the PiP window's frame. */
+.video-viewer-panel.pip-active,
+#screen-viewer-panel.pip-active {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
 
 #screen-viewer-panel {
   bottom: 80px;
