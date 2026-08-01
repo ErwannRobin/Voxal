@@ -103,6 +103,9 @@ run-web:
 build-web:
 	mkdir -p dist
 	cp -r src/* dist/
+	@COMMIT=$$(git rev-parse --short HEAD); \
+	BUILD_DATE=$$(date -u +%FT%TZ); \
+	echo "window.VOXAL_COMMIT='$$COMMIT';window.VOXAL_WEB_BUILD_DATE='$$BUILD_DATE';" > dist/build-info.js
 	@echo "Web app copied to dist/"
 
 # ── Mobile (Capacitor) ────────────────────────────────────────────────────────
