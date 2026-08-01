@@ -223,26 +223,41 @@ test.describe('when the hint appears', () => {
   });
 });
 
-test.describe('counting prompts', () => {
-  // The signal is timing: a grant the browser remembered resolves in
-  // milliseconds, one that needed a human tap cannot. There is no API — neither
-  // Safari nor Firefox exposes `microphone` to navigator.permissions.query().
-  const note = (page, ms) => page.evaluate((m) => {
+test.describe('detecting that a prompt actually happened', () => {
+  // Answers "was this session's permission requested, or automatic?" — a silent
+  // re-grant means the browser is doing its job and there is nothing to advise.
+  const note = (page, ms, state) => page.evaluate(([m, st]) => {
     localStorage.removeItem('mic-prompt-count');
-    window.noteMicAcquisition(m);
+    window.noteMicAcquisition(m, st);
     return localStorage.getItem('mic-prompt-count');
-  }, ms);
+  }, [ms, state]);
 
-  test('a fast grant is not counted — the browser clearly remembered', async ({ page }) => {
+  test('a state of "granted" beforehand means no prompt, however slow the call', async ({ page }) => {
     await spoof(page, UA.iphone);
     await page.goto('/');
-    expect(await note(page, 40)).toBe(null);
+    // The definitive signal must beat the timing guess: a slow machine granting
+    // silently is not the user being asked.
+    expect(await note(page, 5000, 'granted')).toBe(null);
   });
 
-  test('a slow grant is counted — someone had to answer a prompt', async ({ page }) => {
+  test('a state of "prompt" beforehand counts, however fast the answer', async ({ page }) => {
     await spoof(page, UA.iphone);
     await page.goto('/');
-    expect(await note(page, 2500)).toBe('1');
+    // Someone who taps Allow instantly was still asked.
+    expect(await note(page, 20, 'prompt')).toBe('1');
+  });
+
+  test('with no signal available it falls back to timing', async ({ page }) => {
+    await spoof(page, UA.iphone);
+    await page.goto('/');
+    expect(await note(page, 40, 'unknown')).toBe(null);
+    expect(await note(page, 2500, 'unknown')).toBe('1');
+  });
+
+  test('native never counts, so the hint can never surface there', async ({ page }) => {
+    await spoof(page, UA.iphone, { capacitor: true });
+    await page.goto('/');
+    expect(await note(page, 5000, 'prompt')).toBe(null);
   });
 
   test('counts accumulate across visits, which is what makes it meaningful', async ({ page }) => {
@@ -252,19 +267,68 @@ test.describe('counting prompts', () => {
     const n = await page.evaluate(() => {
       showScreen('room');
       localStorage.removeItem('mic-prompt-count');
-      window.noteMicAcquisition(1500);
-      window.noteMicAcquisition(1500);
+      window.noteMicAcquisition(1500, 'prompt');
+      window.noteMicAcquisition(1500, 'prompt');
       return localStorage.getItem('mic-prompt-count');
     });
     expect(n).toBe('2');
-    // The second one re-rendered the peer list, so it is on screen already.
     await expect(page.locator('#mic-hint-banner')).toBeVisible();
   });
+});
 
-  test('native never counts, so the hint can never surface there', async ({ page }) => {
-    await spoof(page, UA.iphone, { capacitor: true });
+test.describe('micPermissionState', () => {
+  test('reports "prompt" when nothing has been granted', async ({ page }) => {
     await page.goto('/');
-    expect(await note(page, 5000)).toBe(null);
+    expect(await page.evaluate(() => window.micPermissionState())).toBe('prompt');
+  });
+
+  test('reports "granted" once permission is held', async ({ page, context }) => {
+    await context.grantPermissions(['microphone']);
+    await page.goto('/');
+    expect(await page.evaluate(() => window.micPermissionState())).toBe('granted');
+  });
+
+  test('falls back to device labels where permissions.query is unsupported', async ({ page }) => {
+    // Safari and Firefox both reject the microphone descriptor, and Safari is
+    // exactly where this matters — so the label probe carries the feature there.
+    // enumerateDevices is stubbed because this container has no audio hardware.
+    await page.addInitScript(() => {
+      navigator.permissions.query = () => Promise.reject(new TypeError('unsupported'));
+      navigator.mediaDevices.enumerateDevices = () =>
+        Promise.resolve([{ kind: 'audioinput', deviceId: 'x', label: 'Built-in Microphone' }]);
+    });
+    await page.goto('/');
+    // A label is only exposed to a document that already holds a capture grant.
+    expect(await page.evaluate(() => window.micPermissionState())).toBe('granted');
+  });
+
+  test('an unlabelled microphone means no grant yet, so a prompt is coming', async ({ page }) => {
+    await page.addInitScript(() => {
+      navigator.permissions.query = () => Promise.reject(new TypeError('unsupported'));
+      navigator.mediaDevices.enumerateDevices = () =>
+        Promise.resolve([{ kind: 'audioinput', deviceId: 'x', label: '' }]);
+    });
+    await page.goto('/');
+    expect(await page.evaluate(() => window.micPermissionState())).toBe('prompt');
+  });
+
+  test('no microphone at all says nothing about permission', async ({ page }) => {
+    await page.addInitScript(() => {
+      navigator.permissions.query = () => Promise.reject(new TypeError('unsupported'));
+      navigator.mediaDevices.enumerateDevices = () => Promise.resolve([{ kind: 'videoinput', label: '' }]);
+    });
+    await page.goto('/');
+    expect(await page.evaluate(() => window.micPermissionState())).toBe('unknown');
+  });
+
+  test('never throws — it runs on the path to acquiring the mic', async ({ page }) => {
+    await page.addInitScript(() => {
+      navigator.permissions.query = () => { throw new Error('boom'); };
+      navigator.mediaDevices.enumerateDevices = () => { throw new Error('boom'); };
+    });
+    await page.goto('/');
+    expect(await page.evaluate(() =>
+      window.micPermissionState().then((s) => s, (e) => 'REJECTED: ' + e.message))).toBe('unknown');
   });
 });
 

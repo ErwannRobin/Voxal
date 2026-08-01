@@ -5143,13 +5143,42 @@ async function refreshMediaDeviceSelectors() {
 // grant to the DOCUMENT, so a reload always re-prompts regardless of what was
 // chosen; the per-site Website Settings toggle is the only thing that survives.
 
-// A grant the browser already remembered resolves in milliseconds. One that
-// needed a human to find and tap "Allow" cannot. That round trip is the only
-// signal available, because neither Safari nor Firefox exposes `microphone` to
-// navigator.permissions.query() — the obvious API is Chromium-only. Threshold
-// set deliberately high: nagging someone whose browser IS remembering is the
-// bad failure; missing the occasional prompt is not.
+// Last-resort signal only — see micPermissionState() for the real ones. A grant
+// the browser already remembered resolves in milliseconds; one that needed a
+// human to find and tap "Allow" cannot. Threshold set deliberately high:
+// nagging someone whose browser IS remembering is the bad failure.
 const MIC_PROMPT_MIN_MS = 800;
+
+// Will the next getUserMedia() put a prompt on screen, or be granted silently?
+//
+// Two signals, best first:
+//
+//  1. navigator.permissions.query({name:'microphone'}) — exact, but Chromium
+//     only. WebKit and Firefox both reject the descriptor, and WebKit is where
+//     this actually matters.
+//
+//  2. Device LABELS. enumerateDevices() only exposes a label when the document
+//     holds a capture permission, so an unlabelled microphone means no grant yet
+//     and therefore a prompt. This works on Safari — and on iOS the labels go
+//     back to empty after every reload, exactly mirroring the document-scoped
+//     grant that causes the re-prompting in the first place.
+//
+// Returns 'granted' | 'prompt' | 'denied' | 'unknown'. Never throws: this runs
+// on the critical path of acquiring the mic and must not be able to break it.
+async function micPermissionState() {
+  try {
+    var status = await navigator.permissions.query({ name: 'microphone' });
+    if (status && status.state) return status.state;
+  } catch (_) { /* not supported here — fall through to the label probe */ }
+  try {
+    var devices = await navigator.mediaDevices.enumerateDevices();
+    var mics = devices.filter(function(d) { return d.kind === 'audioinput'; });
+    // No microphone at all says nothing about permission.
+    if (!mics.length) return 'unknown';
+    return mics.some(function(d) { return !!d.label; }) ? 'granted' : 'prompt';
+  } catch (_) {}
+  return 'unknown';
+}
 
 function micPermissionHint() {
   // Native builds hold an OS-level permission that already persists. Pointing
@@ -5219,10 +5248,18 @@ function shouldShowMicPermissionHint() {
   return micPromptCount() >= 2;
 }
 
-// Called after every successful acquisition, with how long it took.
-function noteMicAcquisition(elapsedMs) {
+// Called after every successful acquisition, with how long it took and what the
+// permission state was BEFORE the call. Only a real prompt counts — a silent
+// re-grant means the browser is doing its job and there is nothing to advise.
+function noteMicAcquisition(elapsedMs, stateBefore) {
   if (!IS_PLAIN_WEB) return;
-  if (elapsedMs < MIC_PROMPT_MIN_MS) return; // silently re-granted — nothing to say
+
+  var prompted;
+  if (stateBefore === 'granted')     prompted = false; // no prompt was possible
+  else if (stateBefore === 'prompt') prompted = true;  // it had to ask
+  else prompted = elapsedMs >= MIC_PROMPT_MIN_MS;      // 'unknown' → guess from timing
+
+  if (!prompted) return;
   localStorage.setItem(MIC_PROMPT_COUNT_KEY, String(micPromptCount() + 1));
   renderMicPermissionHint();
 }
@@ -5325,12 +5362,15 @@ async function getMicStream() {
   };
   Object.assign(audioConstraints, selectedMicConstraints());
 
+  // Has to be sampled BEFORE the call — afterwards the state is 'granted' either
+  // way and the distinction is gone.
+  const stateBefore = await micPermissionState();
   const askedAt = Date.now();
   const rawStream = await getUserMedia({
     audio: audioConstraints,
     video: false,
   });
-  noteMicAcquisition(Date.now() - askedAt);
+  noteMicAcquisition(Date.now() - askedAt, stateBefore);
 
   if (useRNNoise) {
     const ok = await initRNNoise();
