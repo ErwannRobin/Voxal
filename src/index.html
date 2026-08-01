@@ -625,6 +625,46 @@
       <span id="screen-viewer-fps" class="video-fps-overlay hidden"></span>
     </div>
 
+    <!-- Remote debug logs (dev mode).
+         Fixed overlays rather than children of a screen: the authorization
+         prompt must be impossible to miss wherever the person is, and the log
+         viewer has to survive updatePeerList() rebuilding the roster. -->
+    <div id="log-consent-prompt" class="log-consent-prompt hidden" role="alertdialog" aria-live="assertive" aria-label="Debug log request">
+      <p class="log-consent-text">
+        <strong id="log-consent-who">A peer</strong> is asking to read this device's
+        <strong>debug log</strong> — every message the app prints, including errors and
+        connection details. <strong>Nothing is captured or sent unless you allow it.</strong>
+      </p>
+      <div class="log-consent-actions">
+        <button id="btn-log-consent-allow" class="btn btn-primary btn-sm">Allow</button>
+        <button id="btn-log-consent-deny" class="btn btn-secondary btn-sm">Deny</button>
+      </div>
+      <p class="log-consent-note">Sharing stops automatically after 10 minutes, or whenever you press Stop.</p>
+    </div>
+
+    <div id="log-share-indicator" class="log-share-indicator hidden" role="status" aria-live="polite">
+      <span class="log-share-dot" aria-hidden="true"></span>
+      <span class="log-share-text">Sharing debug log with <strong id="log-share-with"></strong></span>
+      <button id="btn-log-share-stop" class="btn btn-secondary btn-sm">Stop</button>
+    </div>
+
+    <div id="remote-log-panel" class="remote-log-panel hidden">
+      <div class="remote-log-header">
+        <span class="remote-log-title" id="remote-log-title">🪵 Remote log</span>
+        <span class="remote-log-status" id="remote-log-status"></span>
+        <div class="remote-log-actions">
+          <button id="btn-copy-remote-log" class="btn-icon dev-log-copy-btn" title="Copy log">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+          </button>
+          <button id="btn-close-remote-log" class="btn-icon" title="Close" aria-label="Close remote log">✕</button>
+        </div>
+      </div>
+      <div id="remote-log-entries" class="dev-log-entries remote-log-entries"></div>
+    </div>
+
     <script src="assets/peerjs.min.js"></script>
     <script src="main.js"></script>
   </body>

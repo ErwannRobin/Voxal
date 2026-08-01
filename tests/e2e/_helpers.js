@@ -46,7 +46,7 @@ export async function seedRoom(page, cfg = {}) {
       const open = entry.open !== false;
       // eslint-disable-next-line no-undef
       connections.set(entry.id, {
-        data: { open, closed: !open, send() {} },
+        data: { open, closed: !open, send() {}, close() {} },
         pseudo: entry.pseudo,
         pseudoColor: entry.pseudoColor,
         videoActive: entry.videoActive,

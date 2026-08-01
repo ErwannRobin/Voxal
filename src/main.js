@@ -29,11 +29,21 @@
  *   device-info-request  { peerId, from }       viewer -> host (relayed to target); dev only
  *   device-info-response { peerId, info,        target -> host (relayed to requester); dev only
  *                          declined, from }
+ *   log-session-request  { peerId, from,        viewer -> host (relayed to target); dev only
+ *                          fromPseudo }
+ *   log-session-stop     { peerId, from }       viewer -> host (relayed to target); dev only
+ *   log-session-response { peerId, granted,     target -> host (relayed to requester); dev only
+ *                          reason, from }
+ *   log-entries          { peerId, entries,     target -> host (relayed to requester); dev only
+ *                          from }
+ *   log-session-end      { peerId, reason, from } target -> host (relayed to requester); dev only
  *
  * Dev-mode debugging: the host advertises `debugMode` in every peer-list and
  * heartbeat. When on, a device-info "i" button appears next to each roster name.
  * Snapshots (device / audio / network) are collected on demand only and each
- * peer can opt out of sharing via Settings → Advanced (default on).
+ * peer can opt out of sharing via Settings → Advanced (default on). The same
+ * panel can ask a peer for its live debug log; that stream is authorized
+ * separately, per session, by an explicit prompt on the peer's own device.
  *
  * Host migration:
  *   When the host's DataConnection closes (or heartbeat times out), every peer runs
@@ -4087,6 +4097,593 @@ function summarizeAudioCheck(report, localEnergy) {
            concealPercent: conceal * 100 };
 }
 
+// --- Remote debug logs (dev mode) --------------------------------------------
+//
+// A device-info snapshot answers "what is that device?"; it cannot answer "what
+// happened on it". That needs the peer's own log stream — every console line,
+// uncaught error and rejection the app produced — which only that device can
+// see. So a debugging viewer asks, the peer's device raises an explicit
+// authorization prompt, and nothing is captured or sent until the person there
+// allows it.
+//
+// Consent is per session and deliberately NOT the global device-info
+// preference: a snapshot is one bounded payload, a log stream is open-ended and
+// carries whatever the app happens to print. So it is re-authorized every time,
+// auto-expires, and the sharing device keeps a visible banner with a Stop
+// button for as long as it runs. An explicit global "declined" still wins —
+// someone who refused diagnostics outright is never prompted again.
+
+const REMOTE_LOG_MAX_MS       = 10 * 60 * 1000; // a session stops itself after this
+const REMOTE_LOG_FLUSH_MS     = 400;            // batching interval on the sharing device
+const REMOTE_LOG_BATCH_MAX    = 40;             // entries per `log-entries` message
+const REMOTE_LOG_QUEUE_MAX    = 200;            // unsent entries held before dropping the oldest
+const REMOTE_LOG_MSG_MAX      = 400;            // characters per line
+const REMOTE_LOG_VIEW_MAX     = 1000;           // entries the viewer keeps per peer
+const REMOTE_LOG_REQUEST_TIMEOUT_MS = 60000;    // give the person time to answer the prompt
+const REMOTE_LOG_DECLINE_COOLDOWN_MS = 2 * 60 * 1000; // a refusal is not re-askable straight away
+
+// Sharing device (the one being debugged).
+var _logShare        = null; // { requesterId, startedAt, queue, dropped, flushTimer, expiryTimer, sent }
+var _logSharePrompt  = null; // { requesterId, pseudo, at } — pending authorization
+var _logCaptureRestore = null;
+var _logCaptureBusy  = false; // re-entrancy guard: sending can itself log
+var _logDeclineCooldown = new Map(); // peerId -> "do not ask again before" timestamp
+
+// Viewer device (the one debugging).
+var _remoteLogSessions   = new Map(); // peerId -> { state, entries, startedAt, note, timer }
+var _remoteLogViewPeerId = null;      // peer whose log panel is open
+
+function logTimestamp() {
+  var now = new Date();
+  return now.toTimeString().slice(0, 8) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+}
+
+function truncateLogMessage(msg) {
+  var s = String(msg == null ? '' : msg);
+  return s.length > REMOTE_LOG_MSG_MAX ? s.slice(0, REMOTE_LOG_MSG_MAX) + '…' : s;
+}
+
+// Peer-supplied text is untrusted: bound it here, and render it with
+// textContent everywhere so it can never be markup.
+function sanitizeLogPseudo(name) {
+  if (typeof name !== 'string') return null;
+  var s = name.trim().slice(0, 40);
+  return s || null;
+}
+
+function peerDisplayName(peerId) {
+  var c = peerId ? connections.get(peerId) : null;
+  return (c && c.pseudo) || (peerId ? shortId(peerId) : 'a peer');
+}
+
+// One console argument as a line of text. Errors keep the head of their stack —
+// that is usually the whole point of asking for the log.
+function formatLogArg(a) {
+  if (typeof a === 'string') return a;
+  if (a === null) return 'null';
+  if (a === undefined) return 'undefined';
+  if (a instanceof Error) {
+    var head = (a.name || 'Error') + ': ' + a.message;
+    var frames = a.stack ? String(a.stack).split('\n').slice(1, 4).map(function(l) { return l.trim(); }) : [];
+    return frames.length ? head + ' | ' + frames.join(' ⏎ ') : head;
+  }
+  if (typeof a === 'object') {
+    try { return JSON.stringify(a); } catch (_) { return String(a); }
+  }
+  return String(a);
+}
+
+// --- Sharing side ------------------------------------------------------------
+
+function logSharingActive() { return !!_logShare; }
+
+// Route a reply (response / entries / end) back to the requester: the host
+// answers it directly, a non-host hands it to the host to relay — the same path
+// the device-info round trip uses.
+function sendLogReply(requesterId, msg) {
+  var full = Object.assign({ peerId: peer && peer.id, from: requesterId || null }, msg);
+  if (isHost) {
+    var rc = requesterId ? connections.get(requesterId) : null;
+    return !!(rc && rc.data && sendDataIfOpen(rc.data, full));
+  }
+  return _sendToHostData(full);
+}
+
+function sendLogBatches(requesterId, entries) {
+  var ok = true;
+  for (var i = 0; i < entries.length; i += REMOTE_LOG_BATCH_MAX) {
+    ok = sendLogReply(requesterId, { type: 'log-entries', entries: entries.slice(i, i + REMOTE_LOG_BATCH_MAX) }) && ok;
+  }
+  return ok;
+}
+
+// A viewer wants this device's logs. Never starts anything on its own: it either
+// refuses outright or raises the authorization prompt.
+function handleLogSessionRequest(requesterId, requesterPseudo) {
+  var from = requesterId || roomCode;
+  if (!from) return;
+  if (IS_TINY_EMBED || !inRoom || deviceInfoConsent() === 'declined') {
+    sendLogReply(from, { type: 'log-session-response', granted: false, reason: 'declined' });
+    return;
+  }
+  // Saying no sticks for a while: without this, a peer can re-raise the prompt
+  // the instant it is dismissed and badger someone into accepting.
+  var declinedUntil = _logDeclineCooldown.get(from) || 0;
+  if (Date.now() < declinedUntil) {
+    sendLogReply(from, { type: 'log-session-response', granted: false, reason: 'declined' });
+    return;
+  }
+  if (_logShare) {
+    // Already streaming: same viewer is a no-op, a second one is refused rather
+    // than silently fanning this device's log out to two places.
+    if (_logShare.requesterId !== from) {
+      sendLogReply(from, { type: 'log-session-response', granted: false, reason: 'busy' });
+    }
+    return;
+  }
+  if (_logSharePrompt) {
+    // One prompt at a time — a second request must not swap out the name the
+    // person is deciding about.
+    if (_logSharePrompt.requesterId !== from) {
+      sendLogReply(from, { type: 'log-session-response', granted: false, reason: 'busy' });
+    }
+    return;
+  }
+  _logSharePrompt = {
+    requesterId: from,
+    pseudo: sanitizeLogPseudo(requesterPseudo) || peerDisplayName(from),
+    at: Date.now()
+  };
+  renderLogConsentPrompt();
+}
+
+function acceptLogSessionRequest() {
+  var p = _logSharePrompt;
+  if (!p) return;
+  _logSharePrompt = null;
+  renderLogConsentPrompt();
+  startLogSharing(p.requesterId);
+}
+
+function declineLogSessionRequest() {
+  var p = _logSharePrompt;
+  if (!p) return;
+  _logSharePrompt = null;
+  _logDeclineCooldown.set(p.requesterId, Date.now() + REMOTE_LOG_DECLINE_COOLDOWN_MS);
+  renderLogConsentPrompt();
+  sendLogReply(p.requesterId, { type: 'log-session-response', granted: false, reason: 'declined' });
+}
+
+function dismissLogConsentPrompt() {
+  if (!_logSharePrompt) return;
+  _logSharePrompt = null;
+  renderLogConsentPrompt();
+}
+
+function startLogSharing(requesterId) {
+  if (_logShare) stopLogSharing('superseded');
+  _logShare = {
+    requesterId: requesterId,
+    startedAt: Date.now(),
+    queue: [], dropped: 0, failures: 0,
+    flushTimer: null, expiryTimer: null
+  };
+  sendLogReply(requesterId, { type: 'log-session-response', granted: true, expiresInMs: REMOTE_LOG_MAX_MS });
+
+  // Ship what already happened, not just what happens next — the interesting
+  // failure is usually already in the ring buffer by the time anyone asks.
+  var backfill = [logContextEntry()].concat(_devLogBuffer.slice(-REMOTE_LOG_QUEUE_MAX).map(function(e) {
+    return { t: e.t, msg: truncateLogMessage(e.msg), lvl: e.lvl };
+  }));
+  sendLogBatches(requesterId, backfill);
+
+  installLogCapture();
+  _logShare.flushTimer  = setInterval(flushLogShareQueue, REMOTE_LOG_FLUSH_MS);
+  _logShare.expiryTimer = setTimeout(function() { stopLogSharing('expired'); }, REMOTE_LOG_MAX_MS);
+  updateLogShareIndicator();
+}
+
+// What the log is FROM — a stream of lines with no idea which build or platform
+// produced them is a lot less useful.
+function logContextEntry() {
+  var bits = [
+    'remote log started',
+    'v' + (typeof VOXAL_VERSION !== 'undefined' ? VOXAL_VERSION : '?'),
+    _detectAppSetup(),
+    isHost ? 'host' : 'peer'
+  ];
+  return { t: logTimestamp(), msg: '— ' + bits.join(' · ') + ' —', lvl: 'info' };
+}
+
+// `reason` is reported to the viewer so an ended session says why it ended.
+function stopLogSharing(reason) {
+  var s = _logShare;
+  if (!s) return;
+  _logShare = null;
+  if (s.flushTimer)  clearInterval(s.flushTimer);
+  if (s.expiryTimer) clearTimeout(s.expiryTimer);
+  removeLogCapture();
+  if (reason !== 'peer-gone') {
+    if (s.queue.length) sendLogBatches(s.requesterId, s.queue.splice(0, s.queue.length));
+    sendLogReply(s.requesterId, { type: 'log-session-end', reason: reason || 'stopped' });
+  }
+  updateLogShareIndicator();
+}
+
+// The viewer asked to stop (or cancelled a pending request).
+function handleLogSessionStop(requesterId) {
+  var from = requesterId || roomCode;
+  if (_logSharePrompt && _logSharePrompt.requesterId === from) dismissLogConsentPrompt();
+  if (_logShare && _logShare.requesterId === from) stopLogSharing('stopped-by-viewer');
+}
+
+function captureLogLine(lvl, args) {
+  var s = _logShare;
+  if (!s || _logCaptureBusy) return;
+  var msg;
+  try { msg = args.map(formatLogArg).join(' '); } catch (_) { return; }
+  if (!msg) return;
+  if (s.queue.length >= REMOTE_LOG_QUEUE_MAX) { s.queue.shift(); s.dropped++; }
+  s.queue.push({ t: logTimestamp(), msg: truncateLogMessage(msg), lvl: lvl });
+}
+
+function flushLogShareQueue() {
+  var s = _logShare;
+  if (!s || !s.queue.length) return;
+  var batch = s.queue.splice(0, REMOTE_LOG_BATCH_MAX);
+  if (s.dropped) {
+    batch.unshift({ t: logTimestamp(), msg: '… ' + s.dropped + ' line(s) dropped (logging faster than the link)', lvl: 'warn' });
+    s.dropped = 0;
+  }
+  // Sending can itself log (PeerJS warns on a closed channel), which would feed
+  // the capture that produced this batch and never settle. Hold the hook off.
+  _logCaptureBusy = true;
+  var ok;
+  try { ok = sendLogReply(s.requesterId, { type: 'log-entries', entries: batch }); }
+  finally { _logCaptureBusy = false; }
+  if (ok) { s.failures = 0; return; }
+  // The link to the viewer is gone; give it a couple of ticks, then give up
+  // rather than capturing into a queue nobody will ever read.
+  if (++s.failures >= 3) stopLogSharing('peer-gone');
+}
+
+// Capture everything the page prints, not just devLog(): third-party warnings
+// (PeerJS, the browser) and uncaught errors are exactly what is missing when
+// someone says "it just stopped working". devLog also goes to the console, so
+// hooking the console alone captures it without duplicating it.
+function installLogCapture() {
+  if (_logCaptureRestore) return;
+  var methods = ['log', 'info', 'warn', 'error', 'debug'];
+  var saved = {};
+  methods.forEach(function(m) {
+    if (typeof console[m] !== 'function') return;
+    saved[m] = console[m];
+    console[m] = function() {
+      try { captureLogLine(m === 'debug' || m === 'log' ? 'info' : m, Array.prototype.slice.call(arguments)); } catch (_) {}
+      return saved[m].apply(console, arguments);
+    };
+  });
+  var onError = function(e) {
+    captureLogLine('error', ['Uncaught ' + (e && e.message ? e.message : 'error')
+      + (e && e.filename ? ' @ ' + e.filename + ':' + (e.lineno || 0) : '')]);
+  };
+  var onRejection = function(e) { captureLogLine('error', ['Unhandled rejection:', e && e.reason]); };
+  window.addEventListener('error', onError);
+  window.addEventListener('unhandledrejection', onRejection);
+
+  _logCaptureRestore = function() {
+    methods.forEach(function(m) { if (saved[m]) console[m] = saved[m]; });
+    window.removeEventListener('error', onError);
+    window.removeEventListener('unhandledrejection', onRejection);
+  };
+}
+
+function removeLogCapture() {
+  if (!_logCaptureRestore) return;
+  var restore = _logCaptureRestore;
+  _logCaptureRestore = null;
+  try { restore(); } catch (_) {}
+}
+
+function renderLogConsentPrompt() {
+  var el = document.getElementById('log-consent-prompt');
+  if (!el) return;
+  var p = _logSharePrompt;
+  el.classList.toggle('hidden', !p);
+  if (!p) return;
+  var who = document.getElementById('log-consent-who');
+  if (who) who.textContent = p.pseudo;
+}
+
+function updateLogShareIndicator() {
+  var el = document.getElementById('log-share-indicator');
+  if (!el) return;
+  el.classList.toggle('hidden', !_logShare);
+  if (!_logShare) return;
+  var who = document.getElementById('log-share-with');
+  if (who) who.textContent = peerDisplayName(_logShare.requesterId);
+}
+
+// --- Viewer side -------------------------------------------------------------
+
+// Route a control message (request / stop) to the target: the host talks to it
+// directly, a non-host addresses it through the host.
+function sendLogControlMessage(targetId, msg) {
+  var full = Object.assign({ fromPseudo: displayPseudoForSelf() }, msg);
+  if (isHost) {
+    var c = targetId ? connections.get(targetId) : null;
+    return !!(c && c.data && sendDataIfOpen(c.data, full));
+  }
+  if (!targetId || targetId === roomCode) return _sendToHostData(full);
+  return _sendToHostData(Object.assign({ peerId: targetId }, full));
+}
+
+function remoteLogSession(peerId) { return _remoteLogSessions.get(peerId) || null; }
+
+function requestRemoteLogs(peerId) {
+  if (!inRoom || !peerId || peerId === 'self' || peerId === (peer && peer.id)) return;
+  var existing = _remoteLogSessions.get(peerId);
+  if (existing && (existing.state === 'requesting' || existing.state === 'active')) return;
+
+  // A new session replays the peer's ring buffer, so keeping the previous
+  // entries would show that overlap twice. Start clean.
+  var session = existing || { entries: [] };
+  session.entries = [];
+  session.state = 'requesting';
+  session.note = null;
+  session.startedAt = Date.now();
+  if (session.timer) clearTimeout(session.timer);
+  _remoteLogSessions.set(peerId, session);
+
+  if (!sendLogControlMessage(peerId, { type: 'log-session-request' })) {
+    session.state = 'ended';
+    session.note = 'Could not reach that peer.';
+  } else {
+    session.timer = setTimeout(function() {
+      var s = _remoteLogSessions.get(peerId);
+      if (!s || s.state !== 'requesting') return;
+      s.state = 'ended';
+      s.note = 'No answer — nobody responded to the prompt.';
+      _refreshRemoteLogUi(peerId);
+    }, REMOTE_LOG_REQUEST_TIMEOUT_MS);
+  }
+  _refreshRemoteLogUi(peerId);
+}
+
+function stopRemoteLogs(peerId) {
+  var session = _remoteLogSessions.get(peerId);
+  sendLogControlMessage(peerId, { type: 'log-session-stop' });
+  if (!session) return;
+  if (session.timer) clearTimeout(session.timer);
+  session.timer = null;
+  session.state = 'ended';
+  session.note = 'Stopped.';
+  _refreshRemoteLogUi(peerId);
+}
+
+function onRemoteLogResponse(peerId, granted, reason) {
+  var session = _remoteLogSessions.get(peerId);
+  if (!session) return;
+  if (session.timer) { clearTimeout(session.timer); session.timer = null; }
+  if (granted) {
+    session.state = 'active';
+    session.note = null;
+    _refreshRemoteLogUi(peerId);
+    return;
+  }
+  session.state = 'denied';
+  session.note = reason === 'busy'
+    ? 'That device is already sharing its log with someone else.'
+    : 'They declined.';
+  _refreshRemoteLogUi(peerId);
+}
+
+function onRemoteLogEntries(peerId, entries) {
+  var session = _remoteLogSessions.get(peerId);
+  // Never requested, already stopped, or malformed — a peer cannot push its log
+  // at us just by sending the message.
+  if (!session || session.state !== 'active' || !Array.isArray(entries)) return;
+  var clean = entries.filter(function(e) { return e && typeof e === 'object'; }).map(function(e) {
+    return {
+      t:   typeof e.t === 'string' ? e.t.slice(0, 16) : logTimestamp(),
+      msg: truncateLogMessage(e.msg),
+      lvl: (e.lvl === 'warn' || e.lvl === 'error') ? e.lvl : 'info'
+    };
+  });
+  if (!clean.length) return;
+  session.entries = session.entries.concat(clean);
+  if (session.entries.length > REMOTE_LOG_VIEW_MAX) {
+    session.entries = session.entries.slice(-REMOTE_LOG_VIEW_MAX);
+  }
+  if (_remoteLogViewPeerId === peerId) _appendRemoteLogEntries(clean);
+  _refreshRemoteLogUi(peerId, true);
+}
+
+function onRemoteLogEnd(peerId, reason) {
+  var session = _remoteLogSessions.get(peerId);
+  if (!session) return;
+  if (session.timer) { clearTimeout(session.timer); session.timer = null; }
+  session.state = 'ended';
+  session.note = reason === 'expired' ? 'Session expired on their device.'
+    : reason === 'left' ? 'They left the room.'
+    : reason === 'peer-gone' ? 'The link to that peer dropped.'
+    : 'They stopped sharing.';
+  _refreshRemoteLogUi(peerId);
+}
+
+// Host receives a viewer's control message about `targetId`: answer for itself,
+// otherwise relay to the target.
+function handleLogControlAtHost(requesterId, targetId, type, fromPseudo) {
+  var self = peer && peer.id;
+  if (!targetId || targetId === self) {
+    if (type === 'log-session-request') handleLogSessionRequest(requesterId, fromPseudo);
+    else handleLogSessionStop(requesterId);
+    return;
+  }
+  var tc = connections.get(targetId);
+  if (!tc || !tc.data) return;
+  var rc = connections.get(requesterId);
+  sendDataIfOpen(tc.data, {
+    type: type,
+    peerId: targetId,
+    from: requesterId,
+    // Prefer the roster's name for the requester over their own claim.
+    fromPseudo: (rc && rc.pseudo) || sanitizeLogPseudo(fromPseudo) || null
+  });
+}
+
+// Target -> viewer, seen by the host: relay when the request came from another
+// peer, otherwise the host is the viewer and handles it itself.
+function handleLogReplyAtHost(targetId, msg) {
+  if (msg.from && msg.from !== (peer && peer.id)) {
+    var rc = connections.get(msg.from);
+    if (rc && rc.data) sendDataIfOpen(rc.data, Object.assign({}, msg, { peerId: targetId }));
+    return;
+  }
+  handleLogReplyMessage(targetId, msg);
+}
+
+// Dispatch a target's reply (response / entries / end) arriving at the viewer.
+function handleLogReplyMessage(peerId, msg) {
+  if (msg.type === 'log-session-response') onRemoteLogResponse(peerId, !!msg.granted, msg.reason);
+  else if (msg.type === 'log-session-end')  onRemoteLogEnd(peerId, msg.reason);
+  else if (msg.type === 'log-entries')      onRemoteLogEntries(peerId, msg.entries);
+}
+
+// A peer disappeared: end anything pointed at it in both directions.
+function noteLogPeerGone(peerId) {
+  if (!peerId) return;
+  if (_logSharePrompt && _logSharePrompt.requesterId === peerId) dismissLogConsentPrompt();
+  if (_logShare && _logShare.requesterId === peerId) stopLogSharing('peer-gone');
+  var session = _remoteLogSessions.get(peerId);
+  if (session && (session.state === 'requesting' || session.state === 'active')) {
+    onRemoteLogEnd(peerId, 'peer-gone');
+  }
+}
+
+function resetRemoteLogState() {
+  dismissLogConsentPrompt();
+  stopLogSharing('left');
+  _logDeclineCooldown.clear();
+  _remoteLogSessions.forEach(function(s) { if (s.timer) clearTimeout(s.timer); });
+  _remoteLogSessions.clear();
+  closeRemoteLogPanel();
+}
+
+// --- Viewer UI ---------------------------------------------------------------
+
+function _remoteLogButton(label, onClick) {
+  var btn = document.createElement('button');
+  btn.className = 'audio-check-btn remote-log-btn';
+  btn.textContent = label;
+  btn.addEventListener('click', function(e) { e.stopPropagation(); onClick(); });
+  return btn;
+}
+
+// The device-info popover's log section. Sessions live outside the popover, so
+// closing it (which updatePeerList does routinely) never stops a stream.
+function _buildRemoteLogSection(peerId) {
+  var wrap = document.createElement('div');
+  wrap.className = 'remote-log';
+
+  var head = document.createElement('div');
+  head.className = 'di-section';
+  head.textContent = '🪵 Debug logs';
+  wrap.appendChild(head);
+
+  var session = _remoteLogSessions.get(peerId);
+  var state = session ? session.state : 'idle';
+  var count = session ? session.entries.length : 0;
+
+  if (state === 'requesting') {
+    var pending = document.createElement('div');
+    pending.className = 'audio-check-pending';
+    pending.textContent = 'Waiting for them to allow it…';
+    wrap.appendChild(pending);
+    wrap.appendChild(_remoteLogButton('Cancel', function() { stopRemoteLogs(peerId); }));
+    return wrap;
+  }
+
+  if (state === 'active') {
+    var live = document.createElement('div');
+    live.className = 'remote-log-live';
+    live.textContent = '● Streaming — ' + count + ' line' + (count === 1 ? '' : 's');
+    wrap.appendChild(live);
+    wrap.appendChild(_remoteLogButton('Open log', function() { showRemoteLogPanel(peerId); }));
+    wrap.appendChild(_remoteLogButton('Stop', function() { stopRemoteLogs(peerId); }));
+    return wrap;
+  }
+
+  wrap.appendChild(_remoteLogButton(count ? 'Request again' : 'Request debug logs', function() {
+    requestRemoteLogs(peerId);
+  }));
+  if (count) {
+    wrap.appendChild(_remoteLogButton('Open log (' + count + ')', function() { showRemoteLogPanel(peerId); }));
+  }
+  var note = document.createElement('div');
+  note.className = 'remote-log-hint';
+  note.textContent = (session && session.note)
+    ? session.note + ' They must allow it on their device.'
+    : 'They must allow it on their device first.';
+  wrap.appendChild(note);
+  return wrap;
+}
+
+function _refreshRemoteLogUi(peerId, entriesOnly) {
+  if (_remoteLogViewPeerId === peerId) _updateRemoteLogPanelStatus();
+  if (entriesOnly) return;
+  if (_deviceInfoPeerId && _deviceInfoPeerId === peerId) _refreshDeviceInfoPopover();
+}
+
+function showRemoteLogPanel(peerId) {
+  var panel = document.getElementById('remote-log-panel');
+  if (!panel) return;
+  _remoteLogViewPeerId = peerId;
+  var title = document.getElementById('remote-log-title');
+  if (title) title.textContent = '🪵 ' + peerDisplayName(peerId);
+  var entries = document.getElementById('remote-log-entries');
+  if (entries) {
+    entries.innerHTML = '';
+    var session = _remoteLogSessions.get(peerId);
+    (session ? session.entries : []).slice(-REMOTE_LOG_VIEW_MAX).forEach(function(e) {
+      appendDevLogEntryToContainer(entries, e);
+    });
+  }
+  panel.classList.remove('hidden');
+  _updateRemoteLogPanelStatus();
+}
+
+function closeRemoteLogPanel() {
+  var panel = document.getElementById('remote-log-panel');
+  if (panel) panel.classList.add('hidden');
+  _remoteLogViewPeerId = null;
+}
+
+function _appendRemoteLogEntries(entries) {
+  var container = document.getElementById('remote-log-entries');
+  if (!container) return;
+  entries.forEach(function(e) { appendDevLogEntryToContainer(container, e); });
+}
+
+function _updateRemoteLogPanelStatus() {
+  var status = document.getElementById('remote-log-status');
+  if (!status) return;
+  var session = _remoteLogViewPeerId ? _remoteLogSessions.get(_remoteLogViewPeerId) : null;
+  if (!session) { status.textContent = ''; return; }
+  var count = session.entries.length;
+  status.textContent = (session.state === 'active' ? '● live' : session.state === 'requesting' ? 'waiting' : 'ended')
+    + ' · ' + count + ' line' + (count === 1 ? '' : 's');
+  status.classList.toggle('live', session.state === 'active');
+}
+
+function remoteLogAsText(peerId) {
+  var session = _remoteLogSessions.get(peerId);
+  if (!session) return '';
+  return session.entries.map(function(e) {
+    return e.t + '  ' + (e.lvl === 'info' ? '' : e.lvl.toUpperCase() + ' ') + e.msg;
+  }).join('\n');
+}
+
 // The self row has no single peer link, so summarize the WebRTC link stats
 // across all current connections (mean RTT, worst packet loss) — this is what
 // lets the Network section show latency/loss on your own row too.
@@ -4239,6 +4836,7 @@ function _refreshDeviceInfoPopover() {
   }
 
   body.appendChild(_buildAudioCheckSection(_deviceInfoPeerId));
+  body.appendChild(_buildRemoteLogSection(_deviceInfoPeerId));
 }
 
 // "Can you hear me?" — the one thing local stats can never answer.
@@ -6389,6 +6987,7 @@ function setFreeHand(active) {
 function removePeer(peerId) {
   const conn = connections.get(peerId);
   if (!conn) return;
+  noteLogPeerGone(peerId);
   if (conn.data) conn.data.close();
   if (conn.media) conn.media.close();
   if (conn.audioMediaOut) conn.audioMediaOut.close();
@@ -7108,6 +7707,7 @@ function leaveRoom() {
   _hostDebugMode = false;
   _hostJitterMs = null;
   cancelAudioCheck();
+  resetRemoteLogState();
   updateDebugConsentBanner();
   stopHostHeartbeat();
   stopHostHeartbeatMonitor();
@@ -7915,6 +8515,11 @@ function handleJoinerDataConnection(dataConn) {
       } else {
         onAudioCheckResponse(joinerId, msg.report, msg.declined);
       }
+    } else if (msg.type === 'log-session-request' || msg.type === 'log-session-stop') {
+      // Remote debug logs, viewer -> target: answer for the host, else relay on.
+      handleLogControlAtHost(joinerId, msg.peerId || null, msg.type, msg.fromPseudo);
+    } else if (msg.type === 'log-session-response' || msg.type === 'log-session-end' || msg.type === 'log-entries') {
+      handleLogReplyAtHost(joinerId, msg);
     } else if (msg.type === 'device-info-request') {
       // A peer wants someone's device info: answer for the host, else relay to the target.
       handleDeviceInfoRequestAtHost(joinerId, msg.peerId);
@@ -8112,6 +8717,18 @@ function handleHostMessage(msg) {
   }
   if (msg.type === 'audio-check-response') {
     onAudioCheckResponse(msg.peerId, msg.report, msg.declined);
+    return;
+  }
+  if (msg.type === 'log-session-request') {
+    handleLogSessionRequest(msg.from || null, msg.fromPseudo);
+    return;
+  }
+  if (msg.type === 'log-session-stop') {
+    handleLogSessionStop(msg.from || null);
+    return;
+  }
+  if (msg.type === 'log-session-response' || msg.type === 'log-session-end' || msg.type === 'log-entries') {
+    handleLogReplyMessage(msg.peerId, msg);
     return;
   }
   if (msg.type === 'device-info-request') {
@@ -9598,6 +10215,24 @@ window.addEventListener('DOMContentLoaded', function() {
       setDeviceInfoConsent('declined');
       updateDebugConsentBanner();
       syncDeviceShareToggles();
+    });
+  }
+
+  // Remote debug logs: the authorization prompt and the "you are sharing" banner
+  // on the device being read, plus the viewer's log panel.
+  var logAllowBtn = document.getElementById('btn-log-consent-allow');
+  if (logAllowBtn) logAllowBtn.addEventListener('click', function() { acceptLogSessionRequest(); });
+  var logDenyBtn = document.getElementById('btn-log-consent-deny');
+  if (logDenyBtn) logDenyBtn.addEventListener('click', function() { declineLogSessionRequest(); });
+  var logStopBtn = document.getElementById('btn-log-share-stop');
+  if (logStopBtn) logStopBtn.addEventListener('click', function() { stopLogSharing('stopped'); });
+  var logCloseBtn = document.getElementById('btn-close-remote-log');
+  if (logCloseBtn) logCloseBtn.addEventListener('click', function() { closeRemoteLogPanel(); });
+  var logCopyBtn = document.getElementById('btn-copy-remote-log');
+  if (logCopyBtn) {
+    logCopyBtn.addEventListener('click', function() {
+      if (!_remoteLogViewPeerId) return;
+      copyTextToClipboard(remoteLogAsText(_remoteLogViewPeerId), 'Log copied!');
     });
   }
 
