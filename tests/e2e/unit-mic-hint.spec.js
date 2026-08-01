@@ -112,6 +112,9 @@ test.describe('when the hint appears', () => {
       else localStorage.setItem('mic-prompt-count', String(c));
       if (d) localStorage.setItem('mic-hint-dismissed', '1');
       else localStorage.removeItem('mic-hint-dismissed');
+      // The hint only speaks to a session that was actually asked; a silent
+      // grant means the browser is remembering and there is nothing to say.
+      _micPromptedThisSession = true;
       showScreen('room');
       updatePeerList();
     }, [count === undefined ? null : count, !!dismissed]);
@@ -158,6 +161,51 @@ test.describe('when the hint appears', () => {
     expect(box.sticky).toBe('sticky');
   });
 
+  test('stays hidden when this session\'s permission was granted automatically', async ({ page }) => {
+    await spoof(page, UA.iphone);
+    await page.goto('/');
+    await seedRoom(page, { isHost: true, roomCode: 'abc-def' });
+    await page.evaluate(() => {
+      // Prompted plenty in the past — but not this time, which means whatever
+      // they were told to change has worked. Advising them again would be wrong.
+      localStorage.setItem('mic-prompt-count', '7');
+      window.noteMicAcquisition(3000, 'granted');
+      showScreen('room');
+      updatePeerList();
+    });
+    await expect(page.locator('#mic-hint-banner')).toHaveCount(0);
+  });
+
+  test('a real prompt this session brings it back', async ({ page }) => {
+    await spoof(page, UA.iphone);
+    await page.goto('/');
+    await seedRoom(page, { isHost: true, roomCode: 'abc-def' });
+    await page.evaluate(() => {
+      localStorage.setItem('mic-prompt-count', '1'); // this run makes it 2
+      window.noteMicAcquisition(50, 'prompt');
+      showScreen('room');
+      updatePeerList();
+    });
+    await expect(page.locator('#mic-hint-banner')).toBeVisible();
+  });
+
+  test('a silent grant does not resurrect the hint mid-session', async ({ page }) => {
+    await spoof(page, UA.iphone);
+    await page.goto('/');
+    await seedRoom(page, { isHost: true, roomCode: 'abc-def' });
+    const shown = await page.evaluate(() => {
+      localStorage.setItem('mic-prompt-count', '5');
+      showScreen('room');
+      // Several acquisitions, none of which asked — e.g. leaving and rejoining
+      // a room after the grant is held.
+      window.noteMicAcquisition(20, 'granted');
+      window.noteMicAcquisition(20, 'granted');
+      updatePeerList();
+      return !!document.getElementById('mic-hint-banner');
+    });
+    expect(shown).toBe(false);
+  });
+
   test('the sticky row is opaque, so peers cannot show through it', async ({ page }) => {
     await inRoom(page, { count: 2 });
     const c = await page.evaluate(() => ({
@@ -173,6 +221,7 @@ test.describe('when the hint appears', () => {
     await seedRoom(page, { isHost: true, roomCode: 'abc-def' });
     const before = await page.evaluate(() => {
       localStorage.removeItem('mic-prompt-count');
+      _micPromptedThisSession = true;
       showScreen('room');
       updatePeerList();
       return document.getElementById('ptt-btn').getBoundingClientRect().top;
@@ -216,6 +265,7 @@ test.describe('when the hint appears', () => {
     await seedRoom(page, { isHost: true, roomCode: 'abc-def' });
     await page.evaluate(() => {
       localStorage.setItem('mic-prompt-count', '5');
+      _micPromptedThisSession = true;
       showScreen('room');
       updatePeerList();
     });
@@ -361,6 +411,7 @@ test.describe('the Advanced settings toggle', () => {
     await seedRoom(page, { isHost: true, roomCode: 'abc-def' });
     await page.evaluate(() => {
       localStorage.setItem('mic-prompt-count', '3');
+      _micPromptedThisSession = true;
       showScreen('room');
       updatePeerList();
     });
@@ -378,6 +429,7 @@ test.describe('the Advanced settings toggle', () => {
     await page.evaluate(() => {
       localStorage.setItem('mic-prompt-count', '3');
       localStorage.setItem('mic-hint-dismissed', '1');
+      _micPromptedThisSession = true;
       showScreen('room');
       updatePeerList();
     });
@@ -395,6 +447,7 @@ test.describe('the Advanced settings toggle', () => {
     await seedRoom(page, { isHost: true, roomCode: 'abc-def' });
     await page.evaluate(() => {
       localStorage.setItem('mic-prompt-count', '3');
+      _micPromptedThisSession = true;
       showScreen('room');
       updatePeerList();
     });

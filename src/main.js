@@ -5239,10 +5239,23 @@ function micPromptCount() {
   return parseInt(localStorage.getItem(MIC_PROMPT_COUNT_KEY), 10) || 0;
 }
 
+// Was the microphone actually REQUESTED during this page load, or was it already
+// granted when we asked? That is the difference between "your browser keeps
+// forgetting" and "your browser is doing its job", and it gates the hint
+// entirely: someone whose grant is now remembered must not be told how to make
+// it stick, however many times they were prompted in the past.
+//
+// Per page load on purpose — it is exactly the question the user asked, and on
+// iOS the answer legitimately changes between one reload and the next.
+var _micPromptedThisSession = false;
+
 function shouldShowMicPermissionHint() {
   if (!micPermissionHint()) return false;
   if (IS_TINY_EMBED) return false; // nowhere to put it, and not the embedder's problem
   if (localStorage.getItem(MIC_HINT_DISMISSED_KEY)) return false;
+  // Granted without asking — there is nothing to fix, so say nothing. This is
+  // what stops the hint outliving the setting change that solved it.
+  if (!_micPromptedThisSession) return false;
   // One prompt is just a first visit working as designed. Two separate ones mean
   // the browser is not keeping the grant, which is the only case worth a word.
   return micPromptCount() >= 2;
@@ -5260,6 +5273,7 @@ function noteMicAcquisition(elapsedMs, stateBefore) {
   else prompted = elapsedMs >= MIC_PROMPT_MIN_MS;      // 'unknown' → guess from timing
 
   if (!prompted) return;
+  _micPromptedThisSession = true;
   localStorage.setItem(MIC_PROMPT_COUNT_KEY, String(micPromptCount() + 1));
   renderMicPermissionHint();
 }
