@@ -2064,6 +2064,8 @@ input[type="password"]:focus { border-color: var(--accent); }
   padding: 10px 12px;
   font-size: 12px;
   white-space: nowrap;
+  /* Deliberately BELOW .modal (400): it is anchored to the topbar, which the
+     settings modal covers. openSettings() also closes it outright. */
   z-index: 200;
   box-shadow: 0 4px 20px rgba(0,0,0,0.45);
 }
@@ -2081,7 +2083,10 @@ input[type="password"]:focus { border-color: var(--accent); }
   border-radius: 8px;
   padding: 8px 12px;
   font-size: 11px;
-  z-index: 300;
+  /* Appended to <body>, so it is a SIBLING of .modal rather than a child — and
+     it is anchored to #turn-test-status, which lives inside the settings modal.
+     It therefore has to outrank .modal (400) to be visible at all. */
+  z-index: 500;
   box-shadow: 0 4px 20px rgba(0,0,0,0.45);
   max-width: 340px;
 }
@@ -2123,7 +2128,11 @@ input[type="password"]:focus { border-color: var(--accent); }
 .modal {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  /* Above the topbar popovers (.conn-status-popover 200, .turn-servers-popover
+     300), which used to paint straight through the settings modal on web. Still
+     below the toast (9999) and the dev-log panel (9000), which are meant to sit
+     on top of everything. */
+  z-index: 400;
   display: flex;
   align-items: center;
   justify-content: center;

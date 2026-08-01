@@ -111,6 +111,19 @@ Always call `getMicStream()`, not `navigator.mediaDevices.getUserMedia` directly
 | `anon-turn-url` | `ANON_TURN_URL_KEY` | Override for the anonymous TURN credential endpoint (default: same-origin `/api/ice-servers` on web) |
 | `peerjs-server` | — | PeerJS broker override (`peerServerOptions()`); test/self-host only |
 | `theme` | `THEME_KEY` | `dark` / `light` / `system` |
+| `echo-test-request` | `ECHO_BRIDGE_REQUEST_KEY` | Transient. Desktop preferences window → main window: `{action:'start'\|'stop', at}` (see below) |
+| `echo-test-state` | `ECHO_BRIDGE_STATE_KEY` | Transient. Main window → preferences window: `{running, text, kind, at}` |
+
+### Cross-window command bridge (desktop)
+
+`settings.html` cannot run the network ("Test over network") echo test — it has no
+module system, so `fetchIceServers()`, `opusSdpTransform()` and the RNNoise
+capture path do not exist there. Instead it writes a request to
+`echo-test-request`; the main window's `storage` listener runs the real
+implementation and publishes progress to `echo-test-state`, which the
+preferences window mirrors. Note a `storage` event never fires in the window
+that wrote the value, and writing an identical value fires nothing — hence the
+`at` timestamp and the writer's optimistic render.
 
 ### Theme
 Applied before first paint via inline `<script>` at the top of both HTML files. `data-theme` on `<html>`. Dark is the default; light overrides via `html[data-theme="light"]`; system uses `@media (prefers-color-scheme: light) { html[data-theme="system"] }`.

@@ -212,13 +212,20 @@
           <!-- The network echo test needs fetchIceServers(), opusSdpTransform()
                and the RNNoise capture path, none of which exist in this window
                (no module system — everything here is duplicated by hand). Rather
-               than fork ~400 lines including a WASM worklet, point at the main
-               window, which has the real implementation. -->
-          <p class="settings-hint" style="margin-top:10px">
-            <strong>Test over network</strong> — hear what you actually sound like
-            to others, after Opus encoding and a round trip through the relay. Run
-            it from the main Voxal window (⚙ → Audio).
+               than fork ~400 lines including a WASM worklet, ASK the main window
+               to run the real implementation over the localStorage bridge and
+               mirror its state here. Pointing the user at the main window was not
+               an option: on desktop its settings gear is hidden, so there is no
+               "⚙ → Audio" to go to and the test was simply unreachable. -->
+          <div class="settings-test-row echo-test-row">
+            <button id="btn-test-echo" type="button" class="btn btn-secondary btn-sm">Test over network</button>
+          </div>
+          <p class="settings-hint">
+            Sends your voice out over the network and back through a relay, then
+            replays what came back — so you hear what others actually hear, not
+            just your raw microphone. Runs in the main Voxal window.
           </p>
+          <div id="echo-test-status" class="echo-test-status hidden"></div>
         </div>
         <p class="settings-subtitle">Noise suppression</p>
         <div class="noise-card-group" id="noise-suppression-group" role="radiogroup" aria-label="Noise suppression mode">
@@ -1304,6 +1311,53 @@
 
       $id('btn-test-turn').addEventListener('click', testTurn);
       $id('btn-test-mic').addEventListener('click', toggleMicTest);
+
+      // --- Network test, executed by the main window -------------------------
+      //
+      // See the markup comment: this window cannot run it. It sends a request
+      // and mirrors whatever the main window reports. Keys and class names are
+      // duplicated from main.js because there is no module system here.
+      var ECHO_BRIDGE_REQUEST_KEY = 'echo-test-request';
+      var ECHO_BRIDGE_STATE_KEY   = 'echo-test-state';
+      var _echoRemoteRunning = false;
+
+      function renderEchoState(state) {
+        _echoRemoteRunning = !!(state && state.running);
+        var btn = $id('btn-test-echo');
+        if (btn) btn.textContent = _echoRemoteRunning ? 'Stop & Replay' : 'Test over network';
+        var el = $id('echo-test-status');
+        if (!el) return;
+        var text = state && state.text ? state.text : '';
+        el.textContent = text;
+        el.className = 'echo-test-status' + (state && state.kind ? ' ac-' + state.kind : '');
+        el.classList.toggle('hidden', !text);
+      }
+
+      $id('btn-test-echo').addEventListener('click', function() {
+        // Both windows would otherwise be capturing at once, and the result
+        // would be unrepresentative of either.
+        stopMicTest();
+        var action = _echoRemoteRunning ? 'stop' : 'start';
+        // A storage event does NOT fire in the window that wrote the value, so
+        // until the main window answers this optimistic render is the only
+        // feedback the click gets.
+        renderEchoState({
+          running: action === 'start',
+          text: action === 'start' ? 'Starting in the main window…' : 'Stopping…',
+        });
+        try {
+          // `at` keeps consecutive requests distinct — writing an identical
+          // value would not fire a storage event at all.
+          localStorage.setItem(ECHO_BRIDGE_REQUEST_KEY,
+            JSON.stringify({ action: action, at: Date.now() }));
+        } catch (_) {}
+      });
+
+      window.addEventListener('storage', function(e) {
+        if (e.key !== ECHO_BRIDGE_STATE_KEY) return;
+        try { renderEchoState(JSON.parse(e.newValue || 'null')); } catch (_) {}
+      });
+
       $id('btn-test-speaker').addEventListener('click', function() { testSpeakerOutput().catch(function(e) { console.warn('[Speaker test]', e.message); }); });
       $id('btn-preview-camera').addEventListener('click', toggleCameraPreview);
       $id('btn-disconnect').addEventListener('click', disconnect);
