@@ -217,6 +217,7 @@ Use Python string replacement scripts for multi-line patches to avoid manual err
 ## Workflow
 
 - Suggest a commit message in the final response only when the current turn actually changed repository files.
+- **Open a pull request for every significant piece of work.** Pushing the branch is not the deliverable — if there is no PR for the work, open one. A **merged** PR is finished and cannot track follow-ups: restart the branch from the latest `main` (keeping the branch name, rebasing any unmerged commits onto it) and open a *new* PR. Fill in `.github/PULL_REQUEST_TEMPLATE.md` rather than writing a free-form body.
 - **Node 24 + Playwright 1.60** emits `DEP0205` (`module.register()` deprecated) from Playwright internals during `playwright test`. This is upstream noise, not app code. `package.json` suppresses only that code via `NODE_OPTIONS=--disable-warning=DEP0205` in `test:e2e`.
 
 ## Host migration refactor
