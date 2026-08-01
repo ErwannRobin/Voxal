@@ -36,3 +36,6 @@ playwright-report
 .devtools-workspace-uuid
 src/.well-known/appspecific/com.chrome.devtools.json
 
+# Generated at build/deploy time (make build-web, Vercel buildCommand)
+src/build-info.js
+

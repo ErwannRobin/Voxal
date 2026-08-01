@@ -1,4 +1,4 @@
-.PHONY: help run run-web dev debug build build-debug build-signed build-web install clean lint check test \
+.PHONY: help run run-web gen-build-info dev debug build build-debug build-signed build-web install clean lint check test \
         test-rust test-api test-e2e test-mesh coverage coverage-rust coverage-e2e \
         cap-sync cap-ios cap-android build-android docs release release-official release-core
 
@@ -91,7 +91,14 @@ build-debug:
 
 # ── Web ───────────────────────────────────────────────────────────────────────
 
-run-web:
+# Mirrors the build-info.js Vercel generates via vercel.json's buildCommand
+# (deployed src/ is served as-is, with no `make` step — see vercel.json).
+gen-build-info:
+	@COMMIT=$$(git rev-parse --short HEAD); \
+	BUILD_DATE=$$(date -u +%FT%TZ); \
+	echo "window.VOXAL_COMMIT='$$COMMIT';window.VOXAL_WEB_BUILD_DATE='$$BUILD_DATE';" > src/build-info.js
+
+run-web: gen-build-info
 	@command -v npx >/dev/null 2>&1 || { echo "npx not found — install Node.js"; exit 1; }
 	@mkdir -p src/.well-known/appspecific
 	@[ -f .devtools-workspace-uuid ] || uuidgen > .devtools-workspace-uuid
@@ -100,17 +107,15 @@ run-web:
 	@echo "Serving web app on http://localhost:8080"
 	npx --yes serve src -l 8080
 
-build-web:
+build-web: gen-build-info
 	mkdir -p dist
 	cp -r src/* dist/
-	@COMMIT=$$(git rev-parse --short HEAD); \
-	BUILD_DATE=$$(date -u +%FT%TZ); \
-	echo "window.VOXAL_COMMIT='$$COMMIT';window.VOXAL_WEB_BUILD_DATE='$$BUILD_DATE';" > dist/build-info.js
 	@echo "Web app copied to dist/"
 
 # ── Mobile (Capacitor) ────────────────────────────────────────────────────────
 
 cap-sync:
+	@rm -f src/build-info.js
 	npx cap sync
 
 cap-ios: cap-sync
