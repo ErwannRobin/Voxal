@@ -2204,6 +2204,7 @@ input[type="password"]:focus { border-color: var(--accent); }
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transition: transform 0.2s ease;
 }
 
 @media (max-width: 640px) {
@@ -2226,10 +2227,40 @@ input[type="password"]:focus { border-color: var(--accent); }
     border-radius: 0;
     border-left: none;
     border-right: none;
+    /* Bottom sheet: rests off-screen below the viewport; JS adds
+       .modal-sheet-open on the next frame after un-hiding so this actually
+       transitions instead of popping straight to its final position, and
+       removes it before the delayed .hidden so the close mirrors the open. */
+    transform: translateY(100%);
+    transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .modal-content.modal-sheet-open {
+    transform: translateY(0);
   }
 
   .modal-settings-scrollable {
     padding: 16px 20px;
+  }
+
+  /* The status bar / dynamic island overlay the webview (Capacitor
+     StatusBar.setOverlaysWebView), so the fixed header needs its own inset —
+     the surrounding 100dvh content already accounts for the safe area, but
+     nothing was pushing the header itself below the notch. Specificity is
+     bumped with the #modal-settings ancestor because the unqualified
+     .modal-header/.modal-footer base rules further down this file would
+     otherwise win on source order alone and cancel this out. */
+  #modal-settings .modal-header {
+    padding-top: max(calc(env(safe-area-inset-top) + 16px), 16px);
+  }
+
+  #modal-settings .modal-footer {
+    padding-bottom: max(calc(env(safe-area-inset-bottom) + 12px), 12px);
+  }
+
+  #btn-close-settings-footer {
+    padding: 13px 24px;
+    font-size: 15px;
+    flex-shrink: 0;
   }
 }
 

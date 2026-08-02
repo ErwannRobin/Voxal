@@ -10058,7 +10058,7 @@ window.addEventListener('DOMContentLoaded', function() {
     initModalSettingsSidebar();
     // Populate About section
     initAboutSection('about-version-modal', 'about-build-date-modal');
-    $('modal-settings').classList.remove('hidden');
+    showSettingsModal();
     if (presenceToken()) loadOrgs();
   }
   function closeSettings() {
@@ -10066,8 +10066,75 @@ window.addEventListener('DOMContentLoaded', function() {
     stopCameraPreview();
     var speakerStatus = $('speaker-test-status');
     if (speakerStatus) speakerStatus.textContent = '';
-    $('modal-settings').classList.add('hidden');
+    hideSettingsModal();
     startPresencePolling(); // refresh in case org changed
+  }
+
+  // Below 640px .modal-content is a bottom sheet (see styles.css); everywhere
+  // else these are a plain instant show/hide, unchanged from before.
+  const SETTINGS_SHEET_TRANSITION_MS = 300;
+  function isSettingsSheetLayout() { return window.matchMedia('(max-width: 640px)').matches; }
+  function showSettingsModal() {
+    var modalEl = $('modal-settings');
+    var contentEl = modalEl.querySelector('.modal-content');
+    modalEl.classList.remove('hidden');
+    if (contentEl && isSettingsSheetLayout()) {
+      contentEl.classList.remove('modal-sheet-open'); // rest at translateY(100%) for one frame
+      requestAnimationFrame(function() {
+        requestAnimationFrame(function() { contentEl.classList.add('modal-sheet-open'); });
+      });
+    }
+  }
+  function hideSettingsModal() {
+    var modalEl = $('modal-settings');
+    var contentEl = modalEl.querySelector('.modal-content');
+    if (contentEl && isSettingsSheetLayout()) {
+      contentEl.classList.remove('modal-sheet-open'); // slide back down
+      setTimeout(function() { modalEl.classList.add('hidden'); }, SETTINGS_SHEET_TRANSITION_MS);
+    } else {
+      modalEl.classList.add('hidden');
+    }
+  }
+
+  // Swipe-down-to-dismiss for the full-screen mobile settings sheet. Only
+  // starts tracking when the inner scroller is already at its top — otherwise
+  // the first pixel of a downward swipe would hijack an ordinary scroll-up
+  // gesture inside a long settings section.
+  const SETTINGS_SWIPE_CLOSE_PX = 120;
+  function setupSettingsSwipeToClose() {
+    var content = document.querySelector('#modal-settings .modal-content');
+    var scroller = document.querySelector('#modal-settings .modal-settings-scrollable');
+    var backdrop = $('modal-backdrop');
+    if (!content || !scroller) return;
+    var startY = 0, dy = 0, tracking = false;
+
+    content.addEventListener('touchstart', function(e) {
+      if (e.touches.length !== 1) return;
+      tracking = scroller.scrollTop <= 0;
+      startY = e.touches[0].clientY;
+      dy = 0;
+      content.style.transition = 'none';
+    }, { passive: true });
+
+    content.addEventListener('touchmove', function(e) {
+      if (!tracking) return;
+      dy = e.touches[0].clientY - startY;
+      if (dy <= 0) { dy = 0; content.style.transform = ''; if (backdrop) backdrop.style.opacity = ''; return; }
+      content.style.transform = 'translateY(' + dy + 'px)';
+      if (backdrop) backdrop.style.opacity = String(Math.max(0, 1 - dy / 300));
+    }, { passive: true });
+
+    var finish = function() {
+      if (!tracking) return;
+      tracking = false;
+      content.style.transition = '';
+      content.style.transform = '';
+      if (backdrop) backdrop.style.opacity = '';
+      if (dy > SETTINGS_SWIPE_CLOSE_PX) closeSettings();
+      dy = 0;
+    };
+    content.addEventListener('touchend', finish);
+    content.addEventListener('touchcancel', finish);
   }
 
   function disconnectAccount() {
@@ -10217,6 +10284,7 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-close-settings').addEventListener('click', closeSettings);
   $('btn-close-settings-footer').addEventListener('click', closeSettings);
   $('modal-backdrop').addEventListener('click', closeSettings);
+  setupSettingsSwipeToClose();
   $('btn-test-turn').addEventListener('click', testTurnCredentials);
   var btnMicTest = $('btn-test-mic');
   if (btnMicTest) btnMicTest.addEventListener('click', toggleMicTest);

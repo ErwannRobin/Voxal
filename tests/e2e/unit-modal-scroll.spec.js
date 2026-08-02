@@ -38,6 +38,10 @@ test('mobile: header/footer stay pinned and the middle scrolls with a big sectio
   await page.goto('/');
   await page.evaluate(() => {
     document.getElementById('modal-settings').classList.remove('hidden');
+    // Below 640px .modal-content is a bottom sheet that rests translateY(100%)
+    // until showSettingsModal() adds this class — add it directly since this
+    // test is asserting final rendered geometry, not the open transition.
+    document.querySelector('#modal-settings .modal-content').classList.add('modal-sheet-open');
     if (typeof initModalSettingsSidebar === 'function') initModalSettingsSidebar();
     const d = document.getElementById('turn-details'); // Advanced — the tall section
     if (d) d.open = true;
