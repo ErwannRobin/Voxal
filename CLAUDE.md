@@ -131,4 +131,4 @@ that wrote the value, and writing an identical value fires nothing — hence the
 Applied before first paint via inline `<script>` at the top of both HTML files. `data-theme` on `<html>`. Dark is the default; light overrides via `html[data-theme="light"]`; system uses `@media (prefers-color-scheme: light) { html[data-theme="system"] }`.
 
 ### Release versioning
-`make release VERSION=x.y.z` syncs version across `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `src/version.js`, and `android/app/build.gradle` (also increments `versionCode`). Omit `VERSION` to auto-bump the patch.
+`make release VERSION=x.y.z` syncs version across `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `src/version.js`, `android/app/build.gradle` (also increments `versionCode`), and `ios/App/App.xcodeproj/project.pbxproj` (`MARKETING_VERSION`; also increments `CURRENT_PROJECT_VERSION`). Omit `VERSION` to auto-bump the patch.

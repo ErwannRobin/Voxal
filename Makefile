@@ -1,6 +1,6 @@
 .PHONY: help run run-web gen-build-info dev debug build build-debug build-signed build-web install clean lint check test \
         test-rust test-api test-e2e test-mesh coverage coverage-rust coverage-e2e \
-        cap-sync cap-ios cap-android build-android docs release release-official release-core
+        cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version
 
 # Default target
 help:
@@ -21,6 +21,7 @@ help:
 	@echo "  install      Check prereqs, then install npm + Rust dependencies"
 	@echo "  release      Build signed release and publish to GitHub (ad-hoc DMG signature allowed)"
 	@echo "  release-official Same as release, but refuses an ad-hoc-signed DMG (requires Developer ID)"
+	@echo "  sync-version Sync package.json/Cargo.toml/version.js/Android/iOS to tauri.conf.json's version (no bump, no commit)"
 	@echo "  docs         Serve architecture flow docs on http://localhost:8090"
 	@echo "  check        Run Rust type-check (no binary)"
 	@echo "  test         Run all test suites (check + Rust tests + Playwright)"
@@ -219,11 +220,15 @@ release-core:
 	if [ "$$NEW_VERSION" != "$$CURRENT_VERSION" ]; then \
 		perl -i -pe 's/^(\s*versionCode\s+)(\d+)/$$1.($$2+1)/e' android/app/build.gradle; \
 	fi; \
-	echo "→ Updated package.json, tauri.conf.json, Cargo.toml, version.js, and Android version fields"; \
+	NEW_VERSION="$$NEW_VERSION" perl -i -pe 's/(MARKETING_VERSION = )[^;]+;/$$1.$$ENV{NEW_VERSION}.";"/e' ios/App/App.xcodeproj/project.pbxproj; \
+	if [ "$$NEW_VERSION" != "$$CURRENT_VERSION" ]; then \
+		perl -i -pe 's/(CURRENT_PROJECT_VERSION = )(\d+);/$$1.($$2+1).";"/e' ios/App/App.xcodeproj/project.pbxproj; \
+	fi; \
+	echo "→ Updated package.json, tauri.conf.json, Cargo.toml, version.js, Android, and iOS version fields"; \
 	VERSION="$$NEW_VERSION"; \
-	if ! git diff --quiet -- package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src/version.js android/app/build.gradle; then \
+	if ! git diff --quiet -- package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src/version.js android/app/build.gradle ios/App/App.xcodeproj/project.pbxproj; then \
 		echo "→ Committing and pushing version bump…"; \
-		git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src/version.js android/app/build.gradle; \
+		git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src/version.js android/app/build.gradle ios/App/App.xcodeproj/project.pbxproj; \
 		git commit -m "publish new release $$VERSION"; \
 		git push; \
 	fi; \
@@ -273,6 +278,16 @@ release-core:
 		--title "Voxal v$$VERSION" \
 		--generate-notes; \
 	echo "✓ Published v$$VERSION to GitHub Releases (desktop + mobile OTA)"
+
+sync-version:
+	@CURRENT_VERSION=$$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*: *"//;s/".*//'); \
+	echo "→ Syncing all platforms to version $$CURRENT_VERSION"; \
+	NEW_VERSION="$$CURRENT_VERSION" perl -i -pe 's/("version"\s*:\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e' package.json; \
+	NEW_VERSION="$$CURRENT_VERSION" perl -i -pe 's/^(version\s*=\s*")[^"]+(")/$$1.$$ENV{NEW_VERSION}.$$2/e' src-tauri/Cargo.toml; \
+	NEW_VERSION="$$CURRENT_VERSION" perl -i -pe "s/^(const VOXAL_VERSION\\s*=\\s*')[^']+(';)/\$$1.\$$ENV{NEW_VERSION}.\$$2/e" src/version.js; \
+	NEW_VERSION="$$CURRENT_VERSION" perl -i -pe 's/^(\s*versionName\s+)"[^"]+"/$$1 . "\"" . $$ENV{NEW_VERSION} . "\""/e' android/app/build.gradle; \
+	NEW_VERSION="$$CURRENT_VERSION" perl -i -pe 's/(MARKETING_VERSION = )[^;]+;/$$1.$$ENV{NEW_VERSION}.";"/e' ios/App/App.xcodeproj/project.pbxproj; \
+	echo "✓ Synced package.json, Cargo.toml, version.js, Android, and iOS to $$CURRENT_VERSION"
 
 check:
 	cd src-tauri && cargo check
