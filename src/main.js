@@ -1325,22 +1325,29 @@ function currentRoomPeerCount() {
   return inRoom ? (1 + connections.size) : 0;
 }
 
+// The *public* identifier of the room we are in: a published lobby slug or the
+// channel's own associated code. Deliberately not the PeerJS peer id — that is
+// already carried by `peer_id`, and a session that advertises it as `room_id`
+// gets it echoed straight back into activeChannelRoomId, replacing the channel
+// name in the header with a random UUID (see publicAssociatedRoomId).
 function currentPresenceRoomId() {
-  return activeChannelRoomId || _publishedRoomId || (roomCode || '');
+  return activeChannelRoomId || _publishedRoomId || '';
 }
 
 function buildPresenceSessionPayload(peerId) {
-  return {
-    room_id: currentPresenceRoomId(),
+  var payload = {
     peer_count: currentRoomPeerCount() || hostPresencePeerCount(),
     deputy_peer_id: currentDeputyId() || null
   };
+  var publicRoomId = currentPresenceRoomId();
+  if (publicRoomId) payload.room_id = publicRoomId;
+  return payload;
 }
 
 function syncPresenceChannelSession() {
   if (!isHost || !inRoom || !peer || !activeChannel || !presenceConfigured()) return;
   postSession(activeChannel, peer.id, buildPresenceSessionPayload(peer.id)).then(function(data) {
-    var associated = associatedRoomIdFromSessionResponse(data);
+    var associated = publicAssociatedRoomId(associatedRoomIdFromSessionResponse(data));
     if (!associated || associated === activeChannelRoomId) return;
     activeChannelRoomId = associated;
     updateRoomHeader();
@@ -2347,6 +2354,23 @@ function associatedRoomIdFromPresenceItem(item) {
     if (candidate) return candidate;
   }
   return '';
+}
+
+// Filter for room ids we are willing to *adopt* as the room's display code.
+// A presence session's room_id is meant to be a named, shareable code (a lobby
+// slug or a channel's own room code). A bare peer id is not: presence backends
+// echo the posted session row back, and clients used to post their PeerJS id as
+// room_id, so adopting it turned a named channel into a UUID in the room header
+// the moment the session registered — the room looked like a fresh anonymous
+// one. The rest of the app already treats UUID-valued codes as unshareable
+// (saveRejoinSnapshot, recordRecentRoom).
+function publicAssociatedRoomId(candidate) {
+  var id = String(candidate || '').trim();
+  if (!id) return '';
+  if (UUID_RE.test(id)) return '';
+  if (peer && peer.id && id === peer.id) return '';
+  if (roomCode && id === roomCode) return '';
+  return id;
 }
 
 function associatedRoomIdFromSessionResponse(payload) {
@@ -9226,10 +9250,10 @@ async function selectOrgAndStartPolling() {
 async function joinChannel(item) {
   const connected    = item.connected || [];
   activeChannel      = item.channel.name;
-  activeChannelRoomId = associatedRoomIdFromPresenceItem(item);
+  activeChannelRoomId = publicAssociatedRoomId(associatedRoomIdFromPresenceItem(item));
   const postPresence = function(peerId) {
     postSession(activeChannel, peerId, buildPresenceSessionPayload(peerId)).then(function(data) {
-      var associated = associatedRoomIdFromSessionResponse(data);
+      var associated = publicAssociatedRoomId(associatedRoomIdFromSessionResponse(data));
       if (associated && associated !== activeChannelRoomId) {
         activeChannelRoomId = associated;
         updateRoomHeader();
@@ -10569,7 +10593,7 @@ window.addEventListener('DOMContentLoaded', function() {
         createRoom(function(peerId) {
           if (!activeChannel || !presenceConfigured()) return;
           postSession(activeChannel, peerId, buildPresenceSessionPayload(peerId)).then(function(data) {
-            var associated = associatedRoomIdFromSessionResponse(data);
+            var associated = publicAssociatedRoomId(associatedRoomIdFromSessionResponse(data));
             if (associated && associated !== activeChannelRoomId) {
               activeChannelRoomId = associated;
               updateRoomHeader();
