@@ -523,6 +523,7 @@
       const CAMERA_DEVICE_KEY       = 'camera-device-id';
       const SPEAKER_DEVICE_KEY      = 'speaker-device-id';
       const DEVICE_LABELS_KEY       = 'media-device-labels';
+      const ROOM_ACTIVE_KEY         = 'room-active'; // written by main.js while in a call
       const VOXAL_CONNECT_URL       = 'https://voxal.app';
       const FALLBACK_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
@@ -703,8 +704,16 @@
         setActive(activeId);
         applyVisibility();
       }
+      // Must mirror getNoiseSuppressionMode() in main.js — this window has no
+      // module system, so the default is duplicated rather than imported. This
+      // one is always desktop (it only exists as the Tauri preferences window),
+      // so the mobile branch of that function can never apply here; spelling it
+      // out anyway keeps the two from silently drifting apart.
       function syncNoiseSuppressionControls() {
-        var mode = localStorage.getItem(NOISE_SUPPRESSION_KEY) || 'rnnoise';
+        var IS_MOBILE_DEVICE = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+          (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform));
+        var mode = localStorage.getItem(NOISE_SUPPRESSION_KEY) ||
+          (IS_MOBILE_DEVICE ? 'browser' : 'rnnoise');
         document.querySelectorAll('input[name="noise-suppression-mode"]').forEach(function(input) {
           input.checked = (input.value === mode);
         });
@@ -782,17 +791,37 @@
                hasNamedDeviceKind(devices, labelMap, 'videoinput');
       }
 
+      function isRoomActive() {
+        try { return !!localStorage.getItem(ROOM_ACTIVE_KEY); } catch (_) { return true; }
+      }
+
+      // NEVER run while a call is live. This window is a separate WebView, and a
+      // getUserMedia here reconfigures the shared capture session — on macOS that
+      // tore down the main window's live mic AND camera tracks, so simply opening
+      // Preferences mid-call killed the call. Generic device names ("Microphone 1")
+      // are a trivial cost next to that; the probe re-runs once the room ends.
+      //
+      // It also asks only for the kinds whose labels are actually missing: the
+      // previous unconditional {audio:true, video:true} lit the camera to fix a
+      // microphone name.
       async function probeMediaLabelsIfNeeded(devices, labelMap) {
         if (_mediaLabelProbeTried) return;
         if (hasInputLabels(devices, labelMap)) return;
         if (!window.__TAURI__) return; // Keep this behavior desktop-only
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+        if (isRoomActive()) return;    // deferred, NOT marked tried — retry after the call
+
+        var need = {
+          audio: !hasNamedDeviceKind(devices, labelMap, 'audioinput'),
+          video: !hasNamedDeviceKind(devices, labelMap, 'videoinput'),
+        };
+        if (!need.audio && !need.video) return;
         _mediaLabelProbeTried = true;
 
         try {
           // In Tauri, preferences runs in a separate WebView; labels may remain blank
           // until this window itself gets media permission once.
-          var probe = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+          var probe = await navigator.mediaDevices.getUserMedia(need);
           probe.getTracks().forEach(function(t) { t.stop(); });
         } catch (_) {
           // Permission denied or missing camera/mic is fine; we still keep generic labels.
@@ -1354,6 +1383,12 @@
       });
 
       window.addEventListener('storage', function(e) {
+        if (e.key === ROOM_ACTIVE_KEY && !e.newValue) {
+          // Call ended — the label probe is safe again, and this window has been
+          // showing generic device names for as long as the room lasted.
+          refreshMediaDeviceSelectors();
+          return;
+        }
         if (e.key !== ECHO_BRIDGE_STATE_KEY) return;
         try { renderEchoState(JSON.parse(e.newValue || 'null')); } catch (_) {}
       });

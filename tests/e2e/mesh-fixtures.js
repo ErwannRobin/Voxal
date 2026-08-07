@@ -48,8 +48,12 @@ export const test = base.extend({
             localStorage.setItem('peerjs-server', JSON.stringify(cfg.server));
             localStorage.setItem('pseudo', cfg.pseudo);
             sessionStorage.setItem('pseudo', cfg.pseudo);
+            // Extra settings this peer should start with. Seeded before load
+            // because several are read once, at load or at first mic
+            // acquisition (noise-suppression, mic-device-id, …).
+            Object.entries(cfg.storage || {}).forEach(([k, v]) => localStorage.setItem(k, v));
           },
-          { server: broker, pseudo }
+          { server: broker, pseudo, storage: opts.storage }
         );
         await startCoverage(page);
         await page.goto('/');

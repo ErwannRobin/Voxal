@@ -95,6 +95,10 @@ Auth token + org ID stored in `localStorage`. All API calls go through `presence
 ### Microphone access
 Always call `getMicStream()`, not `navigator.mediaDevices.getUserMedia` directly. With "join muted" mode, `stream` is `null` until first speak — use `connectOutgoingAudioToPeers()` (not raw `peer.call`) for outgoing audio at join time.
 
+Release a `getMicStream()` result with **`stopMicStreamFully(stream)`**, never `stream.getTracks().forEach(t => t.stop())`. On the RNNoise path the returned stream is a graph *destination*: stopping its tracks leaves the real microphone (`_rnnoiseOriginal`) running and the source node summed into the shared worklet.
+
+A setting that `getMicStream()` reads (`noise-suppression`, `mic-device-id`) is only sampled at acquisition, so changing one mid-call does nothing on its own — call **`reacquireMicForRoom()`** after writing it. It re-acquires and `replaceTrack`s every live sender without renegotiating, and is a no-op outside a room.
+
 ### localStorage keys (defined as constants at top of `main.js`, duplicated in `settings.html`)
 
 | Key | Constant | Purpose |
@@ -113,6 +117,9 @@ Always call `getMicStream()`, not `navigator.mediaDevices.getUserMedia` directly
 | `theme` | `THEME_KEY` | `dark` / `light` / `system` |
 | `mic-prompt-count` | `MIC_PROMPT_COUNT_KEY` | How many separate visits made the user answer a mic prompt (drives the persistence hint) |
 | `mic-hint-dismissed` | `MIC_HINT_DISMISSED_KEY` | Hides that hint. Written by both its ✕ and the Settings → Advanced toggle, via `setMicHintEnabled()` |
+| `noise-suppression` | `NOISE_SUPPRESSION_KEY` | `rnnoise` / `browser` / `off`. A change re-acquires the mic live via `reacquireMicForRoom()` |
+| `mic-device-id` | `MIC_DEVICE_KEY` | Selected microphone; same live re-acquire on change |
+| `room-active` | `ROOM_ACTIVE_KEY` | Transient. Main window → preferences window: a call is live, so `settings.html` must not run its `getUserMedia` device-label probe (it would kill the call). Cleared on leave and on load |
 | `echo-test-request` | `ECHO_BRIDGE_REQUEST_KEY` | Transient. Desktop preferences window → main window: `{action:'start'\|'stop', at}` (see below) |
 | `echo-test-state` | `ECHO_BRIDGE_STATE_KEY` | Transient. Main window → preferences window: `{running, text, kind, at}` |
 

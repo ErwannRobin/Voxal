@@ -128,6 +128,47 @@ deputy crashing together converges on the next successor`.
   (crash + graceful kill paths); host + deputy crashing together → walks the
   successor chain. The migration cases regression-guard the split-brain fix above.
 
+## ✅ Fixed: RNNoise chop, settings not applying live, and Preferences killing calls
+
+Three reported bugs, four root causes, all in the microphone pipeline:
+
+1. **"Remote peers hear heavy chop on RNNoise, whatever the device."**
+   `rnnoise-processor.js` had no output FIFO. RNNoise emits 480-sample frames,
+   `process()` must deliver 128-sample blocks, and 480 isn't a multiple of 128 —
+   so it ran dry every few blocks and zero-filled: **5.07% of the outgoing audio
+   was silence, in 75 dropouts/second**, identical on every device and audible
+   only to the *listener*. Replaced with a ring FIFO + 2-frame (20 ms) pre-fill →
+   measured 0 dropouts. This also **supersedes the "RNNoise sizzles on mobile
+   because WebViews lack headroom" diagnosis** — see `learning.md`.
+2. **"Changing the noise setting only applies next session."** Both the
+   `noise-suppression` and `mic-device-id` handlers just wrote `localStorage`,
+   and those values are only read inside `getMicStream()` (once per join). Added
+   `reacquireMicForRoom()` + `replaceOutgoingAudioTrack()` (`sender.replaceTrack`,
+   no renegotiation), wired to both windows, and added the two keys to the
+   `storage` listener's `relevantKeys`.
+3. **"Opening Settings during a call stops audio and video."** `settings.html`'s
+   device-label probe ran `getUserMedia({audio:true, video:true})` from the
+   *separate* preferences WebView at window load; on macOS that reconfigures and
+   then tears down the shared capture session, taking the main window's live
+   tracks with it. Now skipped while `room-active` is set, and narrowed to only
+   the device kinds whose labels are missing.
+4. **(Found while tracing) The RNNoise graph was never torn down.**
+   `_rnnoiseSource`/`_rnnoiseDest`/`_rnnoiseOriginal` had one write site and zero
+   read sites repo-wide, so the raw mic behind the graph kept running after every
+   call and each acquisition summed another source into the shared worklet node.
+   Added `stopMicStreamFully()` and wired every discard site.
+
+Regression-guarded by `tests/e2e/unit-rnnoise-worklet.spec.js` (loads the real
+worklet, stubs only the WASM surface — 3 of 6 cases fail against the pre-fix
+file), `tests/e2e/unit-mic-hotswap.spec.js` (15 cases), and two new `@mesh` cases.
+
+**Follow-up worth doing:** re-test RNNoise on a real phone/tablet. The
+`IS_MOBILE_DEVICE → 'browser'` default in `getNoiseSuppressionMode()` was a
+workaround for cause #1; if mobile is clean now, RNNoise can be the default
+everywhere again.
+
+---
+
 ## 📈 Scaling to large audiences (deferred — only if needed)
 
 A full WebRTC mesh can't do one→many broadcast: a single speaker uploads one
