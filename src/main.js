@@ -87,6 +87,26 @@ const MIC_DEVICE_KEY        = 'mic-device-id';
 const CAMERA_DEVICE_KEY     = 'camera-device-id';
 const SPEAKER_DEVICE_KEY    = 'speaker-device-id';
 const DEVICE_LABELS_KEY     = 'media-device-labels';
+// Transient. Main window → desktop preferences window: "a call is live, do not
+// touch the capture devices". settings.html runs in a SEPARATE WebView, and on
+// macOS a getUserMedia there reconfigures the shared capture session and kills
+// the main window's live tracks — which is what made opening Preferences during
+// a call drop both audio and video. Cleared on leave and on load (see below).
+const ROOM_ACTIVE_KEY       = 'room-active';
+
+// Tell the desktop preferences window whether a call is live. Only ever written
+// here — the main window is the sole authority — so a value still present at
+// load is by definition left over from a previous run (a crash, or a reload
+// mid-call) and is cleared rather than trusted. Getting that wrong in the
+// permissive direction drops a call; in the restrictive direction it costs
+// nothing but generic device names in Preferences.
+function publishRoomActive(active) {
+  try {
+    if (active) localStorage.setItem(ROOM_ACTIVE_KEY, String(Date.now()));
+    else localStorage.removeItem(ROOM_ACTIVE_KEY);
+  } catch (_) { /* private mode / quota — the probe just stays conservative */ }
+}
+try { localStorage.removeItem(ROOM_ACTIVE_KEY); } catch (_) {}
 
 // --- Audio focus (Android) ---------------------------------------------------
 
@@ -5605,9 +5625,16 @@ async function initRNNoise() {
       const wasmModule = await WebAssembly.compileStreaming(fetch('assets/rnnoise.wasm'));
 
       // Create the worklet node
+      // channelCount/-Mode pinned explicitly: the default 'max' mode would let a
+      // stereo microphone through as two channels, and the worklet only ever
+      // reads input[0] — the right channel would be dropped silently. 'explicit'
+      // downmixes to mono first, so nothing is lost.
       _rnnoiseNode = new AudioWorkletNode(_rnnoiseCtx, 'rnnoise-processor', {
         numberOfInputs: 1, numberOfOutputs: 1,
-        outputChannelCount: [1]
+        outputChannelCount: [1],
+        channelCount: 1,
+        channelCountMode: 'explicit',
+        channelInterpretation: 'speakers'
       });
 
       // Send compiled WASM module to the worklet thread
@@ -5641,17 +5668,48 @@ function applyRNNoise(stream) {
   if (_rnnoiseCtx.state === 'suspended') _rnnoiseCtx.resume();
 
   const source = _rnnoiseCtx.createMediaStreamSource(stream);
-  const dest = _rnnoiseCtx.createMediaStreamDestination();
+  // Defaults to 2 channels, which would upmix the worklet's mono output back to
+  // stereo for no benefit — opusSdpTransform forces stereo=0 downstream anyway.
+  const dest = _rnnoiseCtx.createMediaStreamDestination({ channelCount: 1 });
+  dest.channelCount = 1;
 
   source.connect(_rnnoiseNode);
   _rnnoiseNode.connect(dest);
 
-  // Keep a reference so we can disconnect later
+  // Read back by stopMicStreamFully() — the graph shares one _rnnoiseNode, so a
+  // stream discarded without that teardown leaves its source summed into the
+  // node and its raw mic track running.
   dest.stream._rnnoiseSource = source;
   dest.stream._rnnoiseDest = dest;
   dest.stream._rnnoiseOriginal = stream;
 
   return dest.stream;
+}
+
+// Release a stream returned by getMicStream(), whichever path produced it.
+//
+// A raw stream is just its tracks. An RNNoise stream is the DESTINATION of a
+// three-node graph whose source is a *separate* getUserMedia stream, so stopping
+// only the tracks you can see leaves the real microphone running (indicator lit,
+// device held) and leaves the source permanently summed into the shared worklet
+// node — two mic acquisitions would otherwise mix into one RNNoise instance.
+function stopMicStreamFully(s) {
+  if (!s) return;
+  if (s._rnnoiseSource) {
+    try { s._rnnoiseSource.disconnect(); } catch (_) {}
+  }
+  if (s._rnnoiseDest && _rnnoiseNode) {
+    // One-argument form: a bare _rnnoiseNode.disconnect() would sever every
+    // other consumer of the shared node.
+    try { _rnnoiseNode.disconnect(s._rnnoiseDest); } catch (_) {}
+  }
+  if (s._rnnoiseOriginal) {
+    s._rnnoiseOriginal.getTracks().forEach(function(t) { t.stop(); });
+  }
+  s.getTracks().forEach(function(t) { t.stop(); });
+  s._rnnoiseSource = null;
+  s._rnnoiseDest = null;
+  s._rnnoiseOriginal = null;
 }
 
 function getNoiseSuppressionMode() {
@@ -6726,7 +6784,7 @@ async function stopEchoTest(options) {
 
   try { echo.sender.close(); } catch (_) {}
   try { echo.receiver.close(); } catch (_) {}
-  if (echo.stream) echo.stream.getTracks().forEach(function(t) { t.stop(); });
+  stopMicStreamFully(echo.stream);   // came from getMicStream(), so may be RNNoise-wrapped
   if (echo.ctx) echo.ctx.close().catch(function() {});
   if (echo.audioEl) { echo.audioEl.srcObject = null; }
 
@@ -6904,6 +6962,129 @@ function connectOutgoingAudioToPeers() {
   });
 }
 
+// Swap the microphone track on every live link WITHOUT renegotiating.
+//
+// A peer can be fed by two MediaConnections — `conn.media` (the call we
+// answered, which is full duplex when we had a mic to answer with) and
+// `conn.audioMediaOut` (the call we opened) — so both have to be walked, the
+// same pair `_collectPeerStats` samples. `replaceTrack` is the right primitive
+// here: tearing the calls down and re-running connectOutgoingAudioToPeers()
+// would drop audio for the length of a renegotiation and re-open the glare
+// window where two peers call each other simultaneously and neither has
+// answered yet.
+//
+// Returns the number of senders actually swapped, so the caller can tell a
+// genuine no-op from a silent failure.
+async function replaceOutgoingAudioTrack(track) {
+  var pcs = [];
+  connections.forEach(function(conn) {
+    [conn && conn.media, conn && conn.audioMediaOut].forEach(function(mc) {
+      if (mc && !mc.closed && mc.peerConnection) pcs.push(mc.peerConnection);
+    });
+  });
+
+  var swapped = 0;
+  for (var i = 0; i < pcs.length; i++) {
+    var pc = pcs[i];
+    if (typeof pc.getSenders !== 'function') continue;
+    var senders = pc.getSenders().filter(function(s) {
+      return s.track ? s.track.kind === 'audio' : false;
+    });
+    for (var j = 0; j < senders.length; j++) {
+      if (typeof senders[j].replaceTrack !== 'function') continue;
+      try {
+        await senders[j].replaceTrack(track);
+        swapped++;
+      } catch (e) {
+        console.warn('[mic-swap] replaceTrack failed:', e.message);
+      }
+    }
+  }
+  return swapped;
+}
+
+// Re-acquire the microphone with the CURRENT settings and hand it to the live
+// call. Without this, `getNoiseSuppressionMode()` and the selected mic device
+// are only ever read inside getMicStream(), which runs once per room join — so
+// changing either mid-call appeared to do nothing until the next session.
+//
+// Serialised through `_micAcquirePromise`, the same guard the join-time and
+// first-press acquisitions share, so a settings change landing during an
+// in-flight acquisition cannot leave the room with two live capture tracks.
+// That case needs no swap anyway: the acquisition already in flight has not
+// called getMicStream() yet, or is about to read the value we just stored.
+var _micReacquirePromise = null;
+function reacquireMicForRoom() {
+  if (!inRoom || !stream) return Promise.resolve(false);
+  if (_micAcquirePromise) return Promise.resolve(false);
+  if (_micReacquirePromise) return _micReacquirePromise;
+
+  var previous = stream;
+  // PTT gates the mic with `enabled`, not by removing the track, so the new
+  // track has to inherit that state or a swap mid-press would mute the speaker
+  // (or, worse, unmute a released one).
+  var wasEnabled = !!(audioTrack && audioTrack.enabled);
+
+  _micReacquirePromise = (async function() {
+    var fresh = await getMicStream();
+    // Re-checked after the await: the user may have left the room while the
+    // device was starting up.
+    if (!inRoom || stream !== previous) {
+      stopMicStreamFully(fresh);
+      return false;
+    }
+    var freshTrack = fresh.getAudioTracks()[0];
+    if (!freshTrack) {
+      stopMicStreamFully(fresh);
+      return false;
+    }
+    freshTrack.enabled = wasEnabled;
+
+    stream = fresh;
+    audioTrack = freshTrack;
+    var swapped = await replaceOutgoingAudioTrack(freshTrack);
+    // No sender to swap means no outgoing audio was wired up yet (a peer joined
+    // while we had no mic, say) — fall back to opening the calls normally.
+    if (!swapped) connectOutgoingAudioToPeers();
+    // Best-effort watchdog only. The swap has already succeeded by this point,
+    // so it must not be able to fail it — throwing here would land in the catch
+    // below and report a working microphone as broken.
+    try { watchMicTrackEnded(fresh); } catch (e) { console.warn('[mic-swap] watchdog:', e.message); }
+
+    stopMicStreamFully(previous);
+    devLog('[mic-swap] re-acquired (' + getNoiseSuppressionMode() + '), ' + swapped + ' sender(s) swapped');
+    return true;
+  })().then(function(ok) {
+    _micReacquirePromise = null;
+    return ok;
+  }).catch(function(err) {
+    _micReacquirePromise = null;
+    // The old stream is still live and still wired up — a failed re-acquire
+    // must never leave the call mute, so keep using it and just report.
+    console.warn('[mic-swap] failed, keeping the previous microphone:', err.message);
+    showCopyToast('Could not switch microphone — keeping the current one');
+    return false;
+  });
+
+  return _micReacquirePromise;
+}
+
+// A capture track can die under us without the call ending — most often when
+// something else on the machine grabs the device and reconfigures it. Left
+// unhandled the room stays "connected" while transmitting nothing, which reads
+// to the user as a dead call. Re-acquiring turns that into a blip.
+function watchMicTrackEnded(s) {
+  var t = s && s._rnnoiseOriginal
+    ? s._rnnoiseOriginal.getAudioTracks()[0]
+    : (s && s.getAudioTracks ? s.getAudioTracks()[0] : null);
+  if (!t) return;
+  t.addEventListener('ended', function() {
+    if (!inRoom || stream !== s) return;
+    devLog('[mic-swap] capture track ended unexpectedly — re-acquiring');
+    reacquireMicForRoom();
+  }, { once: true });
+}
+
 // The tiny embed shows the mic spinner on the self chip rather than in the PTT
 // column, which it does not render.
 function setTinyMicAcquiring(on) {
@@ -6935,13 +7116,14 @@ function acquireMicForRoom(reason) {
   _micAcquirePromise = (async function() {
     var micStream = await getMicStream();
     if (!inRoom || stream) {
-      micStream.getTracks().forEach(function(t) { t.stop(); });
+      stopMicStreamFully(micStream);
       return false;
     }
     stream = micStream;
     audioTrack = stream.getAudioTracks()[0];
     if (audioTrack) audioTrack.enabled = false;
     connectOutgoingAudioToPeers();
+    try { watchMicTrackEnded(stream); } catch (e) { console.warn('[mic-swap] watchdog:', e.message); }
     return true;
   })().then(function(ok) {
     _micAcquirePromise = null;
@@ -7826,11 +8008,12 @@ function leaveRoom() {
   releaseAudioFocus();
   nativePTTLeave();
   stopKeepAlive();
+  publishRoomActive(false);
   localStorage.removeItem('active-room-code');
   if (activeChannel) { deleteSession(); activeChannel = null; }
   activeChannelRoomId = null;
   Array.from(connections.keys()).forEach(removePeer);
-  if (stream) stream.getTracks().forEach(function(t) { t.stop(); });
+  stopMicStreamFully(stream);
   if (peer) peer.destroy();
   peer = null; stream = null; audioTrack = null;
   isHost = false; roomCode = '';
@@ -8012,6 +8195,7 @@ function becomeHost() {
   ensurePlaceholdersForKnownPeers();
   startMigrationSettle();
   startHostHeartbeat();
+  publishRoomActive(true);
   localStorage.setItem('active-room-code', peer.id);
   console.log(
     '[migration] This peer became host: ' + migrationPeerLabel(peer.id) +
@@ -8188,6 +8372,7 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
       startHostHeartbeatMonitor();
       stopPeerHeartbeatSweep();
       startPeerHeartbeat();
+      publishRoomActive(true);
       localStorage.setItem('active-room-code', targetHostId);
       iframeEmit({ type: 'host-changed', roomCode: targetHostId, isSelf: false });
       updateRoomHeader();
@@ -8742,6 +8927,7 @@ async function createRoom(onJoined) {
       stopPeerHeartbeat();
       startPeerHeartbeatSweep();
       startHostHeartbeat();
+      publishRoomActive(true);
       localStorage.setItem('active-room-code', id);
       updateRoomHeader();
       nativePTTJoin();
@@ -9097,7 +9283,7 @@ async function attemptRejoin() {
       peer = null;
       if (!isNonFatalPeerRuntimeError(err)) {
         // Fatal error — release mic and bail
-        if (stream) { stream.getTracks().forEach(function(t) { t.stop(); }); stream = null; audioTrack = null; }
+        stopMicStreamFully(stream); stream = null; audioTrack = null;
         throw err;
       }
       // Non-fatal (peer-unavailable): try next candidate
@@ -9111,7 +9297,7 @@ async function attemptRejoin() {
     return;
   }
 
-  if (stream) { stream.getTracks().forEach(function(t) { t.stop(); }); stream = null; audioTrack = null; }
+  stopMicStreamFully(stream); stream = null; audioTrack = null;
   throw new Error('Could not reconnect — no peers from the previous room are available.');
 }
 
@@ -9127,6 +9313,7 @@ function finishJoin(targetHostId, hostData) {
   stopPeerHeartbeatSweep();
   startPeerHeartbeat();
   clearRoomCodeInput();
+  publishRoomActive(true);
   localStorage.setItem('active-room-code', targetHostId);
   rememberPeer(targetHostId);
   connections.set(targetHostId, { data: hostData, media: null, pseudo: shortId(targetHostId), pseudoColor: null, talking: false });
@@ -10254,6 +10441,9 @@ window.addEventListener('DOMContentLoaded', function() {
     input.addEventListener('change', function(e) {
       if (!e.target.checked) return;
       localStorage.setItem(NOISE_SUPPRESSION_KEY, e.target.value);
+      // The mode is only read inside getMicStream(), so a live call keeps the
+      // old pipeline until it re-acquires. No-op when not in a room.
+      reacquireMicForRoom();
     });
   });
   var micSelect = $('select-mic-device');
@@ -10262,6 +10452,7 @@ window.addEventListener('DOMContentLoaded', function() {
       if (e.target.value) localStorage.setItem(MIC_DEVICE_KEY, e.target.value);
       else localStorage.removeItem(MIC_DEVICE_KEY);
       if (_micTestStream) startMicTest().catch(function(err) { console.warn('[Mic test]', err.message); stopMicTest(); });
+      reacquireMicForRoom();   // same staleness as the mode above
     });
   }
   var camSelect = $('select-camera-device');
@@ -10491,8 +10682,18 @@ window.addEventListener('DOMContentLoaded', function() {
     }
     var relevantKeys = [PRESENCE_TOKEN_KEY, PRESENCE_ORG_KEY, METERED_APP_STORE_KEY,
                           METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY,
-                          SPEAKER_DEVICE_KEY, JITTER_BUFFER_KEY, ECHO_BRIDGE_REQUEST_KEY];
+                          SPEAKER_DEVICE_KEY, JITTER_BUFFER_KEY, ECHO_BRIDGE_REQUEST_KEY,
+                          NOISE_SUPPRESSION_KEY, MIC_DEVICE_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
+    if (e.key === NOISE_SUPPRESSION_KEY || e.key === MIC_DEVICE_KEY) {
+      // Changed from the desktop preferences window — that window cannot touch
+      // the capture pipeline (no module system, so no getMicStream there), so
+      // the main window has to do the swap.
+      if (e.key === NOISE_SUPPRESSION_KEY) syncNoiseSuppressionControls();
+      else refreshMediaDeviceSelectors();
+      reacquireMicForRoom();
+      return;
+    }
     if (e.key === JITTER_BUFFER_KEY) {
       // Changed from the desktop preferences window — apply it to live links.
       loadJitterControls();

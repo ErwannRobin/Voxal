@@ -147,6 +147,76 @@ test.describe('mesh @mesh', () => {
     }
   });
 
+  // Mic-pipeline tests. Two scope notes, both load-bearing:
+  //
+  // 1. The choppiness bug lived INSIDE the worklet, upstream of the encoder —
+  //    the receiver got perfectly delivered packets that happened to contain
+  //    silence, so no RTP statistic (concealment included) can see it. The
+  //    sample-exact regression test for the chop is unit-rnnoise-worklet.spec.js.
+  //
+  // 2. The RNNoise worklet does NOT initialise under headless Chromium: the
+  //    AudioContext reports 'running' and addModule()/compileStreaming() both
+  //    succeed, but the processor never answers the 'wasm-module' port message,
+  //    so initRNNoise() times out and getMicStream() falls back to the raw
+  //    stream. Verified identical on the pre-fix worklet, so it is the harness,
+  //    not the code. Do NOT assert stream._rnnoiseOriginal here — it will always
+  //    be absent. What these tests do cover is that a room configured for
+  //    RNNoise still works (the fallback is graceful) and that the live swap
+  //    holds up over real WebRTC.
+  const RNNOISE = { storage: { 'noise-suppression': 'rnnoise' } };
+
+  test('a room configured for RNNoise still forms a working audio mesh', async ({ makePeer }) => {
+    const host = await makePeer({ pseudo: 'Hostie', ...RNNOISE });
+    const code = await createRoom(host);
+    const a = await makePeer({ pseudo: 'Alice', ...RNNOISE });
+    await joinRoom(a, code);
+
+    for (const p of [host, a]) await expect.poll(() => rosterCount(p), POLL).toBe(2);
+    await Promise.all([speak(host), speak(a)]);
+
+    for (const p of [host, a]) {
+      expect(await p.evaluate(() => window.getNoiseSuppressionMode())).toBe('rnnoise');
+      await expect.poll(async () => (await getState(p)).incomingAudio, POLL).toBeGreaterThanOrEqual(1);
+      // Whichever path getMicStream() took, it must hand back a live track.
+      expect(await p.evaluate(() => stream.getAudioTracks()[0].readyState)).toBe('live');
+    }
+  });
+
+  test('switching noise suppression mid-call swaps the mic without dropping audio', async ({ makePeer }) => {
+    const host = await makePeer({ pseudo: 'Hostie', ...RNNOISE });
+    const code = await createRoom(host);
+    const a = await makePeer({ pseudo: 'Alice', ...RNNOISE });
+    await joinRoom(a, code);
+
+    for (const p of [host, a]) await expect.poll(() => rosterCount(p), POLL).toBe(2);
+    await Promise.all([speak(host), speak(a)]);
+    await expect.poll(async () => (await getState(a)).incomingAudio, POLL).toBeGreaterThanOrEqual(1);
+
+    const before = await host.evaluate(() => stream.getAudioTracks()[0].id);
+
+    // What the Settings radio does. Before the fix this only wrote localStorage
+    // and the live call kept the old capture until the next session.
+    const swapped = await host.evaluate(async () => {
+      localStorage.setItem('noise-suppression', 'browser');
+      return window.reacquireMicForRoom();
+    });
+    expect(swapped).toBe(true);
+
+    const after = await host.evaluate(() => ({
+      trackId: stream.getAudioTracks()[0].id,
+      live: stream.getAudioTracks()[0].readyState,
+      mode: window.getNoiseSuppressionMode(),
+    }));
+    expect(after.trackId).not.toBe(before);   // a genuinely new capture
+    expect(after.live).toBe('live');
+    expect(after.mode).toBe('browser');       // re-acquired under the new setting
+
+    // replaceTrack does not renegotiate, so the peer's link must survive intact.
+    expect((await getState(a)).incomingAudio).toBeGreaterThanOrEqual(1);
+    await speak(host);
+    await expect.poll(async () => (await getState(a)).incomingAudio, POLL).toBeGreaterThanOrEqual(1);
+  });
+
   // The "can they hear me?" round trip, over real WebRTC. This is the only check
   // that can distinguish "packets arrived" from "audio was actually heard".
   test('audio check reports a peer really hearing us', async ({ makePeer }) => {
