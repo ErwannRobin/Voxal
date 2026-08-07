@@ -252,4 +252,26 @@ Exit criteria:
 
 ---
 
+## 📣 Ring a friend — reachability (design proposal)
+
+**Goal:** Make Voxal something you can be *reached* on, rather than something both
+people must already have open.
+
+Today nobody can be reached — there is no service worker anywhere in `src/` and no
+notification path on any platform — and nothing persists, since named rooms expire
+1 h after the last heartbeat and rot after host migration. So using Voxal requires
+first using another app to say "open this link".
+
+Full design, including the two problems that decide whether it works (push-token
+rotation across a client-held address book, and the fact that a stateless
+forwarder is an open push relay): **[docs/ring-a-friend.md](../docs/ring-a-friend.md)**.
+
+Phases 1–2 (identity + contacts, then ring over the PeerJS broker) need no
+backend, no push, and no paid Apple membership — so they are not blocked by the
+iOS PushToTalk item above.
+
+**Status:** proposal only, nothing implemented.
+
+---
+
 _Add new items above this line._
