@@ -6124,6 +6124,157 @@ function applySpeakerSinkToAllAudio() {
   });
 }
 
+// --- Audio output routing: loudspeaker vs earpiece (mobile) ------------------
+//
+// `setSinkId` above cannot do this: it is unimplemented on Android (browser and
+// WebView alike — a platform limitation, not a Chrome gap) and WebKit never
+// shipped it, so on mobile it is not an option at all. The two mechanisms that
+// do work are probed once per page load:
+//
+//   'native'           — the Capacitor `AudioRoute` plugin (iOS AVAudioSession /
+//                        Android AudioManager). Only present in a store build.
+//   'web-audiosession' — `navigator.audioSession` (WebKit). Setting the type to
+//                        'play-and-record' declares the page a call, which is
+//                        what moves output to the receiver; 'auto' hands routing
+//                        back to the platform and lands on the loudspeaker.
+//   null               — no way to switch (Android web, desktop). The button
+//                        stays hidden rather than offering a control that cannot
+//                        work.
+const AUDIO_ROUTE_SPEAKER  = 'speaker';
+const AUDIO_ROUTE_EARPIECE = 'earpiece';
+
+// Session state, deliberately never persisted: every room starts on the speaker.
+var _audioRoute = AUDIO_ROUTE_SPEAKER;
+var _audioRouteBackend;              // undefined = unprobed, null = unsupported
+var _audioRouteProbe = null;
+
+function nativeAudioRoutePlugin() {
+  var plugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.AudioRoute;
+  return (plugin && typeof plugin.setRoute === 'function') ? plugin : null;
+}
+
+function webAudioSessionSupported() {
+  try {
+    return !!(navigator.audioSession && 'type' in navigator.audioSession);
+  } catch (_) {
+    return false;
+  }
+}
+
+function normalizeAudioRoute(route) {
+  return route === AUDIO_ROUTE_EARPIECE ? AUDIO_ROUTE_EARPIECE : AUDIO_ROUTE_SPEAKER;
+}
+
+function probeAudioRouteBackend() {
+  if (_audioRouteBackend !== undefined) return Promise.resolve(_audioRouteBackend);
+  if (_audioRouteProbe) return _audioRouteProbe;
+  _audioRouteProbe = (async function() {
+    // Capgo ships this JS over the air, so a native binary older than the bundle
+    // exposes `Capacitor.Plugins` without these methods. Only the method actually
+    // answering proves the native side is there — a presence check would not.
+    var plugin = IS_NATIVE_MOBILE ? nativeAudioRoutePlugin() : null;
+    if (plugin) {
+      try {
+        await plugin.getRoute();
+        _audioRouteBackend = 'native';
+        return _audioRouteBackend;
+      } catch (e) {
+        console.warn('[Audio route] native plugin unavailable:', e && e.message);
+      }
+    }
+    // Desktop Safari also exposes navigator.audioSession, where an "Earpiece"
+    // button would be nonsense — gate on the device, not just the API.
+    _audioRouteBackend = (IS_MOBILE_DEVICE && webAudioSessionSupported()) ? 'web-audiosession' : null;
+    return _audioRouteBackend;
+  })();
+  return _audioRouteProbe;
+}
+
+async function applyAudioRouteToBackend(route) {
+  var backend = await probeAudioRouteBackend();
+  if (!backend) return false;
+  if (backend === 'native') {
+    var plugin = nativeAudioRoutePlugin();
+    if (!plugin) return false;
+    await plugin.setRoute({ route: route });
+    return true;
+  }
+  navigator.audioSession.type = (route === AUDIO_ROUTE_EARPIECE) ? 'play-and-record' : 'auto';
+  return true;
+}
+
+// Only commits `_audioRoute` once the platform actually accepted the switch, so a
+// rejected call leaves the button telling the truth about where the audio is.
+async function setAudioRoute(route) {
+  var next = normalizeAudioRoute(route);
+  try {
+    if (!(await applyAudioRouteToBackend(next))) return false;
+  } catch (e) {
+    console.warn('[Audio route] failed to switch to ' + next + ':', e && e.message);
+    updateAudioRouteUI();
+    return false;
+  }
+  _audioRoute = next;
+  updateAudioRouteUI();
+  return true;
+}
+
+function toggleAudioRoute() {
+  return setAudioRoute(_audioRoute === AUDIO_ROUTE_EARPIECE ? AUDIO_ROUTE_SPEAKER : AUDIO_ROUTE_EARPIECE);
+}
+
+function updateAudioRouteUI() {
+  var btn = document.getElementById('btn-audio-route');
+  if (!btn) return;
+  btn.classList.toggle('hidden', !_audioRouteBackend);
+  if (!_audioRouteBackend) return;
+  var onEarpiece = _audioRoute === AUDIO_ROUTE_EARPIECE;
+  btn.classList.toggle('active', onEarpiece);
+  btn.setAttribute('aria-pressed', String(onEarpiece));
+  // The label names where the audio *is*; the title names what a tap would do.
+  btn.title = onEarpiece ? 'Switch to speaker' : 'Switch to earpiece';
+  var label = btn.querySelector('.audio-route-label');
+  if (label) label.textContent = onEarpiece ? 'Earpiece' : 'Speaker';
+  var speakerIcon = btn.querySelector('.audio-route-icon-speaker');
+  if (speakerIcon) speakerIcon.classList.toggle('hidden', onEarpiece);
+  var earpieceIcon = btn.querySelector('.audio-route-icon-earpiece');
+  if (earpieceIcon) earpieceIcon.classList.toggle('hidden', !onEarpiece);
+}
+
+// Every room starts on the loudspeaker. Call this from the two real join paths
+// only — NOT from the host-migration `publishRoomActive(true)` sites, which fire
+// mid-call and would yank a user back to the speaker because the host died.
+async function initAudioRouteForRoom() {
+  _audioRoute = AUDIO_ROUTE_SPEAKER;
+  updateAudioRouteUI();
+  var backend = await probeAudioRouteBackend();
+  updateAudioRouteUI();
+  if (!backend) return;
+  await setAudioRoute(AUDIO_ROUTE_SPEAKER);
+}
+
+// WebKit reconfigures its audio session around getUserMedia, so acquiring or
+// swapping the microphone can silently reset the output route. Re-assert
+// whatever the user chose rather than letting the platform quietly win.
+function reassertAudioRoute() {
+  if (!_audioRouteBackend) return;
+  Promise.resolve(applyAudioRouteToBackend(_audioRoute)).catch(function(e) {
+    console.warn('[Audio route] re-assert failed:', e && e.message);
+  });
+}
+
+// Hand the device back to the loudspeaker on the way out, so the next sound the
+// user plays in any app isn't stuck on the receiver.
+function resetAudioRouteOnLeave() {
+  var wasEarpiece = _audioRoute === AUDIO_ROUTE_EARPIECE;
+  _audioRoute = AUDIO_ROUTE_SPEAKER;
+  updateAudioRouteUI();
+  if (!wasEarpiece) return;
+  Promise.resolve(applyAudioRouteToBackend(AUDIO_ROUTE_SPEAKER)).catch(function(e) {
+    console.warn('[Audio route] failed to restore the speaker on leave:', e && e.message);
+  });
+}
+
 var _modalSettingsSidebarInit = false;
 function initModalSettingsSidebar() {
   var sidebar = document.getElementById('modal-settings-sidebar');
@@ -7056,6 +7207,7 @@ function reacquireMicForRoom() {
     return true;
   })().then(function(ok) {
     _micReacquirePromise = null;
+    if (ok && inRoom) reassertAudioRoute();
     return ok;
   }).catch(function(err) {
     _micReacquirePromise = null;
@@ -7131,6 +7283,7 @@ function acquireMicForRoom(reason) {
     // Cleared unconditionally: a press released before the mic arrived would
     // otherwise leave "Requesting microphone…" on screen for good.
     $('ptt-status').textContent = '';
+    if (ok && inRoom) reassertAudioRoute();
     if (!ok || !_pendingTalkingStart || !inRoom || freeHandMode) return false;
     applyTalkingState(true);
     return true;
@@ -8018,6 +8171,7 @@ function leaveRoom() {
   peer = null; stream = null; audioTrack = null;
   isHost = false; roomCode = '';
   document.querySelectorAll('audio[id^="audio-"]').forEach(function(el) { el.remove(); });
+  resetAudioRouteOnLeave();
   iframeEmit({ type: 'left' });
   if (IS_TINY_EMBED && returnTinyRoomId) {
     showTinyInviteConnect(returnTinyRoomId, returnTinyPeerCount);
@@ -8933,6 +9087,7 @@ async function createRoom(onJoined) {
       nativePTTJoin();
       startKeepAlive();
       requestAudioFocus(); // Keep foreground service running while in room
+      initAudioRouteForRoom(); // Every room starts on the loudspeaker
       showScreen('room');
       updatePeerList();
       updateShortcutDisplay();
@@ -9321,6 +9476,7 @@ function finishJoin(targetHostId, hostData) {
   nativePTTJoin();
   startKeepAlive();
   requestAudioFocus(); // Keep foreground service running while in room
+  initAudioRouteForRoom(); // Every room starts on the loudspeaker
   showScreen('room');
   updatePeerList();
   updateDebugConsentBanner();
@@ -11052,6 +11208,10 @@ window.addEventListener('DOMContentLoaded', function() {
     screenBtnEl.addEventListener('click', function() {
       if (localScreenActive) stopScreenShare(); else startScreenShare();
     });
+  }
+  var audioRouteBtnEl = $('btn-audio-route');
+  if (audioRouteBtnEl) {
+    audioRouteBtnEl.addEventListener('click', function() { toggleAudioRoute(); });
   }
   $('video-viewer-close').addEventListener('click', closeVideoViewer);
   $('video-viewer-minimize').addEventListener('click', popOutVideoViewer);
