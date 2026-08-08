@@ -36,15 +36,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     // MARK: - Audio Session
 
+    // Routing lives in AudioRoute so that restoring the session after an
+    // interruption restores the route the *user* chose. Configuring the category
+    // inline here would silently drag an earpiece call back to the loudspeaker.
+    // AudioRoute defaults to .speaker, so launch behaviour is unchanged.
     private func configureAudioSession() {
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.playAndRecord,
-                                    mode: .voiceChat,
-                                    options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker])
-        } catch {
-            print("[AVAudioSession] Configuration failed: \(error)")
-        }
+        AudioRoute.apply()
     }
 
     @objc private func handleAudioInterruption(_ notification: Notification) {

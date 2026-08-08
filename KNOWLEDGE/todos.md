@@ -315,4 +315,37 @@ iOS PushToTalk item above.
 
 ---
 
+## 🔈 Speaker ⇄ earpiece switch — native half needs a store release
+
+**Status:** ✅ Implemented, ⏳ blocked on a store release for native users.
+
+One `#btn-audio-route` toggle in the room control row, hidden unless a routing
+backend answers. Backends: the new `AudioRoute` Capacitor plugin
+(`ios/App/App/AudioRoutePlugin.swift`, `android/…/AudioRoutePlugin.java`) on
+native, `navigator.audioSession` on iOS web. Every room starts on the
+loudspeaker; the choice is session state and never persisted.
+
+**Android web gets nothing, permanently** — `setSinkId` is unimplemented on the
+platform and there is no alternative API, so the button is hidden there rather
+than dead. That is the honest ceiling, not a gap to close.
+
+**Blocked:** the Swift/Kotlin half cannot ship over Capgo OTA. Until an App Store
+/ Play Store build goes out, native users see no button (the probe rejects on an
+old binary and falls through). The JS half is already live.
+
+**Needs on-device verification** (nothing here can be tested in the container):
+- iOS: room joins on the loudspeaker; toggle reaches the receiver and back; the
+  route survives a PTT press, a hands-free toggle and an audio interruption;
+  plugging a headset overrides both modes. Confirm `overrideOutputAudioPort`
+  actually takes effect under WKWebView — it is documented as resetting on route
+  changes, which is what the `routeChangeNotification` observer is for.
+- Android: same, on both an API ≥31 and an API <31 device (different code paths).
+  Confirm `MODE_IN_COMMUNICATION` actually reroutes the *WebView's* WebRTC
+  playback, not just the voice-call stream.
+- iOS Safari: confirm `navigator.audioSession.type` still governs the route
+  **after** the mic is acquired on first speak — `reassertAudioRoute()` re-applies
+  it, but only device testing shows whether WebKit honours it at all there.
+
+---
+
 _Add new items above this line._
