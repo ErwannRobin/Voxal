@@ -61,6 +61,7 @@ debug:
 	fi; \
 	if [ "$$NEEDS_BUILD" = "1" ]; then \
 		echo "→ Building debug bundle..."; \
+		$(MAKE) gen-build-info; \
 		npm run tauri build -- --debug || exit 1; \
 	else \
 		echo "→ Bundle up to date, skipping build."; \
@@ -68,11 +69,11 @@ debug:
 	echo "→ Launching Voxal (debug)..."; \
 	open "$$APP"
 
-build:
+build: gen-build-info
 	@echo "→ Building release (unsigned, no updater artifacts). Use 'make build-signed' to sign."
 	npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
-build-signed:
+build-signed: gen-build-info
 	@export TAURI_SIGNING_PRIVATE_KEY="$${TAURI_SIGNING_PRIVATE_KEY:-$$(cat ~/.tauri/voxal.key 2>/dev/null)}"; \
 	if [ -z "$$TAURI_SIGNING_PRIVATE_KEY" ]; then \
 		echo "Error: No signing key found."; exit 1; \
@@ -84,7 +85,7 @@ build-signed:
 	fi; \
 	npm run tauri build
 
-build-debug:
+build-debug: gen-build-info
 	npm run tauri build -- --debug
 	@echo ""
 	@echo "Debug bundle: src-tauri/target/debug/bundle/macos/Voxal.app"
@@ -92,8 +93,11 @@ build-debug:
 
 # ── Web ───────────────────────────────────────────────────────────────────────
 
-# Mirrors the build-info.js Vercel generates via vercel.json's buildCommand
-# (deployed src/ is served as-is, with no `make` step — see vercel.json).
+# Stamps src/build-info.js with the real commit + build timestamp, consumed
+# by about.html / settings.html / the in-page about modal. Used by the web
+# build (mirroring what Vercel generates via vercel.json's buildCommand, since
+# deployed src/ is served as-is with no `make` step) and by every native
+# build (Tauri via build/build-debug/build-signed, Capacitor via cap-sync).
 gen-build-info:
 	@COMMIT=$$(git rev-parse --short HEAD); \
 	BUILD_DATE=$$(date -u +%FT%TZ); \
@@ -115,8 +119,7 @@ build-web: gen-build-info
 
 # ── Mobile (Capacitor) ────────────────────────────────────────────────────────
 
-cap-sync:
-	@rm -f src/build-info.js
+cap-sync: gen-build-info
 	npx cap sync
 
 cap-ios: cap-sync

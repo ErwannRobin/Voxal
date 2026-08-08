@@ -7,6 +7,7 @@
     <link rel="icon" href="assets/favicon.ico" sizes="any" />
     <link rel="stylesheet" href="styles.css" />
     <script src="version.js"></script>
+    <script src="build-info.js" onerror="this.remove()"></script>
     <script>
       // Apply theme before paint to avoid flash
       (function() {
@@ -723,10 +724,12 @@
         var dateEl = $id('about-build-date-desktop');
         if (!versionEl || !dateEl) return;
         versionEl.textContent = 'v' + VOXAL_VERSION;
-        var buildDate = new Date(VOXAL_BUILD_DATE).toLocaleDateString('en-GB', {
-          day: 'numeric', month: 'short', year: 'numeric'
-        });
-        dateEl.textContent = 'Built ' + buildDate;
+        // build-info.js (stamped by `make gen-build-info` at build time) carries
+        // the real commit + timestamp; fall back to the static release constants.
+        var hasBuildInfo = typeof window.VOXAL_COMMIT !== 'undefined';
+        var buildDate = new Date(hasBuildInfo ? window.VOXAL_WEB_BUILD_DATE : VOXAL_BUILD_DATE)
+          .toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+        dateEl.textContent = 'Built ' + buildDate + (hasBuildInfo ? ' · ' + window.VOXAL_COMMIT : '');
       }
       applyTheme(localStorage.getItem(THEME_KEY) || 'system');
       initDesktopSidebar();
