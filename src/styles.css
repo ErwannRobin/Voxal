@@ -2616,6 +2616,12 @@ input[type="password"]:focus { border-color: var(--accent); }
 /* Handedness only affects the web landscape layout — hide it on native apps. */
 html.is-native #settings-handedness { display: none; }
 
+/* This modal is web/mobile only (Tauri desktop uses settings.html instead),
+   so is-native here only ever means Capacitor mobile. The modal header
+   already has a ✕ close icon; the footer's redundant Close button just
+   crowds/masks the build-info footer on small mobile screens. Kept on web. */
+html.is-native #btn-close-settings-footer { display: none; }
+
 /* Theme toggle — segmented control */
 .theme-toggle {
   display: flex;
