@@ -25,5 +25,8 @@
     "@capacitor/ios": "^8.5.0",
     "@capacitor/status-bar": "^8.0.3",
     "@capgo/capacitor-updater": "^8.51.3"
+  },
+  "overrides": {
+    "uuid": "11.1.1"
   }
 }
