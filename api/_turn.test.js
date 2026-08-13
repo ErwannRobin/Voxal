@@ -3,14 +3,8 @@
 import test from 'node:test';
 import assert from 'node:assert';
 
-import {
-  toIceServers,
-  isCacheFresh,
-  rateLimit,
-  pruneHits,
-  clientIp,
-  credentialsUrl,
-} from './_turn.js';
+import { toIceServers, isCacheFresh, credentialsUrl } from './_turn.js';
+import { rateLimit, pruneHits, clientIp } from './_shared.js';
 
 test('toIceServers keeps the TCP and TLS transports', () => {
   // The whole reason we need TURN is firewalls that block UDP/3478. Cloudflare's

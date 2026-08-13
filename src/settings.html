@@ -371,6 +371,28 @@
                 </div>
               </div>
             </div>
+            <p class="settings-sublabel" style="margin-top:16px">Video routing</p>
+            <p class="settings-hint">
+              Camera and screen-share video can route directly between
+              participants (peer-to-peer) or, for large rooms, through
+              Cloudflare's relay servers, which forward — and can technically
+              see — the video. This never applies to voice, which always
+              stays peer-to-peer.
+            </p>
+            <div class="relay-modes">
+              <label class="relay-opt">
+                <input type="radio" name="video-routing-mode" value="prefer-p2p" />
+                <span>Prefer direct</span>
+              </label>
+              <label class="relay-opt">
+                <input type="radio" name="video-routing-mode" value="allow-sfu" />
+                <span>Allow relay for large rooms <em>(recommended)</em></span>
+              </label>
+              <label class="relay-opt">
+                <input type="radio" name="video-routing-mode" value="p2p-only" />
+                <span>Direct only — never relay video</span>
+              </label>
+            </div>
             <div class="settings-field" style="margin-top:12px">
               <label for="input-service-url">Service URL</label>
               <div class="input-clearable">
@@ -519,6 +541,25 @@
       const JITTER_BUFFER_KEY       = 'jitter-buffer';
       const JITTER_BUFFER_MAX_MS    = 500;
       const JITTER_BUFFER_BASE_MS   = 80; // AUDIO_PLAYOUT_DELAY_BASE in main.js
+      // 'prefer-p2p' | 'allow-sfu' | 'p2p-only'. Camera/screen-share routing
+      // ONLY — never audio. See selectVideoTopology() in main.js.
+      const VIDEO_ROUTING_KEY       = 'video-routing-mode';
+      const VIDEO_ROUTING_DEFAULT   = 'allow-sfu';
+      function loadVideoRoutingControls() {
+        var v = localStorage.getItem(VIDEO_ROUTING_KEY);
+        // All three listed explicitly — omitting one silently overrides an
+        // explicit user choice with the default (see main.js).
+        var mode = (v === 'prefer-p2p' || v === 'allow-sfu' || v === 'p2p-only') ? v : VIDEO_ROUTING_DEFAULT;
+        document.querySelectorAll('input[name="video-routing-mode"]').forEach(function(r) { r.checked = (r.value === mode); });
+      }
+      function syncVideoRoutingFromControls() {
+        var checked = document.querySelector('input[name="video-routing-mode"]:checked');
+        var mode = checked ? checked.value : VIDEO_ROUTING_DEFAULT;
+        // The `storage` event never fires in the window that wrote the value,
+        // so this window's own radios are already showing the right state —
+        // nothing else to render here, unlike the main window's live reconcile.
+        localStorage.setItem(VIDEO_ROUTING_KEY, mode);
+      }
       const NOISE_SUPPRESSION_KEY   = 'noise-suppression';
       const MIC_DEVICE_KEY          = 'mic-device-id';
       const CAMERA_DEVICE_KEY       = 'camera-device-id';
@@ -748,6 +789,7 @@
       $id('input-metered-app').value    = localStorage.getItem(METERED_APP_STORE_KEY) || '';
       $id('input-metered-key').value    = localStorage.getItem(METERED_API_STORE_KEY) || '';
       loadRelayControls();
+      loadVideoRoutingControls();
       loadJitterControls();
       syncNoiseSuppressionControls();
       initAboutSection();
@@ -1301,6 +1343,9 @@
       });
       document.querySelectorAll('input[name="relay-mode"]').forEach(function(r) {
         r.addEventListener('change', syncRelayFromControls);
+      });
+      document.querySelectorAll('input[name="video-routing-mode"]').forEach(function(r) {
+        r.addEventListener('change', syncVideoRoutingFromControls);
       });
       document.querySelectorAll('input[name="jitter-mode"]').forEach(function(r) {
         r.addEventListener('change', syncJitterFromControls);

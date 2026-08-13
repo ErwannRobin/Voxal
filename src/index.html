@@ -389,6 +389,28 @@
                     </div>
                   </div>
                 </div>
+                <p class="settings-sublabel" style="margin-top:16px">Video routing</p>
+                <p class="settings-hint">
+                  Camera and screen-share video can route directly between
+                  participants (peer-to-peer) or, for large rooms, through
+                  Cloudflare's relay servers, which forward — and can
+                  technically see — the video. This never applies to voice,
+                  which always stays peer-to-peer.
+                </p>
+                <div class="relay-modes">
+                  <label class="relay-opt">
+                    <input type="radio" name="video-routing-mode" value="prefer-p2p" />
+                    <span>Prefer direct</span>
+                  </label>
+                  <label class="relay-opt">
+                    <input type="radio" name="video-routing-mode" value="allow-sfu" />
+                    <span>Allow relay for large rooms <em>(recommended)</em></span>
+                  </label>
+                  <label class="relay-opt">
+                    <input type="radio" name="video-routing-mode" value="p2p-only" />
+                    <span>Direct only — never relay video</span>
+                  </label>
+                </div>
                 <div class="settings-field" style="margin-top:12px">
                   <label for="input-service-url">Service URL</label>
                   <div class="input-clearable">
