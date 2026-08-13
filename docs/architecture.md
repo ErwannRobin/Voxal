@@ -6,10 +6,26 @@ This document contains the technical reference moved out of the top-level README
 
 ```text
 Signaling topology : star  (host ↔ peers via PeerJS DataConnection)
-Audio topology     : mesh  (peer ↔ peer via WebRTC MediaConnection)
+Audio topology     : mesh  (peer ↔ peer via WebRTC MediaConnection) — ALWAYS, never server-routed
+Video/screen       : mesh by default; optionally routed through Cloudflare's
+                      Realtime SFU per participant, see below
 Codec              : Opus (browser default), 16 kHz mono
 Signaling server   : PeerJS public server by default (self-hostable)
 ```
+
+### Video/screen routing (optional SFU)
+
+Camera and screen-share tracks are architecturally separate from audio: each
+is its own full-mesh set of `MediaConnection`s, independent of the audio mesh.
+Because video/screen (not audio) is what actually hits mesh bandwidth limits
+in larger rooms, they alone can optionally route through Cloudflare's Realtime
+SFU instead of the mesh — a `selectVideoTopology()` decision governed by a
+user preference (Settings → Advanced → Video routing), never applied to
+audio. The decision and its outcome are always carried over the existing star
+signaling above; Cloudflare's SFU carries only the video/screen media plane,
+never application state, and no Cloudflare DataChannel is used. See [Video
+routing](video-routing.md) for the full design, including the privacy
+distinction from TURN relaying and the backend authorization model.
 
 ## Room lifecycle
 
@@ -36,7 +52,7 @@ For a detailed breakdown of election, retries, settle windows, and split-brain s
 | `heartbeat` | host ↔ peers | `{ at, deputyId, successorIds }` |
 | `redirect` | peer → joiner | `{ hostId, hostPseudo }` |
 | `room-published` | host → all | `{ roomId, secret? }` |
-| `video-offer` | peer → host (relay) | `{ peerId }` |
+| `video-offer` | peer → host (relay) | `{ peerId, topology: 'p2p'\|'sfu', providerRef? }` — see [Video routing](video-routing.md) |
 | `video-stop` | peer → host (relay) | `{ peerId }` |
 
 ## Protocol versioning & updates

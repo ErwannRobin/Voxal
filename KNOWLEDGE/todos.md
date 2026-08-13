@@ -178,11 +178,22 @@ soft at 8 / hard at 12 — no hard cap). If large town-hall/audience rooms becom
 real goal, the path is:
 - an **optional SFU/relay** (server forwards one upload to many) — the only thing
   that actually scales one→many; conflicts with the "no server" default, so make
-  it opt-in;
+  it opt-in; **✅ done for video/screen-share** — see `docs/video-routing.md` and
+  `selectVideoTopology()`/`api/sfu-session.js`/`api/sfu-track.js`. **Audio fan-out
+  is explicitly NOT addressed by that work** — voice stays mesh-only, uncapped,
+  permanently (see the "do not re-litigate" entry in `KNOWLEDGE/learning.md`).
+  If one→many *voice* ever becomes a real goal, it needs its own separate
+  design and decision, not a silent extension of the video/screen SFU;
 - an **explicit listen-only role** (skip mic permission, a speaker-aware cap, an
   "audience" roster) — modest UX wins but does NOT remove the speaker fan-out.
-Decided **not** to build either now; the mesh + size warning is enough for the
-small-room product.
+  Still not built.
+- a **P2P/audio ICE-restart or reconnection path** — confirmed absent for both
+  audio and P2P video/screen (`main.js` has no `oniceconnectionstatechange`
+  handler anywhere). The video/screen SFU work above added reconnection
+  *only* for its own new `RTCPeerConnection`s; this pre-existing mesh gap is
+  untouched and still open.
+Decided **not** to build audio-side scaling now; the mesh + size warning is
+enough for the small-room voice product.
 
 ## 🩺 Device-info diagnostics panel (dev mode)
 

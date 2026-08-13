@@ -1399,13 +1399,31 @@ kbd {
   background: rgba(255, 255, 255, 0.35);
 }
 .video-tile.talking .video-tile-mic { background: var(--green); }
-.video-tile-ice {
+.video-tile-badges {
   flex: none;
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.video-tile-ice {
+  flex: none;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.35);
+}
+/* Distinct from the ICE dot on purpose — P2P-vs-relayed-ICE and P2P-vs-SFU are
+   orthogonal questions. Only ever shown on video/screen tiles; audio has no
+   topology choice. See docs/video-routing.md. */
+.video-tile-topology {
+  flex: none;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.18);
+  white-space: nowrap;
 }
 
 /* The minimized self-view: a small badge floating over the stage, dragged to

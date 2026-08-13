@@ -33,6 +33,26 @@ Without them the endpoint returns `503` and the app falls back to STUN-only, so
 deploying before the account exists is safe. Full detail, including why the key
 cannot live in the client, is in [TURN & ICE configuration](turn-and-ice.md#anonymous-turn-credentials-apiice-servers).
 
+## Optional video/screen-share relay (Cloudflare Realtime SFU)
+
+Entirely optional and separate from the TURN relay above — it applies only to
+camera/screen-share video, never voice. `api/sfu-session.js` and
+`api/sfu-track.js` deploy the same way as `api/ice-servers.js`. Set:
+
+```
+CF_SFU_APP_ID=<Cloudflare Realtime (Calls) app id>
+CF_SFU_APP_SECRET=<Cloudflare Realtime app secret>
+SFU_CAPABILITY_SECRET=<a separate, random secret you generate — not the Cloudflare one>
+```
+
+Optional: `SFU_CAPABILITY_TTL` (default `300` seconds) and `SFU_RATE_LIMIT`
+(default `30` per IP per minute). Without these, both endpoints return `503`
+and video/screen-share simply stays on the peer-to-peer mesh — the same
+safe-to-deploy-before-the-account-exists behavior as the TURN relay above.
+Full detail, including the privacy distinction from TURN (an SFU decrypts
+media; TURN never does) and why voice is deliberately excluded, is in [Video
+routing](video-routing.md).
+
 ## Optional presence backend
 
 Presence is optional. Voxal works in pure P2P mode without any account/token.
@@ -48,6 +68,8 @@ For production-grade deployments:
 3. Host the static web app over HTTPS with the required security headers.
 4. Configure deep-link domain files (`.well-known`) for mobile app links.
 5. Optionally run a presence backend and point Voxal to your API base URL.
+6. Optionally configure the Cloudflare Realtime SFU env vars above for
+   video/screen-share relaying in large rooms — voice is unaffected either way.
 
 ## Known operational limits
 

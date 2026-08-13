@@ -53,7 +53,8 @@ After any `src/` change, run `make cap-sync` to mirror changes to `ios/App/App/p
 ### WebRTC topology
 
 - **Signaling: star** — host maintains a `DataConnection` to every peer via PeerJS.
-- **Audio: full mesh** — every peer opens a `MediaConnection` directly to every other peer (Opus, 16 kHz mono).
+- **Audio: full mesh, always** — every peer opens a `MediaConnection` directly to every other peer (Opus, 16 kHz mono). Audio is never routed through a media server, under any setting — see `docs/video-routing.md`.
+- **Video/screen: full mesh by default, optionally an SFU** — camera and screen-share are their own independent full-mesh `MediaConnection` sets (never audio's). `selectVideoTopology()` in `main.js` can route them through Cloudflare's Realtime SFU instead, gated by the `video-routing-mode` preference and never silently for a user who chose `prefer-p2p`/`p2p-only`. See `docs/video-routing.md`.
 - The room code IS the host's PeerJS peer ID.
 - **Host migration**: when the host disconnects, all remaining peers follow the authoritative `deputyId`/`successorIds` chain broadcast in every `peer-list` and heartbeat. Migration uses a state machine (`idle`/`connecting`/`connected`/`migrating`) via `connectToHost(hostId, { mode: 'initial' | 'migration' })`. Success = first authoritative `peer-list` from the new host. Audio `MediaConnection`s to non-host peers are never torn down during migration.
 
@@ -120,6 +121,8 @@ A setting that `getMicStream()` reads (`noise-suppression`, `mic-device-id`) is 
 | `noise-suppression` | `NOISE_SUPPRESSION_KEY` | `rnnoise` / `browser` / `off`. A change re-acquires the mic live via `reacquireMicForRoom()` |
 | `mic-device-id` | `MIC_DEVICE_KEY` | Selected microphone; same live re-acquire on change |
 | `video-mode-enabled` | `VIDEO_MODE_KEY` | Whether the room offers the Camera / Screen controls. Absent means "never chosen" = on (`readVideoModeEnabled()`) |
+| `video-routing-mode` | `VIDEO_ROUTING_KEY` | `prefer-p2p` / `allow-sfu` / `p2p-only` — camera/screen-share routing ONLY, never audio (Settings → Advanced → Video routing). See `docs/video-routing.md` and `selectVideoTopology()` |
+| `sfu-server` | `SFU_SERVER_OVERRIDE_KEY` | SFU allocation endpoint override (`{sessionUrl, trackUrl}`); test/self-host only |
 | `self-video-corner` | `SELF_VIDEO_CORNER_KEY` | Which corner of the video stage the minimized self-view badge was dragged to: `tl` / `tr` / `bl` / `br` |
 | `room-active` | `ROOM_ACTIVE_KEY` | Transient. Main window → preferences window: a call is live, so `settings.html` must not run its `getUserMedia` device-label probe (it would kill the call). Cleared on leave and on load |
 | `echo-test-request` | `ECHO_BRIDGE_REQUEST_KEY` | Transient. Desktop preferences window → main window: `{action:'start'\|'stop', at}` (see below) |

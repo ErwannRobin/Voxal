@@ -1,5 +1,11 @@
 // Pure helpers behind the anonymous TURN credential endpoint. Kept separate from
 // the handler so they can be unit-tested with `node --test` and no network.
+//
+// rateLimit/pruneHits/clientIp used to live here; they moved to _shared.js once
+// api/_sfu.js needed the identical per-IP limiter, and are re-exported below so
+// existing imports of './_turn.js' keep working.
+
+export { rateLimit, pruneHits, clientIp } from './_shared.js';
 
 export const CF_TURN_API = 'https://rtc.live.cloudflare.com/v1/turn/keys';
 
@@ -41,46 +47,10 @@ export function isCacheFresh(cache, now, refreshRatio = 0.8) {
   return now - cache.mintedAt < cache.ttl * 1000 * refreshRatio;
 }
 
-/**
- * Best-effort per-IP sliding window.
- *
- * Honest about what this is: Vercel runs many ephemeral instances, each with its
- * own module scope, so this throttles a single hot instance rather than a
- * distributed attack. It exists to stop one client hammering the endpoint, not
- * to be a security boundary. Move to Vercel KV / Upstash if quota burn appears.
- *
- * Note it now only sees CDN cache misses — edge-cached responses never reach the
- * function. That is fine: the point was to bound provider API calls, and edge
- * caching bounds them harder. The credential TTL remains what limits abuse.
- */
-export function rateLimit(hits, key, now, limit, windowMs) {
-  const recent = (hits.get(key) || []).filter((t) => now - t < windowMs);
-  if (recent.length >= limit) {
-    hits.set(key, recent);
-    return { allowed: false, retryAfter: Math.ceil((windowMs - (now - recent[0])) / 1000) };
-  }
-  recent.push(now);
-  hits.set(key, recent);
-  return { allowed: true, remaining: limit - recent.length };
-}
-
-// Keep the map from growing without bound across a warm instance's lifetime.
-export function pruneHits(hits, now, windowMs) {
-  for (const [key, times] of hits) {
-    const recent = times.filter((t) => now - t < windowMs);
-    if (recent.length) hits.set(key, recent);
-    else hits.delete(key);
-  }
-}
-
-// Vercel sits behind a proxy, so the client address is the FIRST entry of
-// x-forwarded-for; the rest are intermediaries and are trivially spoofable.
-export function clientIp(headers) {
-  const fwd = headers['x-forwarded-for'] || headers['X-Forwarded-For'];
-  if (typeof fwd === 'string' && fwd.trim()) return fwd.split(',')[0].trim();
-  if (Array.isArray(fwd) && fwd.length) return String(fwd[0]).split(',')[0].trim();
-  return headers['x-real-ip'] || 'unknown';
-}
+// rateLimit's per-endpoint note: this endpoint's limiter now only sees CDN cache
+// misses — edge-cached responses never reach the function. That's fine, the
+// point was bounding provider API calls, and edge caching bounds them harder.
+// The credential TTL remains what limits abuse.
 
 export function credentialsUrl(tokenId) {
   return `${CF_TURN_API}/${encodeURIComponent(tokenId)}/credentials/generate`;
