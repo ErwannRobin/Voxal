@@ -125,15 +125,15 @@ test.describe('selectVideoTopology — truth table', () => {
 });
 
 test.describe('video routing preference — persistence', () => {
-  test('defaults to prefer-p2p when unset', async ({ page }) => {
+  test('defaults to allow-sfu when unset', async ({ page }) => {
     await page.goto('/');
-    expect(await page.evaluate(() => videoRoutingPreference())).toBe('prefer-p2p');
+    expect(await page.evaluate(() => videoRoutingPreference())).toBe('allow-sfu');
   });
 
   test('reads back a stored value', async ({ page }) => {
     await page.goto('/');
-    await page.evaluate(() => localStorage.setItem('video-routing-mode', 'allow-sfu'));
-    expect(await page.evaluate(() => videoRoutingPreference())).toBe('allow-sfu');
+    await page.evaluate(() => localStorage.setItem('video-routing-mode', 'prefer-p2p'));
+    expect(await page.evaluate(() => videoRoutingPreference())).toBe('prefer-p2p');
     await page.evaluate(() => localStorage.setItem('video-routing-mode', 'p2p-only'));
     expect(await page.evaluate(() => videoRoutingPreference())).toBe('p2p-only');
   });
@@ -141,7 +141,7 @@ test.describe('video routing preference — persistence', () => {
   test('an invalid stored value falls back to the default rather than crashing', async ({ page }) => {
     await page.goto('/');
     await page.evaluate(() => localStorage.setItem('video-routing-mode', 'nonsense'));
-    expect(await page.evaluate(() => videoRoutingPreference())).toBe('prefer-p2p');
+    expect(await page.evaluate(() => videoRoutingPreference())).toBe('allow-sfu');
   });
 
   test('the in-page modal radios reflect the stored preference', async ({ page }) => {
@@ -259,5 +259,131 @@ test.describe('publish path — endpoint call pattern by preference', () => {
       await publishLocalTrack('video', stream);
     });
     expect(sfuHits).toBeGreaterThan(0);
+  });
+});
+
+// Regression tests for the black-remote-camera bug: an SFU session can
+// negotiate perfectly and still forward no media, because routing is driven by
+// the `tracks[]` instruction, not by the SDP exchange. The first version of
+// this integration sent no tracks[] at all and never named the remote track —
+// the session connected, the badge said "Relayed", and every tile was black.
+test.describe('SFU wire protocol — tracks[] is what actually routes media', () => {
+  function stubMint(page) {
+    return page.route('**/api/sfu-session', (route) => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ capability: 'fake.capability', expires_at: new Date(Date.now() + 300e3).toISOString(), sfu_app_id: 'app1' }),
+    }));
+  }
+
+  test('publishing names its own track: tracks[] carries location:local, a mid and a trackName', async ({ page }) => {
+    await page.goto('/');
+    await stubMint(page);
+    let published = null;
+    await page.route('**/api/sfu-track', async (route) => {
+      published = route.request().postDataJSON();
+      // Answer plausibly so setRemoteDescription succeeds against the offer.
+      const offer = published.offer;
+      route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ sessionId: 'cf-sess-1', sessionDescription: { type: 'answer', sdp: offer }, requiresImmediateRenegotiation: false, tracks: [] }),
+      });
+    });
+    await seedRoom(page, { selfId: 'self', isHost: true, roomCode: 'self' });
+    await page.evaluate(async () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 16; canvas.height = 16;
+      try { await sfuPublishTrack('video', canvas.captureStream(5)); } catch (_) { /* SDP round-trip may still reject; the request body is what matters */ }
+    });
+
+    expect(published, 'publish must reach /api/sfu-track').not.toBeNull();
+    expect(published.action).toBe('publish');
+    expect(Array.isArray(published.tracks)).toBe(true);
+    expect(published.tracks.length).toBeGreaterThan(0);
+    expect(published.tracks[0].location).toBe('local');
+    expect(published.tracks[0].trackName).toBeTruthy();
+    expect(published.tracks[0].mid == null).toBe(false);
+  });
+
+  test('subscribing names the REMOTE track: location:remote + publisher sessionId/trackName', async ({ page }) => {
+    await page.goto('/');
+    await stubMint(page);
+    let subscribed = null;
+    await page.route('**/api/sfu-track', (route) => {
+      subscribed = route.request().postDataJSON();
+      route.fulfill({ status: 502, contentType: 'application/json', body: '{}' }); // stop after asserting the request
+    });
+    await seedRoom(page, {
+      selfId: 'self', isHost: true, roomCode: 'self',
+      connections: [{ id: 'peer-1', pseudo: 'p1', open: true }],
+    });
+    await page.evaluate(async () => {
+      await sfuSubscribeVideo('peer-1', { sessionId: 'cf-publisher-sess', trackName: 'peer-1-video' });
+    });
+
+    expect(subscribed, 'subscribe must reach /api/sfu-track').not.toBeNull();
+    expect(subscribed.action).toBe('subscribe');
+    expect(subscribed.tracks[0]).toMatchObject({
+      location: 'remote',
+      sessionId: 'cf-publisher-sess',
+      trackName: 'peer-1-video',
+    });
+  });
+
+  test('a subscribe with no publisher track reference bails instead of opening a dead connection', async ({ page }) => {
+    // This is the exact silent failure that produced a black tile: negotiating
+    // a transceiver the SFU was never told to fill.
+    await page.goto('/');
+    await stubMint(page);
+    let trackHits = 0;
+    await page.route('**/api/sfu-track', (route) => { trackHits++; route.fulfill({ status: 502, contentType: 'application/json', body: '{}' }); });
+    await seedRoom(page, {
+      selfId: 'self', isHost: true, roomCode: 'self',
+      connections: [{ id: 'peer-1', pseudo: 'p1', open: true }],
+    });
+    await page.evaluate(() => sfuSubscribeVideo('peer-1', undefined));
+    expect(trackHits).toBe(0);
+
+    await page.evaluate(() => sfuSubscribeVideo('peer-1', { sessionId: 'only-half' }));
+    expect(trackHits).toBe(0);
+  });
+
+  test('a remote pull answers Cloudflare\'s offer via /api/sfu-renegotiate', async ({ page }) => {
+    await page.goto('/');
+    await stubMint(page);
+    // Cloudflare describes the track it will forward, so the SUBSCRIBER must
+    // answer an offer rather than receive an answer.
+    const OFFER_SDP = [
+      'v=0', 'o=- 0 0 IN IP4 127.0.0.1', 's=-', 't=0 0',
+      'a=group:BUNDLE 0',
+      'm=video 9 UDP/TLS/RTP/SAVPF 96', 'c=IN IP4 0.0.0.0',
+      'a=rtcp-mux', 'a=ice-ufrag:aaaa', 'a=ice-pwd:bbbbbbbbbbbbbbbbbbbbbb',
+      'a=fingerprint:sha-256 00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF',
+      'a=setup:actpass', 'a=mid:0', 'a=sendonly',
+      'a=rtpmap:96 VP8/90000', '',
+    ].join('\r\n');
+    await page.route('**/api/sfu-track', (route) => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({
+        sessionId: 'cf-sub-sess',
+        sessionDescription: { type: 'offer', sdp: OFFER_SDP },
+        requiresImmediateRenegotiation: true,
+        tracks: [],
+      }),
+    }));
+    let renegotiated = null;
+    await page.route('**/api/sfu-renegotiate', (route) => {
+      renegotiated = route.request().postDataJSON();
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+    });
+    await seedRoom(page, {
+      selfId: 'self', isHost: true, roomCode: 'self',
+      connections: [{ id: 'peer-1', pseudo: 'p1', open: true }],
+    });
+    await page.evaluate(() =>
+      sfuSubscribeVideo('peer-1', { sessionId: 'cf-publisher-sess', trackName: 'peer-1-video' }));
+
+    expect(renegotiated, 'an offer with requiresImmediateRenegotiation must be answered').not.toBeNull();
+    expect(renegotiated.sessionId).toBe('cf-sub-sess');
+    expect(renegotiated.answer).toContain('v=0');
   });
 });

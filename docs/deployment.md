@@ -36,8 +36,10 @@ cannot live in the client, is in [TURN & ICE configuration](turn-and-ice.md#anon
 ## Optional video/screen-share relay (Cloudflare Realtime SFU)
 
 Entirely optional and separate from the TURN relay above — it applies only to
-camera/screen-share video, never voice. `api/sfu-session.js` and
-`api/sfu-track.js` deploy the same way as `api/ice-servers.js`. Set:
+camera/screen-share video, never voice. `api/sfu-session.js`,
+`api/sfu-track.js` and `api/sfu-renegotiate.js` deploy the same way as
+`api/ice-servers.js`. Note the Cloudflare dashboard labels the app secret
+**API Token**; that is the value `CF_SFU_APP_SECRET` wants. Set:
 
 ```
 CF_SFU_APP_ID=<Cloudflare Realtime (Calls) app id>

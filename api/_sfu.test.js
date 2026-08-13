@@ -9,6 +9,8 @@ import {
   validateMintRequest,
   sfuSessionsUrl,
   sfuTracksUrl,
+  sfuRenegotiateUrl,
+  cloudflareTrackError,
 } from './_sfu.js';
 
 const SECRET = 'test-secret-do-not-use-in-prod';
@@ -106,4 +108,31 @@ test('sfuSessionsUrl and sfuTracksUrl build and escape Cloudflare Realtime URLs'
   );
   assert.ok(sfuSessionsUrl('a/b').includes('a%2Fb'));
   assert.ok(sfuTracksUrl('app1', 'a/b').includes('a%2Fb'));
+});
+
+test('sfuRenegotiateUrl builds and escapes the renegotiate endpoint', () => {
+  assert.equal(
+    sfuRenegotiateUrl('app1', 'sess1'),
+    'https://rtc.live.cloudflare.com/v1/apps/app1/sessions/sess1/renegotiate'
+  );
+  assert.ok(sfuRenegotiateUrl('a/b', 'sess1').includes('a%2Fb'));
+  assert.ok(sfuRenegotiateUrl('app1', 'a/b').includes('a%2Fb'));
+});
+
+test('cloudflareTrackError surfaces per-track failures hidden inside a 200 response', () => {
+  // The failure mode this exists for: Cloudflare answers 200 while rejecting
+  // the individual track, so an HTTP-status-only check hands back a session
+  // that forwards no media at all.
+  assert.equal(cloudflareTrackError(null), '');
+  assert.equal(cloudflareTrackError({}), '');
+  assert.equal(cloudflareTrackError({ tracks: [{ trackName: 'ok' }] }), '');
+
+  assert.match(
+    cloudflareTrackError({ tracks: [{ trackName: 'peer-video', errorCode: 'no_such_track', errorDescription: 'not found' }] }),
+    /no_such_track: not found \(track peer-video\)/
+  );
+  assert.match(
+    cloudflareTrackError({ errorCode: 'bad_session', errorDescription: 'expired' }),
+    /bad_session: expired/
+  );
 });

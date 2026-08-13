@@ -24,6 +24,37 @@ export function sfuTracksUrl(appId, sessionId) {
   return `${CF_SFU_API}/${encodeURIComponent(appId)}/sessions/${encodeURIComponent(sessionId)}/tracks/new`;
 }
 
+// Pulling a REMOTE track makes Cloudflare answer with an *offer* plus
+// `requiresImmediateRenegotiation`, which the client must answer back here.
+// Without this leg a subscriber negotiates a transceiver that never receives
+// media — which is exactly how the first version of this integration
+// presented: a connected session and a permanently black video tile.
+export function sfuRenegotiateUrl(appId, sessionId) {
+  return `${CF_SFU_API}/${encodeURIComponent(appId)}/sessions/${encodeURIComponent(sessionId)}/renegotiate`;
+}
+
+/**
+ * Cloudflare reports track-level failures inside a 200 response
+ * (`tracks[].errorCode` / `.errorDescription`) as well as at the top level, so
+ * an HTTP-status-only check silently accepts a session that will never carry
+ * media. Returns a short human-readable reason, or '' when nothing failed.
+ * Never includes anything we signed or sent — only Cloudflare's own words.
+ */
+export function cloudflareTrackError(parsed) {
+  if (!parsed || typeof parsed !== 'object') return '';
+  if (parsed.errorCode || parsed.errorDescription) {
+    return [parsed.errorCode, parsed.errorDescription].filter(Boolean).join(': ');
+  }
+  const tracks = Array.isArray(parsed.tracks) ? parsed.tracks : [];
+  for (const t of tracks) {
+    if (t && (t.errorCode || t.errorDescription)) {
+      const who = t.trackName ? ` (track ${t.trackName})` : '';
+      return [t.errorCode, t.errorDescription].filter(Boolean).join(': ') + who;
+    }
+  }
+  return '';
+}
+
 const VALID_KINDS = new Set(['video', 'screen']);
 const VALID_ACTIONS = new Set(['publish', 'subscribe']);
 

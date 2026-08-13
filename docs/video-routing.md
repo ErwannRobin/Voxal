@@ -38,9 +38,16 @@ this feature.
 
 | Choice | Behaviour |
 |---|---|
-| **Prefer direct** *(default)* | Video/screen try peer-to-peer first. If a room outgrows a comfortable mesh, Voxal reports it and offers to allow a relay — it never switches on its own. |
-| **Allow relay for large rooms** | Still prefers peer-to-peer when it looks viable; uses Cloudflare's SFU once the room is large enough that a mesh stops being practical. |
+| **Allow relay for large rooms** *(default)* | Still prefers peer-to-peer when it looks viable; uses Cloudflare's SFU once the room is large enough that a mesh stops being practical (more than 2 participants). |
+| **Prefer direct** | Video/screen try peer-to-peer first. If a room outgrows a comfortable mesh, Voxal reports it and offers to allow a relay — it never switches on its own. |
 | **Direct only — never relay video** | Never uses an SFU, full stop, regardless of room size or whether one is configured. Large rooms may see video fail to establish; voice is unaffected either way. |
+
+> **The default relays video in group calls.** Because **Allow relay for large
+> rooms** ships as the default, a user who changes nothing will have their
+> *camera and screen-share* routed through Cloudflare once a call passes two
+> participants — and, per the section above, an SFU can technically see that
+> video. Voice is never affected under any setting. Choose **Prefer direct**
+> or **Direct only** to keep video off the relay.
 
 This setting is `localStorage['video-routing-mode']` (`'prefer-p2p' \|
 'allow-sfu' \| 'p2p-only'`), read by `videoRoutingPreference()` in
@@ -53,9 +60,12 @@ equivalent setting for audio, because audio has only one routing mode.
 decides P2P vs. SFU for a `video` or `screen` track. It is pure (no network,
 no DOM) and has one property enforced by construction, checked by an explicit
 unit test: **it can only ever return `sfu` when the preference is `allow-sfu`.**
-A `prefer-p2p` user is never silently moved onto a relay; a degraded mesh
-under that preference is reported back as a P2P decision with a reason the UI
-turns into an explicit prompt, never an automatic switch.
+A user who has selected `prefer-p2p` is never moved onto a relay by the
+selector; a degraded mesh under that preference is reported back as a P2P
+decision with a reason the UI turns into an explicit prompt. Note this is a
+statement about the *preference*, not about the shipped default — since
+`allow-sfu` is now the default, the common case is that the selector is
+permitted to choose the relay without asking (see the warning above).
 
 | Reason | Meaning |
 |---|---|
@@ -104,9 +114,48 @@ secrets only ever read from `process.env`, never returned to the client.
   makes no Cloudflare API call. Mints a short-lived, HMAC-signed *capability
   token* scoped to one `{roomCode, participantId, kind, action}` tuple.
 - **`POST /api/sfu-track`** (`api/sfu-track.js`) — verifies that token, then
-  proxies the client's SDP offer to Cloudflare's Realtime API using the
-  Cloudflare app secret (which never leaves this endpoint), and returns
-  Cloudflare's SDP answer.
+  proxies the SDP and the `tracks[]` instruction to Cloudflare's Realtime API
+  using the Cloudflare app secret (which never leaves this endpoint). It
+  returns Cloudflare's `sessionDescription`, `requiresImmediateRenegotiation`
+  and `tracks` unflattened, so the client can tell an offer from an answer,
+  and surfaces Cloudflare's `errorCode`/`errorDescription` — including the
+  per-track errors Cloudflare reports inside a `200` — rather than reporting
+  success for a session that will never carry media.
+- **`POST /api/sfu-renegotiate`** (`api/sfu-renegotiate.js`) — same token
+  verification; hands the subscriber's answer back to Cloudflare to complete a
+  remote pull.
+
+### The wire protocol (what actually routes media)
+
+The part that trips people up: **an established SFU session forwards nothing on
+its own.** Routing is driven by the `tracks[]` instruction, not by the SDP
+exchange, so it is entirely possible to negotiate a healthy peer connection,
+show a connected session, and receive no media at all. The first version of
+this integration did exactly that — it omitted `tracks[]` and never named the
+remote track, producing perfectly "connected" black video tiles.
+
+Publishing (`sfuPublishTrack`):
+
+1. `addTransceiver(track, { direction: 'sendonly' })` — keep the transceiver,
+   Cloudflare needs each track's `mid`.
+2. Offer → `POST /api/sfu-track` with `action:'publish'`, the SDP, and
+   `tracks: [{ location:'local', mid, trackName }]`.
+3. Apply Cloudflare's answer. `trackName` is `<voxal peer id>-<kind>`.
+
+Subscribing (`sfuSubscribeTrack`) — note the asymmetry:
+
+1. `POST /api/sfu-track` with `action:'subscribe'` and
+   `tracks: [{ location:'remote', sessionId: <publisher's>, trackName }]`,
+   **with no local SDP**.
+2. Cloudflare replies with an **offer** (it describes the track it will
+   forward) plus `requiresImmediateRenegotiation`.
+3. Answer it and `POST /api/sfu-renegotiate` to close the loop.
+
+The publisher's `{ sessionId, trackName }` travels to subscribers as
+`providerRef` on the existing `video-offer`/`screen-offer` messages, and on
+`peer-list` for anyone joining a share already in progress. A subscriber
+without it refuses to negotiate rather than opening a connection that can
+never receive — silence there was the original black-tile bug.
 
 ### Environment variables
 

@@ -15,10 +15,12 @@
  *   peer-list    { peers:[{id,pseudo,              host -> joiner (reply to hello)
  *                  protocolVersion,appVersion,
  *                  videoActive?,screenActive?,
- *                  videoTopology?,screenTopology?}],
+ *                  videoTopology?,screenTopology?,
+ *                  videoProviderRef?,screenProviderRef?}],
  *                  hostId, hostPseudo, deputyId, successorIds,
  *                  hostVideoActive, hostScreenActive,
  *                  hostVideoTopology, hostScreenTopology,
+ *                  hostVideoProviderRef, hostScreenProviderRef,
  *                  protocolVersion, appVersion }
  *   peer-joined  { peerId, pseudo }               host -> all existing peers
  *   peer-left    { peerId }                       host -> all
@@ -32,8 +34,9 @@
  *   video-offer  { peerId, topology, providerRef? } peer -> host (relayed) — peer started camera.
  *                  topology: 'p2p' (default, expect a MediaConnection) | 'sfu' (subscribe via
  *                  the Cloudflare SFU router instead — see sfuSubscribeVideo()). providerRef is
- *                  an opaque SFU-internal token, never a bare Cloudflare id read outside the
- *                  SFU router functions.
+ *                  {sessionId, trackName}: opaque SFU-internal routing identifiers, read only
+ *                  inside the SFU router functions. A subscriber MUST have it — without naming
+ *                  the remote track there is nothing for the SFU to forward.
  *   video-stop   { peerId }                     peer -> host (relayed) — peer stopped camera
  *   audio-check-request  { peerId, from,        viewer -> host (relayed to target); dev only
  *                          durationMs }
@@ -100,7 +103,7 @@ const NOISE_SUPPRESSION_KEY = 'noise-suppression'; // 'rnnoise' | 'browser' | 'o
 // ONLY — see selectVideoTopology() below. Voice/PTT audio never reads this key
 // and is never routed through an SFU, under any value of this setting.
 const VIDEO_ROUTING_KEY      = 'video-routing-mode';
-const VIDEO_ROUTING_DEFAULT  = 'prefer-p2p';
+const VIDEO_ROUTING_DEFAULT  = 'allow-sfu';
 // Local-test-double override for the SFU allocation endpoints, mirroring how
 // `localStorage['peerjs-server']` (see peerServerOptions()) points the mesh E2E
 // harness at a local broker instead of the PeerJS cloud broker. Unset in
@@ -200,7 +203,11 @@ function peerServerOptions() {
 // VIDEO_ROUTING_KEY above.
 function videoRoutingPreference() {
   var v = localStorage.getItem(VIDEO_ROUTING_KEY);
-  return (v === 'allow-sfu' || v === 'p2p-only') ? v : VIDEO_ROUTING_DEFAULT;
+  // Every valid value must be listed explicitly. Leaving one out means an
+  // explicit user choice silently falls through to the default — which, now
+  // that the default is 'allow-sfu', would quietly downgrade someone who
+  // deliberately picked 'prefer-p2p'.
+  return (v === 'prefer-p2p' || v === 'allow-sfu' || v === 'p2p-only') ? v : VIDEO_ROUTING_DEFAULT;
 }
 
 function shouldPersistPseudoGlobally() {
@@ -816,8 +823,9 @@ function anonymousTurnUrl() {
 // Same same-origin-on-web / absolute-on-native resolution as anonymousTurnUrl()
 // above, plus a JSON override for the mesh E2E harness. This never applies to
 // audio — see VIDEO_ROUTING_KEY.
-const DEFAULT_SFU_SESSION_URL = 'https://ptt.voxal.app/api/sfu-session';
-const DEFAULT_SFU_TRACK_URL   = 'https://ptt.voxal.app/api/sfu-track';
+const DEFAULT_SFU_SESSION_URL     = 'https://ptt.voxal.app/api/sfu-session';
+const DEFAULT_SFU_TRACK_URL       = 'https://ptt.voxal.app/api/sfu-track';
+const DEFAULT_SFU_RENEGOTIATE_URL = 'https://ptt.voxal.app/api/sfu-renegotiate';
 
 function _sfuServerOverride() {
   try {
@@ -838,6 +846,13 @@ function sfuTrackUrl() {
   if (override && override.trackUrl) return override.trackUrl;
   if (IS_PLAIN_WEB && /^https?:$/.test(location.protocol)) return '/api/sfu-track';
   return DEFAULT_SFU_TRACK_URL;
+}
+
+function sfuRenegotiateEndpoint() {
+  var override = _sfuServerOverride();
+  if (override && override.renegotiateUrl) return override.renegotiateUrl;
+  if (IS_PLAIN_WEB && /^https?:$/.test(location.protocol)) return '/api/sfu-renegotiate';
+  return DEFAULT_SFU_RENEGOTIATE_URL;
 }
 
 // Credentials are time-boxed, so keep them only until they expire.
@@ -8683,7 +8698,21 @@ async function sfuMintCapability(kind, action) {
   return res.json(); // { capability, expires_at, sfu_app_id }
 }
 
-async function sfuNegotiate(kind, action, offerSdp, minted) {
+// Reads the SDP out of whatever shape Cloudflare returned — it may be a bare
+// string or a {type, sdp} description depending on the leg.
+function _sdpOf(description) {
+  if (!description) return '';
+  return typeof description === 'string' ? description : (description.sdp || '');
+}
+
+// A stable, human-readable track name, unique per publisher per kind so a
+// subscriber can name exactly what it wants and the Cloudflare dashboard is
+// readable. Voxal's own peer id — no Cloudflare concept leaks outward.
+function sfuTrackNameFor(participantId, kind) {
+  return participantId + '-' + kind;
+}
+
+async function sfuNegotiate(kind, action, offerSdp, minted, tracks, sessionId) {
   var res = await fetch(sfuTrackUrl(), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -8693,26 +8722,74 @@ async function sfuNegotiate(kind, action, offerSdp, minted) {
       participantId: peer.id,
       kind: kind,
       action: action,
-      offer: offerSdp
+      offer: offerSdp || undefined,
+      sessionId: sessionId || undefined,
+      // The instruction that actually routes media. Without it Cloudflare
+      // negotiates a session and forwards nothing — a black tile.
+      tracks: tracks
     }),
     cache: 'no-store'
   });
-  if (!res.ok) throw Object.assign(new Error('SFU negotiate failed: HTTP ' + res.status), { code: 'negotiate_failed' });
-  return res.json(); // { sessionId, answer }
+  if (!res.ok) {
+    var detail = await res.json().catch(function() { return {}; });
+    throw Object.assign(
+      new Error('SFU negotiate failed: HTTP ' + res.status + (detail.detail ? ' — ' + detail.detail : '')),
+      { code: 'negotiate_failed' }
+    );
+  }
+  return res.json(); // { sessionId, sessionDescription, requiresImmediateRenegotiation, tracks }
+}
+
+async function sfuRenegotiate(kind, action, answerSdp, minted, sessionId) {
+  var res = await fetch(sfuRenegotiateEndpoint(), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      capability: minted.capability,
+      roomCode: roomCode,
+      participantId: peer.id,
+      kind: kind,
+      action: action,
+      answer: answerSdp,
+      sessionId: sessionId
+    }),
+    cache: 'no-store'
+  });
+  if (!res.ok) {
+    var detail = await res.json().catch(function() { return {}; });
+    throw Object.assign(
+      new Error('SFU renegotiate failed: HTTP ' + res.status + (detail.detail ? ' — ' + detail.detail : '')),
+      { code: 'renegotiate_failed' }
+    );
+  }
+  return res.json();
 }
 
 async function sfuPublishTrack(kind, stream) {
   var minted = await sfuMintCapability(kind, 'publish');
   var pc = new RTCPeerConnection(); // client<->Cloudflare edge leg — STUN/TURN need unverified per docs/video-routing.md
-  stream.getTracks().forEach(function(t) { pc.addTrack(t, stream); });
+  var trackName = sfuTrackNameFor(peer.id, kind);
+
+  // Keep the transceivers: Cloudflare needs each track's `mid` to know which
+  // m-line carries which named track.
+  var transceivers = stream.getTracks().map(function(t) {
+    return pc.addTransceiver(t, { direction: 'sendonly', streams: [stream] });
+  });
   var offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
-  var result = await sfuNegotiate(kind, 'publish', pc.localDescription.sdp, minted);
-  await pc.setRemoteDescription({ type: 'answer', sdp: result.answer });
-  _sfuPublishSessions[kind] = { pc: pc, cfSessionId: result.sessionId };
-  _setTrackState(peer.id, kind, { state: 'published', topology: 'sfu', _providerRef: result.sessionId });
+
+  var tracks = transceivers.map(function(tr) {
+    return { location: 'local', mid: tr.mid, trackName: trackName };
+  });
+  var result = await sfuNegotiate(kind, 'publish', pc.localDescription.sdp, minted, tracks);
+  await pc.setRemoteDescription({ type: 'answer', sdp: _sdpOf(result.sessionDescription) });
+
+  _sfuPublishSessions[kind] = { pc: pc, cfSessionId: result.sessionId, trackName: trackName };
+  var providerRef = { sessionId: result.sessionId, trackName: trackName };
+  _setTrackState(peer.id, kind, { state: 'published', topology: 'sfu', _providerRef: providerRef });
+  devLog('[SFU] published ' + kind + ' as "' + trackName + '" in session ' + result.sessionId);
   _wireSfuReconnect(pc, kind, peer.id, 'publish', function() { return sfuRenegotiatePublish(kind, stream); });
-  return result.sessionId;
+  return providerRef;
 }
 
 function sfuUnpublishTrack(kind) {
@@ -8724,7 +8801,13 @@ function sfuUnpublishTrack(kind) {
 
 async function sfuRenegotiatePublish(kind, stream) {
   sfuUnpublishTrack(kind);
-  return sfuPublishTrack(kind, stream);
+  var providerRef = await sfuPublishTrack(kind, stream);
+  // A republish mints a NEW Cloudflare session, so every subscriber's
+  // {sessionId, trackName} is now stale — re-announce or they keep pulling a
+  // track that no longer exists (a black tile that "reconnected successfully").
+  var topology = _localVideoTopology[kind] || { mode: 'sfu', reason: VIDEO_TOPOLOGY_REASON.PREFERENCE_ALLOW_SFU };
+  announceLocalTrackTopology(kind, topology, providerRef);
+  return providerRef;
 }
 
 function sfuPublishVideo(stream) { return sfuPublishTrack('video', stream); }
@@ -8732,9 +8815,28 @@ function sfuPublishScreen(stream) { return sfuPublishTrack('screen', stream); }
 function sfuUnpublishVideo() { return sfuUnpublishTrack('video'); }
 function sfuUnpublishScreen() { return sfuUnpublishTrack('screen'); }
 
-async function sfuSubscribeTrack(kind, publisherPeerId) {
+// Subscribing needs the publisher's Cloudflare {sessionId, trackName}, which
+// arrives over Voxal's own signaling as `providerRef`. Without naming the
+// remote track there is nothing for Cloudflare to forward — the session
+// connects and the tile stays black, which is exactly how this failed before.
+function _normalizeProviderRef(providerRef) {
+  if (!providerRef || typeof providerRef !== 'object') return null;
+  if (!providerRef.sessionId || !providerRef.trackName) return null;
+  return { sessionId: providerRef.sessionId, trackName: providerRef.trackName };
+}
+
+async function sfuSubscribeTrack(kind, publisherPeerId, providerRef) {
   var conn = connections.get(publisherPeerId);
   if (!conn) return;
+
+  var ref = _normalizeProviderRef(providerRef || _rememberedProviderRef(publisherPeerId, kind));
+  if (!ref) {
+    // Bail loudly instead of negotiating a transceiver that can never receive.
+    devLog('[SFU] subscribe ' + kind + ' from ' + shortId(publisherPeerId) +
+      ' skipped: publisher sent no track reference', 'warn');
+    return;
+  }
+
   var minted = await sfuMintCapability(kind, 'subscribe');
   var pc = new RTCPeerConnection();
   var remoteStream = new MediaStream();
@@ -8745,27 +8847,61 @@ async function sfuSubscribeTrack(kind, publisherPeerId) {
     if (kind === 'video') attachRemoteVideo(publisherPeerId, remoteStream);
     else attachRemoteScreen(publisherPeerId, remoteStream);
   });
-  pc.addTransceiver('video', { direction: 'recvonly' });
-  var offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  var result = await sfuNegotiate(kind, 'subscribe', pc.localDescription.sdp, minted);
-  await pc.setRemoteDescription({ type: 'answer', sdp: result.answer });
+
+  // No local transceiver and no local offer here: for a remote pull Cloudflare
+  // describes the track it will forward, so it generates the offer.
+  var result = await sfuNegotiate(kind, 'subscribe', null, minted, [{
+    location: 'remote',
+    sessionId: ref.sessionId,
+    trackName: ref.trackName
+  }]);
+
+  var sdp = _sdpOf(result.sessionDescription);
+  if (result.requiresImmediateRenegotiation && sdp) {
+    // Cloudflare offered; answer it and hand the answer back to close the loop.
+    await pc.setRemoteDescription({ type: 'offer', sdp: sdp });
+    var answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await sfuRenegotiate(kind, 'subscribe', pc.localDescription.sdp, minted, result.sessionId);
+  } else if (sdp) {
+    await pc.setRemoteDescription({ type: 'answer', sdp: sdp });
+  } else {
+    throw Object.assign(new Error('SFU subscribe returned no session description'), { code: 'negotiate_failed' });
+  }
 
   var shim = { peerConnection: pc, close: function() { try { pc.close(); } catch (_) {} } };
   if (kind === 'video') conn.videoMedia = shim; else conn.screenMedia = shim;
   var topologyPatch = {}; topologyPatch[kind + 'Topology'] = { mode: 'sfu', reason: VIDEO_TOPOLOGY_REASON.PREFERENCE_ALLOW_SFU };
   Object.assign(conn, topologyPatch);
-  _setTrackState(publisherPeerId, kind, { state: 'subscribed', topology: 'sfu', _providerRef: result.sessionId });
-  _wireSfuReconnect(pc, kind, publisherPeerId, 'subscribe', function() { return sfuSubscribeTrack(kind, publisherPeerId); });
+  _setTrackState(publisherPeerId, kind, { state: 'subscribed', topology: 'sfu', _providerRef: ref });
+  devLog('[SFU] subscribed to ' + kind + ' "' + ref.trackName + '" from ' + shortId(publisherPeerId));
+  _wireSfuReconnect(pc, kind, publisherPeerId, 'subscribe', function() {
+    return sfuSubscribeTrack(kind, publisherPeerId, ref);
+  });
 }
 
-function sfuSubscribeVideo(publisherPeerId) {
-  return sfuSubscribeTrack('video', publisherPeerId).catch(function(e) {
+// Publishers announce their {sessionId, trackName} over signaling; remember it
+// per peer so a resubscribe (reconnect, topology reconcile) doesn't need the
+// original message again.
+function _rememberProviderRef(publisherPeerId, kind, providerRef) {
+  var ref = _normalizeProviderRef(providerRef);
+  if (!ref) return null;
+  _setTrackState(publisherPeerId, kind, { _providerRef: ref });
+  return ref;
+}
+
+function _rememberedProviderRef(publisherPeerId, kind) {
+  var track = _videoTrackRegistry.get(_trackRegistryKey(publisherPeerId, kind));
+  return track ? track._providerRef : null;
+}
+
+function sfuSubscribeVideo(publisherPeerId, providerRef) {
+  return sfuSubscribeTrack('video', publisherPeerId, providerRef).catch(function(e) {
     devLog('[SFU] subscribe video from ' + shortId(publisherPeerId) + ' failed: ' + (e && e.message ? e.message : e), 'warn');
   });
 }
-function sfuSubscribeScreen(publisherPeerId) {
-  return sfuSubscribeTrack('screen', publisherPeerId).catch(function(e) {
+function sfuSubscribeScreen(publisherPeerId, providerRef) {
+  return sfuSubscribeTrack('screen', publisherPeerId, providerRef).catch(function(e) {
     devLog('[SFU] subscribe screen from ' + shortId(publisherPeerId) + ' failed: ' + (e && e.message ? e.message : e), 'warn');
   });
 }
@@ -9598,11 +9734,19 @@ function buildHostPeerList(excludedPeerId) {
       var entry = { id: id, pseudo: pseudo, pseudoColor: conn && conn.pseudoColor ? conn.pseudoColor : null };
       if (conn && conn.videoActive) {
         entry.videoActive = true;
-        if (conn.videoTopology && conn.videoTopology.mode === 'sfu') entry.videoTopology = 'sfu';
+        if (conn.videoTopology && conn.videoTopology.mode === 'sfu') {
+          entry.videoTopology = 'sfu';
+          // A late joiner gets no mesh call for an SFU sharer, so it needs the
+          // publisher's {sessionId, trackName} to subscribe on its own.
+          entry.videoProviderRef = _rememberedProviderRef(id, 'video') || undefined;
+        }
       }
       if (conn && conn.screenActive) {
         entry.screenActive = true;
-        if (conn.screenTopology && conn.screenTopology.mode === 'sfu') entry.screenTopology = 'sfu';
+        if (conn.screenTopology && conn.screenTopology.mode === 'sfu') {
+          entry.screenTopology = 'sfu';
+          entry.screenProviderRef = _rememberedProviderRef(id, 'screen') || undefined;
+        }
       }
       if (conn && conn.protocolVersion != null) entry.protocolVersion = conn.protocolVersion;
       if (conn && conn.appVersion) entry.appVersion = conn.appVersion;
@@ -9910,6 +10054,8 @@ function sendHostPeerList(dataConn, excludedPeerId) {
     hostScreenActive: localScreenActive,
     hostVideoTopology: (_localVideoTopology.video && _localVideoTopology.video.mode === 'sfu') ? 'sfu' : 'p2p',
     hostScreenTopology: (_localVideoTopology.screen && _localVideoTopology.screen.mode === 'sfu') ? 'sfu' : 'p2p',
+    hostVideoProviderRef: _rememberedProviderRef(peer.id, 'video') || undefined,
+    hostScreenProviderRef: _rememberedProviderRef(peer.id, 'screen') || undefined,
     videoModeEnabled: videoModeEnabled,
     debugMode: isDevModeEnabled(),
     jitterMs: hostJitterBroadcastMs(),
@@ -10119,7 +10265,10 @@ function handleJoinerDataConnection(dataConn) {
       // The host is a viewer too, just like any other peer — subscribe to
       // render it (the P2P case needs no equivalent call: it arrives via the
       // ordinary peer.on('call') path, same as for any other peer).
-      if (voTopology === 'sfu') sfuSubscribeVideo(joinerId);
+      if (voTopology === 'sfu') {
+        _rememberProviderRef(joinerId, 'video', msg.providerRef);
+        sfuSubscribeVideo(joinerId, msg.providerRef);
+      }
     } else if (msg.type === 'video-stop') {
       // Relay to all other peers
       var vsConn = connections.get(joinerId);
@@ -10138,7 +10287,10 @@ function handleJoinerDataConnection(dataConn) {
           sendDataIfOpen(c.data, { type: 'screen-offer', peerId: joinerId, topology: soTopology, providerRef: msg.providerRef });
         }
       });
-      if (soTopology === 'sfu') sfuSubscribeScreen(joinerId);
+      if (soTopology === 'sfu') {
+        _rememberProviderRef(joinerId, 'screen', msg.providerRef);
+        sfuSubscribeScreen(joinerId, msg.providerRef);
+      }
     } else if (msg.type === 'screen-stop') {
       var ssConn = connections.get(joinerId);
       if (ssConn && ssConn.screenTopology && ssConn.screenTopology.mode === 'sfu') sfuUnsubscribeTrack('screen', joinerId);
@@ -10395,6 +10547,8 @@ function handleHostMessage(msg) {
       screenActive: !!msg.hostScreenActive,
       videoTopology: msg.hostVideoTopology,
       screenTopology: msg.hostScreenTopology,
+      videoProviderRef: msg.hostVideoProviderRef,
+      screenProviderRef: msg.hostScreenProviderRef,
       protocolVersion: msg.protocolVersion,
       appVersion: msg.appVersion
     }]);
@@ -10413,21 +10567,27 @@ function handleHostMessage(msg) {
         update.videoActive = true;
         if (p.videoTopology === 'sfu') {
           update.videoTopology = { mode: 'sfu', reason: VIDEO_TOPOLOGY_REASON.PREFERENCE_ALLOW_SFU };
-          if (peerId !== peer.id) toSubscribeVideo.push(peerId);
+          if (peerId !== peer.id) toSubscribeVideo.push({ peerId: peerId, ref: p.videoProviderRef });
         }
       }
       if (p.screenActive) {
         update.screenActive = true;
         if (p.screenTopology === 'sfu') {
           update.screenTopology = { mode: 'sfu', reason: VIDEO_TOPOLOGY_REASON.PREFERENCE_ALLOW_SFU };
-          if (peerId !== peer.id) toSubscribeScreen.push(peerId);
+          if (peerId !== peer.id) toSubscribeScreen.push({ peerId: peerId, ref: p.screenProviderRef });
         }
       }
       connections.set(peerId, Object.assign({}, prev, update));
       noteRemoteVersion((peerId === roomCode ? 'host ' : 'peer ') + shortId(peerId), p.protocolVersion, p.appVersion, peerId);
     });
-    toSubscribeVideo.forEach(function(peerId) { sfuSubscribeVideo(peerId); });
-    toSubscribeScreen.forEach(function(peerId) { sfuSubscribeScreen(peerId); });
+    toSubscribeVideo.forEach(function(t) {
+      _rememberProviderRef(t.peerId, 'video', t.ref);
+      sfuSubscribeVideo(t.peerId, t.ref);
+    });
+    toSubscribeScreen.forEach(function(t) {
+      _rememberProviderRef(t.peerId, 'screen', t.ref);
+      sfuSubscribeScreen(t.peerId, t.ref);
+    });
 
     // Sync video mode state from host
     if (msg.videoModeEnabled !== undefined) {
@@ -10481,7 +10641,10 @@ function handleHostMessage(msg) {
     markPeerVideoActive(msg.peerId, true);
     var voMsgConn = connections.get(msg.peerId);
     if (voMsgConn) voMsgConn.videoTopology = { mode: voMsgTopology, reason: VIDEO_TOPOLOGY_REASON.PREFERENCE_ALLOW_SFU };
-    if (voMsgTopology === 'sfu' && msg.peerId !== peer.id) sfuSubscribeVideo(msg.peerId);
+    if (voMsgTopology === 'sfu' && msg.peerId !== peer.id) {
+      _rememberProviderRef(msg.peerId, 'video', msg.providerRef);
+      sfuSubscribeVideo(msg.peerId, msg.providerRef);
+    }
   } else if (msg.type === 'video-stop') {
     var vsMsgConn = connections.get(msg.peerId);
     if (vsMsgConn && vsMsgConn.videoTopology && vsMsgConn.videoTopology.mode === 'sfu') sfuUnsubscribeTrack('video', msg.peerId);
@@ -10511,7 +10674,10 @@ function handleHostMessage(msg) {
     markPeerScreenActive(msg.peerId, true);
     var soMsgConn = connections.get(msg.peerId);
     if (soMsgConn) soMsgConn.screenTopology = { mode: soMsgTopology, reason: VIDEO_TOPOLOGY_REASON.PREFERENCE_ALLOW_SFU };
-    if (soMsgTopology === 'sfu' && msg.peerId !== peer.id) sfuSubscribeScreen(msg.peerId);
+    if (soMsgTopology === 'sfu' && msg.peerId !== peer.id) {
+      _rememberProviderRef(msg.peerId, 'screen', msg.providerRef);
+      sfuSubscribeScreen(msg.peerId, msg.providerRef);
+    }
   } else if (msg.type === 'screen-stop') {
     var ssMsgConn = connections.get(msg.peerId);
     if (ssMsgConn && ssMsgConn.screenTopology && ssMsgConn.screenTopology.mode === 'sfu') sfuUnsubscribeTrack('screen', msg.peerId);

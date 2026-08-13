@@ -5,18 +5,27 @@
 //
 // The client must first call POST /api/sfu-session (api/sfu-session.js) to get
 // a `capability` token scoped to {roomCode, participantId, kind, action}. This
-// endpoint verifies that token, then proxies the client's local SDP offer to
-// Cloudflare's `sessions/new` (first publish/subscribe for this participant in
-// this room) or `tracks/new` (adding a track to an existing session — reuses
-// `sessionId` so a participant doesn't need a new Cloudflare session per track)
-// and returns Cloudflare's SDP answer.
+// endpoint verifies that token, then proxies to Cloudflare:
 //
-// NOTE for implementers: Cloudflare's exact Realtime (Calls) request/response
-// shape for sessions/new and tracks/new should be re-verified against current
-// Cloudflare docs before shipping this to production — this proxies a
-// reasonable/expected shape but has not been exercised against a live
-// Cloudflare account (see the plan's open questions on renegotiation support
-// and whether the client<->SFU leg needs its own STUN/TURN).
+//   publish   — POST sessions/new {sessionDescription: offer}   -> {sessionId, sessionDescription: answer}
+//               POST sessions/{id}/tracks/new
+//                 {tracks:[{location:'local', mid, trackName}], sessionDescription}
+//   subscribe — POST sessions/new {sessionDescription: offer}   -> {sessionId, ...}
+//               POST sessions/{id}/tracks/new
+//                 {tracks:[{location:'remote', sessionId:<publisher>, trackName}]}
+//               -> Cloudflare replies with an OFFER and requiresImmediateRenegotiation,
+//                  which the client answers via /api/sfu-renegotiate.
+//
+// The `tracks` array is the part that actually routes media. Omitting it (as
+// an earlier version of this file did) still yields a healthy-looking session
+// and SDP exchange while Cloudflare forwards nothing at all — the failure
+// mode is a connected peer connection whose video tile stays black.
+//
+// This endpoint deliberately does NOT flatten Cloudflare's answer: it returns
+// sessionDescription/requiresImmediateRenegotiation/tracks as-is so the client
+// can tell an offer from an answer, and surfaces Cloudflare's own
+// errorCode/errorDescription (which can appear on a 200 response, per track)
+// rather than reporting success for a session that will never carry media.
 //
 // Scope: video and screen-share ONLY, same boundary as api/sfu-session.js.
 //
@@ -25,7 +34,7 @@
 //   CF_SFU_APP_ID          — Cloudflare Realtime (Calls) app id
 //   CF_SFU_APP_SECRET      — Cloudflare Realtime app secret (never logged, never returned)
 
-import { verifyCapability, sfuSessionsUrl, sfuTracksUrl } from './_sfu.js';
+import { verifyCapability, sfuSessionsUrl, sfuTracksUrl, cloudflareTrackError } from './_sfu.js';
 
 async function callCloudflare(url, appSecret, body) {
   const res = await fetch(url, {
@@ -70,8 +79,19 @@ export default async function handler(req, res) {
   }
 
   const body = req.body && typeof req.body === 'object' ? req.body : {};
-  const { capability, roomCode, participantId, kind, action, offer, sessionId } = body;
-  if (typeof offer !== 'string' || !offer) {
+  const { capability, roomCode, participantId, kind, action, offer, sessionId, tracks } = body;
+
+  if (!Array.isArray(tracks) || !tracks.length) {
+    // Without this the SFU has nothing to route: the session negotiates fine
+    // and forwards no media. Reject loudly rather than returning a session
+    // that can only ever produce a black tile.
+    res.status(400).json({ error: 'invalid_request', message: 'missing tracks[]' });
+    return;
+  }
+  // A local (publish) track carries its own SDP; a remote (subscribe) pull is
+  // driven by Cloudflare, which generates the offer, so no SDP is required.
+  const needsOffer = tracks.some((t) => t && t.location !== 'remote');
+  if (needsOffer && (typeof offer !== 'string' || !offer)) {
     res.status(400).json({ error: 'invalid_request', message: 'missing sdp offer' });
     return;
   }
@@ -89,26 +109,49 @@ export default async function handler(req, res) {
 
   try {
     let cfSessionId = sessionId;
-    let answer;
 
+    // Establish the transport first if this client has no session yet. Its
+    // answer is discarded for the remote-pull case — Cloudflare re-offers
+    // below once it knows which track to forward.
+    let created = null;
     if (!cfSessionId) {
-      const created = await callCloudflare(sfuSessionsUrl(appId), appSecret, {
-        sessionDescription: { type: 'offer', sdp: offer },
+      created = await callCloudflare(sfuSessionsUrl(appId), appSecret, {
+        sessionDescription: offer ? { type: 'offer', sdp: offer } : undefined,
       });
       cfSessionId = created && created.sessionId;
-      answer = created && created.sessionDescription;
-      if (!cfSessionId || !answer) throw new Error('Cloudflare Realtime API returned no session');
-    } else {
-      const tracked = await callCloudflare(sfuTracksUrl(appId, cfSessionId), appSecret, {
-        sessionDescription: { type: 'offer', sdp: offer },
-      });
-      answer = tracked && tracked.sessionDescription;
-      if (!answer) throw new Error('Cloudflare Realtime API returned no answer');
+      if (!cfSessionId) throw new Error('Cloudflare Realtime API returned no sessionId');
     }
 
-    res.status(200).json({ sessionId: cfSessionId, answer: answer.sdp || answer });
+    const trackBody = { tracks };
+    if (needsOffer) trackBody.sessionDescription = { type: 'offer', sdp: offer };
+    const tracked = await callCloudflare(sfuTracksUrl(appId, cfSessionId), appSecret, trackBody);
+
+    // Cloudflare reports per-track failures inside a 200 — treat those as
+    // errors rather than handing back a session that forwards nothing.
+    const trackErr = cloudflareTrackError(tracked);
+    if (trackErr) {
+      const err = new Error('Cloudflare rejected the track');
+      err.detail = trackErr;
+      throw err;
+    }
+
+    // For a publish the useful SDP is the session answer; for a remote pull
+    // it is the tracks/new response, which is an OFFER needing renegotiation.
+    const sessionDescription = (tracked && tracked.sessionDescription)
+      || (created && created.sessionDescription)
+      || null;
+
+    res.status(200).json({
+      sessionId: cfSessionId,
+      sessionDescription,
+      requiresImmediateRenegotiation: !!(tracked && tracked.requiresImmediateRenegotiation),
+      tracks: (tracked && tracked.tracks) || [],
+    });
   } catch (err) {
     console.error('[sfu-track] negotiate failed:', err.message, err.detail || '');
-    res.status(502).json({ error: 'negotiate_failed', message: err.message });
+    // err.detail is Cloudflare's own error text (never our request/secret) —
+    // returning it is what makes a failure diagnosable from the client's dev
+    // log instead of surfacing as an unexplained black video tile.
+    res.status(502).json({ error: 'negotiate_failed', message: err.message, detail: err.detail || undefined });
   }
 }
