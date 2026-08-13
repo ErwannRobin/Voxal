@@ -3263,6 +3263,13 @@ var VIDEO_TOPOLOGY_REASON = {
   PREFERENCE_ALLOW_SFU: 'preference-allow-sfu'
 };
 
+// Video/screen is far heavier per participant than audio, so it gets its own,
+// much lower capacity threshold than ROOM_SOFT_WARN_PEERS (main.js:5729, the
+// audio-only room-size warning) — deliberately decoupled, not reused. Tuned
+// down from an earlier reuse of ROOM_SOFT_WARN_PEERS (8) after testing showed
+// that bar was too high: an 8-peer room with a camera on still read "Direct".
+var VIDEO_SFU_THRESHOLD_PEERS = 2; // "overCapacity" once participantCount > this
+
 /**
  * @param {'video'|'screen'} kind
  * @param {{preference?: string, participantCount?: number, meshHealthy?: boolean, sfuConfigured?: boolean}} opts
@@ -3274,7 +3281,7 @@ function selectVideoTopology(kind, opts) {
   var participantCount = opts.participantCount || 0;
   var meshHealthy = opts.meshHealthy !== false;
   var sfuConfigured = !!opts.sfuConfigured;
-  var overCapacity = participantCount > ROOM_SOFT_WARN_PEERS;
+  var overCapacity = participantCount > VIDEO_SFU_THRESHOLD_PEERS;
 
   if (preference === 'p2p-only') {
     // Never returns 'sfu' for this preference, full stop — regardless of

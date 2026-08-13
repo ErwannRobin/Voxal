@@ -44,7 +44,7 @@ test.describe('selectVideoTopology — truth table', () => {
   test('prefer-p2p under capacity and healthy stays p2p/ok', async ({ page }) => {
     await page.goto('/');
     const result = await decide(page, 'video', {
-      preference: 'prefer-p2p', participantCount: 3, meshHealthy: true, sfuConfigured: true,
+      preference: 'prefer-p2p', participantCount: 2, meshHealthy: true, sfuConfigured: true,
     });
     expect(result).toEqual({ mode: 'p2p', reason: 'ok' });
   });
@@ -60,7 +60,7 @@ test.describe('selectVideoTopology — truth table', () => {
   test('prefer-p2p under capacity but unhealthy reports p2p-failed-temporary', async ({ page }) => {
     await page.goto('/');
     const result = await decide(page, 'video', {
-      preference: 'prefer-p2p', participantCount: 3, meshHealthy: false, sfuConfigured: true,
+      preference: 'prefer-p2p', participantCount: 2, meshHealthy: false, sfuConfigured: true,
     });
     expect(result).toEqual({ mode: 'p2p', reason: 'p2p-failed-temporary' });
   });
@@ -68,7 +68,7 @@ test.describe('selectVideoTopology — truth table', () => {
   test('allow-sfu under capacity still prefers p2p', async ({ page }) => {
     await page.goto('/');
     const result = await decide(page, 'video', {
-      preference: 'allow-sfu', participantCount: 3, meshHealthy: true, sfuConfigured: true,
+      preference: 'allow-sfu', participantCount: 2, meshHealthy: true, sfuConfigured: true,
     });
     expect(result).toEqual({ mode: 'p2p', reason: 'ok' });
   });
@@ -79,6 +79,21 @@ test.describe('selectVideoTopology — truth table', () => {
       preference: 'allow-sfu', participantCount: 50, meshHealthy: true, sfuConfigured: true,
     });
     expect(result).toEqual({ mode: 'sfu', reason: 'preference-allow-sfu' });
+  });
+
+  test('boundary: exactly 2 participants stays p2p, more than 2 switches to sfu under allow-sfu', async ({ page }) => {
+    // Pins VIDEO_SFU_THRESHOLD_PEERS = 2 explicitly, since this is the number
+    // the product decision hinges on ("more than 2 peers with a camera on").
+    await page.goto('/');
+    const atThreshold = await decide(page, 'video', {
+      preference: 'allow-sfu', participantCount: 2, meshHealthy: true, sfuConfigured: true,
+    });
+    expect(atThreshold).toEqual({ mode: 'p2p', reason: 'ok' });
+
+    const overThreshold = await decide(page, 'video', {
+      preference: 'allow-sfu', participantCount: 3, meshHealthy: true, sfuConfigured: true,
+    });
+    expect(overThreshold).toEqual({ mode: 'sfu', reason: 'preference-allow-sfu' });
   });
 
   test('applies identically to the screen kind', async ({ page }) => {

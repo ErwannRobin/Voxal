@@ -66,11 +66,14 @@ turns into an explicit prompt, never an automatic switch.
 | `preference-p2p-only` | The user has forbidden relaying video — informational, never triggers a switch. |
 | `preference-allow-sfu` | The user has opted in and the selector judged the relay was warranted. |
 
-The threshold reused for "room too large for a comfortable mesh" is the same
-`ROOM_SOFT_WARN_PEERS` (8 participants) already used for the room-size warning
-— video is heavier per participant than audio, so a product review of whether
-video specifically should trigger at a lower count is a reasonable follow-up,
-not a technical requirement.
+"Room too large for a comfortable mesh" uses its own dedicated threshold,
+`VIDEO_SFU_THRESHOLD_PEERS` (2 — i.e. `overCapacity` once a room has **more
+than 2 participants**), deliberately decoupled from `ROOM_SOFT_WARN_PEERS`
+(the unrelated, audio-only room-size warning banner, 8 participants). An
+earlier version of this feature reused `ROOM_SOFT_WARN_PEERS` for video too;
+testing showed that was too high in practice — an 8-participant room with a
+camera on still read "Direct" — so video/screen now gets its own, much lower
+bar, reflecting that it's far heavier per participant than audio.
 
 ## What the user sees
 
