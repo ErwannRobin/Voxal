@@ -7964,7 +7964,8 @@ function videoStageTiles() {
       stream: conn.remoteScreenStream || null,
       talking: false,
       iceType: (conn.webrtcStats && conn.webrtcStats.iceType) || null,
-      topology: (conn.screenTopology && conn.screenTopology.mode) || 'p2p'
+      topology: (conn.screenTopology && conn.screenTopology.mode) || 'p2p',
+      trackState: remoteTrackState(peerId, 'screen')
     });
   });
   if (localScreenActive) {
@@ -7995,7 +7996,8 @@ function videoStageTiles() {
       stream: conn.remoteVideoStream || null,
       talking: !!conn.talking,
       iceType: (conn.webrtcStats && conn.webrtcStats.iceType) || null,
-      topology: (conn.videoTopology && conn.videoTopology.mode) || 'p2p'
+      topology: (conn.videoTopology && conn.videoTopology.mode) || 'p2p',
+      trackState: remoteTrackState(peerId, 'video')
     });
   });
 
@@ -8144,7 +8146,18 @@ function _syncVideoTile(el, tile) {
   if (topologyBadge) {
     var isSfu = tile.topology === 'sfu';
     topologyBadge.classList.toggle('hidden', !isSfu);
-    if (isSfu && topologyBadge.textContent !== '☁ Relayed') topologyBadge.textContent = '☁ Relayed';
+    if (isSfu) {
+      // A failed subscription leaves a black tile. Saying "Relayed" over it
+      // claims media is flowing when it isn't, which is exactly how the earlier
+      // bugs in this feature stayed invisible.
+      var broken = tile.trackState === 'failed';
+      var label = broken ? '⚠ Relay failed' : tile.trackState === 'reconnecting' ? '☁ Reconnecting…' : '☁ Relayed';
+      if (topologyBadge.textContent !== label) topologyBadge.textContent = label;
+      topologyBadge.classList.toggle('failed', broken);
+      topologyBadge.title = broken
+        ? 'Could not receive this video through the relay — see the dev log for the reason'
+        : 'Relayed through a media server (Cloudflare) — voice always stays direct';
+    }
   }
 }
 
@@ -8631,6 +8644,14 @@ function decideVideoTopology(kind) {
 
 function _trackRegistryKey(participantId, kind) { return participantId + ':' + kind; }
 
+// The subscription's health, for the tile. A relayed tile that is black because
+// its subscription failed must not look identical to one that is working — that
+// was the whole failure mode of the first two rounds of this feature.
+function remoteTrackState(participantId, kind) {
+  var track = _videoTrackRegistry.get(_trackRegistryKey(participantId, kind));
+  return track ? track.state : null;
+}
+
 function _setTrackState(participantId, kind, patch) {
   var key = _trackRegistryKey(participantId, kind);
   var track = _videoTrackRegistry.get(key) || {
@@ -8944,7 +8965,59 @@ function p2pUnpublishScreen(peerId, c) {
 // not been verified against a live account (see docs/video-routing.md open
 // questions). Never used for audio.
 
-async function sfuMintCapability(kind, action) {
+// Capability tokens are minted with a TTL (SFU_CAPABILITY_TTL, 300s by default)
+// and are scoped to {roomCode, participantId, kind, action} — all four stable
+// for the life of a share. Minting a fresh one per publish/subscribe/retry
+// ignored the TTL entirely and turned /api/sfu-session's per-IP rate limit
+// (30/min) into a live hazard: every peer-list broadcast re-subscribed every
+// viewer to every publisher, and several test peers behind one NAT share one
+// budget. The mints that lost the race were the newest subscriptions — i.e. a
+// new joiner's camera, black for everyone else.
+//
+// Cached per kind:action, re-minted only when the room, the participant or the
+// remaining lifetime says it must be.
+var _sfuCapabilityCache = {};
+var _sfuCapabilityInFlight = {};
+var SFU_CAPABILITY_RENEW_MARGIN_MS = 30000;
+
+function clearSfuCapabilityCache() {
+  _sfuCapabilityCache = {};
+  _sfuCapabilityInFlight = {};
+}
+
+function _cachedCapability(kind, action) {
+  var entry = _sfuCapabilityCache[kind + ':' + action];
+  if (!entry) return null;
+  // A host migration changes roomCode, and the server checks the tuple — a
+  // token minted for the old room would simply be rejected.
+  if (entry.roomCode !== roomCode || entry.participantId !== (peer && peer.id)) return null;
+  if (Date.now() > entry.expiresAt - SFU_CAPABILITY_RENEW_MARGIN_MS) return null;
+  return entry.minted;
+}
+
+function sfuMintCapability(kind, action) {
+  var cached = _cachedCapability(kind, action);
+  if (cached) return Promise.resolve(cached);
+
+  // Subscribes are fired concurrently (one per publisher, off a single
+  // peer-list), so caching only the RESULT still lets a burst all miss the
+  // cache and mint in parallel — straight into the rate limit. Cache the
+  // in-flight promise so a burst collapses into one request.
+  var key = kind + ':' + action;
+  if (_sfuCapabilityInFlight[key]) return _sfuCapabilityInFlight[key];
+
+  var pending = _sfuMintCapabilityNow(kind, action).then(function(minted) {
+    delete _sfuCapabilityInFlight[key];
+    return minted;
+  }, function(err) {
+    delete _sfuCapabilityInFlight[key];
+    throw err;
+  });
+  _sfuCapabilityInFlight[key] = pending;
+  return pending;
+}
+
+async function _sfuMintCapabilityNow(kind, action) {
   var res = await fetch(sfuSessionUrl(), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -8955,9 +9028,29 @@ async function sfuMintCapability(kind, action) {
     noteSfuAvailability(false);
     throw Object.assign(new Error('SFU not configured on this deployment'), { code: 'not_configured' });
   }
+  if (res.status === 429) {
+    // Temporary and retryable — emphatically NOT "no SFU here". Marking the SFU
+    // unavailable would demote the whole room to P2P over a transient limit.
+    var retryAfter = Number(res.headers && res.headers.get && res.headers.get('Retry-After')) || 0;
+    throw Object.assign(
+      new Error('SFU capability rate-limited (HTTP 429)' + (retryAfter ? ', retry after ' + retryAfter + 's' : '')),
+      { code: 'rate_limited', retryAfterMs: (retryAfter || 5) * 1000 }
+    );
+  }
   if (!res.ok) throw Object.assign(new Error('SFU session mint failed: HTTP ' + res.status), { code: 'mint_failed' });
   noteSfuAvailability(true);
-  return res.json(); // { capability, expires_at, sfu_app_id }
+
+  var minted = await res.json(); // { capability, expires_at, sfu_app_id }
+  var expiresAt = Date.parse(minted && minted.expires_at);
+  if (expiresAt) {
+    _sfuCapabilityCache[kind + ':' + action] = {
+      minted: minted,
+      expiresAt: expiresAt,
+      roomCode: roomCode,
+      participantId: peer && peer.id
+    };
+  }
+  return minted;
 }
 
 // Reads the SDP out of whatever shape Cloudflare returned — it may be a bare
@@ -9089,7 +9182,13 @@ function _normalizeProviderRef(providerRef) {
 
 async function sfuSubscribeTrack(kind, publisherPeerId, providerRef) {
   var conn = connections.get(publisherPeerId);
-  if (!conn) return;
+  if (!conn) {
+    // The ref is remembered, but nothing here retries — say so rather than
+    // vanishing, which is indistinguishable from a black tile with no cause.
+    devLog('[SFU] subscribe ' + kind + ' from ' + shortId(publisherPeerId) +
+      ' skipped: no connection entry for that peer yet', 'warn');
+    return;
+  }
 
   var ref = _normalizeProviderRef(providerRef || _rememberedProviderRef(publisherPeerId, kind));
   if (!ref) {
@@ -9098,6 +9197,19 @@ async function sfuSubscribeTrack(kind, publisherPeerId, providerRef) {
       ' skipped: publisher sent no track reference', 'warn');
     return;
   }
+
+  var existing = _rememberedProviderRef(publisherPeerId, kind);
+  var media = kind === 'video' ? conn.videoMedia : conn.screenMedia;
+  if (media && existing && existing.sessionId === ref.sessionId && existing.trackName === ref.trackName) {
+    var livePc = media.peerConnection;
+    var dead = livePc && (livePc.connectionState === 'failed' || livePc.connectionState === 'closed' ||
+                          livePc.iceConnectionState === 'failed');
+    if (livePc && !dead) return; // already subscribed to exactly this track
+  }
+  // Replacing a subscription: close the old peer connection instead of orphaning
+  // it. Overwriting conn.videoMedia left the previous one alive, holding a
+  // Cloudflare session and still attached to the tile.
+  if (media) _teardownRemoteTrack(publisherPeerId, kind);
 
   var minted = await sfuMintCapability(kind, 'subscribe');
   var pc = new RTCPeerConnection();
@@ -9135,7 +9247,8 @@ async function sfuSubscribeTrack(kind, publisherPeerId, providerRef) {
   if (kind === 'video') conn.videoMedia = shim; else conn.screenMedia = shim;
   var topologyPatch = {}; topologyPatch[kind + 'Topology'] = { mode: 'sfu', reason: VIDEO_TOPOLOGY_REASON.PREFERENCE_ALLOW_SFU };
   Object.assign(conn, topologyPatch);
-  _setTrackState(publisherPeerId, kind, { state: 'subscribed', topology: 'sfu', _providerRef: ref });
+  _setTrackState(publisherPeerId, kind, { state: 'subscribed', topology: 'sfu', _providerRef: ref, error: null });
+  delete _sfuSubscribeRetries[_trackRegistryKey(publisherPeerId, kind)];
   devLog('[SFU] subscribed to ' + kind + ' "' + ref.trackName + '" from ' + shortId(publisherPeerId));
   _wireSfuReconnect(pc, kind, publisherPeerId, 'subscribe', function() {
     return sfuSubscribeTrack(kind, publisherPeerId, ref);
@@ -9157,14 +9270,46 @@ function _rememberedProviderRef(publisherPeerId, kind) {
   return track ? track._providerRef : null;
 }
 
+// A failed subscription used to be a dev-log line and nothing else, so a viewer
+// saw a black tile still badged "☁ Relayed" — indistinguishable from a working
+// one. Record the failure on the track state (which the tile renders) and, for
+// the one failure that is genuinely transient, retry with backoff rather than
+// leaving the tile black until the publisher happens to republish.
+var SFU_SUBSCRIBE_MAX_RETRIES = 5;
+var _sfuSubscribeRetries = {};
+
+function _sfuSubscribeFailed(kind, publisherPeerId, providerRef, err) {
+  var message = (err && err.message) ? err.message : String(err);
+  devLog('[SFU] subscribe ' + kind + ' from ' + shortId(publisherPeerId) + ' failed: ' + message, 'warn');
+  _setTrackState(publisherPeerId, kind, { state: 'failed', error: message });
+
+  if (!err || err.code !== 'rate_limited') return;
+  var key = _trackRegistryKey(publisherPeerId, kind);
+  var attempts = (_sfuSubscribeRetries[key] || 0) + 1;
+  if (attempts > SFU_SUBSCRIBE_MAX_RETRIES) {
+    devLog('[SFU] subscribe ' + kind + ' from ' + shortId(publisherPeerId) + ' giving up after ' + (attempts - 1) + ' retries', 'warn');
+    return;
+  }
+  _sfuSubscribeRetries[key] = attempts;
+  // Honour the server's Retry-After, backing further off each attempt.
+  var delay = (err.retryAfterMs || 5000) * attempts;
+  devLog('[SFU] subscribe ' + kind + ' from ' + shortId(publisherPeerId) + ' retrying in ' + Math.round(delay / 1000) + 's');
+  setTimeout(function() {
+    if (!inRoom || !connections.get(publisherPeerId)) return;
+    sfuSubscribeTrack(kind, publisherPeerId, providerRef).then(function() {
+      delete _sfuSubscribeRetries[key];
+    }).catch(function(e2) { _sfuSubscribeFailed(kind, publisherPeerId, providerRef, e2); });
+  }, delay);
+}
+
 function sfuSubscribeVideo(publisherPeerId, providerRef) {
   return sfuSubscribeTrack('video', publisherPeerId, providerRef).catch(function(e) {
-    devLog('[SFU] subscribe video from ' + shortId(publisherPeerId) + ' failed: ' + (e && e.message ? e.message : e), 'warn');
+    _sfuSubscribeFailed('video', publisherPeerId, providerRef, e);
   });
 }
 function sfuSubscribeScreen(publisherPeerId, providerRef) {
   return sfuSubscribeTrack('screen', publisherPeerId, providerRef).catch(function(e) {
-    devLog('[SFU] subscribe screen from ' + shortId(publisherPeerId) + ' failed: ' + (e && e.message ? e.message : e), 'warn');
+    _sfuSubscribeFailed('screen', publisherPeerId, providerRef, e);
   });
 }
 
@@ -9214,9 +9359,15 @@ function applyRemoteTrackTopology(publisherPeerId, kind, rawTopology, providerRe
   // A republish re-announces the same track (sfuRenegotiatePublish does exactly
   // this), and churning a healthy subscription on that would drop video for no
   // reason. Only the {sessionId, trackName} actually changing means "resubscribe".
+  //
+  // For the SFU case "unchanged" also requires that a subscription actually
+  // exists: the ref is remembered before the subscribe is attempted, so a failed
+  // attempt (a rate-limited mint, say) would otherwise look identical to a
+  // healthy one and never be retried — a permanently black tile.
+  var media = conn && (kind === 'video' ? conn.videoMedia : conn.screenMedia);
   var unchanged = !!prev && prev.mode === mode && (
     mode === 'p2p' ||
-    (!!ref && !!prevRef && ref.sessionId === prevRef.sessionId && ref.trackName === prevRef.trackName)
+    (!!media && !!ref && !!prevRef && ref.sessionId === prevRef.sessionId && ref.trackName === prevRef.trackName)
   );
 
   if (conn) {
@@ -9766,6 +9917,8 @@ function leaveRoom() {
   stopStatsPolling();
   resetRosterReconcileState();
   resetBandwidthHistory();
+  clearSfuCapabilityCache(); // tokens are scoped to {roomCode, participantId}
+  _sfuSubscribeRetries = {};
   publishNetworkUsage();  // let an open preferences window show its empty state
   renderNetUsagePanel();  // …and the in-page modal, if it is the one open
   closeStatsPopover();
@@ -10900,13 +11053,18 @@ function handleHostMessage(msg) {
       connections.set(peerId, Object.assign({}, prev, update));
       noteRemoteVersion((peerId === roomCode ? 'host ' : 'peer ') + shortId(peerId), p.protocolVersion, p.appVersion, peerId);
     });
+    // Routed through applyRemoteTrackTopology rather than subscribing directly:
+    // a peer-list is broadcast on every join, leave, prune, rename and settings
+    // change, and this list barely ever changes between them. Subscribing
+    // unconditionally here re-created a peer connection per publisher per
+    // broadcast — leaking the previous one and burning the capability rate
+    // limit, which is what made a new joiner's camera black for everyone.
+    // applyRemoteTrackTopology already no-ops on an unchanged {mode, ref}.
     toSubscribeVideo.forEach(function(t) {
-      _rememberProviderRef(t.peerId, 'video', t.ref);
-      sfuSubscribeVideo(t.peerId, t.ref);
+      applyRemoteTrackTopology(t.peerId, 'video', 'sfu', t.ref);
     });
     toSubscribeScreen.forEach(function(t) {
-      _rememberProviderRef(t.peerId, 'screen', t.ref);
-      sfuSubscribeScreen(t.peerId, t.ref);
+      applyRemoteTrackTopology(t.peerId, 'screen', 'sfu', t.ref);
     });
 
     // Sync video mode state from host

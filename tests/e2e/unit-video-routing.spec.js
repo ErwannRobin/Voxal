@@ -587,3 +587,249 @@ test.describe('applyRemoteTrackTopology — viewer-side migration', () => {
     expect(await page.evaluate(() => window.__subscribes.length)).toBe(0);
   });
 });
+
+// The bug this guards: a new joiner's camera was black for everyone else once
+// the room had switched to the SFU.
+//
+// /api/sfu-session rate-limits capability mints to 30 per IP per minute, and
+// every peer-list broadcast re-subscribed every viewer to every publisher —
+// broadcasts fire on join, leave, prune, rename and settings changes. With
+// several peers behind one NAT (which is what testing WebRTC always looks like)
+// the budget ran out, and the mints that lost were the newest subscriptions.
+test.describe('subscription churn — mints must not scale with peer-list broadcasts', () => {
+  async function seedViewerOf(page, publisherId) {
+    await seedRoom(page, {
+      selfId: 'self', isHost: false, roomCode: 'host-1',
+      connections: [{ id: publisherId, pseudo: 'pub', open: true }],
+    });
+  }
+
+  function countMints(page) {
+    return page.evaluate(() => window.__mints);
+  }
+
+  async function stubMintCounting(page) {
+    await page.evaluate(() => { window.__mints = 0; });
+    await page.route('**/api/sfu-session', (route) => {
+      route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({
+          capability: 'fake.capability',
+          expires_at: new Date(Date.now() + 300e3).toISOString(),
+          sfu_app_id: 'app1',
+        }),
+      });
+    });
+    await page.addInitScript(() => {});
+    // Count on the page side so the capability cache (not the route) is what we measure.
+    await page.evaluate(() => {
+      const realFetch = window.fetch;
+      window.fetch = function(url, opts) {
+        if (String(url).indexOf('/api/sfu-session') !== -1) window.__mints++;
+        return realFetch.call(this, url, opts);
+      };
+    });
+  }
+
+  test('a repeated peer-list for the same publisher mints once, not once per broadcast', async ({ page }) => {
+    await page.goto('/');
+    await stubMintCounting(page);
+    // Fail the negotiate step — this test is only about how many capabilities
+    // get minted, which is what the rate limit counts.
+    await page.route('**/api/sfu-track', (route) => route.fulfill({ status: 502, contentType: 'application/json', body: '{}' }));
+    await seedViewerOf(page, 'pub-1');
+
+    const ref = { sessionId: 'cf-1', trackName: 'pub-1-video' };
+    for (let i = 0; i < 5; i++) {
+      await page.evaluate((r) => applyRemoteTrackTopology('pub-1', 'video', 'sfu', r), ref);
+      await page.waitForTimeout(50); // applyRemoteTrackTopology does not await the subscribe
+    }
+    // The negotiate fails every time, so every round really does try to
+    // subscribe — but the capability is cached, so the SERVER is asked once.
+    expect(await countMints(page)).toBe(1);
+  });
+
+  test('an unchanged re-announcement with a live subscription does not re-subscribe at all', async ({ page }) => {
+    await page.goto('/');
+    await stubMintCounting(page);
+    let trackCalls = 0;
+    await page.route('**/api/sfu-track', (route) => {
+      trackCalls++;
+      route.fulfill({ status: 502, contentType: 'application/json', body: '{}' });
+    });
+    await seedViewerOf(page, 'pub-1');
+    // Pretend a subscription is already established for this exact ref.
+    await page.evaluate(() => {
+      const conn = connections.get('pub-1');
+      conn.videoMedia = { peerConnection: { connectionState: 'connected' }, close() {} };
+      conn.videoTopology = { mode: 'sfu', reason: 'preference-allow-sfu' };
+      _rememberProviderRef('pub-1', 'video', { sessionId: 'cf-1', trackName: 'pub-1-video' });
+    });
+
+    for (let i = 0; i < 4; i++) {
+      await page.evaluate(() =>
+        applyRemoteTrackTopology('pub-1', 'video', 'sfu', { sessionId: 'cf-1', trackName: 'pub-1-video' }));
+      await page.waitForTimeout(50);
+    }
+    expect(trackCalls).toBe(0);
+    expect(await countMints(page)).toBe(0);
+  });
+
+  test('a remembered ref with NO live subscription is retried, not treated as healthy', async ({ page }) => {
+    // The ref is remembered before the subscribe is attempted, so a failed
+    // attempt would otherwise look identical to a working one forever.
+    await page.goto('/');
+    await stubMintCounting(page);
+    let trackCalls = 0;
+    await page.route('**/api/sfu-track', (route) => {
+      trackCalls++;
+      route.fulfill({ status: 502, contentType: 'application/json', body: '{}' });
+    });
+    await seedViewerOf(page, 'pub-1');
+    await page.evaluate(() => {
+      const conn = connections.get('pub-1');
+      conn.videoTopology = { mode: 'sfu', reason: 'preference-allow-sfu' };
+      conn.videoMedia = null; // the subscribe failed
+      _rememberProviderRef('pub-1', 'video', { sessionId: 'cf-1', trackName: 'pub-1-video' });
+    });
+    await page.evaluate(() =>
+      applyRemoteTrackTopology('pub-1', 'video', 'sfu', { sessionId: 'cf-1', trackName: 'pub-1-video' }));
+    await expect.poll(() => trackCalls, { timeout: 5000 }).toBeGreaterThan(0);
+  });
+
+  test('replacing a subscription closes the old peer connection instead of orphaning it', async ({ page }) => {
+    await page.goto('/');
+    await stubMintCounting(page);
+    await page.route('**/api/sfu-track', (route) => route.fulfill({ status: 502, contentType: 'application/json', body: '{}' }));
+    await seedViewerOf(page, 'pub-1');
+    await page.evaluate(() => {
+      window.__oldClosed = 0;
+      const conn = connections.get('pub-1');
+      conn.videoMedia = {
+        peerConnection: { connectionState: 'connected' },
+        close() { window.__oldClosed++; },
+      };
+      _rememberProviderRef('pub-1', 'video', { sessionId: 'cf-OLD', trackName: 'pub-1-video' });
+    });
+    // A republish mints a new Cloudflare session, so the ref changes.
+    await page.evaluate(() =>
+      sfuSubscribeVideo('pub-1', { sessionId: 'cf-NEW', trackName: 'pub-1-video' }));
+    await expect.poll(() => page.evaluate(() => window.__oldClosed), { timeout: 5000 }).toBe(1);
+  });
+});
+
+test.describe('capability token caching and rate-limit handling', () => {
+  test('a cached token is reused within its TTL and re-minted after it expires', async ({ page }) => {
+    await page.goto('/');
+    let mints = 0;
+    await page.route('**/api/sfu-session', (route) => {
+      mints++;
+      route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({
+          capability: 'cap-' + mints,
+          expires_at: new Date(Date.now() + 300e3).toISOString(),
+          sfu_app_id: 'app1',
+        }),
+      });
+    });
+    await seedRoom(page, { selfId: 'self', isHost: true, roomCode: 'self' });
+
+    const first = await page.evaluate(() => sfuMintCapability('video', 'publish'));
+    const second = await page.evaluate(() => sfuMintCapability('video', 'publish'));
+    expect(mints).toBe(1);
+    expect(second.capability).toBe(first.capability);
+
+    // A different action is a different token — the server checks the tuple.
+    await page.evaluate(() => sfuMintCapability('video', 'subscribe'));
+    expect(mints).toBe(2);
+
+    // Past the renewal margin, it re-mints rather than sending a dead token.
+    await page.evaluate(() => {
+      Object.keys(_sfuCapabilityCache).forEach((k) => { _sfuCapabilityCache[k].expiresAt = Date.now(); });
+    });
+    await page.evaluate(() => sfuMintCapability('video', 'publish'));
+    expect(mints).toBe(3);
+  });
+
+  test('a token minted for another room is never reused after host migration', async ({ page }) => {
+    await page.goto('/');
+    let mints = 0;
+    await page.route('**/api/sfu-session', (route) => {
+      mints++;
+      route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ capability: 'cap', expires_at: new Date(Date.now() + 300e3).toISOString(), sfu_app_id: 'app1' }),
+      });
+    });
+    await seedRoom(page, { selfId: 'self', isHost: false, roomCode: 'old-host' });
+    await page.evaluate(() => sfuMintCapability('video', 'subscribe'));
+    expect(mints).toBe(1);
+
+    await page.evaluate(() => { roomCode = 'new-host'; }); // migration
+    await page.evaluate(() => sfuMintCapability('video', 'subscribe'));
+    expect(mints).toBe(2);
+  });
+
+  test('a 429 is reported as rate-limited and does NOT mark the SFU unavailable', async ({ page }) => {
+    // Demoting the whole room to P2P over a transient per-IP limit would be the
+    // wrong response — and would be indistinguishable from "no SFU deployed".
+    await page.goto('/');
+    await page.route('**/api/sfu-session', (route) => route.fulfill({
+      status: 429, contentType: 'application/json',
+      headers: { 'Retry-After': '7' },
+      body: JSON.stringify({ error: 'rate_limited', retry_after: 7 }),
+    }));
+    await seedRoom(page, { selfId: 'self', isHost: true, roomCode: 'self' });
+    const err = await page.evaluate(() =>
+      sfuMintCapability('video', 'publish').then(() => null, (e) => ({ code: e.code, message: e.message })));
+
+    expect(err.code).toBe('rate_limited');
+    expect(err.message).toContain('429');
+    expect(err.message).toContain('7s');
+    expect(await page.evaluate(() => sfuAvailabilityHint())).toBe(true);
+  });
+
+  test('a 503 still marks the SFU unavailable', async ({ page }) => {
+    await page.goto('/');
+    await page.route('**/api/sfu-session', (route) => route.fulfill({
+      status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'not_configured' }),
+    }));
+    await seedRoom(page, { selfId: 'self', isHost: true, roomCode: 'self' });
+    await page.evaluate(() => sfuMintCapability('video', 'publish').catch(() => {}));
+    expect(await page.evaluate(() => sfuAvailabilityHint())).toBe(false);
+  });
+
+  test('a failed subscription is recorded on the track so the tile can say so', async ({ page }) => {
+    await page.goto('/');
+    await page.route('**/api/sfu-session', (route) => route.fulfill({
+      status: 500, contentType: 'application/json', body: '{}',
+    }));
+    await seedRoom(page, {
+      selfId: 'self', isHost: false, roomCode: 'host-1',
+      connections: [{ id: 'pub-1', pseudo: 'pub', open: true }],
+    });
+    await page.evaluate(() => sfuSubscribeVideo('pub-1', { sessionId: 'cf-1', trackName: 'pub-1-video' }));
+    expect(await page.evaluate(() => remoteTrackState('pub-1', 'video'))).toBe('failed');
+  });
+
+  test('a relayed tile whose subscription failed is not badged as working', async ({ page }) => {
+    await page.goto('/');
+    const labels = await page.evaluate(() => {
+      const el = _buildVideoTile({ key: 'camera:pub-1', peerId: 'pub-1', kind: 'camera', label: 'pub' });
+      const read = (state) => {
+        _syncVideoTile(el, {
+          key: 'camera:pub-1', peerId: 'pub-1', kind: 'camera', label: 'pub',
+          topology: 'sfu', trackState: state,
+        });
+        const badge = el.querySelector('.video-tile-topology');
+        return { text: badge.textContent, failed: badge.classList.contains('failed') };
+      };
+      return { ok: read('subscribed'), broken: read('failed') };
+    });
+    expect(labels.ok.text).toBe('☁ Relayed');
+    expect(labels.ok.failed).toBe(false);
+    expect(labels.broken.text).toContain('failed');
+    expect(labels.broken.failed).toBe(true);
+  });
+});

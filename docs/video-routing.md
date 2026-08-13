@@ -141,6 +141,36 @@ Two things follow, and neither is hidden:
   with a shortcut to turn video off or change the setting. Voice is
   unaffected.
 
+### Why a relayed tile can be black
+
+A ☁ Relayed badge means "this track is routed through the relay", not "media is
+arriving". A subscription that fails leaves a black tile, so the badge switches
+to **⚠ Relay failed** and the reason goes to the dev log — a silent black
+rectangle is how every bug in this feature stayed hidden.
+
+The failure worth knowing about is capability minting. `/api/sfu-session`
+rate-limits to **30 requests per IP per minute** (`SFU_RATE_LIMIT`), and that
+budget is *per IP* — several participants behind one NAT, or several test
+windows on one machine, all share it. Three things keep normal use far below it:
+
+- **Tokens are cached for their TTL** (`SFU_CAPABILITY_TTL`, 300 s) per
+  `kind:action`, and the in-flight promise is cached too, so a burst of
+  concurrent subscribes collapses into one request. They are dropped when the
+  room code or participant id changes, since the server checks that tuple.
+- **Subscriptions are idempotent.** A `peer-list` is broadcast on every join,
+  leave, prune, rename and settings change; re-announcing the same
+  `{sessionId, trackName}` for a track that already has a live peer connection
+  does nothing. Before this, every broadcast re-subscribed every viewer to every
+  publisher — which both leaked peer connections and exhausted the mint budget,
+  making a new joiner's camera black for everyone else.
+- **A 429 is treated as temporary.** It is reported distinctly from a 503, never
+  marks the SFU unavailable (that would demote the whole room to P2P over a
+  transient limit), and is retried with backoff honouring `Retry-After`.
+
+Note that "already subscribed" requires an actual live peer connection, not just
+a remembered ref — the ref is stored before the subscribe is attempted, so a
+failed attempt would otherwise be indistinguishable from a healthy one forever.
+
 ### Network usage (Settings → Advanced)
 
 A live `↓`/`↑` readout that expands into the last 10 minutes of traffic, split

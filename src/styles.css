@@ -1501,6 +1501,12 @@ kbd {
   background: rgba(255, 255, 255, 0.18);
   white-space: nowrap;
 }
+/* A relayed tile whose subscription failed is black — the badge has to say so
+   rather than claiming media is flowing. */
+.video-tile-topology.failed {
+  background: rgba(248, 113, 113, 0.85);
+  color: #fff;
+}
 
 /* The minimized self-view: a small badge floating over the stage, dragged to
    whichever corner suits and snapped there on release. Corner-anchored rather
