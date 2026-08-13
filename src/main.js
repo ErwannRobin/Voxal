@@ -5845,8 +5845,14 @@ async function initRNNoise() {
       // Register the worklet processor
       await _rnnoiseCtx.audioWorklet.addModule('assets/rnnoise-processor.js');
 
-      // Load WASM binary and compile it (main thread can use WebAssembly.compileStreaming)
-      const wasmModule = await WebAssembly.compileStreaming(fetch('assets/rnnoise.wasm'));
+      // Fetch the raw WASM bytes rather than a pre-compiled WebAssembly.Module:
+      // structured-cloning a compiled Module across a MessagePort into an
+      // AudioWorkletGlobalScope is not reliably supported everywhere (notably
+      // WebKitGTK) — the postMessage below doesn't throw, but the worklet never
+      // receives it, so initRNNoise() always hits its timeout. A transferable
+      // ArrayBuffer has none of that risk, and WebAssembly.instantiate() can
+      // compile it directly inside the worklet.
+      const wasmBytes = await fetch('assets/rnnoise.wasm').then((r) => r.arrayBuffer());
 
       // Create the worklet node
       // channelCount/-Mode pinned explicitly: the default 'max' mode would let a
@@ -5868,7 +5874,7 @@ async function initRNNoise() {
           if (e.data.type === 'ready') { clearTimeout(timeout); resolve(); }
           else if (e.data.type === 'error') { clearTimeout(timeout); reject(new Error(e.data.message)); }
         };
-        _rnnoiseNode.port.postMessage({ type: 'wasm-module', module: wasmModule });
+        _rnnoiseNode.port.postMessage({ type: 'wasm-bytes', bytes: wasmBytes }, [wasmBytes]);
       });
 
       _rnnoiseReady = true;
