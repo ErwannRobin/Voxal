@@ -105,7 +105,7 @@ bar, reflecting that it's far heavier per participant than audio.
 
 ## Backend (Cloudflare Realtime SFU)
 
-Two new serverless endpoints, following the same pattern as the existing
+Three new serverless endpoints, following the same pattern as the existing
 anonymous TURN endpoint (`api/ice-servers.js`): pure logic in a `_prefixed.js`
 module (unit-tested with `node --test`, no network), a thin routed handler,
 secrets only ever read from `process.env`, never returned to the client.
@@ -134,13 +134,31 @@ show a connected session, and receive no media at all. The first version of
 this integration did exactly that — it omitted `tracks[]` and never named the
 remote track, producing perfectly "connected" black video tiles.
 
+The second thing that trips people up: **the offer goes on `tracks/new`, not on
+`sessions/new`.** Cloudflare's lifecycle is
+
+```
+POST sessions/new              (no body)  -> { sessionId }
+POST sessions/<id>/tracks/new  (offer)    -> (answer)
+ICE -> DTLS -> connectionstatechange: connected -> media flows
+```
+
+`sessions/new` only creates the session; the *first* `tracks/new` is what
+exchanges offer/answer and brings the transport up. Handing `sessions/new` an
+SDP and then pushing tracks before the client has applied the resulting answer
+makes Cloudflare reject the push with `session_error: Session is not ready yet.
+Please ensure the PeerConnection is connected before making this request` —
+which is what the second version of this integration did. `api/sfu-track.js`
+performs both hops server-side, so the client still sees a single round trip.
+
 Publishing (`sfuPublishTrack`):
 
 1. `addTransceiver(track, { direction: 'sendonly' })` — keep the transceiver,
    Cloudflare needs each track's `mid`.
 2. Offer → `POST /api/sfu-track` with `action:'publish'`, the SDP, and
    `tracks: [{ location:'local', mid, trackName }]`.
-3. Apply Cloudflare's answer. `trackName` is `<voxal peer id>-<kind>`.
+3. Apply Cloudflare's answer — which comes from `tracks/new`.
+   `trackName` is `<voxal peer id>-<kind>`.
 
 Subscribing (`sfuSubscribeTrack`) — note the asymmetry:
 
