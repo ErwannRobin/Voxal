@@ -150,6 +150,7 @@ const PSEUDO_SESSION_KEY        = 'pseudo-session';
 const DEV_MODE_KEY              = 'dev-mode';
 const DEBUG_INFO_SHARE_KEY      = 'debug-share-device-info'; // opt-out for sharing device diagnostics in dev mode (default ON)
 const VIDEO_MODE_KEY            = 'video-mode-enabled';
+const SELF_VIDEO_CORNER_KEY     = 'self-video-corner'; // corner the minimized self-view badge was dragged to
 const REJOIN_SNAPSHOT_KEY       = 'rejoin-snapshot';
 const REJOIN_TTL_MS             = 30 * 60 * 1000; // 30 minutes
 var   _rejoinDismissed          = false;
@@ -1120,6 +1121,7 @@ var _screenViewerPeerId = null;  // whose screen is displayed in the fallback vi
 var _videoPopoutWindow = null;   // reference to video popup window
 var _screenPopoutWindow = null;  // reference to screen popup window
 var _stagePinnedKey = null;      // tile key the user pinned as the stage focus
+var _hiddenStageKeys = new Set(); // tile keys the user chose not to watch (local only — nothing is signalled)
 var _devLogBuffer  = [];         // ring buffer of all log entries (max 200)
 var _devLogChannel = null;       // BroadcastChannel to the detached devlog window
 var _hostDebugMode = false;      // non-host mirror of the host's dev-mode flag (from peer-list/heartbeat)
@@ -5388,7 +5390,6 @@ function updatePeerList() {
     const div = document.createElement('div');
     div.id = 'peer-item-' + id;
     div.className = 'peer-item' + (self ? ' peer-self' : '') + (talking ? ' talking' : '');
-    const peerConn = actualPeerId ? connections.get(actualPeerId) : null;
     const videoLive = self && localVideoActive;
     const screenLive = self && localScreenActive;
 
@@ -5419,43 +5420,7 @@ function updatePeerList() {
       div.appendChild(peerMain);
       appendCopyPeerButton(div, actualPeerId, label);
       appendDeviceInfoButton(div, actualPeerId, false);
-      // Camera / screen icons open the floating viewer. They are the only way to
-      // watch a peer where the stage does not apply (mobile, tiny embed, narrow
-      // web, Tauri's pop-out window); where the stage IS showing that peer they
-      // would just open a second, redundant view on top of it.
-      if (videoModeEnabled && actualPeerId && !videoStageIsActive()) {
-        if (peerConn && peerConn.videoActive) {
-          var camBtn = document.createElement('button');
-          camBtn.className = 'btn-icon peer-cam-btn';
-          camBtn.title = 'View camera';
-          camBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>';
-          camBtn.addEventListener('click', function(e) {
-            e.stopPropagation();
-            if (_videoViewerPeerId === actualPeerId) {
-              closeVideoViewer();
-            } else {
-              openVideoViewer(actualPeerId);
-            }
-          });
-          div.appendChild(camBtn);
-        }
-        // Screen share icon
-        if (peerConn && peerConn.screenActive) {
-          var scrBtn = document.createElement('button');
-          scrBtn.className = 'btn-icon peer-cam-btn';
-          scrBtn.title = 'View screen';
-          scrBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>';
-          scrBtn.addEventListener('click', function(e) {
-            e.stopPropagation();
-            if (_screenViewerPeerId === actualPeerId) {
-              closeScreenViewer();
-            } else {
-              openScreenViewer(actualPeerId);
-            }
-          });
-          div.appendChild(scrBtn);
-        }
-      }
+      appendPeerVideoButtons(div, actualPeerId, false);
       appendWebrtcStats(div, actualPeerId);
       // Apply cached ICE dot color immediately
       const cachedConn = connections.get(actualPeerId);
@@ -5528,6 +5493,7 @@ function updatePeerList() {
     div.appendChild(peerMain);
     appendCopyPeerButton(div, actualPeerId, label || 'You');
     appendDeviceInfoButton(div, peer && peer.id, true);
+    appendPeerVideoButtons(div, peer && peer.id, true);
     list.appendChild(div);
   };
 
@@ -7669,6 +7635,38 @@ function videoStageTiles() {
   return tiles;
 }
 
+// The tiles actually rendered: everything live, minus the ones the viewer chose
+// not to watch from the roster. A hide is released as soon as its source goes
+// away, so a peer who turns their camera off and on again comes back visible
+// rather than staying silently hidden behind an icon nobody remembers pressing.
+function visibleVideoStageTiles() {
+  var all = videoStageTiles();
+  if (!_hiddenStageKeys.size) return all;
+  var live = {};
+  all.forEach(function(t) { live[t.key] = true; });
+  _hiddenStageKeys.forEach(function(key) {
+    if (!live[key]) _hiddenStageKeys.delete(key);
+  });
+  return all.filter(function(t) { return !_hiddenStageKeys.has(t.key); });
+}
+
+// Your own camera is a self-view, not content: it takes a small draggable badge
+// floating over the stage instead of a tile in the grid. The one case where it
+// IS the content is when nobody else has a camera on — there is then nothing for
+// it to be small beside, so it takes the stage like any other tile. An explicit
+// pin means "show me this big" and outranks minimising either way.
+// Returns '' when the self-view should stay a normal tile (or does not exist).
+function selfBadgeTileKey(tiles, focusKey) {
+  var selfKey = '';
+  var others = 0;
+  for (var i = 0; i < tiles.length; i++) {
+    if (tiles[i].kind !== 'camera') continue;
+    if (tiles[i].self) selfKey = tiles[i].key; else others++;
+  }
+  if (!selfKey || !others || selfKey === focusKey) return '';
+  return selfKey;
+}
+
 // Which tile fills the focus area: an explicit pin wins, otherwise the first
 // screen share (someone sharing a screen is nearly always the thing to look at).
 // Returns '' when nothing should be focused, i.e. a plain grid of cameras.
@@ -7756,17 +7754,21 @@ function toggleStagePin(key) {
 }
 
 // Reconcile by key: create what is new, remove what is gone, move tiles between
-// the focus slot and the grid, and leave everything else alone.
-function renderVideoStage(tiles, focusKey) {
+// the focus slot, the self-view badge and the grid, and leave everything else
+// alone. Moving a tile between containers keeps the same element, so the video
+// never has its srcObject reassigned and never flashes.
+function renderVideoStage(tiles, focusKey, badgeKey) {
   var focusEl = document.getElementById('video-stage-focus');
   var gridEl  = document.getElementById('video-stage-grid');
+  var badgeEl = document.getElementById('video-stage-self');
   if (!focusEl || !gridEl) return;
+  var containers = badgeEl ? [focusEl, gridEl, badgeEl] : [focusEl, gridEl];
 
   var seen = {};
   tiles.forEach(function(t) { seen[t.key] = true; });
 
   // Drop tiles that no longer belong, releasing their stream reference.
-  [focusEl, gridEl].forEach(function(container) {
+  containers.forEach(function(container) {
     Array.prototype.slice.call(container.children).forEach(function(child) {
       if (seen[child.dataset.key]) return;
       var v = child.querySelector('video');
@@ -7776,28 +7778,36 @@ function renderVideoStage(tiles, focusKey) {
   });
 
   var existing = {};
-  [focusEl, gridEl].forEach(function(container) {
+  containers.forEach(function(container) {
     Array.prototype.slice.call(container.children).forEach(function(child) {
       existing[child.dataset.key] = child;
     });
   });
 
+  var gridCount = 0;
   tiles.forEach(function(tile) {
     var el = existing[tile.key] || _buildVideoTile(tile);
-    var target = (tile.key === focusKey) ? focusEl : gridEl;
+    var target = gridEl;
+    if (tile.key === focusKey) target = focusEl;
+    else if (badgeEl && tile.key === badgeKey) target = badgeEl;
+    else gridCount++;
     if (el.parentNode !== target) target.appendChild(el);
     _syncVideoTile(el, tile);
   });
 
   // Keep grid order stable and matching the tile order.
   tiles.forEach(function(tile) {
-    if (tile.key === focusKey) return;
+    if (tile.key === focusKey || tile.key === badgeKey) return;
     var el = gridEl.querySelector('[data-key="' + cssEscapeAttr(tile.key) + '"]');
     if (el) gridEl.appendChild(el);
   });
 
   focusEl.classList.toggle('hidden', !focusKey);
-  layoutVideoStageGrid(gridEl, focusKey ? 0 : tiles.length);
+  if (badgeEl) {
+    badgeEl.classList.toggle('hidden', !badgeKey);
+    badgeEl.dataset.corner = _selfBadgeCorner;
+  }
+  layoutVideoStageGrid(gridEl, focusKey ? 0 : gridCount);
 }
 
 // Pick the column count that makes the tiles as large as possible while keeping
@@ -7848,32 +7858,23 @@ function videoStageAvailable() {
   return window.innerWidth >= VIDEO_STAGE_MIN_WIDTH;
 }
 
-// Deliberately derived from state, not from the DOM: updatePeerList() consults
-// this while building the roster, i.e. before updateVideoStage() has run, so an
-// observational check ("is #video-stage visible?") is a tick stale and lets the
-// redundant roster icons through on the tick a camera comes on.
-function videoStageIsActive() {
-  if (!inRoom || !videoStageAvailable()) return false;
-  return videoStageTiles().length > 0;
-}
-
 // Single entry point. Safe to call from anywhere video/screen state changes.
 function updateVideoStage() {
   var stage = document.getElementById('video-stage');
   if (!stage) return;
-  var tiles = (inRoom && videoStageAvailable()) ? videoStageTiles() : [];
+  var tiles = (inRoom && videoStageAvailable()) ? visibleVideoStageTiles() : [];
   var active = tiles.length > 0;
 
   document.body.classList.toggle('video-stage', active);
   stage.classList.toggle('hidden', !active);
   if (!active) {
-    renderVideoStage([], '');
+    renderVideoStage([], '', '');
     _stagePinnedKey = null;
     return;
   }
   var focusKey = videoStageFocusKey(tiles);
   stage.classList.toggle('has-focus', !!focusKey);
-  renderVideoStage(tiles, focusKey);
+  renderVideoStage(tiles, focusKey, selfBadgeTileKey(tiles, focusKey));
 }
 
 // The column count is measured, so it has to be recomputed when the window
@@ -7887,6 +7888,242 @@ window.addEventListener('resize', function() {
     updateVideoStage();
   });
 });
+
+// --- The minimized self-view badge --------------------------------------------
+//
+// The badge is corner-anchored rather than free-floating: a self-view parked at
+// an arbitrary offset drifts over someone's face as soon as the window is
+// resized, whereas a corner stays a corner at every size, with no state to
+// recompute. Dragging is therefore a *pick a corner* gesture — the badge follows
+// the pointer, then snaps to whichever corner it was let go nearest.
+
+var SELF_BADGE_CORNERS = ['tl', 'tr', 'bl', 'br'];
+var _selfBadgeCorner = readSelfBadgeCorner();
+var _selfBadgeDrag = null;
+var _selfBadgeDragged = false;   // a drag just ended: swallow the click it produces
+
+function readSelfBadgeCorner() {
+  try {
+    var stored = localStorage.getItem(SELF_VIDEO_CORNER_KEY);
+    if (SELF_BADGE_CORNERS.indexOf(stored) >= 0) return stored;
+  } catch (e) { /* private mode / disabled storage */ }
+  return 'br';
+}
+
+function setSelfBadgeCorner(corner) {
+  if (SELF_BADGE_CORNERS.indexOf(corner) < 0) return;
+  _selfBadgeCorner = corner;
+  try { localStorage.setItem(SELF_VIDEO_CORNER_KEY, corner); } catch (e) { /* ignore */ }
+  var badge = document.getElementById('video-stage-self');
+  if (badge) badge.dataset.corner = corner;
+}
+
+// Pure: the corner a badge dropped at `box` (stage-relative) belongs to. Decided
+// by the badge's centre, not its top-left, so the snap lands where it looks like
+// you let go rather than a half-badge earlier.
+function nearestBadgeCorner(box, stage) {
+  var cx = box.left + (box.width || 0) / 2;
+  var cy = box.top + (box.height || 0) / 2;
+  return (cy < (stage.height || 0) / 2 ? 't' : 'b') + (cx < (stage.width || 0) / 2 ? 'l' : 'r');
+}
+
+function _clampBadge(value, max) {
+  if (!(max > 0)) return 0;
+  return Math.max(0, Math.min(max, value));
+}
+
+var SELF_BADGE_DRAG_SLOP = 3;   // px of movement before a press counts as a drag
+
+function _onSelfBadgePointerDown(e) {
+  var badge = document.getElementById('video-stage-self');
+  var stage = document.getElementById('video-stage');
+  if (!badge || !stage || _selfBadgeDrag || (e.button !== undefined && e.button !== 0)) return;
+  var b = badge.getBoundingClientRect();
+  var s = stage.getBoundingClientRect();
+  _selfBadgeDragged = false;
+  _selfBadgeDrag = {
+    pointerId: e.pointerId,
+    startX: e.clientX,
+    startY: e.clientY,
+    // Grab offset inside the badge, so it does not jump under the pointer.
+    grabX: e.clientX - b.left,
+    grabY: e.clientY - b.top,
+    width: b.width,
+    height: b.height,
+    stage: { left: s.left, top: s.top, width: s.width, height: s.height },
+    left: b.left - s.left,
+    top: b.top - s.top
+  };
+  // Listen on the window, not the badge: the pointer routinely leaves a 200px
+  // badge mid-drag, and a lost pointerup would leave it stuck to the cursor.
+  window.addEventListener('pointermove', _onSelfBadgePointerMove);
+  window.addEventListener('pointerup', _onSelfBadgePointerUp);
+  window.addEventListener('pointercancel', _onSelfBadgePointerUp);
+  badge.classList.add('dragging');
+  e.preventDefault();
+}
+
+function _onSelfBadgePointerMove(e) {
+  var d = _selfBadgeDrag;
+  if (!d || (e.pointerId !== undefined && e.pointerId !== d.pointerId)) return;
+  var badge = document.getElementById('video-stage-self');
+  if (!badge) return;
+  if (!_selfBadgeDragged &&
+      (Math.abs(e.clientX - d.startX) > SELF_BADGE_DRAG_SLOP ||
+       Math.abs(e.clientY - d.startY) > SELF_BADGE_DRAG_SLOP)) {
+    _selfBadgeDragged = true;
+  }
+  d.left = _clampBadge(e.clientX - d.stage.left - d.grabX, d.stage.width - d.width);
+  d.top  = _clampBadge(e.clientY - d.stage.top  - d.grabY, d.stage.height - d.height);
+  badge.style.left = d.left + 'px';
+  badge.style.top = d.top + 'px';
+  badge.style.right = 'auto';
+  badge.style.bottom = 'auto';
+}
+
+function _onSelfBadgePointerUp(e) {
+  var d = _selfBadgeDrag;
+  if (!d || (e && e.pointerId !== undefined && e.pointerId !== d.pointerId)) return;
+  _selfBadgeDrag = null;
+  window.removeEventListener('pointermove', _onSelfBadgePointerMove);
+  window.removeEventListener('pointerup', _onSelfBadgePointerUp);
+  window.removeEventListener('pointercancel', _onSelfBadgePointerUp);
+  var badge = document.getElementById('video-stage-self');
+  if (!badge) return;
+  badge.classList.remove('dragging');
+  badge.style.removeProperty('left');
+  badge.style.removeProperty('top');
+  badge.style.removeProperty('right');
+  badge.style.removeProperty('bottom');
+  if (_selfBadgeDragged) {
+    setSelfBadgeCorner(nearestBadgeCorner(
+      { left: d.left, top: d.top, width: d.width, height: d.height },
+      { width: d.stage.width, height: d.stage.height }
+    ));
+  }
+}
+
+function initSelfVideoBadge() {
+  var badge = document.getElementById('video-stage-self');
+  if (!badge || badge._voxalDragWired) return;
+  badge._voxalDragWired = true;
+  badge.dataset.corner = _selfBadgeCorner;
+  badge.addEventListener('pointerdown', _onSelfBadgePointerDown);
+  // The tile inside the badge carries the click-to-pin handler every tile has,
+  // and a drag ends with a click. Swallow that one in the capture phase, or
+  // moving the badge would also blow it up to the focus slot.
+  badge.addEventListener('click', function(e) {
+    if (!_selfBadgeDragged) return;
+    _selfBadgeDragged = false;
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+}
+
+// --- Watching a peer: the roster's camera / screen icons ----------------------
+//
+// Every participant with a live camera (or screen) keeps an icon on their roster
+// row, and it is a control rather than a label. On your own row it is the camera
+// itself — press to switch it on or off. On someone else's it decides whether
+// *you* watch them: a purely local choice, nothing is signalled and their camera
+// keeps running, because no participant gets to reach across the room and switch
+// off somebody else's camera.
+
+var VIDEO_ICON_PATHS = {
+  camera: '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>',
+  'camera-off': '<path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/><line x1="1" y1="1" x2="23" y2="23"/>',
+  screen: '<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>',
+  'screen-off': '<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/><line x1="1" y1="1" x2="23" y2="23"/>'
+};
+
+function peerVideoTileKey(peerId, kind) {
+  return (kind === 'screen' ? 'screen:' : 'camera:') + peerId;
+}
+
+// Where the stage applies, "watching" means the peer has a tile on it; elsewhere
+// (mobile, tiny embed, narrow web, Tauri's pop-out window) it means the floating
+// viewer is open on them. Gated on videoStageAvailable() — which is a media
+// query, not a count — rather than on whether the stage currently has any tiles:
+// hiding the last one would otherwise flip the icon's meaning underneath the
+// user and leave nothing that could un-hide it.
+function peerVideoWatched(peerId, kind) {
+  if (videoStageAvailable()) return !_hiddenStageKeys.has(peerVideoTileKey(peerId, kind));
+  return kind === 'screen' ? _screenViewerPeerId === peerId : _videoViewerPeerId === peerId;
+}
+
+function togglePeerVideoWatch(peerId, kind) {
+  if (!peerId) return;
+  if (videoStageAvailable()) {
+    var key = peerVideoTileKey(peerId, kind);
+    if (_hiddenStageKeys.has(key)) _hiddenStageKeys.delete(key);
+    else _hiddenStageKeys.add(key);
+    updatePeerList();   // repaints the icon; the stage rides the same tick
+    return;
+  }
+  if (kind === 'screen') {
+    if (_screenViewerPeerId === peerId) closeScreenViewer(); else openScreenViewer(peerId);
+  } else if (_videoViewerPeerId === peerId) {
+    closeVideoViewer();
+  } else {
+    openVideoViewer(peerId);
+  }
+}
+
+function _videoIconButton(kind, on, title, onClick) {
+  var btn = document.createElement('button');
+  btn.className = 'btn-icon peer-cam-btn' + (on ? '' : ' peer-cam-btn-off');
+  btn.title = title;
+  btn.setAttribute('aria-label', title);
+  btn.setAttribute('aria-pressed', String(!!on));
+  btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    VIDEO_ICON_PATHS[on ? kind : kind + '-off'] + '</svg>';
+  btn.addEventListener('click', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    onClick();
+  });
+  return btn;
+}
+
+function appendPeerVideoButtons(parent, peerId, isSelf) {
+  if (!parent || !videoModeEnabled) return;
+
+  if (isSelf) {
+    // The room controls already carry a camera button; in a tiny embed there is
+    // no room for a second one on the roster row.
+    if (IS_TINY_EMBED) return;
+    parent.appendChild(_videoIconButton(
+      'camera',
+      localVideoActive,
+      localVideoActive ? 'Turn your camera off' : 'Turn your camera on',
+      function() { if (localVideoActive) stopVideoShare(); else startVideoShare(); }
+    ));
+    return;
+  }
+
+  var conn = peerId ? connections.get(peerId) : null;
+  if (!conn) return;
+  var who = conn.pseudo || shortId(peerId);
+  if (conn.videoActive) {
+    var seesCamera = peerVideoWatched(peerId, 'camera');
+    parent.appendChild(_videoIconButton(
+      'camera',
+      seesCamera,
+      (seesCamera ? 'Hide ' : 'Show ') + who + "'s camera",
+      function() { togglePeerVideoWatch(peerId, 'camera'); }
+    ));
+  }
+  if (conn.screenActive) {
+    var seesScreen = peerVideoWatched(peerId, 'screen');
+    parent.appendChild(_videoIconButton(
+      'screen',
+      seesScreen,
+      (seesScreen ? 'Hide ' : 'Show ') + who + "'s screen",
+      function() { togglePeerVideoWatch(peerId, 'screen'); }
+    ));
+  }
+}
 
 function updateVideoModeUI() {
   // Video mode toggle in settings — a normal room capability, no longer dev-gated.
@@ -8507,6 +8744,8 @@ function resetVideoState() {
   if (_screenPopoutWindow && !_screenPopoutWindow.closed) _screenPopoutWindow.close();
   _screenPopoutWindow = null;
   _stagePinnedKey = null;
+  // Choosing not to watch someone is scoped to the room you chose it in.
+  _hiddenStageKeys.clear();
   window._voxalVideoStream = null;
   connections.forEach(function(c) {
     c.videoMedia = null;
@@ -11628,6 +11867,7 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-share-camera').addEventListener('click', function() {
     if (localVideoActive) stopVideoShare(); else startVideoShare();
   });
+  initSelfVideoBadge();
   var screenBtnEl = $('btn-share-screen');
   if (screenBtnEl) {
     screenBtnEl.addEventListener('click', function() {

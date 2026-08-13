@@ -303,27 +303,285 @@ test.describe('grid sizing', () => {
   });
 });
 
-test.describe('the stage and the floating viewer do not both appear', () => {
+// The roster row is where a participant's state already lives, so it is also
+// where the control belongs. On someone else's row the icon decides whether YOU
+// watch them — never whether they transmit; on your own it is your camera.
+test.describe('the roster keeps a camera icon for everyone with a camera', () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
-  test('the roster drops its camera icon while the stage shows that peer', async ({ page }) => {
+  test('a peer shown on the stage still carries the icon on their row', async ({ page }) => {
     await enterRoom(page, {
       knownPeerIds: ['p1'],
       connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
     });
-    expect(await page.locator('#peer-item-p1 .peer-cam-btn').count()).toBe(0);
+    expect(await page.locator('#peer-item-p1 .peer-cam-btn').count()).toBe(1);
     expect(await page.locator('#video-stage [data-key="camera:p1"]').count()).toBe(1);
+    expect(await page.locator('#peer-item-p1 .peer-cam-btn').getAttribute('aria-pressed')).toBe('true');
   });
 
-  test('a narrow viewport keeps the icon and does not build a stage', async ({ page }) => {
+  test('pressing it stops watching that peer, pressing again resumes', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1', 'p2'],
+      connections: [
+        { id: 'p1', pseudo: 'Alice', open: true, videoActive: true },
+        { id: 'p2', pseudo: 'Bob', open: true, videoActive: true },
+      ],
+    });
+    expect(await tileKeys(page)).toEqual(['camera:p1', 'camera:p2']);
+
+    await page.locator('#peer-item-p1 .peer-cam-btn').click();
+    expect(await tileKeys(page)).toEqual(['camera:p2']);
+    // The row keeps the icon — it is the only thing that can bring them back.
+    const btn = page.locator('#peer-item-p1 .peer-cam-btn');
+    expect(await btn.count()).toBe(1);
+    expect(await btn.getAttribute('aria-pressed')).toBe('false');
+    // Their camera is untouched: hiding is local, nothing is signalled.
+    expect(await page.evaluate(() => connections.get('p1').videoActive)).toBe(true);
+
+    await btn.click();
+    expect(await tileKeys(page)).toEqual(['camera:p1', 'camera:p2']);
+  });
+
+  test('a camera going off releases the hide, so a re-share is visible again', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1', 'p2'],
+      connections: [
+        { id: 'p1', pseudo: 'Alice', open: true, videoActive: true },
+        { id: 'p2', pseudo: 'Bob', open: true, videoActive: true },
+      ],
+    });
+    await page.locator('#peer-item-p1 .peer-cam-btn').click();
+    expect(await page.evaluate(() => _hiddenStageKeys.has('camera:p1'))).toBe(true);
+
+    await page.evaluate(() => { connections.get('p1').videoActive = false; updatePeerList(); });
+    await page.evaluate(() => { connections.get('p1').videoActive = true; updatePeerList(); });
+    expect(await page.evaluate(() => _hiddenStageKeys.has('camera:p1'))).toBe(false);
+    expect(await tileKeys(page)).toEqual(['camera:p1', 'camera:p2']);
+  });
+
+  test('hiding the last visible camera does not strand the icon', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
+    });
+    await page.locator('#peer-item-p1 .peer-cam-btn').click();
+    // The stage has nothing left to show and stands down…
+    expect(await page.evaluate(() => document.body.classList.contains('video-stage'))).toBe(false);
+    // …but the icon still means "watch Alice", not "open a floating viewer".
+    await page.locator('#peer-item-p1 .peer-cam-btn').click();
+    expect(await page.evaluate(() => _videoViewerPeerId)).toBeNull();
+    expect(await tileKeys(page)).toEqual(['camera:p1']);
+  });
+
+  test('your own row switches your own camera on and off', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true }],
+    });
+    // Stub the capture path: this is about the control, not getUserMedia.
+    await page.evaluate(() => {
+      window.startVideoShare = () => { localVideoActive = true; updatePeerList(); };
+      window.stopVideoShare = () => { localVideoActive = false; updatePeerList(); };
+    });
+    const btn = page.locator('#peer-item-self .peer-cam-btn');
+    expect(await btn.getAttribute('aria-pressed')).toBe('false');
+
+    await btn.click();
+    expect(await page.evaluate(() => localVideoActive)).toBe(true);
+    expect(await btn.getAttribute('aria-pressed')).toBe('true');
+
+    await btn.click();
+    expect(await page.evaluate(() => localVideoActive)).toBe(false);
+  });
+
+  test('the icons follow the video-mode switch', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
+    });
+    expect(await page.locator('.peer-cam-btn').count()).toBe(2);   // Alice + self
+    await page.evaluate(() => { videoModeEnabled = false; updatePeerList(); });
+    expect(await page.locator('.peer-cam-btn').count()).toBe(0);
+  });
+
+  test('below the breakpoint the icon still drives the floating viewer', async ({ page }) => {
     await page.setViewportSize({ width: 700, height: 800 });
     await enterRoom(page, {
       knownPeerIds: ['p1'],
       connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
     });
+    await giveStream(page, 'p1', 'camera');
     expect(await page.evaluate(() => videoStageAvailable())).toBe(false);
-    expect(await page.locator('#peer-item-p1 .peer-cam-btn').count()).toBe(1);
     expect(await page.evaluate(() => document.body.classList.contains('video-stage'))).toBe(false);
+
+    await page.locator('#peer-item-p1 .peer-cam-btn').click();
+    expect(await page.evaluate(() => _videoViewerPeerId)).toBe('p1');
+    await page.locator('#peer-item-p1 .peer-cam-btn').click();
+    expect(await page.evaluate(() => _videoViewerPeerId)).toBeNull();
+  });
+});
+
+// Your own camera is a self-view, not content: it takes a small draggable badge
+// over the stage. The exception is being the only camera in the room — there is
+// then nothing for it to be small beside.
+test.describe('the self-view badge', () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+
+  const badgeKeys = (page) =>
+    page.evaluate(() =>
+      Array.from(document.querySelectorAll('#video-stage-self [data-key]')).map((e) => e.dataset.key)
+    );
+
+  test('selfBadgeTileKey minimizes only when someone else has a camera on', async ({ page }) => {
+    const self = { key: 'camera:self', kind: 'camera', self: true };
+    const alice = { key: 'camera:p1', kind: 'camera', self: false };
+    const screen = { key: 'screen:p1', kind: 'screen', self: false };
+    expect(await callFn(page, 'selfBadgeTileKey', [self], '')).toBe('');
+    expect(await callFn(page, 'selfBadgeTileKey', [alice, self], '')).toBe('camera:self');
+    // A screen share is not a camera: alone with one, you are still the camera.
+    expect(await callFn(page, 'selfBadgeTileKey', [screen, self], 'screen:p1')).toBe('');
+    // An explicit pin means "show me this big" and outranks minimising.
+    expect(await callFn(page, 'selfBadgeTileKey', [alice, self], 'camera:self')).toBe('');
+    expect(await callFn(page, 'selfBadgeTileKey', [alice], '')).toBe('');
+  });
+
+  test('alone with a camera, the self-view takes the stage', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true }],
+    });
+    await page.evaluate(() => { localVideoActive = true; updatePeerList(); });
+    expect(await badgeKeys(page)).toEqual([]);
+    expect(await page.locator('#video-stage-grid [data-key="camera:self"]').count()).toBe(1);
+    expect(await page.locator('#video-stage-self').isVisible()).toBe(false);
+  });
+
+  test('a second camera minimizes it into the badge, and back out again', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true }],
+    });
+    await page.evaluate(() => { localVideoActive = true; updatePeerList(); });
+    await page.evaluate(() => { connections.get('p1').videoActive = true; updatePeerList(); });
+    expect(await badgeKeys(page)).toEqual(['camera:self']);
+    expect(await page.locator('#video-stage-grid [data-key]').count()).toBe(1);
+    expect(await page.locator('#video-stage-self').isVisible()).toBe(true);
+
+    await page.evaluate(() => { connections.get('p1').videoActive = false; updatePeerList(); });
+    expect(await badgeKeys(page)).toEqual([]);
+    expect(await page.locator('#video-stage-grid [data-key="camera:self"]').count()).toBe(1);
+  });
+
+  test('moving between badge and grid never reassigns srcObject', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true }],
+    });
+    await page.evaluate(() => {
+      localVideoStream = new MediaStream();
+      localVideoActive = true;
+      updatePeerList();
+    });
+    const writes = await page.evaluate(() => {
+      const vid = document.querySelector('#video-stage [data-key="camera:self"] video');
+      let count = 0;
+      let desc = null;
+      for (let p = Object.getPrototypeOf(vid); p && !desc; p = Object.getPrototypeOf(p)) {
+        desc = Object.getOwnPropertyDescriptor(p, 'srcObject');
+      }
+      Object.defineProperty(vid, 'srcObject', {
+        configurable: true,
+        get() { return desc.get.call(this); },
+        set(v) { count++; desc.set.call(this, v); },
+      });
+      connections.get('p1').videoActive = true;   // minimize into the badge
+      updatePeerList();
+      connections.get('p1').videoActive = false;  // and back to the grid
+      updatePeerList();
+      return count;
+    });
+    expect(writes).toBe(0);
+  });
+
+  test('nearestBadgeCorner snaps by the badge centre', async ({ page }) => {
+    const stage = { width: 1000, height: 600 };
+    const at = (left, top) => callFn(page, 'nearestBadgeCorner', { left, top, width: 200, height: 120 }, stage);
+    expect(await at(0, 0)).toBe('tl');
+    expect(await at(800, 0)).toBe('tr');
+    expect(await at(0, 480)).toBe('bl');
+    expect(await at(800, 480)).toBe('br');
+    // Centre just past the midpoint counts as the far corner, not the near one.
+    expect(await at(401, 241)).toBe('br');
+    expect(await at(399, 239)).toBe('tl');
+  });
+
+  test('the corner is remembered, and a stored nonsense value is ignored', async ({ page }) => {
+    await page.evaluate(() => setSelfBadgeCorner('tl'));
+    expect(await page.evaluate(() => localStorage.getItem('self-video-corner'))).toBe('tl');
+    expect(await page.evaluate(() => document.getElementById('video-stage-self').dataset.corner)).toBe('tl');
+    expect(await page.evaluate(() => readSelfBadgeCorner())).toBe('tl');
+
+    await page.evaluate(() => localStorage.setItem('self-video-corner', 'somewhere'));
+    expect(await page.evaluate(() => readSelfBadgeCorner())).toBe('br');
+  });
+
+  test('dragging it snaps to the nearest corner without pinning the tile', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
+    });
+    await page.evaluate(() => { localVideoActive = true; updatePeerList(); });
+    const badge = page.locator('#video-stage-self');
+    expect(await badge.getAttribute('data-corner')).toBe('br');
+
+    const box = await badge.boundingBox();
+    const stage = await page.locator('#video-stage').boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(stage.x + 30, stage.y + 30, { steps: 8 });
+    await page.mouse.up();
+
+    expect(await badge.getAttribute('data-corner')).toBe('tl');
+    expect(await page.evaluate(() => localStorage.getItem('self-video-corner'))).toBe('tl');
+    // A drag ends in a click; letting it through would pin the tile to focus.
+    expect(await page.evaluate(() => _stagePinnedKey)).toBeNull();
+    // Snapped back to a corner: no inline offset survives the drop.
+    expect(await page.evaluate(() => document.getElementById('video-stage-self').style.left)).toBe('');
+
+    const after = await badge.boundingBox();
+    expect(after.x).toBeLessThan(stage.x + stage.width / 2);
+    expect(after.y).toBeLessThan(stage.y + stage.height / 2);
+  });
+
+  test('the badge stays inside the stage when dragged past its edge', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
+    });
+    await page.evaluate(() => { localVideoActive = true; updatePeerList(); });
+    const badge = page.locator('#video-stage-self');
+    const box = await badge.boundingBox();
+    const stage = await page.locator('#video-stage').boundingBox();
+
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(stage.x - 400, stage.y - 400, { steps: 6 });
+    const during = await badge.boundingBox();
+    expect(during.x).toBeGreaterThanOrEqual(stage.x - 1);
+    expect(during.y).toBeGreaterThanOrEqual(stage.y - 1);
+    await page.mouse.up();
+  });
+
+  test('a plain click still pins the self-view, as on any other tile', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
+    });
+    await page.evaluate(() => { localVideoActive = true; updatePeerList(); });
+    await page.locator('#video-stage-self .video-tile').click();
+    expect(await page.evaluate(() => _stagePinnedKey)).toBe('camera:self');
+    // Pinned, it is the focus rather than a badge.
+    expect(await page.locator('#video-stage-focus [data-key="camera:self"]').count()).toBe(1);
   });
 });
 

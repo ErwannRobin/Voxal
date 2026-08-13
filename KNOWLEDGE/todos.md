@@ -364,11 +364,22 @@ dot. Video mode is a real setting (Settings → Video), no longer force-enabled
 and no longer dev-gated. Capture is capped at 720p30 and video senders finally
 get `maxBitrate`/`degradationPreference`/`contentHint`/`scaleResolutionDownBy`.
 
-Regression-guarded by `tests/e2e/unit-video-stage.spec.js` (33 cases), the most
+Regression-guarded by `tests/e2e/unit-video-stage.spec.js` (45 cases), the most
 important of which is that an **audio-only room never gets `body.video-stage`**
 and keeps the original flex stack.
 
+Follow-up pass (same file, "the roster keeps a camera icon…" / "the self-view
+badge"): every participant with a live camera keeps a **camera icon on their
+roster row** — on someone else's row it decides whether *you* watch them (local
+only; their camera is never touched), on your own it switches your camera on and
+off. And your **self-view is a small badge floating over the stage** that can be
+dragged to any corner and snaps there, maximising into a real tile only when
+nobody else has a camera on.
+
 **Not done — deliberately out of scope for this pass:**
+- **Keyboard access to the badge.** Dragging is pointer-only; there is no
+  arrow-key nudge or corner picker for keyboard users. Clicking it still pins,
+  and the corner is remembered, so this is a comfort gap rather than a lockout.
 - **Mobile / narrow web (<861px)** keeps the floating viewer panel. A phone in
   portrait has room for ~2 tiles before the roster and PTT are squeezed out, so
   it needs its own layout decision (stage above the voice UI, probably with a

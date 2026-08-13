@@ -536,6 +536,11 @@
       <div id="video-stage" class="video-stage hidden" role="region" aria-label="Video">
         <div id="video-stage-focus" class="video-stage-focus hidden"></div>
         <div id="video-stage-grid" class="video-stage-grid"></div>
+        <!-- Your own camera, minimized: a small badge floating over the stage
+             that can be dragged to any corner. It only holds a tile while
+             someone else has a camera on — see selfBadgeTileKey(). -->
+        <div id="video-stage-self" class="video-stage-self hidden" data-corner="br"
+             title="Drag to move your self-view"></div>
       </div>
 
       <div id="room-peers-panel" class="room-peers-panel">
