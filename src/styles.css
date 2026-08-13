@@ -1230,7 +1230,9 @@ kbd {
    camera or screen is actually live. An audio-only room never gets the
    class and therefore renders byte-identically to before. */
 
-.video-stage { min-height: 0; }
+/* Positioning context for the minimized self-view badge, which floats over the
+   tiles and is clipped to the stage rather than to the room. */
+.video-stage { min-height: 0; position: relative; }
 .video-stage.hidden { display: none; }
 
 /* Below the stage breakpoint the stage stays hidden and the pre-existing
@@ -1243,8 +1245,13 @@ kbd {
   html.is-web body.video-stage:not(.embed-tiny) #screen-room.active {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 320px;   /* stage | voice rail */
-    grid-template-rows: auto auto minmax(0, 1fr);
+    /* The consent banner gets a row of its own, exactly as in the landscape
+       grid above. Sharing `header` with .room-header stacks the two in the same
+       cell, and the banner's Accept/Decline then land on the room's own
+       buttons. The row is `auto`, so it collapses to nothing while hidden. */
+    grid-template-rows: auto auto auto minmax(0, 1fr);
     grid-template-areas:
+      "consent consent"
       "header  header"
       "warning warning"
       "stage   rail";
@@ -1258,7 +1265,7 @@ kbd {
   }
   html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-header { grid-area: header; }
   html.is-web body.video-stage:not(.embed-tiny) #screen-room #room-size-warning { grid-area: warning; }
-  html.is-web body.video-stage:not(.embed-tiny) #screen-room #debug-consent-banner { grid-area: header; }
+  html.is-web body.video-stage:not(.embed-tiny) #screen-room #debug-consent-banner { grid-area: consent; }
 
   html.is-web body.video-stage:not(.embed-tiny) #screen-room #video-stage {
     grid-area: stage;
@@ -1400,6 +1407,38 @@ kbd {
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.35);
 }
+
+/* The minimized self-view: a small badge floating over the stage, dragged to
+   whichever corner suits and snapped there on release. Corner-anchored rather
+   than free-floating, so a resize can never leave it parked over someone's
+   face. It holds a tile only while someone else has a camera on — alone, your
+   self-view is the content and takes the stage like any other tile. */
+.video-stage-self {
+  position: absolute;
+  z-index: 3;
+  width: 22%;
+  min-width: 120px;
+  max-width: 220px;
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  cursor: grab;
+  /* Or the browser claims the gesture as a scroll/pan before we see it. */
+  touch-action: none;
+}
+.video-stage-self.dragging {
+  cursor: grabbing;
+  user-select: none;
+  /* Lifted while dragging so the drop target is unambiguous. */
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+.video-stage-self[data-corner="tl"] { top: 12px; left: 12px; }
+.video-stage-self[data-corner="tr"] { top: 12px; right: 12px; }
+.video-stage-self[data-corner="bl"] { bottom: 12px; left: 12px; }
+.video-stage-self[data-corner="br"] { bottom: 12px; right: 12px; }
+/* The tile fills the badge and inherits its grab cursor — the whole badge is
+   the drag handle, and a click that did not move it still pins as usual. */
+.video-stage-self .video-tile { cursor: inherit; }
 
 body.embed-hide-header #screen-room .room-header {
   display: none;
@@ -3122,6 +3161,11 @@ details.turn-section .turn-inner {
   transition: transform 0.15s;
 }
 .peer-cam-btn:hover { transform: scale(1.15); }
+/* Not watching (or your own camera off). Dimmed rather than greyed out: the
+   slashed glyph already says "you are not seeing this", and the icon's job on
+   the surfaces without a stage is still to advertise that this peer HAS a
+   camera — a muted grey icon stops reading as an invitation to tap it. */
+.peer-cam-btn-off { opacity: 0.55; }
 
 /* Floating video viewer panel */
 .video-viewer-panel {

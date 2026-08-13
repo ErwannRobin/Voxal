@@ -119,6 +119,8 @@ A setting that `getMicStream()` reads (`noise-suppression`, `mic-device-id`) is 
 | `mic-hint-dismissed` | `MIC_HINT_DISMISSED_KEY` | Hides that hint. Written by both its ✕ and the Settings → Advanced toggle, via `setMicHintEnabled()` |
 | `noise-suppression` | `NOISE_SUPPRESSION_KEY` | `rnnoise` / `browser` / `off`. A change re-acquires the mic live via `reacquireMicForRoom()` |
 | `mic-device-id` | `MIC_DEVICE_KEY` | Selected microphone; same live re-acquire on change |
+| `video-mode-enabled` | `VIDEO_MODE_KEY` | Whether the room offers the Camera / Screen controls. Absent means "never chosen" = on (`readVideoModeEnabled()`) |
+| `self-video-corner` | `SELF_VIDEO_CORNER_KEY` | Which corner of the video stage the minimized self-view badge was dragged to: `tl` / `tr` / `bl` / `br` |
 | `room-active` | `ROOM_ACTIVE_KEY` | Transient. Main window → preferences window: a call is live, so `settings.html` must not run its `getUserMedia` device-label probe (it would kill the call). Cleared on leave and on load |
 | `echo-test-request` | `ECHO_BRIDGE_REQUEST_KEY` | Transient. Desktop preferences window → main window: `{action:'start'\|'stop', at}` (see below) |
 | `echo-test-state` | `ECHO_BRIDGE_STATE_KEY` | Transient. Main window → preferences window: `{running, text, kind, at}` |
