@@ -348,4 +348,42 @@ old binary and falls through). The JS half is already live.
 
 ---
 
+## 📹 Video conference UX — stage shipped on web desktop, other surfaces pending
+
+**Status:** ✅ Implemented for web desktop (≥861px). See `KNOWLEDGE/learning.md`
+→ "Video stage".
+
+The video prototype (`KNOWLEDGE/video-prototype-plan.md`) worked but was a
+peep-hole: a camera glyph in the roster opened **one** 320×260 floating panel at
+a time, with no self-view, and the room never stopped being an audio roster. It
+is now a tile grid that takes over the room's main area while any camera or
+screen is live, with the voice UI (roster + PTT + controls) stacked into a
+right-hand rail. Screen shares take a focus slot with the cameras as a
+filmstrip; tiles carry the talking ring, a live-mic chip and the ICE quality
+dot. Video mode is a real setting (Settings → Video), no longer force-enabled
+and no longer dev-gated. Capture is capped at 720p30 and video senders finally
+get `maxBitrate`/`degradationPreference`/`contentHint`/`scaleResolutionDownBy`.
+
+Regression-guarded by `tests/e2e/unit-video-stage.spec.js` (33 cases), the most
+important of which is that an **audio-only room never gets `body.video-stage`**
+and keeps the original flex stack.
+
+**Not done — deliberately out of scope for this pass:**
+- **Mobile / narrow web (<861px)** keeps the floating viewer panel. A phone in
+  portrait has room for ~2 tiles before the roster and PTT are squeezed out, so
+  it needs its own layout decision (stage above the voice UI, probably with a
+  swipe between them) rather than a narrower version of this grid.
+- **Tauri desktop** still short-circuits to the WebviewWindow pop-out
+  (`popOutVideoViewer`). The stage and the pop-out are alternatives, and which
+  one desktop should get is a product call — the pop-out is genuinely better for
+  a second monitor.
+- **Adaptive quality.** `scaleResolutionDownBy` steps on peer count only; it does
+  not react to measured loss the way the audio jitter buffer does, and tile size
+  does not feed back into the sender. A peer watching a 160px filmstrip tile
+  still receives a full-size encode.
+- **Active-speaker auto-focus.** Focus is a screen share or an explicit pin;
+  it does not follow whoever is talking.
+
+---
+
 _Add new items above this line._
