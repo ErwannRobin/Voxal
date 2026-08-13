@@ -1131,7 +1131,7 @@ kbd {
   /* Room: header spans the top; below it the peers list (2/3) and the talk
      button (1/3) sit side by side. The talk button is always the 1/3 column;
      `data-hand` picks its side (default right-handed → talk button on the right). */
-  html.is-web body:not(.embed-tiny) #screen-room.active {
+  html.is-web body:not(.embed-tiny):not(.video-stage) #screen-room.active {
     display: grid;
     grid-template-columns: 2fr 1fr;         /* peers | talk (right-handed) */
     grid-template-rows: auto auto auto minmax(0, 1fr);
@@ -1147,7 +1147,7 @@ kbd {
     border-right: none;
   }
   /* Left-handed → talk button on the left (still 1/3). */
-  html.is-web[data-hand="left"] body:not(.embed-tiny) #screen-room.active {
+  html.is-web[data-hand="left"] body:not(.embed-tiny):not(.video-stage) #screen-room.active {
     grid-template-columns: 1fr 2fr;         /* talk | peers */
     grid-template-areas:
       "consent consent"
@@ -1155,11 +1155,11 @@ kbd {
       "warning warning"
       "main    peers";
   }
-  html.is-web body:not(.embed-tiny) #screen-room #debug-consent-banner { grid-area: consent; }
-  html.is-web body:not(.embed-tiny) #screen-room .room-header { grid-area: header; margin-bottom: 6px; }
-  html.is-web body:not(.embed-tiny) #screen-room #room-size-warning { grid-area: warning; }
+  html.is-web body:not(.embed-tiny):not(.video-stage) #screen-room #debug-consent-banner { grid-area: consent; }
+  html.is-web body:not(.embed-tiny):not(.video-stage) #screen-room .room-header { grid-area: header; margin-bottom: 6px; }
+  html.is-web body:not(.embed-tiny):not(.video-stage) #screen-room #room-size-warning { grid-area: warning; }
   /* Talk button + hint + controls fill the 1/3 column, centered. */
-  html.is-web body:not(.embed-tiny) #screen-room .room-bottom-bar {
+  html.is-web body:not(.embed-tiny):not(.video-stage) #screen-room .room-bottom-bar {
     grid-area: main;
     position: static;
     left: auto;
@@ -1172,9 +1172,9 @@ kbd {
     gap: 10px;
     min-height: 0;
   }
-  html.is-web body:not(.embed-tiny) #screen-room .room-bottom-bar .room-controls { margin-top: 0; }
+  html.is-web body:not(.embed-tiny):not(.video-stage) #screen-room .room-bottom-bar .room-controls { margin-top: 0; }
   /* Peers list = 2/3 column, full height, scrolls. */
-  html.is-web body:not(.embed-tiny) #screen-room .room-peers-panel {
+  html.is-web body:not(.embed-tiny):not(.video-stage) #screen-room .room-peers-panel {
     grid-area: peers;
     padding-bottom: 0;
     min-height: 0;
@@ -1218,6 +1218,187 @@ kbd {
   }
   html.is-web body:not(.embed-tiny) #screen-home #divider-after-connect { margin: 12px 0; }
   html.is-web body:not(.embed-tiny) #screen-home #dev-log-panel { display: none; }
+}
+
+/* ── Video stage ─────────────────────────────────────────────────── */
+/* Declared AFTER the landscape block on purpose: this file is one long
+   sheet of mostly single-class selectors, so declaration order decides
+   ties. The landscape rules above are qualified `:not(.video-stage)`, so
+   the two grids never fight — when video is live this one wins.
+
+   `body.video-stage` is set by updateVideoStage() only while at least one
+   camera or screen is actually live. An audio-only room never gets the
+   class and therefore renders byte-identically to before. */
+
+.video-stage { min-height: 0; }
+.video-stage.hidden { display: none; }
+
+/* Below the stage breakpoint the stage stays hidden and the pre-existing
+   floating viewer panels remain the way to watch a peer. */
+@media (max-width: 860px) {
+  .video-stage { display: none; }
+}
+
+@media (min-width: 861px) {
+  html.is-web body.video-stage:not(.embed-tiny) #screen-room.active {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;   /* stage | voice rail */
+    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-areas:
+      "header  header"
+      "warning warning"
+      "stage   rail";
+    column-gap: 20px;
+    align-items: stretch;
+    /* Without this the grid stays trapped inside the centered 480px column
+       that `@media (min-width: 640px) .screen` imposes. */
+    max-width: none;
+    border-left: none;
+    border-right: none;
+  }
+  html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-header { grid-area: header; }
+  html.is-web body.video-stage:not(.embed-tiny) #screen-room #room-size-warning { grid-area: warning; }
+  html.is-web body.video-stage:not(.embed-tiny) #screen-room #debug-consent-banner { grid-area: header; }
+
+  html.is-web body.video-stage:not(.embed-tiny) #screen-room #video-stage {
+    grid-area: stage;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  /* The voice UI keeps its own markup and behaviour — it is simply stacked
+     into the right rail: roster on top, PTT + controls beneath it. */
+  html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-peers-panel {
+    grid-area: rail;
+    align-self: start;
+    min-height: 0;
+    max-height: 100%;
+    padding-bottom: 0;
+    overflow: hidden;
+  }
+  html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-bottom-bar {
+    grid-area: rail;
+    align-self: end;
+    position: static;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    min-height: 0;
+  }
+  html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-bottom-bar .room-controls { margin-top: 0; }
+}
+
+/* Grid of equal tiles. The column count is set inline by layoutVideoStageGrid()
+   so tiles grow to fill the stage while staying near 16:9 — pure CSS can size
+   columns but knows nothing about the leftover height, which is what left an
+   `auto-fit` grid stranded in the top third of the stage. The `auto-fit` rule
+   below is the fallback used before the first measurement. */
+.video-stage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  flex: 1;
+  gap: 10px;
+  min-height: 0;
+}
+.video-stage-focus { flex: 1; min-height: 0; display: flex; }
+.video-stage-focus.hidden { display: none; }
+.video-stage-focus .video-tile { flex: 1; }
+
+/* With a focus tile present the grid becomes a filmstrip beneath it. */
+.video-stage.has-focus .video-stage-grid {
+  flex: 0 0 auto;
+  grid-template-columns: none;
+  grid-auto-flow: column;
+  grid-auto-columns: 160px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.video-tile {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-raised);
+  border: 2px solid transparent;
+  transition: border-color 0.15s;
+  cursor: pointer;
+}
+/* Filmstrip tiles are fixed-size, so they keep an explicit ratio. */
+.video-stage.has-focus .video-stage-grid .video-tile { aspect-ratio: 16 / 9; height: auto; }
+.video-tile video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: #000;
+}
+.video-stage-focus .video-tile video { object-fit: contain; }
+/* A screen share must never be mirrored, and cropping it loses content. */
+.video-tile-screen video { object-fit: contain; }
+/* Self-view is mirrored — an unmirrored self-view reads as wrong to everyone. */
+.video-tile-self.video-tile-camera video { transform: scaleX(-1); }
+
+.video-tile.talking { border-color: var(--green); }
+
+.video-tile-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: var(--bg-raised);
+}
+
+.video-tile-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
+  color: #fff;
+  font-size: 11px;
+  pointer-events: none;
+}
+.video-tile-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.video-tile-mic {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+}
+.video-tile.talking .video-tile-mic { background: var(--green); }
+.video-tile-ice {
+  flex: none;
+  margin-left: auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
 }
 
 body.embed-hide-header #screen-room .room-header {

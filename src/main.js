@@ -1107,17 +1107,19 @@ let _invitePendingPeerCount = null;
 let _micAcquirePromise = null;
 let _pendingTalkingStart = false;
 
-// --- Video prototype (dev mode, 1:1) -----------------------------------------
-localStorage.setItem(VIDEO_MODE_KEY, 'true');
-var videoModeEnabled  = true;
+// --- Video / screen sharing ---------------------------------------------------
+// Video is a normal room capability, on by default. "Enabled" only means the
+// controls are offered — every camera stays off until its owner opts in.
+var videoModeEnabled  = readVideoModeEnabled();
 var localVideoActive  = false;   // this peer is sharing their camera
 var localVideoStream  = null;    // MediaStream (video only)
 var localScreenActive = false;   // this peer is sharing their screen
 var localScreenStream = null;    // MediaStream (screen share)
-var _videoViewerPeerId = null;   // whose camera is displayed in viewer
-var _screenViewerPeerId = null;  // whose screen is displayed in viewer
+var _videoViewerPeerId = null;   // whose camera is displayed in the fallback viewer
+var _screenViewerPeerId = null;  // whose screen is displayed in the fallback viewer
 var _videoPopoutWindow = null;   // reference to video popup window
 var _screenPopoutWindow = null;  // reference to screen popup window
+var _stagePinnedKey = null;      // tile key the user pinned as the stage focus
 var _devLogBuffer  = [];         // ring buffer of all log entries (max 200)
 var _devLogChannel = null;       // BroadcastChannel to the detached devlog window
 var _hostDebugMode = false;      // non-host mirror of the host's dev-mode flag (from peer-list/heartbeat)
@@ -3086,6 +3088,61 @@ function tuneAudioSenders(pc) {
   });
 }
 
+// Video senders got none of the tuning audio senders get, which mattered less
+// while only one remote camera could be on screen at a time. A tile grid makes
+// every stream live at once, and a sharer uploads one encode PER PEER, so the
+// uplink is the ceiling — hence a bitrate cap plus a resolution scale that grows
+// with the room.
+var CAMERA_MAX_BITRATE = 600000;    // ~600 kbps per listener
+var SCREEN_MAX_BITRATE = 1500000;   // screens need more; text must stay legible
+
+function videoScaleForPeerCount(count) {
+  if (count <= 2) return 1;
+  if (count <= 4) return 1.5;
+  return 2;
+}
+
+function tuneVideoSenders(pc, kind) {
+  if (!pc || typeof pc.getSenders !== 'function') return;
+  var isScreen = kind === 'screen';
+  var maxBitrate = isScreen ? SCREEN_MAX_BITRATE : CAMERA_MAX_BITRATE;
+  // A screen share must keep its resolution — dropping it to save frames makes
+  // text unreadable, which defeats the point of sharing a screen at all.
+  var degradation = isScreen ? 'maintain-resolution' : 'balanced';
+  var scale = isScreen ? 1 : videoScaleForPeerCount(connections.size + 1);
+
+  pc.getSenders().forEach(function(sender) {
+    if (!sender.track || sender.track.kind !== 'video') return;
+    try { sender.track.contentHint = isScreen ? 'detail' : 'motion'; } catch (_) {}
+    if (typeof sender.getParameters !== 'function' || typeof sender.setParameters !== 'function') return;
+    try {
+      var params = sender.getParameters();
+      if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+      var enc = params.encodings[0];
+      if (enc.maxBitrate === maxBitrate &&
+          enc.scaleResolutionDownBy === scale &&
+          params.degradationPreference === degradation) return;  // already tuned
+      enc.maxBitrate = maxBitrate;
+      if (scale > 1) enc.scaleResolutionDownBy = scale;
+      else delete enc.scaleResolutionDownBy;
+      params.degradationPreference = degradation;
+      var res = sender.setParameters(params);
+      if (res && typeof res.catch === 'function') res.catch(function() {});
+    } catch (_) {}
+  });
+}
+
+// PeerJS creates the RTCPeerConnection asynchronously, so the senders may not
+// exist yet at call time. Tune on the next tick and again once negotiated.
+function tuneVideoCall(call, kind) {
+  if (!call) return;
+  var apply = function() {
+    if (call.peerConnection) tuneVideoSenders(call.peerConnection, kind);
+  };
+  setTimeout(apply, 0);
+  call.on('stream', apply);
+}
+
 function tuneAudioReceivers(pc, delaySeconds) {
   if (!pc || typeof pc.getReceivers !== 'function') return;
   pc.getReceivers().forEach(function(receiver) {
@@ -3348,13 +3405,22 @@ var ICE_LABELS = { host: 'Direct', srflx: 'STUN', relay: 'TURN' };
 var ICE_CLASSES = { host: 'ice-direct', srflx: 'ice-stun', relay: 'ice-relay' };
 var ICE_DOT_CLASSES = ['peer-dot-direct', 'peer-dot-stun', 'peer-dot-relay'];
 
-function _applyDotIceClass(el, iceType) {
-  if (!el) return;
-  var dot = el.querySelector('.peer-dot');
+// The three ICE classes are plain `background` rules, so they compose onto any
+// round element — the roster dot and the video-tile dot share them.
+function iceDotClass(iceType) {
+  return { host: 'peer-dot-direct', srflx: 'peer-dot-stun', relay: 'peer-dot-relay' }[iceType] || '';
+}
+
+function _setDotIceClass(dot, iceType) {
   if (!dot) return;
   ICE_DOT_CLASSES.forEach(function(c) { dot.classList.remove(c); });
-  var cls = { host: 'peer-dot-direct', srflx: 'peer-dot-stun', relay: 'peer-dot-relay' }[iceType];
+  var cls = iceDotClass(iceType);
   if (cls) dot.classList.add(cls);
+}
+
+function _applyDotIceClass(el, iceType) {
+  if (!el) return;
+  _setDotIceClass(el.querySelector('.peer-dot'), iceType);
 }
 
 function _buildStatsBadge(stats) {
@@ -5353,8 +5419,11 @@ function updatePeerList() {
       div.appendChild(peerMain);
       appendCopyPeerButton(div, actualPeerId, label);
       appendDeviceInfoButton(div, actualPeerId, false);
-      // Video camera icon (dev mode video prototype)
-      if (videoModeEnabled && actualPeerId) {
+      // Camera / screen icons open the floating viewer. They are the only way to
+      // watch a peer where the stage does not apply (mobile, tiny embed, narrow
+      // web, Tauri's pop-out window); where the stage IS showing that peer they
+      // would just open a second, redundant view on top of it.
+      if (videoModeEnabled && actualPeerId && !videoStageIsActive()) {
         if (peerConn && peerConn.videoActive) {
           var camBtn = document.createElement('button');
           camBtn.className = 'btn-icon peer-cam-btn';
@@ -5528,6 +5597,11 @@ function updatePeerList() {
 
   if (window._updateTinyPeersToggle) window._updateTinyPeersToggle();
   updateRoomSizeWarning();
+  // Single wiring point for the stage: every video/screen state change already
+  // refreshes the roster, so hanging the stage off the same tick keeps the two
+  // from ever drifting. updateVideoStage() never calls back into this, and it
+  // reconciles rather than rebuilds, so the frequent calls are cheap.
+  updateVideoStage();
 }
 
 // Voxal audio is a full WebRTC mesh, so connections grow ~O(n²) and a single
@@ -5588,17 +5662,27 @@ function updateTinyCompactStatus() {
   }
 }
 
+// Both talking setters deliberately avoid a full updatePeerList() — they run on
+// every press/release. The video tile is toggled the same targeted way, so the
+// speaking ring costs one classList call rather than a roster rebuild.
+function setStageTileTalking(tileKey, active) {
+  const tile = document.querySelector('#video-stage [data-key="' + cssEscapeAttr(tileKey) + '"]');
+  if (tile) tile.classList.toggle('talking', active);
+}
+
 function updatePeerTalking(peerId, active) {
   const conn = connections.get(peerId);
   if (conn) conn.talking = active;
   const el = document.getElementById('peer-item-' + peerId);
   if (el) el.classList.toggle('talking', active);
+  setStageTileTalking('camera:' + peerId, active);
   updateTinyCompactStatus();
 }
 
 function updateSelfTalking(active) {
   const el = document.getElementById('peer-item-self');
   if (el) el.classList.toggle('talking', active);
+  setStageTileTalking('camera:self', active);
 }
 
 // --- Audio helpers -----------------------------------------------------------
@@ -5770,11 +5854,21 @@ function selectedMicConstraints() {
   return micDeviceId ? { deviceId: { exact: micDeviceId } } : {};
 }
 
+// Capture was previously uncapped, so a 1080p/60 camera was encoded once per
+// peer. `ideal`/`max` only — never `exact`: KNOWLEDGE/learning.md records that
+// forcing fixed dimensions renders a split frame on Desk View / virtual cameras,
+// so the OS must stay free to pick its native profile and merely be asked to
+// stay at or below 720p30.
+var CAMERA_CAPTURE_CAP = {
+  width:     { ideal: 1280, max: 1280 },
+  height:    { ideal: 720,  max: 720  },
+  frameRate: { ideal: 30,   max: 30   }
+};
+
 function selectedCameraConstraints() {
   var cameraId = selectedCameraDeviceId();
-  return cameraId
-    ? { deviceId: { exact: cameraId } }
-    : { facingMode: 'user' };
+  var base = cameraId ? { deviceId: { exact: cameraId } } : { facingMode: 'user' };
+  return Object.assign({}, base, CAMERA_CAPTURE_CAP);
 }
 
 function readStoredDeviceLabels() {
@@ -7484,18 +7578,327 @@ function shouldAcceptJoinerDataConnection(joinerId) {
   return accepted;
 }
 
-// --- Video prototype helpers -------------------------------------------------
+// --- Video / screen sharing helpers ------------------------------------------
+
+// Video is on by default. An absent key means "never chosen", not "off" — only an
+// explicit 'false' disables it, so shipping the feature doesn't require a migration.
+function readVideoModeEnabled() {
+  try {
+    return localStorage.getItem(VIDEO_MODE_KEY) !== 'false';
+  } catch (_) {
+    return true;
+  }
+}
+
+// --- Video stage --------------------------------------------------------------
+//
+// The room is a voice UI first: an audio-only room must render exactly as it did
+// before this feature existed. So the stage is additive — `body.video-stage` is
+// set only while at least one camera or screen is genuinely live, and the CSS
+// grid that moves the roster and the PTT column into a right-hand rail hangs off
+// that class. Everything else (roster markup, PTT, controls) is untouched.
+
+// Pure: the ordered list of tiles the stage should be showing, derived from the
+// same connection state the roster reads. Kept free of DOM so it can be unit
+// tested directly (main.js is a flat classic script — see KNOWLEDGE/learning.md).
+function videoStageTiles() {
+  var tiles = [];
+  if (!videoModeEnabled) return tiles;
+
+  var selfId = (peer && peer.id) || 'self';
+
+  // Screen shares come first: they are the focus candidates.
+  connections.forEach(function(conn, peerId) {
+    if (!conn || !conn.screenActive) return;
+    tiles.push({
+      key: 'screen:' + peerId,
+      peerId: peerId,
+      kind: 'screen',
+      self: false,
+      label: (conn.pseudo || shortId(peerId)) + ' — screen',
+      color: conn.pseudoColor || null,
+      stream: conn.remoteScreenStream || null,
+      talking: false,
+      iceType: (conn.webrtcStats && conn.webrtcStats.iceType) || null
+    });
+  });
+  if (localScreenActive) {
+    tiles.push({
+      key: 'screen:self',
+      peerId: selfId,
+      kind: 'screen',
+      self: true,
+      label: 'Your screen',
+      color: null,
+      stream: localScreenStream,
+      talking: false,
+      iceType: null
+    });
+  }
+
+  // Then remote cameras.
+  connections.forEach(function(conn, peerId) {
+    if (!conn || !conn.videoActive) return;
+    tiles.push({
+      key: 'camera:' + peerId,
+      peerId: peerId,
+      kind: 'camera',
+      self: false,
+      label: conn.pseudo || shortId(peerId),
+      color: conn.pseudoColor || null,
+      stream: conn.remoteVideoStream || null,
+      talking: !!conn.talking,
+      iceType: (conn.webrtcStats && conn.webrtcStats.iceType) || null
+    });
+  });
+
+  // Self camera last, so your own face doesn't push everyone else around.
+  if (localVideoActive) {
+    tiles.push({
+      key: 'camera:self',
+      peerId: selfId,
+      kind: 'camera',
+      self: true,
+      label: displayPseudoForSelf(),
+      color: null,
+      stream: localVideoStream,
+      talking: isTalking || freeHandMode,
+      iceType: null
+    });
+  }
+  return tiles;
+}
+
+// Which tile fills the focus area: an explicit pin wins, otherwise the first
+// screen share (someone sharing a screen is nearly always the thing to look at).
+// Returns '' when nothing should be focused, i.e. a plain grid of cameras.
+function videoStageFocusKey(tiles) {
+  if (_stagePinnedKey) {
+    for (var i = 0; i < tiles.length; i++) {
+      if (tiles[i].key === _stagePinnedKey) return _stagePinnedKey;
+    }
+    _stagePinnedKey = null;   // pinned tile is gone; fall through
+  }
+  for (var j = 0; j < tiles.length; j++) {
+    if (tiles[j].kind === 'screen') return tiles[j].key;
+  }
+  return '';
+}
+
+function _buildVideoTile(tile) {
+  var el = document.createElement('div');
+  el.className = 'video-tile video-tile-' + tile.kind + (tile.self ? ' video-tile-self' : '');
+  el.dataset.key = tile.key;
+  if (tile.peerId) el.dataset.peerId = tile.peerId;
+
+  var vid = document.createElement('video');
+  vid.autoplay = true;
+  vid.playsInline = true;
+  vid.setAttribute('playsinline', '');
+  // Every tile is muted: audio travels on its own MediaConnection and is already
+  // being played by the audio pipeline. Unmuting here would double every voice.
+  vid.muted = true;
+  el.appendChild(vid);
+
+  var placeholder = document.createElement('div');
+  placeholder.className = 'video-tile-placeholder hidden';
+  el.appendChild(placeholder);
+
+  var bar = document.createElement('div');
+  bar.className = 'video-tile-bar';
+  var mic = document.createElement('span');
+  mic.className = 'video-tile-mic';
+  var name = document.createElement('span');
+  name.className = 'video-tile-name';
+  var ice = document.createElement('span');
+  ice.className = 'video-tile-ice';
+  bar.appendChild(mic);
+  bar.appendChild(name);
+  bar.appendChild(ice);
+  el.appendChild(bar);
+
+  el.addEventListener('click', function() { toggleStagePin(tile.key); });
+  return el;
+}
+
+// Reconcile one existing tile in place. Reassigning `srcObject` restarts
+// playback and visibly flashes the tile, and updateVideoStage() runs on every
+// roster tick — so the stream is only ever assigned when it actually changed.
+function _syncVideoTile(el, tile) {
+  var vid = el.querySelector('video');
+  var placeholder = el.querySelector('.video-tile-placeholder');
+  if (vid && vid.srcObject !== tile.stream) vid.srcObject = tile.stream || null;
+
+  var hasStream = !!tile.stream;
+  if (vid) vid.classList.toggle('hidden', !hasStream);
+  if (placeholder) {
+    placeholder.classList.toggle('hidden', hasStream);
+    // A peer whose camera is on but whose stream has not arrived (or briefly
+    // dropped) keeps its slot, rather than making the whole grid reflow.
+    var initial = (tile.label || '?').trim().charAt(0).toUpperCase();
+    if (placeholder.textContent !== initial) placeholder.textContent = initial;
+  }
+
+  el.classList.toggle('talking', !!tile.talking);
+  el.classList.toggle('video-tile-pinned', _stagePinnedKey === tile.key);
+
+  var name = el.querySelector('.video-tile-name');
+  if (name) {
+    if (name.textContent !== tile.label) name.textContent = tile.label;
+    name.style.color = tile.color || '';
+  }
+  _setDotIceClass(el.querySelector('.video-tile-ice'), tile.iceType);
+}
+
+function toggleStagePin(key) {
+  _stagePinnedKey = (_stagePinnedKey === key) ? null : key;
+  updateVideoStage();
+}
+
+// Reconcile by key: create what is new, remove what is gone, move tiles between
+// the focus slot and the grid, and leave everything else alone.
+function renderVideoStage(tiles, focusKey) {
+  var focusEl = document.getElementById('video-stage-focus');
+  var gridEl  = document.getElementById('video-stage-grid');
+  if (!focusEl || !gridEl) return;
+
+  var seen = {};
+  tiles.forEach(function(t) { seen[t.key] = true; });
+
+  // Drop tiles that no longer belong, releasing their stream reference.
+  [focusEl, gridEl].forEach(function(container) {
+    Array.prototype.slice.call(container.children).forEach(function(child) {
+      if (seen[child.dataset.key]) return;
+      var v = child.querySelector('video');
+      if (v) v.srcObject = null;
+      child.remove();
+    });
+  });
+
+  var existing = {};
+  [focusEl, gridEl].forEach(function(container) {
+    Array.prototype.slice.call(container.children).forEach(function(child) {
+      existing[child.dataset.key] = child;
+    });
+  });
+
+  tiles.forEach(function(tile) {
+    var el = existing[tile.key] || _buildVideoTile(tile);
+    var target = (tile.key === focusKey) ? focusEl : gridEl;
+    if (el.parentNode !== target) target.appendChild(el);
+    _syncVideoTile(el, tile);
+  });
+
+  // Keep grid order stable and matching the tile order.
+  tiles.forEach(function(tile) {
+    if (tile.key === focusKey) return;
+    var el = gridEl.querySelector('[data-key="' + cssEscapeAttr(tile.key) + '"]');
+    if (el) gridEl.appendChild(el);
+  });
+
+  focusEl.classList.toggle('hidden', !focusKey);
+  layoutVideoStageGrid(gridEl, focusKey ? 0 : tiles.length);
+}
+
+// Pick the column count that makes the tiles as large as possible while keeping
+// them near 16:9. Pure CSS can size columns but knows nothing about the height
+// left over, which is why an `auto-fit` grid leaves half the stage empty.
+function bestGridColumns(count, width, height, aspect) {
+  if (count <= 0 || !(width > 0) || !(height > 0)) return 1;
+  var best = 1;
+  var bestArea = -1;
+  for (var cols = 1; cols <= count; cols++) {
+    var rows = Math.ceil(count / cols);
+    // Largest tile that fits this arrangement, constrained on both axes.
+    var w = Math.min(width / cols, (height / rows) * aspect);
+    if (w * (w / aspect) > bestArea) { bestArea = w * (w / aspect); best = cols; }
+  }
+  return best;
+}
+
+function layoutVideoStageGrid(gridEl, count) {
+  if (!gridEl) return;
+  if (count <= 0) { gridEl.style.removeProperty('grid-template-columns'); return; }
+  var rect = gridEl.getBoundingClientRect();
+  // Before first layout (or while hidden) there is nothing to measure — leave
+  // the CSS fallback in place rather than committing to a wrong column count.
+  if (!rect.width || !rect.height) { gridEl.style.removeProperty('grid-template-columns'); return; }
+  var cols = bestGridColumns(count, rect.width, rect.height, 16 / 9);
+  gridEl.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0, 1fr))';
+}
+
+// Tile keys are built from peer ids (UUIDs) plus a fixed prefix, but a
+// querySelector attribute value still has to survive quoting.
+function cssEscapeAttr(value) {
+  return String(value).replace(/["\\]/g, '\\$&');
+}
+
+// Where the stage can apply at all. Below the breakpoint (mobile, narrow web),
+// in a tiny embed, and on Tauri/native — which keep the floating viewer panels
+// and the pop-out window — it cannot, so the roster keeps its camera icons and
+// nothing about the room layout changes.
+var VIDEO_STAGE_MIN_WIDTH = 861;
+
+function videoStageAvailable() {
+  if (IS_TINY_EMBED) return false;
+  if (!document.documentElement.classList.contains('is-web')) return false;
+  if (typeof window.matchMedia === 'function') {
+    return window.matchMedia('(min-width: ' + VIDEO_STAGE_MIN_WIDTH + 'px)').matches;
+  }
+  return window.innerWidth >= VIDEO_STAGE_MIN_WIDTH;
+}
+
+// Deliberately derived from state, not from the DOM: updatePeerList() consults
+// this while building the roster, i.e. before updateVideoStage() has run, so an
+// observational check ("is #video-stage visible?") is a tick stale and lets the
+// redundant roster icons through on the tick a camera comes on.
+function videoStageIsActive() {
+  if (!inRoom || !videoStageAvailable()) return false;
+  return videoStageTiles().length > 0;
+}
+
+// Single entry point. Safe to call from anywhere video/screen state changes.
+function updateVideoStage() {
+  var stage = document.getElementById('video-stage');
+  if (!stage) return;
+  var tiles = (inRoom && videoStageAvailable()) ? videoStageTiles() : [];
+  var active = tiles.length > 0;
+
+  document.body.classList.toggle('video-stage', active);
+  stage.classList.toggle('hidden', !active);
+  if (!active) {
+    renderVideoStage([], '');
+    _stagePinnedKey = null;
+    return;
+  }
+  var focusKey = videoStageFocusKey(tiles);
+  stage.classList.toggle('has-focus', !!focusKey);
+  renderVideoStage(tiles, focusKey);
+}
+
+// The column count is measured, so it has to be recomputed when the window
+// changes size — including the first resize that crosses the stage breakpoint,
+// where the stage goes from unmeasurable (hidden) to visible.
+var _stageResizeRaf = null;
+window.addEventListener('resize', function() {
+  if (_stageResizeRaf) return;
+  _stageResizeRaf = requestAnimationFrame(function() {
+    _stageResizeRaf = null;
+    updateVideoStage();
+  });
+});
 
 function updateVideoModeUI() {
-  // Video mode toggle in settings (visible only when dev mode + host + in room)
+  // Video mode toggle in settings — a normal room capability, no longer dev-gated.
   var settingRow = document.getElementById('video-mode-setting');
   if (settingRow) {
-    settingRow.classList.toggle('hidden', !isDevModeEnabled());
+    settingRow.classList.remove('hidden');
     var toggleBtn = document.getElementById('btn-video-mode');
     if (toggleBtn) {
       toggleBtn.classList.toggle('active', videoModeEnabled);
       toggleBtn.textContent = videoModeEnabled ? 'ON' : 'OFF';
-      toggleBtn.setAttribute('aria-pressed', String(videoModeEnabled));
+      // role="switch" → aria-checked, not aria-pressed.
+      toggleBtn.setAttribute('aria-checked', String(videoModeEnabled));
     }
   }
   // Share camera button in room controls (visible when video mode is active)
@@ -7538,7 +7941,11 @@ function toggleVideoMode() {
       if (c.data) c.data.send({ type: 'video-mode', enabled: videoModeEnabled });
     });
   }
-  if (!videoModeEnabled) stopVideoShare();
+  if (!videoModeEnabled) {
+    stopVideoShare();
+    stopScreenShare();
+  }
+  updateVideoStage();
   updateVideoModeUI();
 }
 
@@ -7564,6 +7971,7 @@ async function startVideoShare() {
     if (!peer || peerId === peer.id) return;
     var videoCall = peer.call(peerId, localVideoStream, { metadata: { type: 'video' } });
     if (!videoCall) return;
+    tuneVideoCall(videoCall, 'camera');
     videoCall.on('stream', function(remote) {
       // Only use this stream if we don't already have one from an incoming call
       var existing = connections.get(peerId);
@@ -7640,6 +8048,7 @@ async function startScreenShare() {
     if (!peer || peerId === peer.id) return;
     var screenCall = peer.call(peerId, localScreenStream, { metadata: { type: 'screen' } });
     if (!screenCall) return;
+    tuneVideoCall(screenCall, 'screen');
     screenCall.on('stream', function(remote) {
       var existing = connections.get(peerId);
       if (!existing || !existing.remoteScreenStream || !existing.remoteScreenStream.active) {
@@ -8084,8 +8493,9 @@ function resetVideoState() {
   _screenFpsIntervalId = _stopFpsOverlay(_screenFpsIntervalId, 'screen-viewer-fps');
   stopVideoShare();
   stopScreenShare();
-  videoModeEnabled = true;
-  localStorage.setItem(VIDEO_MODE_KEY, 'true');
+  // Re-read rather than force: leaving a room must not overwrite the user's
+  // (or the host's last) choice. The forced `true` here was prototype scaffolding.
+  videoModeEnabled = readVideoModeEnabled();
   localVideoActive = false;
   localVideoStream = null;
   localScreenActive = false;
@@ -8096,6 +8506,7 @@ function resetVideoState() {
   _videoPopoutWindow = null;
   if (_screenPopoutWindow && !_screenPopoutWindow.closed) _screenPopoutWindow.close();
   _screenPopoutWindow = null;
+  _stagePinnedKey = null;
   window._voxalVideoStream = null;
   connections.forEach(function(c) {
     c.videoMedia = null;
@@ -8109,10 +8520,11 @@ function resetVideoState() {
   });
   closeVideoViewer();
   closeScreenViewer();
+  updateVideoStage();
   updateVideoModeUI();
 }
 
-// --- End video prototype helpers ---------------------------------------------
+// --- End video / screen sharing helpers --------------------------------------
 
 function leaveRoom() {
   var returnTinyRoomId = IS_TINY_EMBED ? (_invitePendingRoomId || roomDisplayCode() || roomCode || '') : '';
@@ -8857,6 +9269,7 @@ function handleJoinerDataConnection(dataConn) {
       if (localVideoActive && localVideoStream) {
         var videoCall = peer.call(joinerId, localVideoStream, { metadata: { type: 'video' } });
         if (videoCall) {
+          tuneVideoCall(videoCall, 'camera');
           var jConn = connections.get(joinerId);
           if (jConn) jConn.videoMediaOut = videoCall;
           videoCall.on('stream', function(remote) {
@@ -8882,6 +9295,7 @@ function handleJoinerDataConnection(dataConn) {
       if (localScreenActive && localScreenStream) {
         var screenCall = peer.call(joinerId, localScreenStream, { metadata: { type: 'screen' } });
         if (screenCall) {
+          tuneVideoCall(screenCall, 'screen');
           var jConn2 = connections.get(joinerId);
           if (jConn2) jConn2.screenMediaOut = screenCall;
           screenCall.on('close', function() {
@@ -9269,6 +9683,7 @@ function handleHostMessage(msg) {
     if (localVideoActive && localVideoStream && msg.peerId) {
       var vc = peer.call(msg.peerId, localVideoStream, { metadata: { type: 'video' } });
       if (vc) {
+        tuneVideoCall(vc, 'camera');
         var tc = connections.get(msg.peerId);
         if (tc) tc.videoMediaOut = vc;
         vc.on('stream', function(remote) {
@@ -9292,6 +9707,7 @@ function handleHostMessage(msg) {
     if (localScreenActive && localScreenStream && msg.peerId) {
       var sc = peer.call(msg.peerId, localScreenStream, { metadata: { type: 'screen' } });
       if (sc) {
+        tuneVideoCall(sc, 'screen');
         var tc3 = connections.get(msg.peerId);
         if (tc3) tc3.screenMediaOut = sc;
         sc.on('stream', function(remote) {
@@ -11206,7 +11622,9 @@ window.addEventListener('DOMContentLoaded', function() {
   });
   $('btn-cancel-shortcut').addEventListener('click', stopRecordingShortcut);
 
-  // Video prototype buttons
+  // Video / screen sharing buttons
+  var videoModeBtnEl = $('btn-video-mode');
+  if (videoModeBtnEl) videoModeBtnEl.addEventListener('click', toggleVideoMode);
   $('btn-share-camera').addEventListener('click', function() {
     if (localVideoActive) stopVideoShare(); else startVideoShare();
   });

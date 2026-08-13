@@ -269,6 +269,12 @@
 
           <div id="settings-video" class="settings-card">
             <p class="settings-group-title">📹 Video</p>
+            <div id="video-mode-setting" class="settings-field settings-inline-toggle">
+              <label for="btn-video-mode" style="flex:1">Camera &amp; screen sharing</label>
+              <button id="btn-video-mode" class="toggle-btn" role="switch" aria-checked="true"
+                      title="Offer the camera and screen-share controls in the room">ON</button>
+            </div>
+            <p class="settings-hint" style="margin-top:6px">Turns the Camera and Screen buttons on in the room. Your camera stays off until you switch it on yourself — this only decides whether the controls are offered.</p>
             <div class="settings-device-row">
               <div class="settings-device-head">
                 <label for="select-camera-device">Camera</label>
@@ -523,6 +529,14 @@
       </div>
 
       <div id="room-size-warning" class="room-size-warning hidden" role="status" aria-live="polite"></div>
+
+      <!-- Video stage. Empty and hidden in an audio-only room, which then renders
+           exactly as it did before this element existed. Direct child of
+           #screen-room so it shares a stacking context with the peers panel. -->
+      <div id="video-stage" class="video-stage hidden" role="region" aria-label="Video">
+        <div id="video-stage-focus" class="video-stage-focus hidden"></div>
+        <div id="video-stage-grid" class="video-stage-grid"></div>
+      </div>
 
       <div id="room-peers-panel" class="room-peers-panel">
         <button id="btn-toggle-peers" class="btn btn-secondary btn-sm room-peers-toggle hidden" aria-expanded="false">Peers</button>
