@@ -1245,8 +1245,13 @@ kbd {
   html.is-web body.video-stage:not(.embed-tiny) #screen-room.active {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 320px;   /* stage | voice rail */
-    grid-template-rows: auto auto minmax(0, 1fr);
+    /* The consent banner gets a row of its own, exactly as in the landscape
+       grid above. Sharing `header` with .room-header stacks the two in the same
+       cell, and the banner's Accept/Decline then land on the room's own
+       buttons. The row is `auto`, so it collapses to nothing while hidden. */
+    grid-template-rows: auto auto auto minmax(0, 1fr);
     grid-template-areas:
+      "consent consent"
       "header  header"
       "warning warning"
       "stage   rail";
@@ -1260,7 +1265,7 @@ kbd {
   }
   html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-header { grid-area: header; }
   html.is-web body.video-stage:not(.embed-tiny) #screen-room #room-size-warning { grid-area: warning; }
-  html.is-web body.video-stage:not(.embed-tiny) #screen-room #debug-consent-banner { grid-area: header; }
+  html.is-web body.video-stage:not(.embed-tiny) #screen-room #debug-consent-banner { grid-area: consent; }
 
   html.is-web body.video-stage:not(.embed-tiny) #screen-room #video-stage {
     grid-area: stage;

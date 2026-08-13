@@ -183,6 +183,41 @@ test.describe('room layout', () => {
     );
     expect(display).toBe('flex');
   });
+
+  // The consent banner shared the `header` grid area with .room-header, so its
+  // Accept / Decline buttons landed on top of the room's own header controls.
+  test('the debug consent banner sits above the header, not on top of it', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
+    });
+    await page.evaluate(() => document.getElementById('debug-consent-banner').classList.remove('hidden'));
+    const boxes = await page.evaluate(() => {
+      const r = (s) => {
+        const b = document.querySelector(s).getBoundingClientRect();
+        return { top: b.top, bottom: b.bottom, height: b.height };
+      };
+      return { banner: r('#debug-consent-banner'), header: r('.room-header'), stage: r('#video-stage') };
+    });
+    expect(boxes.banner.height).toBeGreaterThan(0);
+    expect(boxes.banner.bottom).toBeLessThanOrEqual(boxes.header.top + 1);
+    expect(boxes.header.bottom).toBeLessThanOrEqual(boxes.stage.top + 1);
+  });
+
+  test('and its row collapses to nothing while it is hidden', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
+    });
+    const withoutBanner = await page.evaluate(
+      () => document.querySelector('.room-header').getBoundingClientRect().top
+    );
+    await page.evaluate(() => document.getElementById('debug-consent-banner').classList.remove('hidden'));
+    const withBanner = await page.evaluate(
+      () => document.querySelector('.room-header').getBoundingClientRect().top
+    );
+    expect(withBanner).toBeGreaterThan(withoutBanner);
+  });
 });
 
 test.describe('renderVideoStage', () => {
@@ -373,25 +408,38 @@ test.describe('the roster keeps a camera icon for everyone with a camera', () =>
     expect(await tileKeys(page)).toEqual(['camera:p1']);
   });
 
-  test('your own row switches your own camera on and off', async ({ page }) => {
+  // Your own icon is about your self-view only. The footer Camera button owns
+  // the stream, and two controls for one stream is how you end up switching off
+  // a camera you only meant to stop looking at.
+  test('your own row hides your self-view without touching the stream', async ({ page }) => {
     await enterRoom(page, {
       knownPeerIds: ['p1'],
-      connections: [{ id: 'p1', pseudo: 'Alice', open: true }],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
     });
-    // Stub the capture path: this is about the control, not getUserMedia.
-    await page.evaluate(() => {
-      window.startVideoShare = () => { localVideoActive = true; updatePeerList(); };
-      window.stopVideoShare = () => { localVideoActive = false; updatePeerList(); };
-    });
+    await page.evaluate(() => { localVideoActive = true; updatePeerList(); });
     const btn = page.locator('#peer-item-self .peer-cam-btn');
-    expect(await btn.getAttribute('aria-pressed')).toBe('false');
-
-    await btn.click();
-    expect(await page.evaluate(() => localVideoActive)).toBe(true);
     expect(await btn.getAttribute('aria-pressed')).toBe('true');
 
     await btn.click();
-    expect(await page.evaluate(() => localVideoActive)).toBe(false);
+    expect(await page.evaluate(() => localVideoActive)).toBe(true);   // still transmitting
+    expect(await page.locator('#video-stage [data-key="camera:self"]').count()).toBe(0);
+    expect(await btn.getAttribute('aria-pressed')).toBe('false');
+
+    await btn.click();
+    expect(await page.locator('#video-stage [data-key="camera:self"]').count()).toBe(1);
+  });
+
+  test('no self-view to hide means no icon on your own row', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
+    });
+    // Camera off: the footer button is what turns it on, not this row.
+    expect(await page.locator('#peer-item-self .peer-cam-btn').count()).toBe(0);
+    // Camera on but below the breakpoint: there is no stage, so no self-view.
+    await page.setViewportSize({ width: 700, height: 800 });
+    await page.evaluate(() => { localVideoActive = true; updatePeerList(); });
+    expect(await page.locator('#peer-item-self .peer-cam-btn').count()).toBe(0);
   });
 
   test('the icons follow the video-mode switch', async ({ page }) => {
@@ -399,6 +447,7 @@ test.describe('the roster keeps a camera icon for everyone with a camera', () =>
       knownPeerIds: ['p1'],
       connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
     });
+    await page.evaluate(() => { localVideoActive = true; updatePeerList(); });
     expect(await page.locator('.peer-cam-btn').count()).toBe(2);   // Alice + self
     await page.evaluate(() => { videoModeEnabled = false; updatePeerList(); });
     expect(await page.locator('.peer-cam-btn').count()).toBe(0);

@@ -1122,6 +1122,7 @@ var _videoPopoutWindow = null;   // reference to video popup window
 var _screenPopoutWindow = null;  // reference to screen popup window
 var _stagePinnedKey = null;      // tile key the user pinned as the stage focus
 var _hiddenStageKeys = new Set(); // tile keys the user chose not to watch (local only — nothing is signalled)
+var SELF_CAMERA_TILE_KEY = 'camera:self';
 var _devLogBuffer  = [];         // ring buffer of all log entries (max 200)
 var _devLogChannel = null;       // BroadcastChannel to the detached devlog window
 var _hostDebugMode = false;      // non-host mirror of the host's dev-mode flag (from peer-list/heartbeat)
@@ -7621,7 +7622,7 @@ function videoStageTiles() {
   // Self camera last, so your own face doesn't push everyone else around.
   if (localVideoActive) {
     tiles.push({
-      key: 'camera:self',
+      key: SELF_CAMERA_TILE_KEY,
       peerId: selfId,
       kind: 'camera',
       self: true,
@@ -8051,13 +8052,17 @@ function peerVideoWatched(peerId, kind) {
   return kind === 'screen' ? _screenViewerPeerId === peerId : _videoViewerPeerId === peerId;
 }
 
+// Show or hide one tile, for this viewer only.
+function toggleStageTileHidden(key) {
+  if (_hiddenStageKeys.has(key)) _hiddenStageKeys.delete(key);
+  else _hiddenStageKeys.add(key);
+  updatePeerList();   // repaints the icon; the stage rides the same tick
+}
+
 function togglePeerVideoWatch(peerId, kind) {
   if (!peerId) return;
   if (videoStageAvailable()) {
-    var key = peerVideoTileKey(peerId, kind);
-    if (_hiddenStageKeys.has(key)) _hiddenStageKeys.delete(key);
-    else _hiddenStageKeys.add(key);
-    updatePeerList();   // repaints the icon; the stage rides the same tick
+    toggleStageTileHidden(peerVideoTileKey(peerId, kind));
     return;
   }
   if (kind === 'screen') {
@@ -8090,14 +8095,18 @@ function appendPeerVideoButtons(parent, peerId, isSelf) {
   if (!parent || !videoModeEnabled) return;
 
   if (isSelf) {
-    // The room controls already carry a camera button; in a tiny embed there is
-    // no room for a second one on the roster row.
-    if (IS_TINY_EMBED) return;
+    // Your own icon shows or hides your *self-view*, nothing more. Whether the
+    // camera transmits at all belongs to the footer Camera button and stays
+    // there — two controls for one stream is how you end up switching off a
+    // camera you only meant to stop looking at. So the icon is offered only
+    // where a self-view exists to hide: a live camera, on the stage surface.
+    if (IS_TINY_EMBED || !localVideoActive || !videoStageAvailable()) return;
+    var selfShown = !_hiddenStageKeys.has(SELF_CAMERA_TILE_KEY);
     parent.appendChild(_videoIconButton(
       'camera',
-      localVideoActive,
-      localVideoActive ? 'Turn your camera off' : 'Turn your camera on',
-      function() { if (localVideoActive) stopVideoShare(); else startVideoShare(); }
+      selfShown,
+      selfShown ? 'Hide your self-view' : 'Show your self-view',
+      function() { toggleStageTileHidden(SELF_CAMERA_TILE_KEY); }
     ));
     return;
   }

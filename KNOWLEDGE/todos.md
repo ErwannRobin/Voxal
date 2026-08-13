@@ -370,11 +370,14 @@ and keeps the original flex stack.
 
 Follow-up pass (same file, "the roster keeps a camera icon…" / "the self-view
 badge"): every participant with a live camera keeps a **camera icon on their
-roster row** — on someone else's row it decides whether *you* watch them (local
-only; their camera is never touched), on your own it switches your camera on and
-off. And your **self-view is a small badge floating over the stage** that can be
-dragged to any corner and snaps there, maximising into a real tile only when
-nobody else has a camera on.
+roster row**, which decides what *you* see and never what anyone transmits — on
+someone else's row it shows/hides their tile (their camera is untouched and
+nothing is signalled), on your own it shows/hides your self-view, while the
+footer Camera button keeps sole ownership of the stream. And your **self-view is
+a small badge floating over the stage** that can be dragged to any corner and
+snaps there, maximising into a real tile only when nobody else has a camera on.
+The same pass gave the debug-consent banner its own grid row on the stage — it
+shared `header` with `.room-header` and its buttons sat on the room's own.
 
 **Not done — deliberately out of scope for this pass:**
 - **Keyboard access to the badge.** Dragging is pointer-only; there is no
