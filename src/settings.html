@@ -8,6 +8,9 @@
     <link rel="stylesheet" href="styles.css" />
     <script src="version.js"></script>
     <script src="build-info.js" onerror="this.remove()"></script>
+    <!-- Shared verbatim with main.js/index.html — this window renders the same
+         usage charts from data relayed over the net-usage-state bridge. -->
+    <script src="net-usage.js"></script>
     <script>
       // Apply theme before paint to avoid flash
       (function() {
@@ -393,6 +396,21 @@
                 <span>Direct only — never relay video</span>
               </label>
             </div>
+            <p class="settings-sublabel" style="margin-top:16px">Network usage</p>
+            <p class="settings-hint">
+              How much data Voxal is moving right now, and what it is carrying.
+              Measured in the main window — this one has no connections of its
+              own — so it only shows numbers while a call is live there.
+            </p>
+            <button id="net-usage-summary" type="button" class="net-usage-summary"
+                    aria-expanded="false" aria-controls="net-usage-detail">
+              <span class="net-usage-totals">
+                <span class="net-usage-dir">↓ <strong id="net-usage-in">—</strong></span>
+                <span class="net-usage-dir">↑ <strong id="net-usage-out">—</strong></span>
+              </span>
+              <span class="net-usage-chevron" aria-hidden="true">▸</span>
+            </button>
+            <div id="net-usage-detail" class="net-usage-detail hidden"></div>
             <div class="settings-field" style="margin-top:12px">
               <label for="input-service-url">Service URL</label>
               <div class="input-clearable">
@@ -1437,9 +1455,51 @@
           refreshMediaDeviceSelectors();
           return;
         }
+        if (e.key === NETWORK_USAGE_STATE_KEY) {
+          try { renderNetUsage(JSON.parse(e.newValue || 'null')); } catch (_) {}
+          return;
+        }
         if (e.key !== ECHO_BRIDGE_STATE_KEY) return;
         try { renderEchoState(JSON.parse(e.newValue || 'null')); } catch (_) {}
       });
+
+      // --- Network usage -------------------------------------------------------
+      //
+      // This window has no peer connections, so it cannot measure anything. The
+      // main window samples and publishes; we ask to be fed and render. The
+      // drawing itself lives in net-usage.js, loaded by both documents, so the
+      // two surfaces cannot drift the way hand-duplicated helpers here have.
+      var NETWORK_USAGE_REQUEST_KEY = 'net-usage-request';
+      var NETWORK_USAGE_STATE_KEY   = 'net-usage-state';
+      var _netUsageSnapshot = null;
+      var _netUsageExpanded = false;
+
+      function renderNetUsage(snapshot) {
+        if (snapshot) _netUsageSnapshot = snapshot;
+        renderNetUsageSummary($id('net-usage-in'), $id('net-usage-out'), _netUsageSnapshot);
+        if (_netUsageExpanded) renderNetUsageDetail($id('net-usage-detail'), _netUsageSnapshot);
+      }
+
+      function requestNetUsage(watching) {
+        try {
+          // `at` keeps consecutive requests distinct — an identical write fires
+          // no storage event in the other window at all.
+          localStorage.setItem(NETWORK_USAGE_REQUEST_KEY,
+            JSON.stringify({ watching: !!watching, at: Date.now() }));
+        } catch (_) {}
+      }
+
+      $id('net-usage-summary').addEventListener('click', function() {
+        _netUsageExpanded = !_netUsageExpanded;
+        $id('net-usage-detail').classList.toggle('hidden', !_netUsageExpanded);
+        this.setAttribute('aria-expanded', String(_netUsageExpanded));
+        renderNetUsage();
+      });
+
+      // Ask as soon as this window opens, not on expand: the summary row is
+      // always visible, and the main window only publishes while asked.
+      requestNetUsage(true);
+      window.addEventListener('beforeunload', function() { requestNetUsage(false); });
 
       $id('btn-test-speaker').addEventListener('click', function() { testSpeakerOutput().catch(function(e) { console.warn('[Speaker test]', e.message); }); });
       $id('btn-preview-camera').addEventListener('click', toggleCameraPreview);

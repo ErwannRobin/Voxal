@@ -85,6 +85,44 @@ testing showed that was too high in practice — an 8-participant room with a
 camera on still read "Direct" — so video/screen now gets its own, much lower
 bar, reflecting that it's far heavier per participant than audio.
 
+### Migration — the decision is re-run mid-call
+
+The room that needs a relay usually becomes that room while people are already
+talking, so the decision cannot be made once at share time. `decideVideoTopology`
+reads `connections.size + 1`, and `reconcileVideoTopologyForRoster()` re-runs it
+whenever the roster changes — debounced ~1.5 s and memoized on the participant
+count, so a burst of joins settles before anything moves and the many
+`updatePeerList()` calls that are about talking state cost nothing. Without it,
+only *new joiners* ever used the relay: someone who started sharing in a
+two-person room stayed on the mesh for the life of the call.
+
+Migrating is not the same problem as deciding. The losing path has to be torn
+down on both sides, or one track ends up carried twice:
+
+- **Publisher** — `unpublishLocalTrack(kind)` closes whichever path is live: the
+  outgoing mesh `MediaConnection`s (`p2pUnpublishVideo`/`p2pUnpublishScreen`) or
+  the SFU publish session. An earlier version only handled the SFU branch, so a
+  P2P→SFU migration kept uploading N direct streams *and* one to Cloudflare —
+  strictly worse than not migrating at all. A `_topologyReconcileInFlight` guard
+  stops a second reconcile landing during the awaited SFU publish, when
+  `_localVideoTopology[kind]` still reads as the old mode.
+- **Viewer** — `applyRemoteTrackTopology()` treats a re-announced
+  `video-offer`/`screen-offer` as a possible migration: it drops the incoming
+  mesh stream before subscribing via the SFU, or unsubscribes before letting the
+  mesh call arrive. It is a deliberate no-op when the mode *and* the
+  `{sessionId, trackName}` are both unchanged, because `sfuRenegotiatePublish()`
+  re-announces on every republish and churning a healthy subscription there would
+  drop video for no reason.
+
+Two things follow, and neither is hidden:
+
+- Migrating interrupts video briefly for viewers (teardown → republish →
+  resubscribe). Audio is untouched, as always.
+- Video that was flowing directly starts flowing through Cloudflare, mid-call.
+  That is the `allow-sfu` bargain, and the ☁ Relayed badge updates to say so.
+  The selector invariant is what keeps this bounded: `prefer-p2p` and `p2p-only`
+  never migrate onto the relay, at any room size.
+
 ## What the user sees
 
 - **Working peer-to-peer**: no change from before this feature — no badge, no
@@ -102,6 +140,28 @@ bar, reflecting that it's far heavier per participant than audio.
   establish a direct connection because relaying is disabled in Settings,
   with a shortcut to turn video off or change the setting. Voice is
   unaffected.
+
+### Network usage (Settings → Advanced)
+
+A live `↓`/`↑` readout that expands into the last 10 minutes of traffic, split
+by media kind (voice / camera / screen) in each direction. This exists so the
+routing decisions above are *observable*: switching camera and screen onto the
+relay should show up as a visible step down in upload while the voice band stays
+flat, and if it doesn't, the setting isn't doing what it claims.
+
+Sampled on the existing 5 s stats tick from each peer connection's nominated
+candidate pair, so the numbers are transport-level and include RTP, RTCP, STUN
+and DTLS overhead — what a data plan is actually billed for. Each connection
+carries exactly one kind, which is what makes the per-kind split possible without
+reading individual RTP reports.
+
+Rendering lives in `src/net-usage.js`, a plain classic script loaded by both
+`index.html` and `settings.html` — the desktop preferences window has no peer
+connections of its own, so the main window samples and publishes over the
+`net-usage-state` localStorage bridge (same shape as the echo-test bridge) and
+the preferences window renders the identical charts. Publishing is gated on an
+open panel; *sampling* is not, so the graph is already ten minutes deep when it
+opens.
 
 ## Backend (Cloudflare Realtime SFU)
 

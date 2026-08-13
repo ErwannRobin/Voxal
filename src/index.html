@@ -411,6 +411,20 @@
                     <span>Direct only — never relay video</span>
                   </label>
                 </div>
+                <p class="settings-sublabel" style="margin-top:16px">Network usage</p>
+                <p class="settings-hint">
+                  How much data Voxal is moving right now, and what it is
+                  carrying. Only meaningful during a call.
+                </p>
+                <button id="net-usage-summary" type="button" class="net-usage-summary"
+                        aria-expanded="false" aria-controls="net-usage-detail">
+                  <span class="net-usage-totals">
+                    <span class="net-usage-dir">↓ <strong id="net-usage-in">—</strong></span>
+                    <span class="net-usage-dir">↑ <strong id="net-usage-out">—</strong></span>
+                  </span>
+                  <span class="net-usage-chevron" aria-hidden="true">▸</span>
+                </button>
+                <div id="net-usage-detail" class="net-usage-detail hidden"></div>
                 <div class="settings-field" style="margin-top:12px">
                   <label for="input-service-url">Service URL</label>
                   <div class="input-clearable">
@@ -715,6 +729,9 @@
     </div>
 
     <script src="assets/peerjs.min.js"></script>
+    <!-- Shared with settings.html — must load before main.js, which uses its
+         constants (NET_USAGE_KINDS, NET_USAGE_HISTORY_MAX). -->
+    <script src="net-usage.js"></script>
     <script src="main.js"></script>
   </body>
 </html>

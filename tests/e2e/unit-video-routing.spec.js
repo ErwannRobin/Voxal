@@ -387,3 +387,203 @@ test.describe('SFU wire protocol — tracks[] is what actually routes media', ()
     expect(renegotiated.answer).toContain('v=0');
   });
 });
+
+// Migrating an ALREADY-RUNNING share when the roster crosses the threshold.
+//
+// Before this existed, only new joiners ever got the SFU: someone who started
+// sharing in a 2-person room stayed on the mesh for the life of the call, no
+// matter how large it grew — exactly the case the relay exists for. Migration
+// is not the same problem as the initial decision, because the losing path has
+// to be torn down on both the publisher and every viewer; leaving it up means
+// two live streams for one track, which is strictly worse than not migrating.
+test.describe('topology migration — existing participants, not just joiners', () => {
+  function stubMint(page) {
+    return page.route('**/api/sfu-session', (route) => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ capability: 'fake.capability', expires_at: new Date(Date.now() + 300e3).toISOString(), sfu_app_id: 'app1' }),
+    }));
+  }
+
+  // A room seeded with `peerCount` peers and a live P2P camera share, with
+  // peer.call stubbed so the mesh branch works without a real PeerJS Peer. The
+  // stub records closes, which is what the migration has to actually perform.
+  async function seedSharingRoom(page, peerCount) {
+    const connections = [];
+    for (let i = 0; i < peerCount; i++) connections.push({ id: 'peer-' + i, pseudo: 'p' + i, open: true });
+    await seedRoom(page, { selfId: 'self', isHost: true, roomCode: 'self', connections });
+    await page.evaluate(() => {
+      window.__peerCallCount = 0;
+      window.__peerCallClosed = 0;
+      peer.call = function() {
+        window.__peerCallCount++;
+        return { on() {}, close() { window.__peerCallClosed++; } };
+      };
+      const canvas = document.createElement('canvas');
+      canvas.width = 16; canvas.height = 16;
+      localVideoStream = canvas.captureStream(5);
+      localVideoActive = true;
+    });
+  }
+
+  test('crossing the threshold migrates a live share onto the SFU and closes the mesh calls', async ({ page }) => {
+    await page.goto('/');
+    await stubMint(page);
+    let publishBody = null;
+    let sawPublish;
+    const publishReached = new Promise((resolve) => { sawPublish = resolve; });
+    await page.route('**/api/sfu-track', (route) => {
+      publishBody = route.request().postDataJSON();
+      sawPublish();
+      route.fulfill({ status: 502, contentType: 'application/json', body: '{}' });
+    });
+    // Two participants total: under the threshold, so this share starts on the mesh.
+    await seedSharingRoom(page, 1);
+    await page.evaluate(() => localStorage.setItem('video-routing-mode', 'allow-sfu'));
+    await page.evaluate(() => publishLocalTrack('video', localVideoStream));
+    expect(await page.evaluate(() => _localVideoTopology.video.mode)).toBe('p2p');
+    expect(await page.evaluate(() => window.__peerCallCount)).toBe(1);
+
+    // A third participant arrives.
+    await page.evaluate(() => {
+      connections.set('peer-late', { data: { open: true, closed: false, send() {}, close() {} }, pseudo: 'late' });
+    });
+    // reconcileVideoTopology() fires the SFU publish without returning its
+    // promise, so wait on the route handler itself rather than assuming the
+    // request has already landed.
+    await page.evaluate(() => reconcileVideoTopology());
+    await publishReached;
+
+    expect(publishBody, 'the migration must attempt an SFU publish').not.toBeNull();
+    expect(publishBody.action).toBe('publish');
+    // The load-bearing half: the mesh calls it was already making are closed.
+    // Leaving them open means uploading N direct streams AND one to the relay.
+    expect(await page.evaluate(() => window.__peerCallClosed)).toBe(1);
+  });
+
+  test('p2p-only never migrates, no matter how large the room gets', async ({ page }) => {
+    await page.goto('/');
+    let sfuHits = 0;
+    await page.route('**/api/sfu-session', (route) => { sfuHits++; route.abort(); });
+    await seedSharingRoom(page, 1);
+    await page.evaluate(() => localStorage.setItem('video-routing-mode', 'p2p-only'));
+    await page.evaluate(() => publishLocalTrack('video', localVideoStream));
+
+    await page.evaluate(() => {
+      for (let i = 0; i < 20; i++) {
+        connections.set('flood-' + i, { data: { open: true, closed: false, send() {}, close() {} }, pseudo: 'f' + i });
+      }
+    });
+    await page.evaluate(() => reconcileVideoTopology());
+
+    expect(sfuHits).toBe(0);
+    expect(await page.evaluate(() => _localVideoTopology.video.mode)).toBe('p2p');
+  });
+
+  test('a roster change schedules a reconcile; an unchanged count does not', async ({ page }) => {
+    await page.goto('/');
+    await seedSharingRoom(page, 1);
+    await page.evaluate(() => {
+      window.__reconciles = 0;
+      window.__realReconcile = reconcileVideoTopology;
+      reconcileVideoTopology = function() { window.__reconciles++; };
+      resetRosterReconcileState();
+    });
+
+    // First call establishes the baseline count; a repeat at the same count is
+    // a no-op, which is what keeps this cheap on the many updatePeerList()
+    // calls that are about talking state rather than membership.
+    await page.evaluate(() => { reconcileVideoTopologyForRoster(); reconcileVideoTopologyForRoster(); });
+    await page.evaluate(() => {
+      connections.set('peer-late', { data: { open: true, closed: false, send() {}, close() {} }, pseudo: 'late' });
+      reconcileVideoTopologyForRoster();
+    });
+    await page.waitForTimeout(2000); // past ROSTER_RECONCILE_DEBOUNCE_MS
+    // Debounced: the burst collapses into a single reconcile.
+    expect(await page.evaluate(() => window.__reconciles)).toBe(1);
+  });
+});
+
+// Viewer side of the same migration. A re-announced video-offer may mean the
+// publisher moved the track between the mesh and the relay mid-call, so
+// whatever was carrying it before has to go — otherwise the viewer holds two
+// live streams for one track and renders whichever arrived last.
+test.describe('applyRemoteTrackTopology — viewer-side migration', () => {
+  async function seedViewer(page, existingMedia) {
+    await seedRoom(page, {
+      selfId: 'self', isHost: false, roomCode: 'host-1',
+      connections: [{ id: 'peer-1', pseudo: 'p1', open: true }],
+    });
+    await page.evaluate((media) => {
+      window.__oldMediaClosed = 0;
+      const conn = connections.get('peer-1');
+      conn.videoMedia = { peerConnection: {}, close() { window.__oldMediaClosed++; } };
+      conn.videoTopology = media.topology;
+      if (media.providerRef) _rememberProviderRef('peer-1', 'video', media.providerRef);
+      window.__subscribes = [];
+      sfuSubscribeVideo = function(id, ref) { window.__subscribes.push({ id, ref }); };
+    }, existingMedia);
+  }
+
+  test('p2p -> sfu drops the incoming mesh stream before subscribing', async ({ page }) => {
+    await page.goto('/');
+    await seedViewer(page, { topology: { mode: 'p2p', reason: 'ok' } });
+    await page.evaluate(() =>
+      applyRemoteTrackTopology('peer-1', 'video', 'sfu', { sessionId: 'cf-1', trackName: 'peer-1-video' }));
+
+    expect(await page.evaluate(() => window.__oldMediaClosed)).toBe(1);
+    expect(await page.evaluate(() => connections.get('peer-1').videoTopology.mode)).toBe('sfu');
+    expect(await page.evaluate(() => window.__subscribes.length)).toBe(1);
+  });
+
+  test('sfu -> p2p unsubscribes and opens nothing itself', async ({ page }) => {
+    await page.goto('/');
+    await seedViewer(page, {
+      topology: { mode: 'sfu', reason: 'preference-allow-sfu' },
+      providerRef: { sessionId: 'cf-1', trackName: 'peer-1-video' },
+    });
+    await page.evaluate(() => applyRemoteTrackTopology('peer-1', 'video', 'p2p', undefined));
+
+    expect(await page.evaluate(() => window.__oldMediaClosed)).toBe(1);
+    expect(await page.evaluate(() => connections.get('peer-1').videoTopology.mode)).toBe('p2p');
+    // The publisher's MediaConnection arrives on its own via peer.on('call').
+    expect(await page.evaluate(() => window.__subscribes.length)).toBe(0);
+  });
+
+  test('an unchanged re-announcement does not churn a healthy subscription', async ({ page }) => {
+    // sfuRenegotiatePublish() re-announces on every republish. Tearing down a
+    // working subscription on that would drop video for no reason at all.
+    await page.goto('/');
+    await seedViewer(page, {
+      topology: { mode: 'sfu', reason: 'preference-allow-sfu' },
+      providerRef: { sessionId: 'cf-1', trackName: 'peer-1-video' },
+    });
+    await page.evaluate(() =>
+      applyRemoteTrackTopology('peer-1', 'video', 'sfu', { sessionId: 'cf-1', trackName: 'peer-1-video' }));
+
+    expect(await page.evaluate(() => window.__oldMediaClosed)).toBe(0);
+    expect(await page.evaluate(() => window.__subscribes.length)).toBe(0);
+  });
+
+  test('a NEW provider ref for the same peer does resubscribe', async ({ page }) => {
+    // A republish mints a new Cloudflare session, so the old {sessionId,
+    // trackName} no longer exists — continuing to pull it is a black tile.
+    await page.goto('/');
+    await seedViewer(page, {
+      topology: { mode: 'sfu', reason: 'preference-allow-sfu' },
+      providerRef: { sessionId: 'cf-1', trackName: 'peer-1-video' },
+    });
+    await page.evaluate(() =>
+      applyRemoteTrackTopology('peer-1', 'video', 'sfu', { sessionId: 'cf-2', trackName: 'peer-1-video' }));
+
+    expect(await page.evaluate(() => window.__oldMediaClosed)).toBe(1);
+    expect(await page.evaluate(() => window.__subscribes[0].ref.sessionId)).toBe('cf-2');
+  });
+
+  test('an absent or unrecognized topology is read as p2p, never inferred as sfu', async ({ page }) => {
+    await page.goto('/');
+    await seedViewer(page, { topology: { mode: 'p2p', reason: 'ok' } });
+    expect(await page.evaluate(() => applyRemoteTrackTopology('peer-1', 'video', undefined, undefined))).toBe('p2p');
+    expect(await page.evaluate(() => applyRemoteTrackTopology('peer-1', 'video', 'RELAY', undefined))).toBe('p2p');
+    expect(await page.evaluate(() => window.__subscribes.length)).toBe(0);
+  });
+});

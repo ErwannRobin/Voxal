@@ -3183,6 +3183,25 @@ function audioPeerConnections(conn) {
     .map(function(mc) { return mc.peerConnection; });
 }
 
+// The video/screen equivalents of audioPeerConnections(). Each of the three
+// media kinds has its own independent MediaConnection set (see the topology note
+// in CLAUDE.md), so which set a peer connection belongs to is what attributes
+// its bytes to a kind. The SFU subscription shim exposes `.peerConnection` too,
+// so one accessor covers both the mesh and the relay.
+function videoPeerConnections(conn) {
+  if (!conn) return [];
+  return [conn.videoMedia, conn.videoMediaOut]
+    .filter(function(mc) { return mc && !mc.closed && mc.peerConnection; })
+    .map(function(mc) { return mc.peerConnection; });
+}
+
+function screenPeerConnections(conn) {
+  if (!conn) return [];
+  return [conn.screenMedia, conn.screenMediaOut]
+    .filter(function(mc) { return mc && !mc.closed && mc.peerConnection; })
+    .map(function(mc) { return mc.peerConnection; });
+}
+
 function tuneAudioSenders(pc) {
   if (!pc || typeof pc.getSenders !== 'function') return;
   pc.getSenders().forEach(function(sender) {
@@ -3547,11 +3566,154 @@ async function _collectPeerStats(peerId, conn) {
   } catch (_) {}
 }
 
+// --- Network usage sampling --------------------------------------------------
+//
+// Bytes actually moved on the wire, split by media kind and direction, sampled
+// on the same 5s tick as the loss stats. Surfaced in Settings → Advanced; the
+// point of the breakdown is that switching camera/screen onto the SFU should
+// show up as a visible step down in upload while audio stays flat.
+
+// NET_USAGE_KINDS / NET_USAGE_HISTORY_MAX / formatBitrate / netUsageTotals come
+// from net-usage.js, a plain classic script both this window and settings.html
+// load — the rendering has to be identical in both and hand-duplicating it is
+// how settings.html's constants drifted from main.js before.
+
+// Byte counters are cumulative PER PEER CONNECTION. Summing the whole set and
+// diffing that total would spike when a peer joins (their lifetime bytes land in
+// one tick) and go negative when one leaves. Comparing each pc only against its
+// own previous reading is immune to both, and a departed pc simply stops
+// contributing. WeakMap so a closed pc is collectable.
+var _pcByteCursors = new WeakMap();
+var _bandwidthHistory = [];
+var _bandwidthCurrent = null;
+
+function _emptyBandwidthSample(at) {
+  return {
+    at: at,
+    in:  { audio: 0, camera: 0, screen: 0 },
+    out: { audio: 0, camera: 0, screen: 0 }
+  };
+}
+
+// Bits/second moved by one peer connection since its previous reading, or null
+// when there is no baseline yet — counting a pc's lifetime total as a single
+// tick's worth would render as an enormous false spike the first time it is seen.
+async function _pcByteDelta(pc, now) {
+  if (!pc || typeof pc.getStats !== 'function') return null;
+  var sent = 0, received = 0, found = false;
+  try {
+    var reports = await pc.getStats();
+    reports.forEach(function(report) {
+      // Transport level, not per-track: this includes RTP, RTCP, STUN and DTLS
+      // overhead, which is what "network usage" means to someone watching a
+      // data plan. Each pc carries exactly one kind, so nothing is lost by not
+      // reading the individual rtp reports.
+      if (report.type !== 'candidate-pair' || !report.nominated) return;
+      if (report.state && report.state !== 'succeeded') return;
+      sent     += report.bytesSent || 0;
+      received += report.bytesReceived || 0;
+      found = true;
+    });
+  } catch (_) { return null; }
+  if (!found) return null;
+
+  var prev = _pcByteCursors.get(pc);
+  _pcByteCursors.set(pc, { sent: sent, received: received, at: now });
+  if (!prev) return null;
+  var elapsedSec = (now - prev.at) / 1000;
+  if (elapsedSec <= 0) return null;
+  return {
+    inBits:  Math.max(0, received - prev.received) * 8 / elapsedSec,
+    outBits: Math.max(0, sent - prev.sent) * 8 / elapsedSec
+  };
+}
+
+async function _collectBandwidthSample() {
+  var now = Date.now();
+  var sample = _emptyBandwidthSample(now);
+  var pending = [];
+
+  function measure(pc, kind) {
+    pending.push(_pcByteDelta(pc, now).then(function(delta) {
+      if (!delta) return;
+      sample.in[kind]  += delta.inBits;
+      sample.out[kind] += delta.outBits;
+    }));
+  }
+
+  connections.forEach(function(conn) {
+    audioPeerConnections(conn).forEach(function(pc) { measure(pc, 'audio'); });
+    videoPeerConnections(conn).forEach(function(pc) { measure(pc, 'camera'); });
+    screenPeerConnections(conn).forEach(function(pc) { measure(pc, 'screen'); });
+  });
+  // Our own SFU publish legs belong to no peer — one per kind, not per peer,
+  // which is the whole point of routing through a relay.
+  if (_sfuPublishSessions.video && _sfuPublishSessions.video.pc) measure(_sfuPublishSessions.video.pc, 'camera');
+  if (_sfuPublishSessions.screen && _sfuPublishSessions.screen.pc) measure(_sfuPublishSessions.screen.pc, 'screen');
+
+  await Promise.all(pending);
+
+  NET_USAGE_KINDS.forEach(function(kind) {
+    sample.in[kind]  = Math.round(sample.in[kind]);
+    sample.out[kind] = Math.round(sample.out[kind]);
+  });
+
+  _bandwidthCurrent = sample;
+  _bandwidthHistory.push(sample);
+  if (_bandwidthHistory.length > NET_USAGE_HISTORY_MAX) {
+    _bandwidthHistory = _bandwidthHistory.slice(_bandwidthHistory.length - NET_USAGE_HISTORY_MAX);
+  }
+  publishNetworkUsage();
+  renderNetUsagePanel();
+  return sample;
+}
+
+function networkUsageSnapshot() {
+  return {
+    inRoom: !!inRoom,
+    current: _bandwidthCurrent,
+    history: _bandwidthHistory.slice(),
+    at: Date.now()
+  };
+}
+
+function resetBandwidthHistory() {
+  _bandwidthHistory = [];
+  _bandwidthCurrent = null;
+  _pcByteCursors = new WeakMap();
+}
+
+// The in-page settings modal (web / mobile) reads the snapshot straight from
+// here — no bridge needed, this window owns the data. settings.html receives the
+// same shape over localStorage and renders it with the same net-usage.js
+// helpers, so the two surfaces cannot drift.
+var _netUsageExpanded = false;
+
+function renderNetUsagePanel() {
+  var inEl = document.getElementById('net-usage-in');
+  if (!inEl) return; // this surface has no usage panel
+  var snapshot = networkUsageSnapshot();
+  renderNetUsageSummary(inEl, document.getElementById('net-usage-out'), snapshot);
+  if (_netUsageExpanded) renderNetUsageDetail(document.getElementById('net-usage-detail'), snapshot);
+}
+
+function setNetUsageExpanded(expanded) {
+  _netUsageExpanded = !!expanded;
+  var detail = document.getElementById('net-usage-detail');
+  var summary = document.getElementById('net-usage-summary');
+  if (detail) detail.classList.toggle('hidden', !_netUsageExpanded);
+  if (summary) summary.setAttribute('aria-expanded', String(_netUsageExpanded));
+  renderNetUsagePanel();
+}
+
 function startStatsPolling() {
   stopStatsPolling();
   _statsIntervalId = setInterval(function() {
     if (!inRoom) { stopStatsPolling(); return; }
     connections.forEach(function(conn, peerId) { _collectPeerStats(peerId, conn); });
+    // Recorded continuously, not only while the usage panel is open, so the
+    // 10-minute graph is already populated the moment someone opens it.
+    _collectBandwidthSample();
     // Always: update dot color to reflect ICE type
     connections.forEach(function(conn, peerId) {
       if (conn.webrtcStats && conn.webrtcStats.iceType) {
@@ -5280,6 +5442,9 @@ function closeDeviceInfoPopover() {
 function updatePeerList() {
   closeStatsPopover();
   closeDeviceInfoPopover();
+  // Every membership change already funnels through here (join, leave, host
+  // migration), and this is a memoized no-op unless the count actually moved.
+  reconcileVideoTopologyForRoster();
   const list = $('peers-list');
   list.innerHTML = '';
   const deputyPeerId = roomCode ? currentDeputyId() : null;
@@ -6849,6 +7014,35 @@ const ECHO_BRIDGE_STATE_KEY   = 'echo-test-state';   // {running, text, kind, at
 // Only desktop has a second window to talk to; everywhere else this would be
 // writes nobody reads.
 function echoBridgeActive() { return !!window.__TAURI__; }
+
+// --- Network-usage bridge (desktop preferences window) ------------------------
+//
+// Same shape and same reason as the echo bridge above: settings.html has no
+// access to `connections` or any RTCPeerConnection, so it cannot measure
+// anything. This window samples (see _collectBandwidthSample) and publishes; the
+// preferences window subscribes and renders.
+//
+// Publishing is gated on an explicit request so a closed panel costs nothing —
+// but SAMPLING is not, so the history is already 10 minutes deep when the panel
+// opens rather than starting from empty.
+const NETWORK_USAGE_REQUEST_KEY = 'net-usage-request'; // {watching:boolean, at}
+const NETWORK_USAGE_STATE_KEY   = 'net-usage-state';   // {inRoom, current, history, at}
+
+var _networkUsageWatchers = false;
+
+function setNetworkUsageWatching(on) {
+  _networkUsageWatchers = !!on;
+  if (_networkUsageWatchers) publishNetworkUsage();
+}
+
+function publishNetworkUsage() {
+  if (!_networkUsageWatchers || !echoBridgeActive()) return;
+  try {
+    // `at` keeps consecutive writes distinct — an identical value fires no
+    // storage event at all, and two quiet ticks in a row are identical.
+    localStorage.setItem(NETWORK_USAGE_STATE_KEY, JSON.stringify(networkUsageSnapshot()));
+  } catch (_) {}
+}
 
 function publishEchoBridgeState(text, kind) {
   if (!echoBridgeActive()) return;
@@ -8468,15 +8662,11 @@ async function startVideoShare() {
 
 function stopVideoShare() {
   if (!localVideoActive && !localVideoStream) return;
-  unpublishLocalTrack('video');
+  unpublishLocalTrack('video'); // closes the outgoing mesh calls or the SFU session
   if (localVideoStream) {
     localVideoStream.getTracks().forEach(function(t) { t.stop(); });
     localVideoStream = null;
   }
-  connections.forEach(function(c) {
-    // Just drop the reference; tracks are already stopped above via localVideoStream
-    c.videoMediaOut = null;
-  });
   if (peer && inRoom) {
     var msg = { type: 'video-stop', peerId: peer.id };
     if (isHost) {
@@ -8520,14 +8710,11 @@ async function startScreenShare() {
 
 function stopScreenShare() {
   if (!localScreenActive && !localScreenStream) return;
-  unpublishLocalTrack('screen');
+  unpublishLocalTrack('screen'); // closes the outgoing mesh calls or the SFU session
   if (localScreenStream) {
     localScreenStream.getTracks().forEach(function(t) { t.stop(); });
     localScreenStream = null;
   }
-  connections.forEach(function(c) {
-    c.screenMediaOut = null;
-  });
   if (peer && inRoom) {
     var msg = { type: 'screen-stop', peerId: peer.id };
     if (isHost) {
@@ -8574,12 +8761,21 @@ async function publishLocalTrack(kind, stream) {
   announceLocalTrackTopology(kind, topology, providerRef);
 }
 
+// Stop publishing this kind over whichever topology is currently carrying it.
+// Both branches matter: `stopVideoShare`/`stopScreenShare` and topology
+// migration share this one teardown, so a migration cannot leave the losing
+// path running (which is exactly what P2P -> SFU used to do).
 function unpublishLocalTrack(kind) {
   var topology = _localVideoTopology[kind];
   _localVideoTopology[kind] = null;
   if (topology && topology.mode === 'sfu') {
     if (kind === 'video') sfuUnpublishVideo(); else sfuUnpublishScreen();
+    return;
   }
+  connections.forEach(function(c, peerId) {
+    if (kind === 'video') p2pUnpublishVideo(peerId, c);
+    else p2pUnpublishScreen(peerId, c);
+  });
 }
 
 // Re-run the topology decision for whatever this client is currently
@@ -8587,11 +8783,17 @@ function unpublishLocalTrack(kind) {
 // changes. Only re-publishes when the decision actually changed (never tears
 // down a perfectly good SFU or P2P session just because it was re-evaluated
 // and reached the same answer). Never touches audio.
+// An SFU publish is awaited while `_localVideoTopology[kind]` still holds the
+// OLD mode, so a second reconcile landing mid-flight would see a stale "current"
+// and publish the same track twice. One migration per kind at a time.
+var _topologyReconcileInFlight = { video: false, screen: false };
+
 function reconcileVideoTopology() {
   ['video', 'screen'].forEach(function(kind) {
     var active = kind === 'video' ? localVideoActive : localScreenActive;
     var stream = kind === 'video' ? localVideoStream : localScreenStream;
     if (!active || !stream) return;
+    if (_topologyReconcileInFlight[kind]) return;
     var next = decideVideoTopology(kind);
     var current = _localVideoTopology[kind];
     if (current && current.mode === next.mode) return; // same decision, nothing to do
@@ -8605,6 +8807,7 @@ function reconcileVideoTopology() {
       _localVideoTopology[kind] = next;
       announceLocalTrackTopology(kind, next);
     } else {
+      _topologyReconcileInFlight[kind] = true;
       (kind === 'video' ? sfuPublishVideo(stream) : sfuPublishScreen(stream)).then(function(providerRef) {
         _localVideoTopology[kind] = next;
         announceLocalTrackTopology(kind, next, providerRef);
@@ -8617,9 +8820,46 @@ function reconcileVideoTopology() {
         });
         _localVideoTopology[kind] = { mode: 'p2p', reason: VIDEO_TOPOLOGY_REASON.SFU_UNAVAILABLE };
         announceLocalTrackTopology(kind, _localVideoTopology[kind]);
+      }).then(function() {
+        _topologyReconcileInFlight[kind] = false;
       });
     }
   });
+}
+
+// The roster is what makes the topology decision go stale: `decideVideoTopology`
+// reads `connections.size + 1`, so a join or leave can change the answer for
+// someone who is ALREADY sharing. Before this existed, only new joiners ever got
+// the SFU and existing publishers stayed on the mesh for the life of the call.
+//
+// Debounced, because a burst of joins (or a join immediately followed by a drop)
+// should settle before anything is torn down — migrating interrupts video
+// briefly, so flapping on it is worse than reacting a second later. Memoized on
+// the count so the many updatePeerList() calls that are about talking state or
+// video icons cost nothing.
+var ROSTER_RECONCILE_DEBOUNCE_MS = 1500;
+var _lastReconciledParticipantCount = null;
+var _rosterReconcileTimer = null;
+
+function reconcileVideoTopologyForRoster() {
+  if (!inRoom) return;
+  var count = connections.size + 1;
+  if (count === _lastReconciledParticipantCount) return;
+  _lastReconciledParticipantCount = count;
+  if (_rosterReconcileTimer) clearTimeout(_rosterReconcileTimer);
+  _rosterReconcileTimer = setTimeout(function() {
+    _rosterReconcileTimer = null;
+    if (!inRoom) return;
+    reconcileVideoTopology();
+  }, ROSTER_RECONCILE_DEBOUNCE_MS);
+}
+
+function resetRosterReconcileState() {
+  if (_rosterReconcileTimer) clearTimeout(_rosterReconcileTimer);
+  _rosterReconcileTimer = null;
+  _lastReconciledParticipantCount = null;
+  _topologyReconcileInFlight.video = false;
+  _topologyReconcileInFlight.screen = false;
 }
 
 function announceLocalTrackTopology(kind, topology, providerRef) {
@@ -8675,6 +8915,22 @@ function p2pPublishScreen(peerId, c, stream) {
     if (c.screenMediaOut === screenCall) c.screenMediaOut = null;
   });
   c.screenMediaOut = screenCall;
+}
+
+// The inverse of p2pPublishVideo/p2pPublishScreen: stop sending this kind to one
+// peer over the mesh. Needed by topology migration — reconciling P2P -> SFU used
+// to leave these MediaConnections running, so the publisher uploaded N direct
+// streams *and* one to Cloudflare, which is strictly worse than not migrating.
+function p2pUnpublishVideo(peerId, c) {
+  if (!c || !c.videoMediaOut) return;
+  try { c.videoMediaOut.close(); } catch (_) {}
+  c.videoMediaOut = null;
+}
+
+function p2pUnpublishScreen(peerId, c) {
+  if (!c || !c.screenMediaOut) return;
+  try { c.screenMediaOut.close(); } catch (_) {}
+  c.screenMediaOut = null;
 }
 
 // --- Cloudflare SFU router (video/screen only) --------------------------------
@@ -8917,6 +9173,72 @@ function sfuUnsubscribeTrack(kind, publisherPeerId) {
   var media = conn && (kind === 'video' ? conn.videoMedia : conn.screenMedia);
   if (media && media.close) { try { media.close(); } catch (_) {} }
   _videoTrackRegistry.delete(_trackRegistryKey(publisherPeerId, kind));
+}
+
+// Drop whatever is currently carrying a remote track, whichever topology it is.
+// `conn.videoMedia`/`screenMedia` holds a PeerJS MediaConnection on the mesh and
+// the SFU subscription shim on the relay; both expose `.close()`, so one
+// teardown covers a migration in either direction.
+function _teardownRemoteTrack(publisherPeerId, kind) {
+  var conn = connections.get(publisherPeerId);
+  var media = conn && (kind === 'video' ? conn.videoMedia : conn.screenMedia);
+  if (media && media.close) { try { media.close(); } catch (_) {} }
+  if (conn) {
+    if (kind === 'video') conn.videoMedia = null; else conn.screenMedia = null;
+  }
+  _videoTrackRegistry.delete(_trackRegistryKey(publisherPeerId, kind));
+  if (kind === 'video') detachRemoteVideo(publisherPeerId);
+  else detachRemoteScreen(publisherPeerId);
+}
+
+/**
+ * Viewer side of a video-offer/screen-offer.
+ *
+ * A re-announcement is not necessarily a fresh share: the publisher may have
+ * MIGRATED this track between the mesh and the SFU mid-call, because the room
+ * crossed the size threshold (see reconcileVideoTopologyForRoster). Whatever was
+ * carrying it before has to be torn down first, or the viewer ends up holding
+ * two live streams for one track and rendering whichever arrived last.
+ *
+ * Returns the normalized mode so the host can relay it. An absent or
+ * unrecognized topology is always read as 'p2p' — the always-available path —
+ * and never inferred as 'sfu'.
+ */
+function applyRemoteTrackTopology(publisherPeerId, kind, rawTopology, providerRef) {
+  var mode = rawTopology === 'sfu' ? 'sfu' : 'p2p';
+  var conn = connections.get(publisherPeerId);
+  var prev = conn ? (kind === 'video' ? conn.videoTopology : conn.screenTopology) : null;
+  var ref = _normalizeProviderRef(providerRef);
+  var prevRef = _rememberedProviderRef(publisherPeerId, kind);
+
+  // A republish re-announces the same track (sfuRenegotiatePublish does exactly
+  // this), and churning a healthy subscription on that would drop video for no
+  // reason. Only the {sessionId, trackName} actually changing means "resubscribe".
+  var unchanged = !!prev && prev.mode === mode && (
+    mode === 'p2p' ||
+    (!!ref && !!prevRef && ref.sessionId === prevRef.sessionId && ref.trackName === prevRef.trackName)
+  );
+
+  if (conn) {
+    var next = { mode: mode, reason: VIDEO_TOPOLOGY_REASON.PREFERENCE_ALLOW_SFU };
+    if (kind === 'video') conn.videoTopology = next; else conn.screenTopology = next;
+  }
+  if (unchanged) return mode;
+
+  if (prev) {
+    devLog('[SFU] remote ' + kind + ' from ' + shortId(publisherPeerId) + ': ' +
+      prev.mode + ' -> ' + mode + ', dropping the old path');
+    _teardownRemoteTrack(publisherPeerId, kind);
+  }
+
+  if (mode === 'sfu' && publisherPeerId !== (peer && peer.id)) {
+    _rememberProviderRef(publisherPeerId, kind, providerRef);
+    if (kind === 'video') sfuSubscribeVideo(publisherPeerId, providerRef);
+    else sfuSubscribeScreen(publisherPeerId, providerRef);
+  }
+  // mode === 'p2p' needs no equivalent call: the publisher's MediaConnection
+  // arrives on its own through the ordinary peer.on('call') path.
+  return mode;
 }
 
 // --- SFU reconnection (video/screen only; never touches roomState/host migration) ---
@@ -9442,6 +9764,10 @@ function leaveRoom() {
   _authoritativeSuccessorIds = [];
   stopMigrationSettle();
   stopStatsPolling();
+  resetRosterReconcileState();
+  resetBandwidthHistory();
+  publishNetworkUsage();  // let an open preferences window show its empty state
+  renderNetUsagePanel();  // …and the in-page modal, if it is the one open
   closeStatsPopover();
   closeDeviceInfoPopover();
   _hostDebugMode = false;
@@ -10259,22 +10585,16 @@ function handleJoinerDataConnection(dataConn) {
       // everyone knows whether to expect a MediaConnection or to subscribe via
       // the SFU. Never inferred/defaulted to 'sfu' — an absent/unrecognized
       // value is treated as 'p2p', the always-available path.
-      var voTopology = msg.topology === 'sfu' ? 'sfu' : 'p2p';
       markPeerVideoActive(joinerId, true);
-      var voConn = connections.get(joinerId);
-      if (voConn) voConn.videoTopology = { mode: voTopology, reason: VIDEO_TOPOLOGY_REASON.PREFERENCE_ALLOW_SFU };
+      // The host is a viewer too, just like any other peer — this both applies
+      // the topology locally (migrating off the old path when it changed) and
+      // hands back the normalized mode to relay.
+      var voTopology = applyRemoteTrackTopology(joinerId, 'video', msg.topology, msg.providerRef);
       connections.forEach(function(c, id) {
         if (id !== joinerId && c.data) {
           sendDataIfOpen(c.data, { type: 'video-offer', peerId: joinerId, topology: voTopology, providerRef: msg.providerRef });
         }
       });
-      // The host is a viewer too, just like any other peer — subscribe to
-      // render it (the P2P case needs no equivalent call: it arrives via the
-      // ordinary peer.on('call') path, same as for any other peer).
-      if (voTopology === 'sfu') {
-        _rememberProviderRef(joinerId, 'video', msg.providerRef);
-        sfuSubscribeVideo(joinerId, msg.providerRef);
-      }
     } else if (msg.type === 'video-stop') {
       // Relay to all other peers
       var vsConn = connections.get(joinerId);
@@ -10284,19 +10604,13 @@ function handleJoinerDataConnection(dataConn) {
         if (id !== joinerId && c.data) sendDataIfOpen(c.data, { type: 'video-stop', peerId: joinerId });
       });
     } else if (msg.type === 'screen-offer') {
-      var soTopology = msg.topology === 'sfu' ? 'sfu' : 'p2p';
       markPeerScreenActive(joinerId, true);
-      var soConn = connections.get(joinerId);
-      if (soConn) soConn.screenTopology = { mode: soTopology, reason: VIDEO_TOPOLOGY_REASON.PREFERENCE_ALLOW_SFU };
+      var soTopology = applyRemoteTrackTopology(joinerId, 'screen', msg.topology, msg.providerRef);
       connections.forEach(function(c, id) {
         if (id !== joinerId && c.data) {
           sendDataIfOpen(c.data, { type: 'screen-offer', peerId: joinerId, topology: soTopology, providerRef: msg.providerRef });
         }
       });
-      if (soTopology === 'sfu') {
-        _rememberProviderRef(joinerId, 'screen', msg.providerRef);
-        sfuSubscribeScreen(joinerId, msg.providerRef);
-      }
     } else if (msg.type === 'screen-stop') {
       var ssConn = connections.get(joinerId);
       if (ssConn && ssConn.screenTopology && ssConn.screenTopology.mode === 'sfu') sfuUnsubscribeTrack('screen', joinerId);
@@ -10643,14 +10957,8 @@ function handleHostMessage(msg) {
     videoModeEnabled = true;
     updateVideoModeUI();
   } else if (msg.type === 'video-offer') {
-    var voMsgTopology = msg.topology === 'sfu' ? 'sfu' : 'p2p';
     markPeerVideoActive(msg.peerId, true);
-    var voMsgConn = connections.get(msg.peerId);
-    if (voMsgConn) voMsgConn.videoTopology = { mode: voMsgTopology, reason: VIDEO_TOPOLOGY_REASON.PREFERENCE_ALLOW_SFU };
-    if (voMsgTopology === 'sfu' && msg.peerId !== peer.id) {
-      _rememberProviderRef(msg.peerId, 'video', msg.providerRef);
-      sfuSubscribeVideo(msg.peerId, msg.providerRef);
-    }
+    applyRemoteTrackTopology(msg.peerId, 'video', msg.topology, msg.providerRef);
   } else if (msg.type === 'video-stop') {
     var vsMsgConn = connections.get(msg.peerId);
     if (vsMsgConn && vsMsgConn.videoTopology && vsMsgConn.videoTopology.mode === 'sfu') sfuUnsubscribeTrack('video', msg.peerId);
@@ -10676,14 +10984,8 @@ function handleHostMessage(msg) {
       }
     }
   } else if (msg.type === 'screen-offer') {
-    var soMsgTopology = msg.topology === 'sfu' ? 'sfu' : 'p2p';
     markPeerScreenActive(msg.peerId, true);
-    var soMsgConn = connections.get(msg.peerId);
-    if (soMsgConn) soMsgConn.screenTopology = { mode: soMsgTopology, reason: VIDEO_TOPOLOGY_REASON.PREFERENCE_ALLOW_SFU };
-    if (soMsgTopology === 'sfu' && msg.peerId !== peer.id) {
-      _rememberProviderRef(msg.peerId, 'screen', msg.providerRef);
-      sfuSubscribeScreen(msg.peerId, msg.providerRef);
-    }
+    applyRemoteTrackTopology(msg.peerId, 'screen', msg.topology, msg.providerRef);
   } else if (msg.type === 'screen-stop') {
     var ssMsgConn = connections.get(msg.peerId);
     if (ssMsgConn && ssMsgConn.screenTopology && ssMsgConn.screenTopology.mode === 'sfu') sfuUnsubscribeTrack('screen', msg.peerId);
@@ -12107,6 +12409,12 @@ window.addEventListener('DOMContentLoaded', function() {
     });
   }
 
+  var netUsageSummary = document.getElementById('net-usage-summary');
+  if (netUsageSummary) {
+    netUsageSummary.addEventListener('click', function() { setNetUsageExpanded(!_netUsageExpanded); });
+    renderNetUsagePanel();
+  }
+
   var micHintToggle = document.getElementById('toggle-mic-hint-modal');
   if (micHintToggle) {
     micHintToggle.addEventListener('click', function() {
@@ -12257,7 +12565,8 @@ window.addEventListener('DOMContentLoaded', function() {
     var relevantKeys = [PRESENCE_TOKEN_KEY, PRESENCE_ORG_KEY, METERED_APP_STORE_KEY,
                           METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY,
                           SPEAKER_DEVICE_KEY, JITTER_BUFFER_KEY, ECHO_BRIDGE_REQUEST_KEY,
-                          NOISE_SUPPRESSION_KEY, MIC_DEVICE_KEY, VIDEO_ROUTING_KEY];
+                          NOISE_SUPPRESSION_KEY, MIC_DEVICE_KEY, VIDEO_ROUTING_KEY,
+                          NETWORK_USAGE_REQUEST_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
     if (e.key === NOISE_SUPPRESSION_KEY || e.key === MIC_DEVICE_KEY) {
       // Changed from the desktop preferences window — that window cannot touch
@@ -12311,6 +12620,14 @@ window.addEventListener('DOMContentLoaded', function() {
       // reopened preferences window starts from a blank slate). Re-publish so
       // the remote button snaps back instead of sitting on "Stopping…".
       else publishEchoBridgeState('');
+      return;
+    }
+    if (e.key === NETWORK_USAGE_REQUEST_KEY) {
+      // The preferences window has no peer connections to measure — it asks to
+      // be fed, and stops asking when the panel closes.
+      var usageReq = null;
+      try { usageReq = JSON.parse(e.newValue || 'null'); } catch (_) {}
+      setNetworkUsageWatching(!!(usageReq && usageReq.watching));
       return;
     }
     updateTurnBadge();
