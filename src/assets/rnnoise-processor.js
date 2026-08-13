@@ -40,15 +40,15 @@ class RNNoiseProcessor extends AudioWorkletProcessor {
     this._priming = true;
 
     this.port.onmessage = (e) => {
-      if (e.data.type === 'wasm-module') {
-        this._initWasm(e.data.module);
+      if (e.data.type === 'wasm-bytes') {
+        this._initWasm(e.data.bytes);
       } else if (e.data.type === 'destroy') {
         this._cleanup();
       }
     };
   }
 
-  async _initWasm(wasmModule) {
+  async _initWasm(wasmBytes) {
     try {
       let wasmMemory = null;
       let HEAPU8 = null;
@@ -58,7 +58,9 @@ class RNNoiseProcessor extends AudioWorkletProcessor {
         this._HEAPF32 = new Float32Array(wasmMemory.buffer);
       };
 
-      const instance = await WebAssembly.instantiate(wasmModule, {
+      // wasmBytes is raw ArrayBuffer, not a pre-compiled Module, so this both
+      // compiles and instantiates (returns { module, instance }).
+      const { instance } = await WebAssembly.instantiate(wasmBytes, {
         a: {
           a: (requestedSize) => {
             const oldSize = HEAPU8.length;
