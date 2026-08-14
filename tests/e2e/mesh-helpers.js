@@ -72,10 +72,27 @@ export function getState(page) {
       typeof currentDeputyId === 'function' && typeof roomCode !== 'undefined' && roomCode
         ? currentDeputyId()
         : null,
-    incomingAudio:
-      typeof connections !== 'undefined'
-        ? Array.from(connections.values()).filter((c) => c && c.media).length
-        : 0,
+    // "How many peers can I actually hear."
+    //
+    // Deliberately measured from the attached <audio> elements and their live
+    // tracks, NOT from `conn.media`. A PeerJS MediaConnection is bidirectional:
+    // whoever places the call sends its mic, and `handleIncomingCall` answers
+    // with `call.answer(stream)`, so ONE connection carries audio both ways.
+    // Which side happened to place it is an implementation detail — the caller
+    // records it as `audioMediaOut`, the answerer as `media`, and counting only
+    // `media` reports 0 for a peer that is hearing the other side perfectly.
+    //
+    // That is not hypothetical: these tests used to pass only because
+    // initRNNoise() stalled ~5s on every mic acquisition, which delayed the
+    // host's `connectOutgoingAudioToPeers()` until after the joiner had
+    // arrived, so BOTH sides redundantly placed a call. Fixing that stall
+    // (#111) left one connection instead of two — correct and cheaper — and
+    // collapsed the old proxy metric.
+    incomingAudio: Array.from(document.querySelectorAll('audio[id^="audio-"]')).filter(
+      (el) =>
+        el.srcObject &&
+        el.srcObject.getAudioTracks().some((t) => t.readyState === 'live')
+    ).length,
     outgoingAudio:
       typeof connections !== 'undefined'
         ? Array.from(connections.values()).filter((c) => c && c.audioMediaOut).length
