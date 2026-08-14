@@ -163,6 +163,12 @@ windows on one machine, all share it. Three things keep normal use far below it:
   does nothing. Before this, every broadcast re-subscribed every viewer to every
   publisher — which both leaked peer connections and exhausted the mint budget,
   making a new joiner's camera black for everyone else.
+- **A subscribe already negotiating is joined, not duplicated.** Idempotency
+  above keys off a *live* peer connection, and a subscribe takes two round trips
+  (mint, then negotiate) before there is one — so a `peer-list` landing in that
+  window used to open a second connection for the same track and orphan the
+  first, which stayed alive pulling media. `_sfuSubscribeInFlight` returns the
+  pending promise instead.
 - **A 429 is treated as temporary.** It is reported distinctly from a 503, never
   marks the SFU unavailable (that would demote the whole room to P2P over a
   transient limit), and is retried with backoff honouring `Retry-After`.
@@ -170,6 +176,31 @@ windows on one machine, all share it. Three things keep normal use far below it:
 Note that "already subscribed" requires an actual live peer connection, not just
 a remembered ref — the ref is stored before the subscribe is attempted, so a
 failed attempt would otherwise be indistinguishable from a healthy one forever.
+
+### Why a relayed peer can be missing entirely
+
+A black tile and *no tile* are different failures with different causes, and the
+second is the more confusing one: the peer is in the roster, but has no entry on
+the video stage at all.
+
+`videoStageTiles()` builds the stage from `conn.videoActive` / `conn.screenActive`
+— "is this peer sharing", which is signaling state, set by `video-offer` and
+cleared by `video-stop`. It is deliberately *not* derived from whether a stream
+is currently attached, so a tile survives a momentary reconnect.
+
+The consequence is that anything clearing that flag removes the peer from the
+stage until the next `video-offer`, and a live share does not re-announce itself.
+So swapping a track's transport (mesh ↔ SFU) must go through
+`detachRemoteVideoTransport` / `detachRemoteScreenTransport`, which drop the
+stream and the connection carrying it but leave the flag alone.
+`detachRemoteVideo` / `detachRemoteScreen` clear it, and are only for a share
+that genuinely ended.
+
+Getting this wrong produced a distinctive symptom worth recognising: a peer
+joining a room that had already switched to the SFU saw *nobody*, while everyone
+already in the room saw the newcomer fine. The asymmetry is the diagnosis — a
+newcomer learns about existing publishers from `peer-list`, everyone learns about
+a newcomer from `video-offer`, and only the first path ran a teardown.
 
 ### Network usage (Settings → Advanced)
 

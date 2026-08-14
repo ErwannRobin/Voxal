@@ -833,3 +833,223 @@ test.describe('capability token caching and rate-limit handling', () => {
     expect(labels.broken.failed).toBe(true);
   });
 });
+
+// The bug this suite pins down, reported from a live 4-person call: once a room
+// switched to the SFU, a peer joining afterwards saw nobody, while everybody
+// already in the room saw the newcomer fine. The asymmetry is the tell — a
+// newcomer learns about existing publishers from `peer-list`, whereas everyone
+// learns about the newcomer from `video-offer`, and only the first path went
+// through a transport teardown.
+//
+// `videoStageTiles()` skips any peer whose `videoActive` is false, so clearing
+// that flag does not merely drop the pixels — it removes the tile entirely.
+test.describe('a peer joining an already-relayed room sees the peers already sharing', () => {
+  // A viewer that has just connected and knows nothing yet, with the SFU
+  // subscribe stubbed out: these tests are about the bookkeeping around the
+  // subscribe, not the negotiation itself (covered above).
+  async function seedFreshViewer(page) {
+    await seedRoom(page, { selfId: 'self', isHost: false, roomCode: 'host-1' });
+    await page.evaluate(() => {
+      window.__subscribes = [];
+      sfuSubscribeVideo = function(id, ref) { window.__subscribes.push({ id, ref }); };
+      sfuSubscribeScreen = function(id, ref) { window.__subscribes.push({ id, ref }); };
+    });
+  }
+
+  const RELAYED_PEER_LIST = {
+    type: 'peer-list',
+    hostId: 'host-1',
+    hostPseudo: 'Host',
+    hostVideoActive: true,
+    hostVideoTopology: 'sfu',
+    hostVideoProviderRef: { sessionId: 'cf-host', trackName: 'host-1-video' },
+    peers: [{
+      id: 'pub-1',
+      pseudo: 'Publisher',
+      videoActive: true,
+      videoTopology: 'sfu',
+      videoProviderRef: { sessionId: 'cf-1', trackName: 'pub-1-video' },
+    }],
+  };
+
+  test('an already-relayed publisher stays on the video stage instead of vanishing', async ({ page }) => {
+    await page.goto('/');
+    await seedFreshViewer(page);
+    await page.evaluate((msg) => handleHostMessage(msg), RELAYED_PEER_LIST);
+
+    const stage = await page.evaluate(() => ({
+      active: Array.from(connections.entries()).map(([id, c]) => ({ id, videoActive: !!c.videoActive })),
+      tiles: videoStageTiles().filter((t) => t.kind === 'camera' && !t.self).map((t) => t.peerId),
+      subscribed: window.__subscribes.map((s) => s.id),
+    }));
+
+    // Both the host and the other peer are relaying a camera; both must be
+    // subscribed to AND rendered.
+    expect(stage.subscribed.sort()).toEqual(['host-1', 'pub-1']);
+    expect(stage.tiles.sort()).toEqual(['host-1', 'pub-1']);
+    expect(stage.active).toEqual(
+      expect.arrayContaining([
+        { id: 'host-1', videoActive: true },
+        { id: 'pub-1', videoActive: true },
+      ])
+    );
+  });
+
+  test('first sight of a relayed publisher does not tear down a subscription that was never opened', async ({ page }) => {
+    await page.goto('/');
+    await seedFreshViewer(page);
+    await page.evaluate(() => {
+      window.__teardowns = [];
+      const real = _teardownRemoteTrack;
+      _teardownRemoteTrack = function(id, kind) { window.__teardowns.push(id + ':' + kind); return real(id, kind); };
+    });
+    await page.evaluate((msg) => handleHostMessage(msg), RELAYED_PEER_LIST);
+    expect(await page.evaluate(() => window.__teardowns)).toEqual([]);
+  });
+
+  test('a publisher migrating p2p -> sfu keeps its tile through the swap', async ({ page }) => {
+    await page.goto('/');
+    await seedRoom(page, {
+      selfId: 'self', isHost: false, roomCode: 'host-1',
+      connections: [{ id: 'pub-1', pseudo: 'pub', open: true, videoActive: true }],
+    });
+    await page.evaluate(() => {
+      window.__subscribes = [];
+      sfuSubscribeVideo = function(id, ref) { window.__subscribes.push({ id, ref }); };
+      // A live mesh stream, as it would be before the room crossed the threshold.
+      const conn = connections.get('pub-1');
+      conn.videoTopology = { mode: 'p2p', reason: 'ok' };
+      conn.videoMedia = { peerConnection: {}, close() {} };
+      // A real MediaStream: the tile renderer assigns it to srcObject.
+      conn.remoteVideoStream = new MediaStream();
+    });
+
+    await page.evaluate(() => handleHostMessage({
+      type: 'video-offer', peerId: 'pub-1', topology: 'sfu',
+      providerRef: { sessionId: 'cf-1', trackName: 'pub-1-video' },
+    }));
+
+    const after = await page.evaluate(() => ({
+      videoActive: !!connections.get('pub-1').videoActive,
+      meshDropped: connections.get('pub-1').videoMedia === null,
+      tiles: videoStageTiles().filter((t) => t.kind === 'camera' && !t.self).map((t) => t.peerId),
+      subscribed: window.__subscribes.map((s) => s.id),
+    }));
+
+    // The mesh leg goes, the subscription is opened — but the peer is still
+    // sharing, so it must not disappear from the stage in between.
+    expect(after.meshDropped).toBe(true);
+    expect(after.subscribed).toEqual(['pub-1']);
+    expect(after.videoActive).toBe(true);
+    expect(after.tiles).toEqual(['pub-1']);
+  });
+
+  test('video-stop still clears the tile — teardown and "stopped sharing" stay distinct', async ({ page }) => {
+    await page.goto('/');
+    await seedRoom(page, {
+      selfId: 'self', isHost: false, roomCode: 'host-1',
+      connections: [{ id: 'pub-1', pseudo: 'pub', open: true, videoActive: true }],
+    });
+    await page.evaluate(() => handleHostMessage({ type: 'video-stop', peerId: 'pub-1' }));
+    expect(await page.evaluate(() => connections.get('pub-1').videoActive)).toBe(false);
+    expect(await page.evaluate(() => videoStageTiles().filter((t) => !t.self).length)).toBe(0);
+  });
+});
+
+// A subscribe takes two round trips (mint, then negotiate), and a peer-list is
+// broadcast on every join, leave, prune and rename — so one lands mid-subscribe
+// routinely, not rarely. Both of these were true before the fix and compounded:
+// the duplicate subscribe is what made the first one's result land on an
+// object that `connections` no longer held.
+test.describe('a peer-list arriving mid-subscribe', () => {
+  const REF = { sessionId: 'cf-1', trackName: 'pub-1-video' };
+
+  // Stubs the two endpoints and holds the negotiate open, so the test controls
+  // exactly when the in-flight subscribe completes. Returns a release fn and a
+  // live count of negotiate calls.
+  async function heldSubscribe(page) {
+    let release;
+    const held = new Promise((r) => { release = r; });
+    let negotiates = 0;
+    await page.route('**/api/sfu-session', (route) => route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({
+        capability: 'fake.capability',
+        expires_at: new Date(Date.now() + 300e3).toISOString(),
+        sfu_app_id: 'app1',
+      }),
+    }));
+    await page.route('**/api/sfu-track', async (route) => {
+      negotiates++;
+      await held;
+      route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ sessionId: 'cf-sub', sessionDescription: { type: 'answer', sdp: 'v=0\r\n' } }),
+      });
+    });
+    await seedRoom(page, {
+      selfId: 'self', isHost: false, roomCode: 'host-1',
+      connections: [{ id: 'pub-1', pseudo: 'pub', open: true, videoActive: true }],
+    });
+    await page.evaluate(() => {
+      // Answering a hand-rolled SDP is not what these assert; make the peer
+      // connection inert so they measure only the bookkeeping around it.
+      RTCPeerConnection.prototype.setRemoteDescription = function() { return Promise.resolve(); };
+    });
+    return { release, negotiates: () => negotiates };
+  }
+
+  const PEER_LIST = {
+    type: 'peer-list', hostId: 'host-1', hostPseudo: 'Host',
+    peers: [{ id: 'pub-1', pseudo: 'pub', videoActive: true, videoTopology: 'sfu', videoProviderRef: REF }],
+  };
+
+  test('does not start a second subscription for a track already being negotiated', async ({ page }) => {
+    await page.goto('/');
+    const { release, negotiates } = await heldSubscribe(page);
+
+    await page.evaluate((ref) => { window.__sub = sfuSubscribeVideo('pub-1', ref); }, REF);
+    await page.evaluate((msg) => handleHostMessage(msg), PEER_LIST);
+    release();
+    await page.evaluate(() => window.__sub);
+
+    // One track, one negotiation. Two means a duplicate peer connection was
+    // opened, the loser orphaned but still pulling media from Cloudflare.
+    expect(negotiates()).toBe(1);
+  });
+
+  test('leaves the subscription reachable on the connection the map holds', async ({ page }) => {
+    await page.goto('/');
+    const { release } = await heldSubscribe(page);
+
+    await page.evaluate((ref) => { window.__sub = sfuSubscribeVideo('pub-1', ref); }, REF);
+    // Any handler that rebuilt the entry instead of mutating it used to swap in
+    // a copy here, and the in-flight subscribe then wrote its result to the
+    // object nothing could reach.
+    await page.evaluate(() => {
+      connections.set('pub-1', Object.assign({}, connections.get('pub-1')));
+    });
+    release();
+    await page.evaluate(() => window.__sub);
+
+    expect(await page.evaluate(() => !!connections.get('pub-1').videoMedia)).toBe(true);
+    expect(await page.evaluate(() => remoteTrackState('pub-1', 'video'))).toBe('subscribed');
+  });
+
+  test('a subscription that completes after the peer left is closed, not kept', async ({ page }) => {
+    await page.goto('/');
+    const { release } = await heldSubscribe(page);
+
+    await page.evaluate((ref) => {
+      window.__closed = 0;
+      const realClose = RTCPeerConnection.prototype.close;
+      RTCPeerConnection.prototype.close = function() { window.__closed++; return realClose.call(this); };
+      window.__sub = sfuSubscribeVideo('pub-1', ref);
+    }, REF);
+    await page.evaluate(() => connections.delete('pub-1'));
+    release();
+    await page.evaluate(() => window.__sub);
+
+    expect(await page.evaluate(() => window.__closed)).toBeGreaterThan(0);
+  });
+});
