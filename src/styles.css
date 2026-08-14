@@ -772,6 +772,82 @@ html[data-theme="light"] .debug-consent-text strong { color: #b45309; }
 }
 .loss-spark-in  { color: var(--accent); }
 .loss-spark-out { color: #f87171; }
+
+/* --- Network usage (Settings → Advanced) ---------------------------------- */
+/* Rendered by net-usage.js in both index.html's modal and settings.html. */
+.net-usage-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.net-usage-summary:hover { border-color: var(--accent); }
+.net-usage-totals {
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+.net-usage-dir { opacity: 0.7; }
+.net-usage-dir strong { opacity: 1; font-weight: 600; }
+.net-usage-chevron {
+  font-size: 10px;
+  opacity: 0.6;
+  transition: transform 0.15s ease;
+}
+.net-usage-summary[aria-expanded="true"] .net-usage-chevron { transform: rotate(90deg); }
+.net-usage-detail { margin-top: 8px; }
+.net-usage-empty { margin: 6px 0 0; }
+.net-usage-scale,
+.net-usage-axis {
+  font-size: 10px;
+  opacity: 0.55;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+.net-usage-axis { display: flex; justify-content: space-between; margin-top: 2px; }
+.net-usage-row { margin-top: 6px; }
+.net-usage-row-head {
+  font-size: 10.5px;
+  opacity: 0.7;
+  margin-bottom: 2px;
+}
+.net-usage-area {
+  display: block;
+  width: 100%;
+  height: 56px;
+  background: var(--bg);
+  border-radius: 3px;
+}
+/* One colour per media kind, shared by the stacked bands and the legend
+   swatches so the chart reads without cross-referencing. */
+.net-usage-band { fill: currentColor; opacity: 0.75; }
+.net-usage-band-audio  { color: var(--accent); }
+.net-usage-band-camera { color: #a78bfa; }
+.net-usage-band-screen { color: #fbbf24; }
+.net-usage-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 10.5px;
+  opacity: 0.75;
+}
+.net-usage-legend-item { display: inline-flex; align-items: center; gap: 4px; }
+.net-usage-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.75;
+}
 .stats-row {
   display: flex;
   justify-content: space-between;
@@ -1424,6 +1500,12 @@ kbd {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.18);
   white-space: nowrap;
+}
+/* A relayed tile whose subscription failed is black — the badge has to say so
+   rather than claiming media is flowing. */
+.video-tile-topology.failed {
+  background: rgba(248, 113, 113, 0.85);
+  color: #fff;
 }
 
 /* The minimized self-view: a small badge floating over the stage, dragged to

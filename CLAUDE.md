@@ -127,6 +127,8 @@ A setting that `getMicStream()` reads (`noise-suppression`, `mic-device-id`) is 
 | `room-active` | `ROOM_ACTIVE_KEY` | Transient. Main window → preferences window: a call is live, so `settings.html` must not run its `getUserMedia` device-label probe (it would kill the call). Cleared on leave and on load |
 | `echo-test-request` | `ECHO_BRIDGE_REQUEST_KEY` | Transient. Desktop preferences window → main window: `{action:'start'\|'stop', at}` (see below) |
 | `echo-test-state` | `ECHO_BRIDGE_STATE_KEY` | Transient. Main window → preferences window: `{running, text, kind, at}` |
+| `net-usage-request` | `NETWORK_USAGE_REQUEST_KEY` | Transient. Preferences window → main window: `{watching, at}` — ask to be fed bandwidth samples (see below) |
+| `net-usage-state` | `NETWORK_USAGE_STATE_KEY` | Transient. Main window → preferences window: `{inRoom, current, history, at}` |
 
 ### Cross-window command bridge (desktop)
 
@@ -138,6 +140,23 @@ implementation and publishes progress to `echo-test-state`, which the
 preferences window mirrors. Note a `storage` event never fires in the window
 that wrote the value, and writing an identical value fires nothing — hence the
 `at` timestamp and the writer's optimistic render.
+
+The Settings → Advanced **network usage** panel uses the same channel for the
+same reason: `settings.html` has no `connections` map and no `RTCPeerConnection`,
+so it cannot measure anything. It writes `net-usage-request` `{watching:true}`;
+the main window samples on its 5 s stats tick and publishes `net-usage-state`.
+Sampling is *not* gated on a watcher — only publishing is — so the 10-minute
+history is already populated when the panel opens.
+
+### Shared classic scripts (`src/net-usage.js`)
+
+Anything both `index.html` and `settings.html` need should go in a plain classic
+script both documents load with `<script src>`, the way `version.js` already is —
+**not** hand-duplicated into `settings.html`. `net-usage.js` holds the usage
+constants, `formatBitrate()` and the chart renderers. Two constraints: it must
+load *before* `main.js` (which uses its constants), and a `const`/`let` declared
+there must not also be declared in `main.js` — classic scripts share one global
+lexical scope, so a duplicate declaration is a load-time `SyntaxError`.
 
 ### Theme
 Applied before first paint via inline `<script>` at the top of both HTML files. `data-theme` on `<html>`. Dark is the default; light overrides via `html[data-theme="light"]`; system uses `@media (prefers-color-scheme: light) { html[data-theme="system"] }`.

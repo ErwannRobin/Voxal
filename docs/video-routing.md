@@ -85,6 +85,44 @@ testing showed that was too high in practice — an 8-participant room with a
 camera on still read "Direct" — so video/screen now gets its own, much lower
 bar, reflecting that it's far heavier per participant than audio.
 
+### Migration — the decision is re-run mid-call
+
+The room that needs a relay usually becomes that room while people are already
+talking, so the decision cannot be made once at share time. `decideVideoTopology`
+reads `connections.size + 1`, and `reconcileVideoTopologyForRoster()` re-runs it
+whenever the roster changes — debounced ~1.5 s and memoized on the participant
+count, so a burst of joins settles before anything moves and the many
+`updatePeerList()` calls that are about talking state cost nothing. Without it,
+only *new joiners* ever used the relay: someone who started sharing in a
+two-person room stayed on the mesh for the life of the call.
+
+Migrating is not the same problem as deciding. The losing path has to be torn
+down on both sides, or one track ends up carried twice:
+
+- **Publisher** — `unpublishLocalTrack(kind)` closes whichever path is live: the
+  outgoing mesh `MediaConnection`s (`p2pUnpublishVideo`/`p2pUnpublishScreen`) or
+  the SFU publish session. An earlier version only handled the SFU branch, so a
+  P2P→SFU migration kept uploading N direct streams *and* one to Cloudflare —
+  strictly worse than not migrating at all. A `_topologyReconcileInFlight` guard
+  stops a second reconcile landing during the awaited SFU publish, when
+  `_localVideoTopology[kind]` still reads as the old mode.
+- **Viewer** — `applyRemoteTrackTopology()` treats a re-announced
+  `video-offer`/`screen-offer` as a possible migration: it drops the incoming
+  mesh stream before subscribing via the SFU, or unsubscribes before letting the
+  mesh call arrive. It is a deliberate no-op when the mode *and* the
+  `{sessionId, trackName}` are both unchanged, because `sfuRenegotiatePublish()`
+  re-announces on every republish and churning a healthy subscription there would
+  drop video for no reason.
+
+Two things follow, and neither is hidden:
+
+- Migrating interrupts video briefly for viewers (teardown → republish →
+  resubscribe). Audio is untouched, as always.
+- Video that was flowing directly starts flowing through Cloudflare, mid-call.
+  That is the `allow-sfu` bargain, and the ☁ Relayed badge updates to say so.
+  The selector invariant is what keeps this bounded: `prefer-p2p` and `p2p-only`
+  never migrate onto the relay, at any room size.
+
 ## What the user sees
 
 - **Working peer-to-peer**: no change from before this feature — no badge, no
@@ -103,9 +141,92 @@ bar, reflecting that it's far heavier per participant than audio.
   with a shortcut to turn video off or change the setting. Voice is
   unaffected.
 
+### Why a relayed tile can be black
+
+A ☁ Relayed badge means "this track is routed through the relay", not "media is
+arriving". A subscription that fails leaves a black tile, so the badge switches
+to **⚠ Relay failed** and the reason goes to the dev log — a silent black
+rectangle is how every bug in this feature stayed hidden.
+
+The failure worth knowing about is capability minting. `/api/sfu-session`
+rate-limits to **30 requests per IP per minute** (`SFU_RATE_LIMIT`), and that
+budget is *per IP* — several participants behind one NAT, or several test
+windows on one machine, all share it. Three things keep normal use far below it:
+
+- **Tokens are cached for their TTL** (`SFU_CAPABILITY_TTL`, 300 s) per
+  `kind:action`, and the in-flight promise is cached too, so a burst of
+  concurrent subscribes collapses into one request. They are dropped when the
+  room code or participant id changes, since the server checks that tuple.
+- **Subscriptions are idempotent.** A `peer-list` is broadcast on every join,
+  leave, prune, rename and settings change; re-announcing the same
+  `{sessionId, trackName}` for a track that already has a live peer connection
+  does nothing. Before this, every broadcast re-subscribed every viewer to every
+  publisher — which both leaked peer connections and exhausted the mint budget,
+  making a new joiner's camera black for everyone else.
+- **A subscribe already negotiating is joined, not duplicated.** Idempotency
+  above keys off a *live* peer connection, and a subscribe takes two round trips
+  (mint, then negotiate) before there is one — so a `peer-list` landing in that
+  window used to open a second connection for the same track and orphan the
+  first, which stayed alive pulling media. `_sfuSubscribeInFlight` returns the
+  pending promise instead.
+- **A 429 is treated as temporary.** It is reported distinctly from a 503, never
+  marks the SFU unavailable (that would demote the whole room to P2P over a
+  transient limit), and is retried with backoff honouring `Retry-After`.
+
+Note that "already subscribed" requires an actual live peer connection, not just
+a remembered ref — the ref is stored before the subscribe is attempted, so a
+failed attempt would otherwise be indistinguishable from a healthy one forever.
+
+### Why a relayed peer can be missing entirely
+
+A black tile and *no tile* are different failures with different causes, and the
+second is the more confusing one: the peer is in the roster, but has no entry on
+the video stage at all.
+
+`videoStageTiles()` builds the stage from `conn.videoActive` / `conn.screenActive`
+— "is this peer sharing", which is signaling state, set by `video-offer` and
+cleared by `video-stop`. It is deliberately *not* derived from whether a stream
+is currently attached, so a tile survives a momentary reconnect.
+
+The consequence is that anything clearing that flag removes the peer from the
+stage until the next `video-offer`, and a live share does not re-announce itself.
+So swapping a track's transport (mesh ↔ SFU) must go through
+`detachRemoteVideoTransport` / `detachRemoteScreenTransport`, which drop the
+stream and the connection carrying it but leave the flag alone.
+`detachRemoteVideo` / `detachRemoteScreen` clear it, and are only for a share
+that genuinely ended.
+
+Getting this wrong produced a distinctive symptom worth recognising: a peer
+joining a room that had already switched to the SFU saw *nobody*, while everyone
+already in the room saw the newcomer fine. The asymmetry is the diagnosis — a
+newcomer learns about existing publishers from `peer-list`, everyone learns about
+a newcomer from `video-offer`, and only the first path ran a teardown.
+
+### Network usage (Settings → Advanced)
+
+A live `↓`/`↑` readout that expands into the last 10 minutes of traffic, split
+by media kind (voice / camera / screen) in each direction. This exists so the
+routing decisions above are *observable*: switching camera and screen onto the
+relay should show up as a visible step down in upload while the voice band stays
+flat, and if it doesn't, the setting isn't doing what it claims.
+
+Sampled on the existing 5 s stats tick from each peer connection's nominated
+candidate pair, so the numbers are transport-level and include RTP, RTCP, STUN
+and DTLS overhead — what a data plan is actually billed for. Each connection
+carries exactly one kind, which is what makes the per-kind split possible without
+reading individual RTP reports.
+
+Rendering lives in `src/net-usage.js`, a plain classic script loaded by both
+`index.html` and `settings.html` — the desktop preferences window has no peer
+connections of its own, so the main window samples and publishes over the
+`net-usage-state` localStorage bridge (same shape as the echo-test bridge) and
+the preferences window renders the identical charts. Publishing is gated on an
+open panel; *sampling* is not, so the graph is already ten minutes deep when it
+opens.
+
 ## Backend (Cloudflare Realtime SFU)
 
-Two new serverless endpoints, following the same pattern as the existing
+Three new serverless endpoints, following the same pattern as the existing
 anonymous TURN endpoint (`api/ice-servers.js`): pure logic in a `_prefixed.js`
 module (unit-tested with `node --test`, no network), a thin routed handler,
 secrets only ever read from `process.env`, never returned to the client.
@@ -134,13 +255,31 @@ show a connected session, and receive no media at all. The first version of
 this integration did exactly that — it omitted `tracks[]` and never named the
 remote track, producing perfectly "connected" black video tiles.
 
+The second thing that trips people up: **the offer goes on `tracks/new`, not on
+`sessions/new`.** Cloudflare's lifecycle is
+
+```
+POST sessions/new              (no body)  -> { sessionId }
+POST sessions/<id>/tracks/new  (offer)    -> (answer)
+ICE -> DTLS -> connectionstatechange: connected -> media flows
+```
+
+`sessions/new` only creates the session; the *first* `tracks/new` is what
+exchanges offer/answer and brings the transport up. Handing `sessions/new` an
+SDP and then pushing tracks before the client has applied the resulting answer
+makes Cloudflare reject the push with `session_error: Session is not ready yet.
+Please ensure the PeerConnection is connected before making this request` —
+which is what the second version of this integration did. `api/sfu-track.js`
+performs both hops server-side, so the client still sees a single round trip.
+
 Publishing (`sfuPublishTrack`):
 
 1. `addTransceiver(track, { direction: 'sendonly' })` — keep the transceiver,
    Cloudflare needs each track's `mid`.
 2. Offer → `POST /api/sfu-track` with `action:'publish'`, the SDP, and
    `tracks: [{ location:'local', mid, trackName }]`.
-3. Apply Cloudflare's answer. `trackName` is `<voxal peer id>-<kind>`.
+3. Apply Cloudflare's answer — which comes from `tracks/new`.
+   `trackName` is `<voxal peer id>-<kind>`.
 
 Subscribing (`sfuSubscribeTrack`) — note the asymmetry:
 

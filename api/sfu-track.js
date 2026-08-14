@@ -7,14 +7,24 @@
 // a `capability` token scoped to {roomCode, participantId, kind, action}. This
 // endpoint verifies that token, then proxies to Cloudflare:
 //
-//   publish   — POST sessions/new {sessionDescription: offer}   -> {sessionId, sessionDescription: answer}
+//   publish   — POST sessions/new  (NO body)                    -> {sessionId}
 //               POST sessions/{id}/tracks/new
-//                 {tracks:[{location:'local', mid, trackName}], sessionDescription}
-//   subscribe — POST sessions/new {sessionDescription: offer}   -> {sessionId, ...}
+//                 {tracks:[{location:'local', mid, trackName}], sessionDescription: offer}
+//               -> {sessionDescription: answer}
+//   subscribe — POST sessions/new  (NO body)                    -> {sessionId}
 //               POST sessions/{id}/tracks/new
 //                 {tracks:[{location:'remote', sessionId:<publisher>, trackName}]}
 //               -> Cloudflare replies with an OFFER and requiresImmediateRenegotiation,
 //                  which the client answers via /api/sfu-renegotiate.
+//
+// The offer belongs on `tracks/new`, NOT on `sessions/new`. Cloudflare's
+// documented lifecycle is: create the session, then let the first tracks/new
+// carry the offer and return the answer that brings the transport up
+// (ICE -> DTLS -> media). Handing `sessions/new` an SDP and then pushing
+// tracks before the client has applied the resulting answer makes Cloudflare
+// reject the push with `session_error: Session is not ready yet. Please ensure
+// the PeerConnection is connected before making this request` — which is
+// exactly what an earlier version of this file did.
 //
 // The `tracks` array is the part that actually routes media. Omitting it (as
 // an earlier version of this file did) still yields a healthy-looking session
@@ -36,14 +46,15 @@
 
 import { verifyCapability, sfuSessionsUrl, sfuTracksUrl, cloudflareTrackError } from './_sfu.js';
 
+// `body` is optional: sessions/new takes no request body at all, and sending
+// an empty JSON object there is not the same thing as sending nothing.
 async function callCloudflare(url, appSecret, body) {
+  const headers = { authorization: `Bearer ${appSecret}` };
+  if (body != null) headers['content-type'] = 'application/json';
   const res = await fetch(url, {
     method: 'POST',
-    headers: {
-      authorization: `Bearer ${appSecret}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(body),
+    headers,
+    body: body == null ? undefined : JSON.stringify(body),
   });
   const detail = await res.text().catch(() => '');
   let parsed = null;
@@ -110,14 +121,17 @@ export default async function handler(req, res) {
   try {
     let cfSessionId = sessionId;
 
-    // Establish the transport first if this client has no session yet. Its
-    // answer is discarded for the remote-pull case — Cloudflare re-offers
-    // below once it knows which track to forward.
-    let created = null;
+    // Create the session if this client has no session yet. No SDP here — see
+    // the lifecycle note at the top of this file. The offer travels on
+    // tracks/new below, which is what returns the answer.
     if (!cfSessionId) {
-      created = await callCloudflare(sfuSessionsUrl(appId), appSecret, {
-        sessionDescription: offer ? { type: 'offer', sdp: offer } : undefined,
-      });
+      const created = await callCloudflare(sfuSessionsUrl(appId), appSecret, null);
+      const createErr = cloudflareTrackError(created);
+      if (createErr) {
+        const err = new Error('Cloudflare rejected the session');
+        err.detail = createErr;
+        throw err;
+      }
       cfSessionId = created && created.sessionId;
       if (!cfSessionId) throw new Error('Cloudflare Realtime API returned no sessionId');
     }
@@ -135,15 +149,14 @@ export default async function handler(req, res) {
       throw err;
     }
 
-    // For a publish the useful SDP is the session answer; for a remote pull
-    // it is the tracks/new response, which is an OFFER needing renegotiation.
-    const sessionDescription = (tracked && tracked.sessionDescription)
-      || (created && created.sessionDescription)
-      || null;
-
+    // Both legs get their SDP from tracks/new: an ANSWER for a publish, an
+    // OFFER (needing renegotiation) for a remote pull. There is deliberately no
+    // fallback to a sessions/new description — under the corrected flow that
+    // response carries no SDP, and a fallback would only serve to hide a
+    // regression back to the broken shape.
     res.status(200).json({
       sessionId: cfSessionId,
-      sessionDescription,
+      sessionDescription: (tracked && tracked.sessionDescription) || null,
       requiresImmediateRenegotiation: !!(tracked && tracked.requiresImmediateRenegotiation),
       tracks: (tracked && tracked.tracks) || [],
     });
