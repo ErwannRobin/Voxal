@@ -1311,11 +1311,11 @@ kbd {
 .video-stage { min-height: 0; position: relative; }
 .video-stage.hidden { display: none; }
 
-/* Below the stage breakpoint the stage stays hidden and the pre-existing
-   floating viewer panels remain the way to watch a peer. */
-@media (max-width: 860px) {
-  .video-stage { display: none; }
-}
+/* Which shape of stage applies is decided in JS (videoStageMode()) and published
+   as body classes, NOT re-derived here: a media query would have to duplicate
+   the is-web / is-native / tiny-embed reasoning and could then disagree with the
+   JS that renders the tiles. `body.video-stage` means a stage is live;
+   `body.video-stage-immersive` narrows that to the phone shape below. */
 
 @media (min-width: 861px) {
   html.is-web body.video-stage:not(.embed-tiny) #screen-room.active {
@@ -1379,6 +1379,165 @@ kbd {
   html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-bottom-bar .room-controls { margin-top: 0; }
 }
 
+/* ---------------------------------------------------------------------------
+   IMMERSIVE STAGE — phones (mobile web AND the Capacitor apps).
+
+   A phone has no room for a stage-plus-rail split, so the tiles take the whole
+   screen and the voice UI floats over them. Declared last in this file and
+   carrying no media query of its own: the mode is decided in JS
+   (videoStageMode()) and published as `body.video-stage-immersive`, so this
+   block can never tie with the landscape or desktop grids above.
+
+   Nothing here is absolute except the stage itself — the header, banners and
+   roster keep their normal flow position and are simply lifted above the stage
+   with a z-index, so their existing markup and behaviour are untouched.
+   --------------------------------------------------------------------------- */
+
+body.video-stage-immersive #screen-room #video-stage {
+  /* An absolutely-positioned child is laid out against its container's PADDING
+     box, so plain `inset: 0` already spans the room's safe-area padding and the
+     video reaches the physical edges. Offsetting by the padding as well (the
+     obvious-looking fix) overshoots by exactly twice it. The chrome keeps the
+     padding and therefore stays inside the safe area. */
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: #000;
+}
+body.video-stage-immersive #screen-room .video-stage-grid { gap: 2px; }
+body.video-stage-immersive #screen-room .video-tile { border-radius: 0; }
+
+/* Scrims, so white-on-video chrome stays legible over a bright frame. Painted
+   above the tiles but below the self-view badge (z-index 3), and transparent to
+   pointer events so tapping a tile still pins it. */
+body.video-stage-immersive #screen-room #video-stage::before,
+body.video-stage-immersive #screen-room #video-stage::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 140px;
+  pointer-events: none;
+  z-index: 1;
+  transition: opacity 0.25s ease;
+}
+body.video-stage-immersive #screen-room #video-stage::before {
+  top: 0;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.55), transparent);
+}
+body.video-stage-immersive #screen-room #video-stage::after {
+  bottom: 0;
+  height: 200px;
+  background: linear-gradient(to top, rgba(0,0,0,0.65), transparent);
+}
+body.video-stage-immersive.stage-chrome-hidden #screen-room #video-stage::before { opacity: 0; }
+
+/* Chrome above the video. The bottom bar already carries z-index 20 and its own
+   safe-area offsets, so it needs nothing here beyond staying put. */
+body.video-stage-immersive #screen-room #debug-consent-banner,
+body.video-stage-immersive #screen-room .room-header,
+body.video-stage-immersive #screen-room #room-size-warning,
+body.video-stage-immersive #screen-room .room-peers-panel {
+  position: relative;
+  z-index: 10;
+}
+body.video-stage-immersive #screen-room .room-header,
+body.video-stage-immersive #screen-room .room-peers-panel {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+/* Auto-hide after idle. The PTT button and the control row are deliberately
+   NOT in this list: this is a push-to-talk app, and putting the talk button
+   behind a tap-to-reveal would hide the one control people reach for without
+   looking. */
+body.video-stage-immersive.stage-chrome-hidden #screen-room .room-header,
+body.video-stage-immersive.stage-chrome-hidden #screen-room .room-peers-panel {
+  opacity: 0;
+  transform: translateY(-8px);
+  pointer-events: none;
+}
+
+/* The roster collapses to a horizontal strip of chips: a full vertical list
+   would cover the faces it is describing, but dropping it entirely would make
+   participants with no camera invisible. */
+body.video-stage-immersive #screen-room .room-peers-panel {
+  flex: 0 0 auto;
+  min-height: 0;
+  padding-bottom: 0;   /* the 220px reserve is for a bottom bar that now floats */
+}
+body.video-stage-immersive #screen-room .peers-list {
+  flex-direction: row;
+  align-items: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+  min-height: 0;
+  max-height: none;
+  margin-bottom: 0;
+  padding: 0 0 2px;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  scrollbar-width: none;
+}
+body.video-stage-immersive #screen-room .peers-list::-webkit-scrollbar { display: none; }
+body.video-stage-immersive #screen-room .peer-item {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+}
+body.video-stage-immersive #screen-room .peer-item.talking {
+  background: rgba(74, 222, 128, 0.35);
+}
+/* Advisory rows do not survive the collapse to a chip strip — and both have
+   already served their purpose by the time a camera is live. They come back the
+   moment the stage stands down. */
+body.video-stage-immersive #screen-room .room-invite-nudge { display: none; }
+
+/* Everything that floats over video needs to read against a bright frame. The
+   scrims above do most of the work; these fix the muted greys that were chosen
+   against a solid surface colour. */
+body.video-stage-immersive #screen-room .room-header,
+body.video-stage-immersive #screen-room .ptt-hint,
+body.video-stage-immersive #screen-room .ptt-status {
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+body.video-stage-immersive #screen-room .room-action-btn {
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+body.video-stage-immersive #screen-room .room-action-btn.active {
+  background: rgba(74, 222, 128, 0.35);
+  border-color: rgba(74, 222, 128, 0.6);
+}
+/* "Hold Space anywhere to talk" describes a keyboard, and screen space over
+   video is the scarcest thing here — every line it takes is taken from the
+   tiles it sits on. It comes back the moment the stage stands down. */
+body.video-stage-immersive #screen-room .ptt-hint { display: none; }
+
+/* The self-view badge is anchored to the stage's corners, and the stage now
+   runs under the chrome — so without this it parks on the control stack. The
+   insets are published by applyImmersiveStageInsets() from real measurements. */
+body.video-stage-immersive #video-stage-self[data-corner="tl"],
+body.video-stage-immersive #video-stage-self[data-corner="tr"] {
+  top: calc(var(--stage-inset-top, 0px) + 12px);
+}
+body.video-stage-immersive #video-stage-self[data-corner="bl"],
+body.video-stage-immersive #video-stage-self[data-corner="br"] {
+  bottom: calc(var(--stage-inset-bottom, 0px) + 12px);
+}
+
 /* Grid of equal tiles. The column count is set inline by layoutVideoStageGrid()
    so tiles grow to fill the stage while staying near 16:9 — pure CSS can size
    columns but knows nothing about the leftover height, which is what left an
@@ -1431,8 +1590,11 @@ kbd {
 .video-stage-focus .video-tile video { object-fit: contain; }
 /* A screen share must never be mirrored, and cropping it loses content. */
 .video-tile-screen video { object-fit: contain; }
-/* Self-view is mirrored — an unmirrored self-view reads as wrong to everyone. */
+/* Self-view is mirrored — an unmirrored self-view reads as wrong to everyone.
+   ...except on the rear camera, where you are filming the scene in front of the
+   phone and a mirrored image is simply backwards. */
 .video-tile-self.video-tile-camera video { transform: scaleX(-1); }
+.video-tile-self.video-tile-camera[data-facing="environment"] video { transform: none; }
 
 .video-tile.talking { border-color: var(--green); }
 

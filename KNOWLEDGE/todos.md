@@ -394,10 +394,8 @@ shared `header` with `.room-header` and its buttons sat on the room's own.
 - **Keyboard access to the badge.** Dragging is pointer-only; there is no
   arrow-key nudge or corner picker for keyboard users. Clicking it still pins,
   and the corner is remembered, so this is a comfort gap rather than a lockout.
-- **Mobile / narrow web (<861px)** keeps the floating viewer panel. A phone in
-  portrait has room for ~2 tiles before the roster and PTT are squeezed out, so
-  it needs its own layout decision (stage above the voice UI, probably with a
-  swipe between them) rather than a narrower version of this grid.
+- ~~**Mobile / narrow web (<861px)** keeps the floating viewer panel.~~ ✅ **Done**
+  — see the section below.
 - **Tauri desktop** still short-circuits to the WebviewWindow pop-out
   (`popOutVideoViewer`). The stage and the pop-out are alternatives, and which
   one desktop should get is a product call — the pop-out is genuinely better for
@@ -408,6 +406,44 @@ shared `header` with `.room-header` and its buttons sat on the room's own.
   still receives a full-size encode.
 - **Active-speaker auto-focus.** Focus is a screen share or an explicit pin;
   it does not follow whoever is talking.
+
+---
+
+## 📱 Video on mobile web + native — shipped, Android needs a store release
+
+**Status:** ✅ Implemented. See `KNOWLEDGE/learning.md` → "Video stage on mobile".
+
+Phones (mobile web **and** the iOS/Android apps) now get an **immersive** stage:
+tiles fill the screen edge to edge with the voice UI overlaid, instead of the
+one-peer-at-a-time floating viewer. Which shape applies is decided by
+`videoStageMode()` (`'none' | 'desktop' | 'immersive'`) and published as body
+classes; Tauri and the tiny embed still resolve to `'none'` and keep the
+floating viewer / pop-out. Also in this pass: front/back camera flip, 360p24
+capture and a 300 kbps cap on mobile (150 kbps on save-data or 2g/3g), a screen
+wake lock while the stage is up, and capture paused (`track.enabled = false`,
+never `stop()`) when the app backgrounds.
+
+Regression-guarded by `tests/e2e/unit-video-mobile.spec.js` (26 cases), plus two
+rewritten cases in `unit-video-stage.spec.js` that had been using "narrow
+viewport" as a stand-in for "no stage".
+
+**⏳ Blocked on a Play Store release:** `android.permission.CAMERA` is a manifest
+change and cannot ship via Capgo OTA. Existing Android installs get the new
+layout over the air and can watch other people's cameras, but their own camera
+stays dark until a build carrying the permission ships. Exit criteria: bump
+`versionCode`, `make build-android`, upload. iOS needs no native change.
+
+**Not done — deliberately out of scope:**
+- **Landscape on native.** Both apps stay hard portrait-locked; the stage is
+  designed for portrait rather than unlocking rotation, which would need
+  `Info.plist` + `AndroidManifest` changes *and* a landscape review of every
+  other screen.
+- **Screen sharing on mobile.** No mobile browser implements `getDisplayMedia`;
+  Android would need a native MediaProjection bridge.
+- **Swipe between stage and roster.** The roster collapses to a chip strip
+  instead. The invite nudge and mic-permission hint are hidden while the
+  immersive stage is up (they do not survive the collapse to chips) and return
+  as soon as it stands down.
 
 ---
 

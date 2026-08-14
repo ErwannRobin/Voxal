@@ -436,10 +436,28 @@ test.describe('the roster keeps a camera icon for everyone with a camera', () =>
     });
     // Camera off: the footer button is what turns it on, not this row.
     expect(await page.locator('#peer-item-self .peer-cam-btn').count()).toBe(0);
-    // Camera on but below the breakpoint: there is no stage, so no self-view.
-    await page.setViewportSize({ width: 700, height: 800 });
-    await page.evaluate(() => { localVideoActive = true; updatePeerList(); });
+    // Camera on, on a surface with no stage at all (Tauri has neither is-web
+    // nor is-native and keeps its pop-out window): still no self-view to hide.
+    await page.evaluate(() => {
+      document.documentElement.classList.remove('is-web');
+      localVideoActive = true;
+      updatePeerList();
+    });
+    expect(await page.evaluate(() => videoStageMode())).toBe('none');
     expect(await page.locator('#peer-item-self .peer-cam-btn').count()).toBe(0);
+  });
+
+  // A phone is no longer a surface without a stage — it gets the immersive one —
+  // so the self-view icon has to be there to hide it, exactly as on desktop.
+  test('a narrow web viewport gets the immersive stage, self-view icon and all', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
+    });
+    await page.evaluate(() => { localVideoActive = true; updatePeerList(); });
+    expect(await page.evaluate(() => videoStageMode())).toBe('immersive');
+    expect(await page.locator('#peer-item-self .peer-cam-btn').count()).toBe(1);
   });
 
   test('the icons follow the video-mode switch', async ({ page }) => {
@@ -453,12 +471,15 @@ test.describe('the roster keeps a camera icon for everyone with a camera', () =>
     expect(await page.locator('.peer-cam-btn').count()).toBe(0);
   });
 
-  test('below the breakpoint the icon still drives the floating viewer', async ({ page }) => {
-    await page.setViewportSize({ width: 700, height: 800 });
+  // Where there is no stage — Tauri (its own pop-out window) and the tiny embed —
+  // the same icon keeps its original meaning: open a floating viewer on that
+  // peer. Both readings are "am I watching this person".
+  test('with no stage available the icon still drives the floating viewer', async ({ page }) => {
     await enterRoom(page, {
       knownPeerIds: ['p1'],
       connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
     });
+    await page.evaluate(() => document.documentElement.classList.remove('is-web'));
     await giveStream(page, 'p1', 'camera');
     expect(await page.evaluate(() => videoStageAvailable())).toBe(false);
     expect(await page.evaluate(() => document.body.classList.contains('video-stage'))).toBe(false);

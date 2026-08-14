@@ -3227,7 +3227,28 @@ function tuneAudioSenders(pc) {
 // uplink is the ceiling — hence a bitrate cap plus a resolution scale that grows
 // with the room.
 var CAMERA_MAX_BITRATE = 600000;    // ~600 kbps per listener
+var CAMERA_MAX_BITRATE_MOBILE = 300000;
+var CAMERA_MAX_BITRATE_FRUGAL = 150000;  // save-data, or a 2g/3g link
 var SCREEN_MAX_BITRATE = 1500000;   // screens need more; text must stay legible
+
+// A phone uploads one encode per listener over a metered link, so it gets a
+// tighter ceiling than a desktop, tighter still when the connection says so.
+//
+// `navigator.connection` is Chromium-only — WebKit (every iOS browser, and
+// Safari) has no Network Information API at all. Its ABSENCE must therefore
+// fall through to the plain mobile cap, never to the desktop one.
+function cameraMaxBitrate() {
+  if (!IS_MOBILE_DEVICE) return CAMERA_MAX_BITRATE;
+  var conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  if (conn) {
+    if (conn.saveData) return CAMERA_MAX_BITRATE_FRUGAL;
+    var effective = String(conn.effectiveType || '');
+    if (effective === 'slow-2g' || effective === '2g' || effective === '3g') {
+      return CAMERA_MAX_BITRATE_FRUGAL;
+    }
+  }
+  return CAMERA_MAX_BITRATE_MOBILE;
+}
 
 function videoScaleForPeerCount(count) {
   if (count <= 2) return 1;
@@ -3238,7 +3259,9 @@ function videoScaleForPeerCount(count) {
 function tuneVideoSenders(pc, kind) {
   if (!pc || typeof pc.getSenders !== 'function') return;
   var isScreen = kind === 'screen';
-  var maxBitrate = isScreen ? SCREEN_MAX_BITRATE : CAMERA_MAX_BITRATE;
+  // Computed once, so the "already tuned" comparison below stays stable across
+  // the senders of one call even if the network readings shift mid-loop.
+  var maxBitrate = isScreen ? SCREEN_MAX_BITRATE : cameraMaxBitrate();
   // A screen share must keep its resolution — dropping it to save frames makes
   // text unreadable, which defeats the point of sharing a screen at all.
   var degradation = isScreen ? 'maintain-resolution' : 'balanced';
@@ -6176,10 +6199,34 @@ var CAMERA_CAPTURE_CAP = {
   frameRate: { ideal: 30,   max: 30   }
 };
 
+// A phone pays for capture twice — battery to encode, and data to send one
+// encode per peer — so it captures smaller. Same `ideal`/`max` rule as above.
+var CAMERA_CAPTURE_CAP_MOBILE = {
+  width:     { ideal: 640, max: 640 },
+  height:    { ideal: 360, max: 360 },
+  frameRate: { ideal: 24,  max: 24  }
+};
+
+function cameraCaptureCap() {
+  return IS_MOBILE_DEVICE ? CAMERA_CAPTURE_CAP_MOBILE : CAMERA_CAPTURE_CAP;
+}
+
+// Which way the phone's camera is pointing. Session state, never persisted —
+// like the audio route, every call starts on the front camera.
+var _cameraFacing = 'user';
+
 function selectedCameraConstraints() {
   var cameraId = selectedCameraDeviceId();
-  var base = cameraId ? { deviceId: { exact: cameraId } } : { facingMode: 'user' };
-  return Object.assign({}, base, CAMERA_CAPTURE_CAP);
+  var base;
+  if (IS_MOBILE_DEVICE) {
+    // A phone's device list is not stable enough for a pinned deviceId to mean
+    // anything across sessions, and the flip button is expressed as a facing
+    // mode — so on mobile the facing mode wins over any stored camera id.
+    base = { facingMode: _cameraFacing };
+  } else {
+    base = cameraId ? { deviceId: { exact: cameraId } } : { facingMode: 'user' };
+  }
+  return Object.assign({}, base, cameraCaptureCap());
 }
 
 function readStoredDeviceLabels() {
@@ -8118,6 +8165,10 @@ function _syncVideoTile(el, tile) {
   var placeholder = el.querySelector('.video-tile-placeholder');
   if (vid && vid.srcObject !== tile.stream) vid.srcObject = tile.stream || null;
 
+  // Mirroring is right for a front camera and wrong for a rear one — you expect
+  // your own face flipped, but not the scene behind the phone.
+  if (tile.self && tile.kind === 'camera') el.dataset.facing = _cameraFacing;
+
   var hasStream = !!tile.stream;
   if (vid) vid.classList.toggle('hidden', !hasStream);
   if (placeholder) {
@@ -8239,14 +8290,72 @@ function bestGridColumns(count, width, height, aspect) {
   return best;
 }
 
+// In immersive mode the stage is edge-to-edge, so the chrome floating over it
+// would otherwise bury the top tile under the header and the bottom tile's name
+// bar under the controls. The tiles are inset by the space the chrome actually
+// occupies — measured, not a magic number, because the header, the roster strip
+// and the control stack all change height with content (a consent banner, a long
+// name, a hidden Screen button). The stage background stays full-bleed, so the
+// video area still reaches the physical edges.
+function applyImmersiveStageInsets(gridEl) {
+  if (!gridEl) return;
+  var stage = document.getElementById('video-stage');
+  if (!document.body.classList.contains('video-stage-immersive')) {
+    gridEl.style.removeProperty('padding-top');
+    gridEl.style.removeProperty('padding-bottom');
+    if (stage) {
+      stage.style.removeProperty('--stage-inset-top');
+      stage.style.removeProperty('--stage-inset-bottom');
+    }
+    return;
+  }
+  if (!stage) return;
+  var stageBox = stage.getBoundingClientRect();
+  if (!stageBox.height) return;
+
+  var chromeHidden = document.body.classList.contains('stage-chrome-hidden');
+  var lowest = stageBox.top;
+  if (!chromeHidden) {
+    // Everything that sits above the tiles and is currently on screen.
+    ['#debug-consent-banner', '.room-header', '#room-size-warning', '.room-peers-panel']
+      .forEach(function(sel) {
+        var el = document.querySelector(sel);
+        if (!el || el.classList.contains('hidden')) return;
+        var box = el.getBoundingClientRect();
+        if (box.height && box.bottom > lowest) lowest = box.bottom;
+      });
+  }
+  var bar = document.querySelector('.room-bottom-bar');
+  var barBox = bar ? bar.getBoundingClientRect() : null;
+
+  var insetTop = Math.max(0, Math.round(lowest - stageBox.top));
+  var insetBottom = (barBox && barBox.height)
+    ? Math.max(0, Math.round(stageBox.bottom - barBox.top))
+    : 0;
+
+  gridEl.style.paddingTop = insetTop + 'px';
+  gridEl.style.paddingBottom = insetBottom + 'px';
+  // Published so the self-view badge can park inside the same visible band —
+  // corner-anchored to the stage, it would otherwise sit on the control stack.
+  stage.style.setProperty('--stage-inset-top', insetTop + 'px');
+  stage.style.setProperty('--stage-inset-bottom', insetBottom + 'px');
+}
+
 function layoutVideoStageGrid(gridEl, count) {
   if (!gridEl) return;
   if (count <= 0) { gridEl.style.removeProperty('grid-template-columns'); return; }
+  applyImmersiveStageInsets(gridEl);
   var rect = gridEl.getBoundingClientRect();
   // Before first layout (or while hidden) there is nothing to measure — leave
   // the CSS fallback in place rather than committing to a wrong column count.
   if (!rect.width || !rect.height) { gridEl.style.removeProperty('grid-template-columns'); return; }
-  var cols = bestGridColumns(count, rect.width, rect.height, 16 / 9);
+  // The rect is the border box; the tiles only get the content box, so the
+  // immersive insets above have to come off before choosing a column count.
+  var style = window.getComputedStyle(gridEl);
+  var innerW = rect.width - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+  var innerH = rect.height - (parseFloat(style.paddingTop) || 0) - (parseFloat(style.paddingBottom) || 0);
+  if (innerW <= 0 || innerH <= 0) { gridEl.style.removeProperty('grid-template-columns'); return; }
+  var cols = bestGridColumns(count, innerW, innerH, 16 / 9);
   gridEl.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0, 1fr))';
 }
 
@@ -8256,30 +8365,57 @@ function cssEscapeAttr(value) {
   return String(value).replace(/["\\]/g, '\\$&');
 }
 
-// Where the stage can apply at all. Below the breakpoint (mobile, narrow web),
-// in a tiny embed, and on Tauri/native — which keep the floating viewer panels
-// and the pop-out window — it cannot, so the roster keeps its camera icons and
-// nothing about the room layout changes.
+// Which shape of stage applies here, if any:
+//
+//   'desktop'   — the tile grid with the voice UI railed right (wide web).
+//   'immersive' — tiles fill the room edge to edge and the voice UI overlays
+//                 them (phones: mobile web AND the Capacitor apps).
+//   'none'      — no stage; the roster's camera icon keeps opening the floating
+//                 viewer panel, and the room layout is untouched. This is the
+//                 tiny embed and Tauri, which has its own pop-out WebviewWindow.
+//
+// `is-native` / `is-web` are set by the head inline script in index.html; Tauri
+// gets NEITHER, which is exactly what keeps it on the pop-out.
 var VIDEO_STAGE_MIN_WIDTH = 861;
 
-function videoStageAvailable() {
-  if (IS_TINY_EMBED) return false;
-  if (!document.documentElement.classList.contains('is-web')) return false;
+function videoStageWideEnough() {
   if (typeof window.matchMedia === 'function') {
     return window.matchMedia('(min-width: ' + VIDEO_STAGE_MIN_WIDTH + 'px)').matches;
   }
   return window.innerWidth >= VIDEO_STAGE_MIN_WIDTH;
 }
 
+function videoStageMode() {
+  if (IS_TINY_EMBED) return 'none';
+  var root = document.documentElement.classList;
+  // Native is immersive at any width — an iPad in portrait is ~768-1024px, and
+  // the desktop grid is `html.is-web`-qualified so it can never match there.
+  if (root.contains('is-native')) return 'immersive';
+  if (!root.contains('is-web')) return 'none';
+  return videoStageWideEnough() ? 'desktop' : 'immersive';
+}
+
+function videoStageAvailable() {
+  return videoStageMode() !== 'none';
+}
+
 // Single entry point. Safe to call from anywhere video/screen state changes.
 function updateVideoStage() {
   var stage = document.getElementById('video-stage');
   if (!stage) return;
-  var tiles = (inRoom && videoStageAvailable()) ? visibleVideoStageTiles() : [];
+  var mode = videoStageMode();
+  var tiles = (inRoom && mode !== 'none') ? visibleVideoStageTiles() : [];
   var active = tiles.length > 0;
 
   document.body.classList.toggle('video-stage', active);
+  // Both classes obey the same rule: set ONLY while a camera or screen is
+  // genuinely live, so an audio-only room still renders byte-identically.
+  document.body.classList.toggle('video-stage-immersive', active && mode === 'immersive');
   stage.classList.toggle('hidden', !active);
+  // The screen must not sleep while you are watching someone — and must be
+  // allowed to again the moment the stage stands down.
+  if (active) requestStageWakeLock(); else releaseStageWakeLock();
+  if (active && mode === 'immersive') scheduleStageChromeHide(); else showStageChrome(true);
   if (!active) {
     renderVideoStage([], '', '');
     _stagePinnedKey = null;
@@ -8301,6 +8437,96 @@ window.addEventListener('resize', function() {
     updateVideoStage();
   });
 });
+
+// --- Screen wake lock ---------------------------------------------------------
+//
+// Watching someone's camera is the one thing in this app that involves no touch
+// input for minutes at a time, so without a wake lock the phone dims and locks
+// mid-call. Held only while the stage is actually up, never for audio-only.
+//
+// The sentinel is released by the browser whenever the page is hidden, so it has
+// to be re-acquired on the way back to the foreground — see the visibilitychange
+// handler in the DOMContentLoaded bootstrap.
+
+var _stageWakeLock = null;
+var _stageWakeLockWanted = false;
+
+function requestStageWakeLock() {
+  _stageWakeLockWanted = true;
+  // Chromium and Safari 16.4+; older WebKit simply has no equivalent.
+  if (!navigator.wakeLock || typeof navigator.wakeLock.request !== 'function') return;
+  if (_stageWakeLock) return;
+  navigator.wakeLock.request('screen').then(function(sentinel) {
+    if (!_stageWakeLockWanted) { try { sentinel.release(); } catch (e) { /* ignore */ } return; }
+    _stageWakeLock = sentinel;
+    sentinel.addEventListener('release', function() { _stageWakeLock = null; });
+  }).catch(function(e) {
+    // Denied (backgrounded tab, low battery, no permission). Not worth an error.
+    devLog('[Video] Wake lock unavailable: ' + (e && e.message ? e.message : String(e)), 'warn');
+  });
+}
+
+function releaseStageWakeLock() {
+  _stageWakeLockWanted = false;
+  if (!_stageWakeLock) return;
+  var sentinel = _stageWakeLock;
+  _stageWakeLock = null;
+  try { sentinel.release(); } catch (e) { /* already gone */ }
+}
+
+// --- Immersive chrome auto-hide -----------------------------------------------
+//
+// On a phone the stage fills the screen and the room chrome floats over it, so
+// the header and roster fade out once you stop touching. The PTT button and the
+// control row are deliberately EXEMPT: this is a push-to-talk app, and hiding
+// the talk button behind a tap-to-reveal would be hostile — it is the one
+// control people reach for without looking.
+
+var STAGE_CHROME_IDLE_MS = 4000;
+var _stageChromeTimer = null;
+
+function showStageChrome(cancelTimer) {
+  var changed = document.body.classList.contains('stage-chrome-hidden');
+  document.body.classList.remove('stage-chrome-hidden');
+  if (cancelTimer && _stageChromeTimer) {
+    clearTimeout(_stageChromeTimer);
+    _stageChromeTimer = null;
+  }
+  // The tiles are inset by the chrome's measured height, so they have to be
+  // re-measured whenever the chrome comes or goes.
+  if (changed) relayoutVideoStage();
+}
+
+function relayoutVideoStage() {
+  var grid = document.getElementById('video-stage-grid');
+  if (grid) layoutVideoStageGrid(grid, grid.children.length);
+}
+
+function scheduleStageChromeHide() {
+  if (_stageChromeTimer) clearTimeout(_stageChromeTimer);
+  _stageChromeTimer = setTimeout(function() {
+    _stageChromeTimer = null;
+    // Never hide mid-sentence, and never while hands-free is doing the talking.
+    if (isTalking || freeHandMode) { scheduleStageChromeHide(); return; }
+    if (!document.body.classList.contains('video-stage-immersive')) return;
+    document.body.classList.add('stage-chrome-hidden');
+    relayoutVideoStage();   // the tiles reclaim the space the chrome gave up
+  }, STAGE_CHROME_IDLE_MS);
+}
+
+function revealStageChrome() {
+  if (!document.body.classList.contains('video-stage-immersive')) return;
+  showStageChrome(false);
+  scheduleStageChromeHide();
+}
+
+// Delegated on the document rather than bound to #video-stage: the stage's
+// contents are re-rendered on every roster tick, and a tap anywhere in the room
+// (including on the chrome itself) should restart the idle timer.
+document.addEventListener('pointerdown', function(e) {
+  if (!document.body.classList.contains('video-stage-immersive')) return;
+  if (e.target && e.target.closest && e.target.closest('#screen-room')) revealStageChrome();
+}, true);
 
 // --- The minimized self-view badge --------------------------------------------
 //
@@ -8566,6 +8792,13 @@ function updateVideoModeUI() {
     shareBtn.classList.toggle('active', localVideoActive);
     shareBtn.setAttribute('aria-pressed', String(localVideoActive));
   }
+  // Flip camera (mobile only, and only while your camera is actually on).
+  var flipBtn = document.getElementById('btn-flip-camera');
+  if (flipBtn) {
+    flipBtn.classList.toggle('hidden', !(videoModeEnabled && localVideoActive && _cameraFlipSupported));
+    var facingFront = _cameraFacing === 'user';
+    flipBtn.title = facingFront ? 'Switch to the rear camera' : 'Switch to the front camera';
+  }
   // Share screen button (visible when video mode is active, hidden on mobile)
   var screenBtn = document.getElementById('btn-share-screen');
   if (screenBtn) {
@@ -8679,6 +8912,13 @@ async function startVideoShare() {
   if (!freeHandMode) setFreeHand(true);
   await publishLocalTrack('video', localVideoStream);
   updateVideoModeUI();
+  // Fire and forget: the flip button appears a tick later if there is a second
+  // camera. Nothing waits on it, so a slow enumerateDevices never delays video.
+  cameraFlipAvailable().then(function(supported) {
+    if (supported === _cameraFlipSupported) return;
+    _cameraFlipSupported = supported;
+    updateVideoModeUI();
+  });
 }
 
 function stopVideoShare() {
@@ -8699,6 +8939,134 @@ function stopVideoShare() {
   }
   localVideoActive = false;
   updateVideoModeUI();
+}
+
+// --- Front/back camera flip (mobile) ------------------------------------------
+//
+// Shaped after reacquireMicForRoom(), which solved exactly this problem for the
+// microphone. The rules it learned apply verbatim here:
+//
+//   * acquire the new stream FIRST and keep the old one on any failure — a flip
+//     that leaves the call with a dead camera is far worse than one that does
+//     nothing;
+//   * swap with sender.replaceTrack(), never a teardown + re-publish. Republishing
+//     renegotiates, drops every viewer's tile, and re-opens the glare window;
+//   * say NOTHING on the wire. `conn.videoActive` is signaling state meaning
+//     "this peer is sharing" — a flip is not a stop, and re-announcing would make
+//     every peer tear the tile down and rebuild it.
+
+var _cameraFlipInFlight = false;
+// Probed after the camera starts (a device count is only trustworthy once the
+// page holds a capture grant), then cached for the session.
+var _cameraFlipSupported = false;
+
+function localVideoSenders() {
+  var pcs = [];
+  connections.forEach(function(conn) {
+    videoPeerConnections(conn).forEach(function(pc) { pcs.push(pc); });
+  });
+  // The relay path publishes through its own peer connection, not the mesh.
+  var sfu = _sfuPublishSessions.video;
+  if (sfu && sfu.pc) pcs.push(sfu.pc);
+
+  var senders = [];
+  pcs.forEach(function(pc) {
+    if (!pc || typeof pc.getSenders !== 'function') return;
+    pc.getSenders().forEach(function(sender) {
+      if (sender.track && sender.track.kind === 'video') senders.push(sender);
+    });
+  });
+  return senders;
+}
+
+async function flipCamera() {
+  if (!localVideoActive || _cameraFlipInFlight) return;
+  _cameraFlipInFlight = true;
+  var previousFacing = _cameraFacing;
+  var oldStream = localVideoStream;
+  try {
+    _cameraFacing = (_cameraFacing === 'user') ? 'environment' : 'user';
+    var newStream;
+    try {
+      newStream = await navigator.mediaDevices.getUserMedia({
+        video: selectedCameraConstraints(),
+        audio: false
+      });
+    } catch (e) {
+      // Keep the old camera wired up, exactly as reacquireMicForRoom does.
+      _cameraFacing = previousFacing;
+      devLog('[Video] Camera flip failed: ' + (e && e.message ? e.message : String(e)), 'warn');
+      showCopyToast('Could not switch camera');
+      return;
+    }
+
+    var newTrack = newStream.getVideoTracks()[0];
+    if (!newTrack) {
+      _cameraFacing = previousFacing;
+      stopStreamTracks(newStream);
+      showCopyToast('Could not switch camera');
+      return;
+    }
+
+    localVideoStream = newStream;
+    // A flip that lands while backgrounded must not silently un-pause capture.
+    if (_localCameraSuspended) { try { newTrack.enabled = false; } catch (e) { /* ignore */ } }
+    var swaps = localVideoSenders().map(function(sender) {
+      return Promise.resolve(sender.replaceTrack(newTrack)).catch(function(e) {
+        devLog('[Video] replaceTrack failed on flip: ' + (e && e.message ? e.message : String(e)), 'warn');
+      });
+    });
+    await Promise.all(swaps);
+
+    // A replaced track carries none of the old one's encoder parameters.
+    connections.forEach(function(conn) {
+      videoPeerConnections(conn).forEach(function(pc) { tuneVideoSenders(pc, 'video'); });
+    });
+    if (_sfuPublishSessions.video && _sfuPublishSessions.video.pc) {
+      tuneVideoSenders(_sfuPublishSessions.video.pc, 'video');
+    }
+
+    if (oldStream) stopStreamTracks(oldStream);
+    updateVideoModeUI();
+    updatePeerList();   // refreshes the stage, which re-reads localVideoStream
+  } finally {
+    _cameraFlipInFlight = false;
+  }
+}
+
+function stopStreamTracks(stream) {
+  if (!stream) return;
+  try { stream.getTracks().forEach(function(t) { t.stop(); }); } catch (e) { /* ignore */ }
+}
+
+// Backgrounding the app should stop burning battery on an encode nobody can
+// see. `enabled = false` — not `track.stop()` — is the right lever: it needs no
+// renegotiation, is instantly reversible, and leaves `conn.videoActive` alone,
+// so nobody's tile disappears and no `video-stop` goes on the wire. It is the
+// same mechanism PTT already uses to gate the microphone.
+var _localCameraSuspended = false;
+
+function setLocalCameraSuspended(suspended) {
+  suspended = !!suspended;
+  if (suspended === _localCameraSuspended) return;
+  _localCameraSuspended = suspended;
+  if (!localVideoStream) return;
+  try {
+    localVideoStream.getVideoTracks().forEach(function(t) { t.enabled = !suspended; });
+  } catch (e) { /* track already ended */ }
+}
+
+// Only worth offering where there is more than one camera to flip between, and
+// only on a phone — a laptop's second camera is not a "flip".
+async function cameraFlipAvailable() {
+  if (!IS_MOBILE_DEVICE) return false;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return false;
+  try {
+    var devices = await navigator.mediaDevices.enumerateDevices();
+    return devices.filter(function(d) { return d.kind === 'videoinput'; }).length > 1;
+  } catch (e) {
+    return false;
+  }
 }
 
 // --- Screen sharing (dev mode) -----------------------------------------------
@@ -9925,6 +10293,13 @@ function resetVideoState() {
   if (_screenPopoutWindow && !_screenPopoutWindow.closed) _screenPopoutWindow.close();
   _screenPopoutWindow = null;
   _stagePinnedKey = null;
+  // Session state that belongs to the call, not to the user: every room starts
+  // on the front camera with the screen free to sleep again.
+  _cameraFacing = 'user';
+  _cameraFlipSupported = false;
+  _localCameraSuspended = false;
+  releaseStageWakeLock();
+  showStageChrome(true);
   // Choosing not to watch someone is scoped to the room you chose it in.
   _hiddenStageKeys.clear();
   window._voxalVideoStream = null;
@@ -13178,6 +13553,8 @@ window.addEventListener('DOMContentLoaded', function() {
     if (localVideoActive) stopVideoShare(); else startVideoShare();
   });
   initSelfVideoBadge();
+  var flipBtnEl = $('btn-flip-camera');
+  if (flipBtnEl) flipBtnEl.addEventListener('click', function() { flipCamera(); });
   var screenBtnEl = $('btn-share-screen');
   if (screenBtnEl) {
     screenBtnEl.addEventListener('click', function() {
@@ -13419,22 +13796,37 @@ window.addEventListener('DOMContentLoaded', function() {
 
   // Resume audio context and keep-alive when app returns to foreground
   document.addEventListener('visibilitychange', function() {
-    if (document.visibilityState === 'visible') {
-      if (_audioCtx.state === 'suspended') _audioCtx.resume();
-      if (inRoom) {
-        startKeepAlive();
-        if (peer && peer.disconnected && !peer.destroyed) {
-          peer.reconnect();
-        }
-        // Only non-host peers have a host DataConnection in the map.
-        if (!isHost && !connectingToHostId) {
-          const hostConn = connections.get(roomCode);
-          if (!hostConn || !hostConn.data || hostConn.data.closed) {
-            console.warn('[visibility] Host connection lost, reconnecting...');
-            initiateHostMigration(roomCode);
-          }
+    var visible = document.visibilityState === 'visible';
+    setLocalCameraSuspended(!visible);
+    if (!visible) return;
+    // A wake-lock sentinel is auto-released whenever the page is hidden, so
+    // coming back is the only place it can be re-taken.
+    if (_stageWakeLockWanted) requestStageWakeLock();
+    if (_audioCtx.state === 'suspended') _audioCtx.resume();
+    if (inRoom) {
+      startKeepAlive();
+      if (peer && peer.disconnected && !peer.destroyed) {
+        peer.reconnect();
+      }
+      // Only non-host peers have a host DataConnection in the map.
+      if (!isHost && !connectingToHostId) {
+        const hostConn = connections.get(roomCode);
+        if (!hostConn || !hostConn.data || hostConn.data.closed) {
+          console.warn('[visibility] Host connection lost, reconnecting...');
+          initiateHostMigration(roomCode);
         }
       }
     }
   });
+
+  // Capacitor delivers a real app-lifecycle event; on iOS the WebContent
+  // process can be suspended before a visibilitychange is dispatched, so the
+  // native signal is the more reliable of the two. Both are idempotent.
+  if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+    window.Capacitor.Plugins.App.addListener('appStateChange', function(state) {
+      var active = !!(state && state.isActive);
+      setLocalCameraSuspended(!active);
+      if (active && _stageWakeLockWanted) requestStageWakeLock();
+    });
+  }
 });
