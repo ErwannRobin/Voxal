@@ -62,4 +62,18 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <!-- Camera share. Capacitor's BridgeWebChromeClient maps the WebView's
+         RESOURCE_VIDEO_CAPTURE request onto a runtime CAMERA request, but a
+         permission missing from the manifest is auto-denied — which is why
+         getUserMedia({video}) failed silently in the app before this line.
+
+         Note the foreground service above stays foregroundServiceType="microphone":
+         capture is paused when the app backgrounds (setLocalCameraSuspended in
+         main.js), so no camera foreground service is needed. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- required="false" on both: Voxal is a voice app first, and Play must not
+         hide it from devices without a camera. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 </manifest>

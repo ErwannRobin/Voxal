@@ -361,6 +361,43 @@ mesh (peer-to-peer) connections have no equivalent ICE-restart logic today;
 that is a known, separate gap this feature does not attempt to fix (see
 `KNOWLEDGE/todos.md`).
 
+## On phones
+
+Camera video works on mobile web and in the iOS/Android apps, with the same
+routing rules as desktop — the routing preference above is platform-independent.
+What differs is the presentation and the capture budget:
+
+| | Desktop web (≥861px) | Phone (mobile web + iOS/Android apps) | Tauri desktop / tiny embed |
+|---|---|---|---|
+| Layout | Tile grid, voice UI railed right | **Immersive** — tiles fill the screen; header and roster slide in over them from drag handles | Floating viewer panel / pop-out window |
+| Capture | 720p30 | 360p24 | 720p30 |
+| Bitrate cap | 600 kbps | 300 kbps, or 150 kbps on save-data / 2g / 3g | 600 kbps |
+| Camera flip | — | Front/back button on your own self-view tile | — |
+| Screen share | Yes | No — no mobile browser implements `getDisplayMedia` | Yes |
+
+Which layout applies is decided by `videoStageMode()` in `src/main.js`, not by
+CSS media queries, and published as the `video-stage` / `video-stage-immersive`
+body classes. Both are set **only** while a camera or screen is genuinely live,
+so an audio-only room renders exactly as it did before video existed.
+
+In the immersive layout the room header and the participant list slide
+off-screen and are pulled back **over** the tiles by a drag handle — top-centre
+for the header, right-centre for the roster — so neither costs the video any
+height. Both keep the app's normal colours: turning a camera on never restyles
+the room. The talk button and the control row are never hidden by anything.
+
+On a phone the stage also takes a screen wake lock (so the display does not
+sleep mid-call) and **pauses capture when the app is backgrounded** — the local
+video track is disabled, not stopped, so no renegotiation happens and no peer's
+tile disappears.
+
+> **Android needs a store build for camera.** `android.permission.CAMERA` is a
+> manifest change, so it cannot ship through Capgo OTA the way `src/` JavaScript
+> does. The layout and capture changes reach existing installs over the air; the
+> camera itself lights up only once a Play Store build carrying the permission
+> lands. iOS needs no native change — `NSCameraUsageDescription` was already
+> present.
+
 ## Debugging
 
 Dev mode (Settings → Advanced → Dev mode) logs every topology decision,

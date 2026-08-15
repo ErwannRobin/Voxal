@@ -579,6 +579,16 @@
              title="Drag to move your self-view"></div>
       </div>
 
+      <!-- Immersive (phone) video mode only: the header and the participant list
+           slide off-screen and are pulled back over the video by these handles.
+           Direct children of #screen-room so they stack against the panels in
+           the same context. -->
+      <div id="stage-panel-scrim" class="stage-panel-scrim"></div>
+      <button id="stage-handle-header" class="stage-handle stage-handle-top" type="button"
+              aria-label="Show the room header" aria-expanded="false"></button>
+      <button id="stage-handle-roster" class="stage-handle stage-handle-right" type="button"
+              aria-label="Show the participant list" aria-expanded="false"></button>
+
       <div id="room-peers-panel" class="room-peers-panel">
         <button id="btn-toggle-peers" class="btn btn-secondary btn-sm room-peers-toggle hidden" aria-expanded="false">Peers</button>
         <div id="peers-list" class="peers-list"></div>
