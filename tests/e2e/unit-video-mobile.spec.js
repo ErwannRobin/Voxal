@@ -146,7 +146,9 @@ test.describe('body.video-stage-immersive', () => {
   // hides behind the roster strip and the bottom tile's name bar behind the
   // controls. The insets come off the grid's CONTENT box, which is also why the
   // column count has to be computed from the content box, not the border box.
-  test('tiles sit between the chrome, not underneath it', async ({ page }) => {
+  // The header and roster OVERLAY the video, so they cost the tiles nothing —
+  // only the always-present control stack does.
+  test('tiles clear the control stack, and nothing else', async ({ page }) => {
     await enterRoom(page, {
       knownPeerIds: ['p1', 'p2'],
       connections: [
@@ -157,7 +159,6 @@ test.describe('body.video-stage-immersive', () => {
     const boxes = await page.evaluate(() => {
       const r = (s) => document.querySelector(s).getBoundingClientRect().toJSON();
       return {
-        roster: r('.room-peers-panel'),
         bar: r('.room-bottom-bar'),
         tiles: [...document.querySelectorAll('#video-stage-grid .video-tile')]
           .map((e) => e.getBoundingClientRect().toJSON()),
@@ -165,60 +166,175 @@ test.describe('body.video-stage-immersive', () => {
     });
     expect(boxes.tiles.length).toBe(2);
     for (const t of boxes.tiles) {
-      expect(t.top).toBeGreaterThanOrEqual(Math.floor(boxes.roster.bottom));
       expect(t.bottom).toBeLessThanOrEqual(Math.ceil(boxes.bar.top));
       expect(t.height).toBeGreaterThan(0);
     }
-  });
-
-  test('hiding the chrome gives the space back to the tiles', async ({ page }) => {
-    await enterRoom(page, {
-      knownPeerIds: ['p1'],
-      connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
-    });
-    const topPad = () => page.evaluate(() =>
+    // Only the top handle sits above the tiles, so the top inset stays small —
+    // if this grows, a panel has started reserving space again.
+    const padTop = await page.evaluate(() =>
       parseFloat(getComputedStyle(document.getElementById('video-stage-grid')).paddingTop));
-    const before = await topPad();
-    expect(before).toBeGreaterThan(0);
-
-    await page.evaluate(() => {
-      document.body.classList.add('stage-chrome-hidden');
-      relayoutVideoStage();
-    });
-    expect(await topPad()).toBe(0);
-
-    await page.evaluate(() => showStageChrome(true));
-    expect(await topPad()).toBe(before);
+    expect(padTop).toBeLessThanOrEqual(30);
   });
 
-  // The talk button is the one control people reach for without looking, so it
-  // is exempt from the auto-hide that takes the header and roster.
-  test('the PTT button is never hidden with the chrome', async ({ page }) => {
+  // The talk button and the control row are never hidden — this is a
+  // push-to-talk app, and the talk button is the one control people reach for
+  // without looking.
+  test('the PTT button and controls stay visible with a panel open', async ({ page }) => {
     await enterRoom(page, {
       knownPeerIds: ['p1'],
       connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
     });
-    await page.evaluate(() => document.body.classList.add('stage-chrome-hidden'));
-    const opacity = (sel) => page.evaluate(
-      (s) => getComputedStyle(document.querySelector(s)).opacity, sel);
-    // The fade is a transition, so the header reaches 0 a beat after the class
-    // lands — reading it synchronously catches it mid-animation at 1.
-    await expect.poll(() => opacity('.room-header')).toBe('0');
-    expect(await opacity('#ptt-btn')).toBe('1');
-    expect(await opacity('.room-controls')).toBe('1');
-  });
+    await page.evaluate(() => setStagePanel('roster', true));
+    const visible = (sel) => page.evaluate((s) => {
+      const st = getComputedStyle(document.querySelector(s));
+      return st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0';
+    }, sel);
+    expect(await visible('#ptt-btn')).toBe(true);
+    expect(await visible('.room-controls')).toBe(true);
 
-  test('a tap on the room reveals the chrome again', async ({ page }) => {
+    // Visible is not enough — the scrim behind an open panel must stop above the
+    // control stack, or it swallows the tap it does not dim.
+    const hit = await page.evaluate(() => {
+      const b = document.getElementById('ptt-btn').getBoundingClientRect();
+      const el = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+      return { isPtt: el === document.getElementById('ptt-btn') || document.getElementById('ptt-btn').contains(el),
+               got: el && el.id };
+    });
+    expect(hit.isPtt).toBe(true);
+  });
+});
+
+// Switching a camera on must not restyle the room. The panels keep the app's
+// own surface colours, which is also what makes them legible over video without
+// a video-only palette.
+test.describe('the room keeps its colours in video mode', () => {
+  test.use({ viewport: PHONE });
+
+  test('the control buttons look identical with and without video', async ({ page }) => {
+    await page.goto('/');
     await enterRoom(page, {
       knownPeerIds: ['p1'],
-      connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true }],
     });
-    await page.evaluate(() => document.body.classList.add('stage-chrome-hidden'));
+    const styles = () => page.evaluate(() => {
+      const pick = (s) => {
+        const st = getComputedStyle(document.querySelector(s));
+        return { bg: st.backgroundColor, color: st.color, border: st.borderColor };
+      };
+      return { btn: pick('#btn-freehand'), status: pick('.ptt-status') };
+    });
+    const audioOnly = await styles();
+    expect(await page.evaluate(() => document.body.classList.contains('video-stage-immersive'))).toBe(false);
+
     await page.evaluate(() => {
-      document.getElementById('video-stage').dispatchEvent(
-        new PointerEvent('pointerdown', { bubbles: true }));
+      connections.get('p1').videoActive = true;
+      updatePeerList();
     });
-    expect(await page.evaluate(() => document.body.classList.contains('stage-chrome-hidden'))).toBe(false);
+    expect(await page.evaluate(() => document.body.classList.contains('video-stage-immersive'))).toBe(true);
+    expect(await styles()).toEqual(audioOnly);
+  });
+});
+
+// The header and the participant list slide off-screen while video is live and
+// are pulled back over the tiles by a drag handle.
+test.describe('sliding panels', () => {
+  test.use({ viewport: PHONE });
+
+  test.beforeEach(async ({ page }) => { await page.goto('/'); });
+
+  const withVideo = (page) => enterRoom(page, {
+    knownPeerIds: ['p1'],
+    connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
+  });
+
+  const onScreen = (page, sel) => page.evaluate((s) => {
+    const b = document.querySelector(s).getBoundingClientRect();
+    return b.left < window.innerWidth && b.right > 0 && b.top < window.innerHeight && b.bottom > 0;
+  }, sel);
+
+  test('both panels start off-screen, and their handles are on it', async ({ page }) => {
+    await withVideo(page);
+    expect(await onScreen(page, '#screen-room .room-header')).toBe(false);
+    expect(await onScreen(page, '#screen-room .room-peers-panel')).toBe(false);
+    for (const id of ['#stage-handle-header', '#stage-handle-roster']) {
+      expect(await page.evaluate((s) =>
+        getComputedStyle(document.querySelector(s)).display, id)).toBe('flex');
+    }
+  });
+
+  test('an audio-only room keeps both in their normal place', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true }],
+    });
+    expect(await onScreen(page, '#screen-room .room-header')).toBe(true);
+    expect(await onScreen(page, '#screen-room .room-peers-panel')).toBe(true);
+    expect(await page.evaluate(() =>
+      getComputedStyle(document.getElementById('stage-handle-header')).display)).toBe('none');
+  });
+
+  test('tapping a handle slides its panel in, and again slides it out', async ({ page }) => {
+    await withVideo(page);
+    await page.locator('#stage-handle-header').click();
+    await expect.poll(() => onScreen(page, '#screen-room .room-header')).toBe(true);
+    expect(await page.locator('#stage-handle-header').getAttribute('aria-expanded')).toBe('true');
+
+    await page.locator('#stage-handle-header').click();
+    await expect.poll(() => onScreen(page, '#screen-room .room-header')).toBe(false);
+  });
+
+  test('the roster handle slides the participant list in from the right', async ({ page }) => {
+    await withVideo(page);
+    await page.locator('#stage-handle-roster').click();
+    await expect.poll(() => onScreen(page, '#screen-room .room-peers-panel')).toBe(true);
+    // It overlays the video rather than reflowing it: the tiles are unmoved.
+    const tileBefore = await page.evaluate(() =>
+      document.querySelector('#video-stage-grid .video-tile').getBoundingClientRect().toJSON());
+    await page.evaluate(() => setStagePanel('roster', false));
+    await page.waitForTimeout(300);
+    const tileAfter = await page.evaluate(() =>
+      document.querySelector('#video-stage-grid .video-tile').getBoundingClientRect().toJSON());
+    expect(Math.round(tileAfter.height)).toBe(Math.round(tileBefore.height));
+  });
+
+  // They are alternatives — two panels open at once on a phone would overlap.
+  test('opening one panel closes the other', async ({ page }) => {
+    await withVideo(page);
+    await page.evaluate(() => setStagePanel('header', true));
+    await page.evaluate(() => setStagePanel('roster', true));
+    expect(await page.evaluate(() => stagePanelOpen('header'))).toBe(false);
+    expect(await page.evaluate(() => stagePanelOpen('roster'))).toBe(true);
+  });
+
+  test('a drag past the commit threshold opens the panel; a short one snaps back', async ({ page }) => {
+    await withVideo(page);
+    const handle = page.locator('#stage-handle-header');
+    const box = await handle.boundingBox();
+    const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+
+    // A few pixels: under the threshold, so it must snap back closed.
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(from.x, from.y + 10, { steps: 3 });
+    await page.mouse.up();
+    expect(await page.evaluate(() => stagePanelOpen('header'))).toBe(false);
+
+    // Well past it: opens.
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(from.x, from.y + 200, { steps: 8 });
+    await page.mouse.up();
+    expect(await page.evaluate(() => stagePanelOpen('header'))).toBe(true);
+  });
+
+  test('leaving the stage never strands a panel open', async ({ page }) => {
+    await withVideo(page);
+    await page.evaluate(() => setStagePanel('roster', true));
+    await page.evaluate(() => {
+      connections.get('p1').videoActive = false;
+      updatePeerList();
+    });
+    expect(await page.evaluate(() => stagePanelOpen('roster'))).toBe(false);
   });
 });
 
@@ -375,6 +491,62 @@ test.describe('camera flip', () => {
     expect(result.facing).toBe('user');
     expect(result.kept).toBe(true);
     expect(result.active).toBe(true);
+  });
+
+  // Flip belongs to the camera, not to the room — so it lives on the self-view
+  // tile, and because renderVideoStage() MOVES the same element between the grid
+  // and the minimized badge, one button serves both.
+  test('the button rides on the self-view tile, not the control row', async ({ page }) => {
+    await page.goto('/');
+    await enterRoom(page, { knownPeerIds: [], connections: [] });
+    await page.evaluate(() => {
+      localVideoActive = true;
+      localVideoStream = new MediaStream();
+      window._voxalVideoStream = localVideoStream;
+      _cameraFlipSupported = true;
+      updatePeerList();
+    });
+    expect(await page.locator('#video-stage [data-key="camera:self"] .video-tile-flip').count()).toBe(1);
+    expect(await page.locator('.room-controls #btn-flip-camera').count()).toBe(0);
+  });
+
+  test('it is offered only when there is a second camera to switch to', async ({ page }) => {
+    await page.goto('/');
+    await enterRoom(page, { knownPeerIds: [], connections: [] });
+    await page.evaluate(() => {
+      localVideoActive = true;
+      localVideoStream = new MediaStream();
+      window._voxalVideoStream = localVideoStream;
+      _cameraFlipSupported = false;
+      updatePeerList();
+    });
+    const btn = page.locator('#video-stage [data-key="camera:self"] .video-tile-flip');
+    expect(await btn.evaluate((e) => getComputedStyle(e).display)).toBe('none');
+    await page.evaluate(() => { _cameraFlipSupported = true; updatePeerList(); });
+    expect(await btn.evaluate((e) => getComputedStyle(e).display)).toBe('flex');
+  });
+
+  // Every tile carries a click-to-pin handler and the badge carries a drag;
+  // pressing flip must trigger neither.
+  test('pressing it does not also pin the tile', async ({ page }) => {
+    await page.goto('/');
+    await enterRoom(page, { knownPeerIds: [], connections: [] });
+    await page.evaluate(() => {
+      navigator.mediaDevices.getUserMedia = async () => {
+        const s = new MediaStream();
+        s.getVideoTracks = () => [{ kind: 'video', enabled: true, stop() {} }];
+        s.getTracks = () => s.getVideoTracks();
+        return s;
+      };
+      localVideoActive = true;
+      localVideoStream = new MediaStream();
+      window._voxalVideoStream = localVideoStream;
+      _cameraFlipSupported = true;
+      updatePeerList();
+    });
+    await page.locator('#video-stage [data-key="camera:self"] .video-tile-flip').click();
+    expect(await page.evaluate(() => _stagePinnedKey)).toBeNull();
+    await expect.poll(() => page.evaluate(() => _cameraFacing)).toBe('environment');
   });
 
   test('the self-view stops being mirrored on the rear camera', async ({ page }) => {

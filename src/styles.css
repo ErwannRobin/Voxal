@@ -1436,95 +1436,191 @@ body.video-stage-immersive #screen-room #video-stage::after {
   height: 200px;
   background: linear-gradient(to top, rgba(0,0,0,0.65), transparent);
 }
-body.video-stage-immersive.stage-chrome-hidden #screen-room #video-stage::before { opacity: 0; }
 
-/* Chrome above the video. The bottom bar already carries z-index 20 and its own
-   safe-area offsets, so it needs nothing here beyond staying put. */
+/* Anything that can appear above the room still has to out-paint the stage:
+   these are static elements, and a positioned stage (z-index 5) paints over
+   static content no matter where it sits in the source. The consent banner in
+   particular must never end up behind the video. */
 body.video-stage-immersive #screen-room #debug-consent-banner,
-body.video-stage-immersive #screen-room .room-header,
-body.video-stage-immersive #screen-room #room-size-warning,
-body.video-stage-immersive #screen-room .room-peers-panel {
+body.video-stage-immersive #screen-room #room-size-warning {
   position: relative;
   z-index: 10;
 }
-body.video-stage-immersive #screen-room .room-header,
-body.video-stage-immersive #screen-room .room-peers-panel {
-  transition: opacity 0.3s ease, transform 0.3s ease;
+
+/* The header and the roster become SLIDING PANELS: both are off-screen while
+   video is live and are pulled in over the tiles by a drag handle. Nothing about
+   their colours changes — they keep the app's own surface background, which is
+   what makes them legible over video without a video-only palette. Consistency
+   is the point: switching a camera on must not restyle the room.
+
+   `position: fixed` rather than absolute — the panel is pinned to the viewport
+   edge it slides from, and #screen-room's padding would otherwise inset it. */
+body.video-stage-immersive #screen-room .room-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  margin: 0;
+  padding: max(calc(env(safe-area-inset-top) + 12px), 12px)
+           max(calc(env(safe-area-inset-right) + 18px), 18px) 12px
+           max(calc(env(safe-area-inset-left) + 18px), 18px);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  transform: translateY(-100%);
+  transition: transform 0.25s ease;
 }
-/* Auto-hide after idle. The PTT button and the control row are deliberately
-   NOT in this list: this is a push-to-talk app, and putting the talk button
-   behind a tap-to-reveal would hide the one control people reach for without
-   looking. */
-body.video-stage-immersive.stage-chrome-hidden #screen-room .room-header,
-body.video-stage-immersive.stage-chrome-hidden #screen-room .room-peers-panel {
-  opacity: 0;
-  transform: translateY(-8px);
-  pointer-events: none;
+body.video-stage-immersive.stage-header-open #screen-room .room-header {
+  transform: translateY(0);
 }
 
-/* The roster collapses to a horizontal strip of chips: a full vertical list
-   would cover the faces it is describing, but dropping it entirely would make
-   participants with no camera invisible. */
 body.video-stage-immersive #screen-room .room-peers-panel {
-  flex: 0 0 auto;
-  min-height: 0;
-  padding-bottom: 0;   /* the 220px reserve is for a bottom bar that now floats */
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  z-index: 40;
+  width: min(300px, 82vw);
+  padding: max(calc(env(safe-area-inset-top) + 14px), 14px)
+           max(calc(env(safe-area-inset-right) + 14px), 14px)
+           max(calc(env(safe-area-inset-bottom) + 14px), 14px) 14px;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border);
+  transform: translateX(100%);
+  transition: transform 0.25s ease;
 }
+body.video-stage-immersive.stage-roster-open #screen-room .room-peers-panel {
+  transform: translateX(0);
+}
+/* The list keeps its normal vertical shape and colours; it simply gets the whole
+   panel height instead of the 220px reserve meant for the bottom bar, and drops
+   its own surface so the panel does not read as a card inside a card. */
 body.video-stage-immersive #screen-room .peers-list {
-  flex-direction: row;
-  align-items: center;
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior: contain;
-  min-height: 0;
   max-height: none;
   margin-bottom: 0;
-  padding: 0 0 2px;
-  gap: 6px;
   background: transparent;
   border: none;
-  scrollbar-width: none;
+  padding: 0;
 }
-body.video-stage-immersive #screen-room .peers-list::-webkit-scrollbar { display: none; }
-body.video-stage-immersive #screen-room .peer-item {
-  flex: 0 0 auto;
-  flex-wrap: nowrap;
-  white-space: nowrap;
-  border-radius: 999px;
-  padding: 4px 10px;
-  background: rgba(0, 0, 0, 0.45);
-  color: #fff;
-}
-body.video-stage-immersive #screen-room .peer-item.talking {
-  background: rgba(74, 222, 128, 0.35);
-}
-/* Advisory rows do not survive the collapse to a chip strip — and both have
-   already served their purpose by the time a camera is live. They come back the
-   moment the stage stands down. */
-body.video-stage-immersive #screen-room .room-invite-nudge { display: none; }
 
-/* Everything that floats over video needs to read against a bright frame. The
-   scrims above do most of the work; these fix the muted greys that were chosen
-   against a solid surface colour. */
-body.video-stage-immersive #screen-room .room-header,
-body.video-stage-immersive #screen-room .ptt-hint,
-body.video-stage-immersive #screen-room .ptt-status {
-  color: #fff;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+/* While a panel is being dragged it follows the finger, so the transition must
+   not fight the per-frame inline transform. */
+body.stage-panel-dragging #screen-room .room-header,
+body.stage-panel-dragging #screen-room .room-peers-panel { transition: none; }
+
+/* The drag handles. Small, always reachable, and the only chrome that sits on
+   the video permanently besides the talk button. */
+.stage-handle {
+  position: fixed;
+  z-index: 41;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: rgba(0, 0, 0, 0.35);
+  cursor: grab;
+  touch-action: none;   /* the handle owns the gesture; do not scroll the page */
+  -webkit-tap-highlight-color: transparent;
 }
-body.video-stage-immersive #screen-room .room-action-btn {
-  background: rgba(0, 0, 0, 0.45);
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.22);
+body.video-stage-immersive .stage-handle { display: flex; }
+/* The panels are mutually exclusive, so while one is open the other's handle is
+   just a control floating on top of it. Hide it until the panel is dismissed. */
+body.video-stage-immersive.stage-roster-open .stage-handle-top,
+body.video-stage-immersive.stage-header-open .stage-handle-right { display: none; }
+.stage-handle::before {
+  content: '';
+  display: block;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.75);
 }
-body.video-stage-immersive #screen-room .room-action-btn.active {
-  background: rgba(74, 222, 128, 0.35);
-  border-color: rgba(74, 222, 128, 0.6);
+.stage-handle:active { cursor: grabbing; }
+
+/* Top-centre: pulls the header down. */
+.stage-handle-top {
+  top: max(env(safe-area-inset-top), 0px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 72px;
+  height: 22px;
+  border-radius: 0 0 12px 12px;
+  transition: top 0.25s ease;
 }
+.stage-handle-top::before { width: 34px; height: 4px; }
+/* Ride down with the header, so the handle stays the thing you grab to close. */
+body.video-stage-immersive.stage-header-open .stage-handle-top {
+  top: calc(var(--stage-header-height, 56px) + max(env(safe-area-inset-top), 0px));
+}
+
+/* Right-centre: pulls the participant list in. */
+.stage-handle-right {
+  right: max(env(safe-area-inset-right), 0px);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 72px;
+  border-radius: 12px 0 0 12px;
+  transition: right 0.25s ease;
+}
+.stage-handle-right::before { width: 4px; height: 34px; }
+body.video-stage-immersive.stage-roster-open .stage-handle-right {
+  right: calc(min(300px, 82vw) + max(env(safe-area-inset-right), 0px));
+}
+
+/* A scrim behind an open panel, so a tap outside dismisses it and the video
+   behind reads as "not the thing you are looking at".
+
+   It stops ABOVE the control stack: covering the talk button would both dim it
+   and swallow the tap, and "the PTT button is always available" is the rule this
+   whole layout is built around. `--stage-inset-bottom` is the measured height of
+   that stack, published by applyImmersiveStageInsets(). */
+.stage-panel-scrim {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: var(--stage-inset-bottom, 0px);
+  z-index: 39;
+  display: none;
+  background: rgba(0, 0, 0, 0.35);
+}
+body.video-stage-immersive.stage-header-open .stage-panel-scrim,
+body.video-stage-immersive.stage-roster-open .stage-panel-scrim { display: block; }
+
 /* "Hold Space anywhere to talk" describes a keyboard, and screen space over
    video is the scarcest thing here — every line it takes is taken from the
    tiles it sits on. It comes back the moment the stage stands down. */
 body.video-stage-immersive #screen-room .ptt-hint { display: none; }
+
+/* Flip lives ON the self camera tile — it is a property of that camera, not a
+   room control, and putting it here means it follows the self-view wherever it
+   goes: renderVideoStage() MOVES the same tile element between the grid and the
+   minimized badge, so one button serves both without a second implementation. */
+.video-tile-flip {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  cursor: pointer;
+}
+.video-tile-flip svg { display: block; }
+.video-tile-self.video-tile-camera .video-tile-flip.available { display: flex; }
+/* The badge is small; keep the control proportional to it. */
+#video-stage-self .video-tile-flip { width: 26px; height: 26px; top: 4px; right: 4px; }
+/* The tile is mirrored on the front camera — the control on top of it must not
+   be, or its icon reads backwards. */
+.video-tile-self.video-tile-camera .video-tile-flip { transform: scaleX(-1); }
+.video-tile-self.video-tile-camera[data-facing="environment"] .video-tile-flip { transform: none; }
 
 /* The self-view badge is anchored to the stage's corners, and the stage now
    runs under the chrome — so without this it parks on the control stack. The

@@ -8133,6 +8133,25 @@ function _buildVideoTile(tile) {
   placeholder.className = 'video-tile-placeholder hidden';
   el.appendChild(placeholder);
 
+  // Front/back flip belongs to this camera, not to the room, so it rides on the
+  // tile. renderVideoStage() MOVES the same element between the grid and the
+  // minimized badge, so this one button serves both.
+  if (tile.self && tile.kind === 'camera') {
+    var flip = document.createElement('button');
+    flip.type = 'button';
+    flip.className = 'video-tile-flip';
+    flip.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 19H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/><path d="M13 5h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5"/><polyline points="15 3 13 5 15 7"/><polyline points="9 17 11 19 9 21"/></svg>';
+    // Every tile has a click-to-pin handler, and the badge has a drag — neither
+    // should fire because the flip button was pressed.
+    flip.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      flipCamera();
+    });
+    flip.addEventListener('pointerdown', function(e) { e.stopPropagation(); });
+    el.appendChild(flip);
+  }
+
   var bar = document.createElement('div');
   bar.className = 'video-tile-bar';
   var mic = document.createElement('span');
@@ -8167,7 +8186,16 @@ function _syncVideoTile(el, tile) {
 
   // Mirroring is right for a front camera and wrong for a rear one — you expect
   // your own face flipped, but not the scene behind the phone.
-  if (tile.self && tile.kind === 'camera') el.dataset.facing = _cameraFacing;
+  if (tile.self && tile.kind === 'camera') {
+    el.dataset.facing = _cameraFacing;
+    var flip = el.querySelector('.video-tile-flip');
+    if (flip) {
+      flip.classList.toggle('available', !!_cameraFlipSupported);
+      flip.title = _cameraFacing === 'user'
+        ? 'Switch to the rear camera' : 'Switch to the front camera';
+      flip.setAttribute('aria-label', flip.title);
+    }
+  }
 
   var hasStream = !!tile.stream;
   if (vid) vid.classList.toggle('hidden', !hasStream);
@@ -8290,55 +8318,47 @@ function bestGridColumns(count, width, height, aspect) {
   return best;
 }
 
-// In immersive mode the stage is edge-to-edge, so the chrome floating over it
-// would otherwise bury the top tile under the header and the bottom tile's name
-// bar under the controls. The tiles are inset by the space the chrome actually
-// occupies — measured, not a magic number, because the header, the roster strip
-// and the control stack all change height with content (a consent banner, a long
-// name, a hidden Screen button). The stage background stays full-bleed, so the
-// video area still reaches the physical edges.
+// In immersive mode the stage is edge-to-edge and the header/roster panels
+// OVERLAY it, so neither costs the tiles any height. What does is the control
+// stack at the bottom, which is always on screen — without an inset it buries
+// the bottom tile's name bar. The inset is measured rather than a constant,
+// because that stack changes height with content (a wrapped name, an absent
+// Screen button). The stage background stays full-bleed, so the video still
+// reaches the physical edges.
+//
+// Anything above the tiles is inset by a small constant instead: the only thing
+// permanently up there is the top drag handle.
+var STAGE_HANDLE_CLEARANCE = 26;
+
 function applyImmersiveStageInsets(gridEl) {
   if (!gridEl) return;
   var stage = document.getElementById('video-stage');
   if (!document.body.classList.contains('video-stage-immersive')) {
     gridEl.style.removeProperty('padding-top');
     gridEl.style.removeProperty('padding-bottom');
-    if (stage) {
-      stage.style.removeProperty('--stage-inset-top');
-      stage.style.removeProperty('--stage-inset-bottom');
-    }
+    document.documentElement.style.removeProperty('--stage-inset-top');
+    document.documentElement.style.removeProperty('--stage-inset-bottom');
     return;
   }
   if (!stage) return;
   var stageBox = stage.getBoundingClientRect();
   if (!stageBox.height) return;
 
-  var chromeHidden = document.body.classList.contains('stage-chrome-hidden');
-  var lowest = stageBox.top;
-  if (!chromeHidden) {
-    // Everything that sits above the tiles and is currently on screen.
-    ['#debug-consent-banner', '.room-header', '#room-size-warning', '.room-peers-panel']
-      .forEach(function(sel) {
-        var el = document.querySelector(sel);
-        if (!el || el.classList.contains('hidden')) return;
-        var box = el.getBoundingClientRect();
-        if (box.height && box.bottom > lowest) lowest = box.bottom;
-      });
-  }
   var bar = document.querySelector('.room-bottom-bar');
   var barBox = bar ? bar.getBoundingClientRect() : null;
 
-  var insetTop = Math.max(0, Math.round(lowest - stageBox.top));
+  var insetTop = STAGE_HANDLE_CLEARANCE;
   var insetBottom = (barBox && barBox.height)
     ? Math.max(0, Math.round(stageBox.bottom - barBox.top))
     : 0;
 
   gridEl.style.paddingTop = insetTop + 'px';
   gridEl.style.paddingBottom = insetBottom + 'px';
-  // Published so the self-view badge can park inside the same visible band —
-  // corner-anchored to the stage, it would otherwise sit on the control stack.
-  stage.style.setProperty('--stage-inset-top', insetTop + 'px');
-  stage.style.setProperty('--stage-inset-bottom', insetBottom + 'px');
+  // Published on the root, not the stage, because two things outside the stage
+  // need them: the self-view badge (corner-anchored, would otherwise park on the
+  // control stack) and the panel scrim (must stop above the talk button).
+  document.documentElement.style.setProperty('--stage-inset-top', insetTop + 'px');
+  document.documentElement.style.setProperty('--stage-inset-bottom', insetBottom + 'px');
 }
 
 function layoutVideoStageGrid(gridEl, count) {
@@ -8415,7 +8435,14 @@ function updateVideoStage() {
   // The screen must not sleep while you are watching someone — and must be
   // allowed to again the moment the stage stands down.
   if (active) requestStageWakeLock(); else releaseStageWakeLock();
-  if (active && mode === 'immersive') scheduleStageChromeHide(); else showStageChrome(true);
+  if (active && mode === 'immersive') {
+    initStagePanelHandles();
+    publishStageHeaderHeight();
+  } else {
+    // Leaving immersive (or the stage entirely) must not strand a panel open
+    // over a layout that no longer has anywhere to slide it back to.
+    closeStagePanels();
+  }
   if (!active) {
     renderVideoStage([], '', '');
     _stagePinnedKey = null;
@@ -8474,27 +8501,74 @@ function releaseStageWakeLock() {
   try { sentinel.release(); } catch (e) { /* already gone */ }
 }
 
-// --- Immersive chrome auto-hide -----------------------------------------------
+// --- Immersive sliding panels -------------------------------------------------
 //
-// On a phone the stage fills the screen and the room chrome floats over it, so
-// the header and roster fade out once you stop touching. The PTT button and the
-// control row are deliberately EXEMPT: this is a push-to-talk app, and hiding
-// the talk button behind a tap-to-reveal would be hostile — it is the one
-// control people reach for without looking.
+// On a phone the video takes the screen, so the header and the participant list
+// are off-screen while a camera is live and are pulled back OVER the tiles by a
+// drag handle — top-centre for the header, right-centre for the roster. They
+// overlay rather than reserve space, so revealing one never reflows the video.
+//
+// Deliberately NOT hidden this way: the talk button and the control row. This is
+// a push-to-talk app, and putting the talk button behind a reveal gesture would
+// hide the one control people reach for without looking.
+//
+// The panels keep the app's own surface colours — switching a camera on must not
+// restyle the room, which is also what makes them legible over video without a
+// video-only palette.
 
-var STAGE_CHROME_IDLE_MS = 4000;
-var _stageChromeTimer = null;
+// `sign` is the direction of the GESTURE that opens the panel, not the direction
+// of the transform that hides it — they are opposites, and conflating them is
+// how the drag ends up refusing to open. The header hides upward and is opened
+// by pulling DOWN (+y); the roster hides to the right and is opened by pulling
+// LEFT (-x).
+var STAGE_PANELS = {
+  header: { cls: 'stage-header-open', panel: '.room-header', handle: 'stage-handle-header', axis: 'y', sign: 1 },
+  roster: { cls: 'stage-roster-open', panel: '.room-peers-panel', handle: 'stage-handle-roster', axis: 'x', sign: -1 }
+};
 
-function showStageChrome(cancelTimer) {
-  var changed = document.body.classList.contains('stage-chrome-hidden');
-  document.body.classList.remove('stage-chrome-hidden');
-  if (cancelTimer && _stageChromeTimer) {
-    clearTimeout(_stageChromeTimer);
-    _stageChromeTimer = null;
+// A drag has to travel this fraction of the panel before release counts as a
+// change of state; anything shorter snaps back, and a tap toggles.
+var STAGE_PANEL_COMMIT = 0.4;
+var STAGE_PANEL_DRAG_SLOP = 6;
+
+function stagePanelOpen(which) {
+  var spec = STAGE_PANELS[which];
+  return !!spec && document.body.classList.contains(spec.cls);
+}
+
+function setStagePanel(which, open) {
+  var spec = STAGE_PANELS[which];
+  if (!spec) return;
+  // The two panels are alternatives: opening one closes the other, so they can
+  // never overlap each other on a screen this small.
+  if (open) {
+    Object.keys(STAGE_PANELS).forEach(function(other) {
+      if (other !== which) document.body.classList.remove(STAGE_PANELS[other].cls);
+    });
   }
-  // The tiles are inset by the chrome's measured height, so they have to be
-  // re-measured whenever the chrome comes or goes.
-  if (changed) relayoutVideoStage();
+  document.body.classList.toggle(spec.cls, !!open);
+  Object.keys(STAGE_PANELS).forEach(function(key) {
+    var el = document.getElementById(STAGE_PANELS[key].handle);
+    if (el) el.setAttribute('aria-expanded', String(stagePanelOpen(key)));
+  });
+  publishStageHeaderHeight();
+}
+
+function closeStagePanels() {
+  Object.keys(STAGE_PANELS).forEach(function(key) {
+    document.body.classList.remove(STAGE_PANELS[key].cls);
+    var el = document.getElementById(STAGE_PANELS[key].handle);
+    if (el) el.setAttribute('aria-expanded', 'false');
+  });
+}
+
+// The top handle rides down with the header so it stays the thing you grab to
+// close it, which means it needs the header's real height.
+function publishStageHeaderHeight() {
+  var header = document.querySelector('#screen-room .room-header');
+  if (!header) return;
+  var h = header.getBoundingClientRect().height;
+  if (h) document.documentElement.style.setProperty('--stage-header-height', Math.round(h) + 'px');
 }
 
 function relayoutVideoStage() {
@@ -8502,31 +8576,91 @@ function relayoutVideoStage() {
   if (grid) layoutVideoStageGrid(grid, grid.children.length);
 }
 
-function scheduleStageChromeHide() {
-  if (_stageChromeTimer) clearTimeout(_stageChromeTimer);
-  _stageChromeTimer = setTimeout(function() {
-    _stageChromeTimer = null;
-    // Never hide mid-sentence, and never while hands-free is doing the talking.
-    if (isTalking || freeHandMode) { scheduleStageChromeHide(); return; }
-    if (!document.body.classList.contains('video-stage-immersive')) return;
-    document.body.classList.add('stage-chrome-hidden');
-    relayoutVideoStage();   // the tiles reclaim the space the chrome gave up
-  }, STAGE_CHROME_IDLE_MS);
+// One drag implementation for both handles; `axis`/`sign` are all that differ.
+var _stagePanelDrag = null;
+
+function _stagePanelPointerDown(which, e) {
+  var spec = STAGE_PANELS[which];
+  if (!spec || _stagePanelDrag || (e.button !== undefined && e.button !== 0)) return;
+  var panel = document.querySelector('#screen-room ' + spec.panel);
+  if (!panel) return;
+  var box = panel.getBoundingClientRect();
+  _stagePanelDrag = {
+    which: which,
+    spec: spec,
+    pointerId: e.pointerId,
+    startX: e.clientX,
+    startY: e.clientY,
+    moved: false,
+    wasOpen: stagePanelOpen(which),
+    size: spec.axis === 'y' ? box.height : box.width,
+    panel: panel
+  };
+  // On the window, not the handle: a finger routinely leaves a 22px handle
+  // mid-drag, and a lost pointerup would strand the panel under the cursor.
+  window.addEventListener('pointermove', _onStagePanelPointerMove);
+  window.addEventListener('pointerup', _onStagePanelPointerUp);
+  window.addEventListener('pointercancel', _onStagePanelPointerUp);
+  document.body.classList.add('stage-panel-dragging');
+  e.preventDefault();
 }
 
-function revealStageChrome() {
-  if (!document.body.classList.contains('video-stage-immersive')) return;
-  showStageChrome(false);
-  scheduleStageChromeHide();
+function _onStagePanelPointerMove(e) {
+  var d = _stagePanelDrag;
+  if (!d || (e.pointerId !== undefined && e.pointerId !== d.pointerId)) return;
+  var delta = d.spec.axis === 'y' ? (e.clientY - d.startY) : (e.clientX - d.startX);
+  if (!d.moved && Math.abs(delta) > STAGE_PANEL_DRAG_SLOP) d.moved = true;
+  if (!d.moved) return;
+
+  // `sign` points in the direction that OPENS the panel; progress runs 0
+  // (closed) → 1 (open) whichever state the drag started from.
+  var travel = delta * d.spec.sign;
+  var progress = d.wasOpen ? 1 + (travel / d.size) : travel / d.size;
+  d.progress = Math.max(0, Math.min(1, progress));
+  var offset = (1 - d.progress) * d.size * -d.spec.sign;
+  d.panel.style.transform = d.spec.axis === 'y'
+    ? 'translateY(' + offset + 'px)'
+    : 'translateX(' + offset + 'px)';
 }
 
-// Delegated on the document rather than bound to #video-stage: the stage's
-// contents are re-rendered on every roster tick, and a tap anywhere in the room
-// (including on the chrome itself) should restart the idle timer.
-document.addEventListener('pointerdown', function(e) {
-  if (!document.body.classList.contains('video-stage-immersive')) return;
-  if (e.target && e.target.closest && e.target.closest('#screen-room')) revealStageChrome();
-}, true);
+function _onStagePanelPointerUp(e) {
+  var d = _stagePanelDrag;
+  if (!d || (e && e.pointerId !== undefined && e.pointerId !== d.pointerId)) return;
+  window.removeEventListener('pointermove', _onStagePanelPointerMove);
+  window.removeEventListener('pointerup', _onStagePanelPointerUp);
+  window.removeEventListener('pointercancel', _onStagePanelPointerUp);
+  _stagePanelDrag = null;
+  document.body.classList.remove('stage-panel-dragging');
+  d.panel.style.removeProperty('transform');   // hand control back to the class
+
+  // A tap is a toggle; a drag commits only once it has travelled far enough,
+  // otherwise it snaps back to where it started.
+  var open;
+  if (!d.moved) open = !d.wasOpen;
+  else if (d.wasOpen) open = d.progress > (1 - STAGE_PANEL_COMMIT);
+  else open = d.progress > STAGE_PANEL_COMMIT;
+  setStagePanel(d.which, open);
+}
+
+function initStagePanelHandles() {
+  Object.keys(STAGE_PANELS).forEach(function(which) {
+    var el = document.getElementById(STAGE_PANELS[which].handle);
+    if (!el || el._voxalHandleWired) return;
+    el._voxalHandleWired = true;
+    el.addEventListener('pointerdown', function(e) { _stagePanelPointerDown(which, e); });
+    // Keyboard parity: the handle is a real button, so Enter/Space must work.
+    el.addEventListener('keydown', function(e) {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      setStagePanel(which, !stagePanelOpen(which));
+    });
+  });
+  var scrim = document.getElementById('stage-panel-scrim');
+  if (scrim && !scrim._voxalWired) {
+    scrim._voxalWired = true;
+    scrim.addEventListener('pointerdown', function() { closeStagePanels(); });
+  }
+}
 
 // --- The minimized self-view badge --------------------------------------------
 //
@@ -8792,13 +8926,8 @@ function updateVideoModeUI() {
     shareBtn.classList.toggle('active', localVideoActive);
     shareBtn.setAttribute('aria-pressed', String(localVideoActive));
   }
-  // Flip camera (mobile only, and only while your camera is actually on).
-  var flipBtn = document.getElementById('btn-flip-camera');
-  if (flipBtn) {
-    flipBtn.classList.toggle('hidden', !(videoModeEnabled && localVideoActive && _cameraFlipSupported));
-    var facingFront = _cameraFacing === 'user';
-    flipBtn.title = facingFront ? 'Switch to the rear camera' : 'Switch to the front camera';
-  }
+  // Note there is no flip button here: front/back belongs to the self-view
+  // tile (see _buildVideoTile), not to the room's control row.
   // Share screen button (visible when video mode is active, hidden on mobile)
   var screenBtn = document.getElementById('btn-share-screen');
   if (screenBtn) {
@@ -10299,7 +10428,7 @@ function resetVideoState() {
   _cameraFlipSupported = false;
   _localCameraSuspended = false;
   releaseStageWakeLock();
-  showStageChrome(true);
+  closeStagePanels();
   // Choosing not to watch someone is scoped to the room you chose it in.
   _hiddenStageKeys.clear();
   window._voxalVideoStream = null;
@@ -13553,8 +13682,6 @@ window.addEventListener('DOMContentLoaded', function() {
     if (localVideoActive) stopVideoShare(); else startVideoShare();
   });
   initSelfVideoBadge();
-  var flipBtnEl = $('btn-flip-camera');
-  if (flipBtnEl) flipBtnEl.addEventListener('click', function() { flipCamera(); });
   var screenBtnEl = $('btn-share-screen');
   if (screenBtnEl) {
     screenBtnEl.addEventListener('click', function() {

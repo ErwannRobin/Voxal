@@ -418,12 +418,16 @@ tiles fill the screen edge to edge with the voice UI overlaid, instead of the
 one-peer-at-a-time floating viewer. Which shape applies is decided by
 `videoStageMode()` (`'none' | 'desktop' | 'immersive'`) and published as body
 classes; Tauri and the tiny embed still resolve to `'none'` and keep the
-floating viewer / pop-out. Also in this pass: front/back camera flip, 360p24
-capture and a 300 kbps cap on mobile (150 kbps on save-data or 2g/3g), a screen
-wake lock while the stage is up, and capture paused (`track.enabled = false`,
-never `stop()`) when the app backgrounds.
+floating viewer / pop-out. The header and the participant list slide off-screen
+and are pulled back over the tiles by drag handles (top-centre / right-centre),
+keeping the app's own colours — turning a camera on never restyles the room.
+Also in this pass: front/back camera flip **on the self-view tile** (so it
+follows the self-view into the minimized badge for free), 360p24 capture and a
+300 kbps cap on mobile (150 kbps on save-data or 2g/3g), a screen wake lock
+while the stage is up, and capture paused (`track.enabled = false`, never
+`stop()`) when the app backgrounds.
 
-Regression-guarded by `tests/e2e/unit-video-mobile.spec.js` (26 cases), plus two
+Regression-guarded by `tests/e2e/unit-video-mobile.spec.js` (38 cases), plus two
 rewritten cases in `unit-video-stage.spec.js` that had been using "narrow
 viewport" as a stand-in for "no stage".
 
@@ -440,10 +444,9 @@ stays dark until a build carrying the permission ships. Exit criteria: bump
   other screen.
 - **Screen sharing on mobile.** No mobile browser implements `getDisplayMedia`;
   Android would need a native MediaProjection bridge.
-- **Swipe between stage and roster.** The roster collapses to a chip strip
-  instead. The invite nudge and mic-permission hint are hidden while the
-  immersive stage is up (they do not survive the collapse to chips) and return
-  as soon as it stands down.
+- **A swipe anywhere on the video** to reveal the panels. Today the gesture has
+  to start on one of the two drag handles; a swipe from anywhere on the stage
+  would be nicer but competes with the tile's click-to-pin.
 
 ---
 
