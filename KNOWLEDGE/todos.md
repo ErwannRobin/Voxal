@@ -403,9 +403,45 @@ shared `header` with `.room-header` and its buttons sat on the room's own.
 - **Adaptive quality.** `scaleResolutionDownBy` steps on peer count only; it does
   not react to measured loss the way the audio jitter buffer does, and tile size
   does not feed back into the sender. A peer watching a 160px filmstrip tile
-  still receives a full-size encode.
+  still receives a full-size encode. **A minimized ribbon thumbnail is now the
+  clearest case of this** — it is 120×68 on screen and still receives whatever
+  the sender encodes for everyone.
 - **Active-speaker auto-focus.** Focus is a screen share or an explicit pin;
-  it does not follow whoever is talking.
+  it does not follow whoever is talking. (Speaking order now decides *grid
+  membership* — see the conference-layout section below — but the big focus slot
+  still does not follow the voice.)
+
+---
+
+## 🪟 Conference layout — the split adapts, and the overflow has somewhere to go
+
+**Status:** ✅ Implemented. See `KNOWLEDGE/learning.md` → "Conference layout".
+
+The tile grid is now divided from a metric that matches what is actually on
+screen (tiles fill their cell and `cover`-crop, so the score is cell area × the
+surviving fraction of the frame, charging a vertical crop in full and a
+horizontal one at the square root), then balanced (`|cols - rows|` smallest) and
+finally biased toward the extra column — so a tie becomes a vertical split
+rather than a stack. An incomplete last row is centred. Everything is recomputed
+on every roster change and every resize.
+
+Past a bounded number of tiles — a hard **4 on a phone**, 12 on desktop, plus a
+measured floor on cell size — the rest are minimized into a **bottom ribbon**
+ordered by most recent speaker, which scrolls horizontally and carries a "+N"
+pill for whatever is still off its end. A minimized peer who starts speaking is
+promoted into the grid, displacing exactly one incumbent.
+
+Regression-guarded by `tests/e2e/unit-video-layout.spec.js` (28 cases).
+
+**Not done — deliberately out of scope for this pass:**
+- **Encoding for the ribbon.** See the adaptive-quality item above: a 120×68
+  thumbnail still receives a full-size encode. Simulcast or a per-viewer
+  `scaleResolutionDownBy` request is the real fix.
+- **Reordering the ribbon by hand**, or pinning someone *into* the grid without
+  using the focus slot. Clicking a thumbnail pins it as the focus, which is the
+  only way to force a specific person large.
+- **A keyboard path to the ribbon.** It scrolls with a pointer or a trackpad;
+  the thumbnails are clickable but there is no roving focus through the strip.
 
 ---
 

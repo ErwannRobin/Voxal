@@ -1231,6 +1231,16 @@ var _localVideoTopology = { video: null, screen: null };
 var _stagePinnedKey = null;      // tile key the user pinned as the stage focus
 var _hiddenStageKeys = new Set(); // tile keys the user chose not to watch (local only — nothing is signalled)
 var SELF_CAMERA_TILE_KEY = 'camera:self';
+// Which tiles the grid currently holds and which are minimized into the overflow
+// ribbon, in display order. Grid membership is sticky (see partitionStageTiles)
+// so faces don't jump slots on every press, and the ribbon list is what tells
+// noteStageSpeaker() whether a talker is currently minimized and worth promoting.
+var _stageGridKeys = [];
+var _stageRibbonKeys = [];
+// peerId -> monotonic sequence number of the last time they started talking.
+// This is the "most recent speaker" order the grid and the ribbon are built from.
+var _speakerRecency = new Map();
+var _speakerSeq = 0;
 var _devLogBuffer  = [];         // ring buffer of all log entries (max 200)
 var _devLogChannel = null;       // BroadcastChannel to the detached devlog window
 var _hostDebugMode = false;      // non-host mirror of the host's dev-mode flag (from peer-list/heartbeat)
@@ -6004,6 +6014,9 @@ function updatePeerTalking(peerId, active) {
   const el = document.getElementById('peer-item-' + peerId);
   if (el) el.classList.toggle('talking', active);
   setStageTileTalking('camera:' + peerId, active);
+  // Speaking order is what decides who holds a grid slot once the room outgrows
+  // the stage, so it is recorded here rather than on the next roster tick.
+  noteStageSpeaker(peerId, active);
   updateTinyCompactStatus();
 }
 
@@ -6011,6 +6024,7 @@ function updateSelfTalking(active) {
   const el = document.getElementById('peer-item-self');
   if (el) el.classList.toggle('talking', active);
   setStageTileTalking('camera:self', active);
+  noteStageSpeaker((peer && peer.id) || 'self', active);
 }
 
 // --- Audio helpers -----------------------------------------------------------
@@ -8250,11 +8264,15 @@ function toggleStagePin(key) {
 // alone. Moving a tile between containers keeps the same element, so the video
 // never has its srcObject reassigned and never flashes.
 function renderVideoStage(tiles, focusKey, badgeKey) {
-  var focusEl = document.getElementById('video-stage-focus');
-  var gridEl  = document.getElementById('video-stage-grid');
-  var badgeEl = document.getElementById('video-stage-self');
+  var focusEl  = document.getElementById('video-stage-focus');
+  var gridEl   = document.getElementById('video-stage-grid');
+  var badgeEl  = document.getElementById('video-stage-self');
+  var ribbonEl = document.getElementById('video-stage-ribbon');
+  var ribbonWrap = document.getElementById('video-stage-ribbon-wrap');
   if (!focusEl || !gridEl) return;
-  var containers = badgeEl ? [focusEl, gridEl, badgeEl] : [focusEl, gridEl];
+  var containers = [focusEl, gridEl];
+  if (ribbonEl) containers.push(ribbonEl);
+  if (badgeEl) containers.push(badgeEl);
 
   var seen = {};
   tiles.forEach(function(t) { seen[t.key] = true; });
@@ -8276,22 +8294,46 @@ function renderVideoStage(tiles, focusKey, badgeKey) {
     });
   });
 
-  var gridCount = 0;
+  // Everything that is neither focused nor minimized into the self-view badge
+  // competes for a grid slot; the rest go to the ribbon. With a focus tile the
+  // grid IS already a scrolling filmstrip, so there is no second overflow strip
+  // to build — the split only applies to a plain grid of faces.
+  var contenders = tiles.filter(function(t) {
+    return t.key !== focusKey && !(badgeEl && t.key === badgeKey);
+  });
+  var split;
+  if (focusKey) {
+    split = { gridKeys: contenders.map(function(t) { return t.key; }), ribbonKeys: [] };
+    _stageGridKeys = split.gridKeys.slice();
+    _stageRibbonKeys = [];
+  } else {
+    var box = stageGridBox(gridEl);
+    split = partitionStageTiles(contenders, stageGridCapacity(
+      contenders.length, box.width, box.height,
+      document.body.classList.contains('video-stage-immersive')
+    ));
+  }
+  var inRibbon = {};
+  split.ribbonKeys.forEach(function(key) { inRibbon[key] = true; });
+
   tiles.forEach(function(tile) {
     var el = existing[tile.key] || _buildVideoTile(tile);
     var target = gridEl;
     if (tile.key === focusKey) target = focusEl;
     else if (badgeEl && tile.key === badgeKey) target = badgeEl;
-    else gridCount++;
+    else if (ribbonEl && inRibbon[tile.key]) target = ribbonEl;
     if (el.parentNode !== target) target.appendChild(el);
+    el.classList.toggle('video-tile-mini', target === ribbonEl);
     _syncVideoTile(el, tile);
   });
 
-  // Keep grid order stable and matching the tile order.
-  tiles.forEach(function(tile) {
-    if (tile.key === focusKey || tile.key === badgeKey) return;
-    var el = gridEl.querySelector('[data-key="' + cssEscapeAttr(tile.key) + '"]');
-    if (el) gridEl.appendChild(el);
+  // Keep each container's order matching the order we decided on.
+  var order = split.gridKeys.concat(split.ribbonKeys);
+  order.forEach(function(key) {
+    var container = inRibbon[key] ? ribbonEl : gridEl;
+    if (!container) return;
+    var el = container.querySelector('[data-key="' + cssEscapeAttr(key) + '"]');
+    if (el) container.appendChild(el);
   });
 
   focusEl.classList.toggle('hidden', !focusKey);
@@ -8299,23 +8341,250 @@ function renderVideoStage(tiles, focusKey, badgeKey) {
     badgeEl.classList.toggle('hidden', !badgeKey);
     badgeEl.dataset.corner = _selfBadgeCorner;
   }
-  layoutVideoStageGrid(gridEl, focusKey ? 0 : gridCount);
+  // Toggled BEFORE the grid is measured: the ribbon is a flex sibling, so its
+  // presence is part of the box the column count is chosen against.
+  if (ribbonWrap) ribbonWrap.classList.toggle('hidden', !split.ribbonKeys.length);
+  layoutVideoStageGrid(gridEl, focusKey ? 0 : split.gridKeys.length);
+  updateStageRibbonOverflow();
 }
 
-// Pick the column count that makes the tiles as large as possible while keeping
-// them near 16:9. Pure CSS can size columns but knows nothing about the height
-// left over, which is why an `auto-fit` grid leaves half the stage empty.
-function bestGridColumns(count, width, height, aspect) {
-  if (count <= 0 || !(width > 0) || !(height > 0)) return 1;
-  var best = 1;
-  var bestArea = -1;
+// The space the grid has to work with, in content-box terms and independent of
+// whether a ribbon happens to be showing right now — the ribbon's own reserve is
+// added back, so stageGridCapacity() can subtract it exactly once and the two
+// can never chase each other across ticks.
+function stageGridBox(gridEl) {
+  var rect = gridEl.getBoundingClientRect();
+  if (!rect.width || !rect.height) return { width: 0, height: 0 };
+  var style = window.getComputedStyle(gridEl);
+  var width = rect.width - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+  var height = rect.height - (parseFloat(style.paddingTop) || 0) - (parseFloat(style.paddingBottom) || 0);
+  var wrap = document.getElementById('video-stage-ribbon-wrap');
+  if (wrap && !wrap.classList.contains('hidden')) height += STAGE_RIBBON_RESERVE;
+  return { width: Math.max(0, width), height: Math.max(0, height) };
+}
+
+// How many ribbon tiles are scrolled out of sight. The ribbon is the overflow of
+// an overflow, so it has to say what it is still hiding — and be scrollable to
+// reach it.
+function updateStageRibbonOverflow() {
+  var ribbon = document.getElementById('video-stage-ribbon');
+  var more = document.getElementById('video-stage-ribbon-more');
+  if (!ribbon || !more) return;
+  var viewLeft = ribbon.scrollLeft;
+  var viewRight = viewLeft + ribbon.clientWidth;
+  var hidden = 0;
+  for (var i = 0; i < ribbon.children.length; i++) {
+    var el = ribbon.children[i];
+    var left = el.offsetLeft;
+    var right = left + el.offsetWidth;
+    // A tile only counts as reachable when it is fully in view — half a face at
+    // the edge is what the indicator is there to tell you about.
+    if (right > viewRight + 1 || left < viewLeft - 1) hidden++;
+  }
+  more.classList.toggle('hidden', hidden <= 0);
+  if (hidden > 0) {
+    var label = '+' + hidden;
+    if (more.textContent !== label) more.textContent = label;
+    more.title = hidden + ' more participant' + (hidden === 1 ? '' : 's') + ' — scroll the strip to see them';
+  }
+}
+
+// --- How the stage is divided up ---------------------------------------------
+//
+// Three rules, in priority order, and they are the whole of the layout policy:
+//
+//   1. Show as much of the video as the measured box allows. Pure CSS can size
+//      columns but knows nothing about the leftover *height*, which is why an
+//      `auto-fit` grid leaves half the stage empty.
+//   2. Among arrangements that are within STAGE_AREA_TOLERANCE of the best,
+//      prefer the one whose splits are balanced — as close to as many vertical
+//      cuts as horizontal ones (|cols - rows| smallest).
+//   3. Still tied? Take the extra COLUMN. A vertical split reads better in a
+//      conference: faces end up side by side rather than stacked, and the exact
+//      tie is the common case (two tiles on a 16:9 stage come out the same size
+//      either way).
+//
+// Everything is recomputed from scratch on every roster change and every
+// resize, so the arrangement always matches the current participant count.
+//
+// Rule 1 needs a metric, and the obvious one — the largest 16:9 rectangle a cell
+// can hold — describes a *letterboxed* tile, which is not what is on screen: a
+// tile fills its cell and the video is `object-fit: cover`, so a mismatched cell
+// crops the frame rather than shrinking it. What the viewer loses is the cropped
+// part, and the two directions do NOT cost the same:
+//
+//   * a cell WIDER than the frame crops top and bottom — foreheads and chins,
+//     the part you are looking at. Charged in full (`frame / cell`).
+//   * a cell NARROWER than the frame crops left and right — mostly background,
+//     and the subject renders BIGGER because the cell is taller. Charged at the
+//     square root, i.e. discounted.
+//
+// That asymmetry is also why a phone ends up with 2×2 rather than four
+// full-width letterbox strips, and it is what makes rule 3 fall out naturally
+// rather than being bolted on.
+var STAGE_TILE_ASPECT = 16 / 9;
+// Within 20% is "about the same" — the metric above is a heuristic (both
+// arrangements fill the box; only the crop differs), so anything this close is
+// decided on shape instead.
+var STAGE_AREA_TOLERANCE = 0.8;
+
+// The arrangement itself for `count` tiles in a `width` × `height` box:
+// `{ cols, rows, cellW, cellH, tileW, tileH, score }`. `cellW`/`cellH` are the
+// tile as laid out; `tileW`/`tileH` are the uncropped `aspect` rectangle inside
+// it, kept because "is this still big enough to be worth a slot" is a question
+// about the frame, not the cell.
+function bestGridLayout(count, width, height, aspect) {
+  var fallback = { cols: 1, rows: Math.max(1, count), cellW: 0, cellH: 0, tileW: 0, tileH: 0, score: 0 };
+  if (count <= 0 || !(width > 0) || !(height > 0)) return fallback;
+  var ratio = aspect > 0 ? aspect : STAGE_TILE_ASPECT;
+
+  var candidates = [];
+  var bestScore = 0;
   for (var cols = 1; cols <= count; cols++) {
     var rows = Math.ceil(count / cols);
-    // Largest tile that fits this arrangement, constrained on both axes.
-    var w = Math.min(width / cols, (height / rows) * aspect);
-    if (w * (w / aspect) > bestArea) { bestArea = w * (w / aspect); best = cols; }
+    // Skip arrangements with a column that would stand entirely empty — 3×2 for
+    // four tiles is never better than the 2×2 it degenerates into.
+    if ((cols - 1) * rows >= count) continue;
+    var cellW = width / cols;
+    var cellH = height / rows;
+    var cellAspect = cellW / cellH;
+    var kept = cellAspect >= ratio
+      ? ratio / cellAspect                      // vertical crop: charged in full
+      : Math.sqrt(cellAspect / ratio);          // horizontal crop: discounted
+    var score = cellW * cellH * kept;
+    if (score > bestScore) bestScore = score;
+    var tileW = Math.min(cellW, cellH * ratio);
+    candidates.push({
+      cols: cols, rows: rows, cellW: cellW, cellH: cellH,
+      tileW: tileW, tileH: tileW / ratio, score: score
+    });
   }
-  return best;
+  if (!candidates.length) return fallback;
+
+  var best = null;
+  candidates.forEach(function(c) {
+    if (c.score < bestScore * STAGE_AREA_TOLERANCE) return;  // rule 1
+    if (!best) { best = c; return; }
+    var balance = Math.abs(c.cols - c.rows);
+    var bestBalance = Math.abs(best.cols - best.rows);
+    if (balance < bestBalance) { best = c; return; }         // rule 2
+    if (balance === bestBalance && c.cols > best.cols) best = c;  // rule 3
+  });
+  return best || candidates[0];
+}
+
+function bestGridColumns(count, width, height, aspect) {
+  return bestGridLayout(count, width, height, aspect).cols;
+}
+
+// --- Who gets a grid slot -----------------------------------------------------
+//
+// Past a point another tile makes every tile worse, so the grid takes a bounded
+// number of participants and the rest are minimized into the ribbon along the
+// bottom. A phone is a hard 4 — a fifth face on a 390px screen is a thumbnail
+// either way, and 2×2 is the last arrangement that still reads. Every surface is
+// additionally bounded by measurement, so a short stage cannot "fit" nine tiles
+// 40px tall.
+var STAGE_MAX_GRID_TILES_IMMERSIVE = 4;
+var STAGE_MAX_GRID_TILES_DESKTOP = 12;
+var STAGE_MIN_TILE_W = 160;
+var STAGE_MIN_TILE_H = 90;
+// Height the ribbon takes off the grid when it is shown. Kept in step with
+// `--stage-ribbon-tile-h` in styles.css. A constant rather than a measurement on
+// purpose: the ribbon's presence depends on the capacity that depends on the
+// available height, so measuring the live ribbon would let the two oscillate.
+var STAGE_RIBBON_RESERVE = 84;
+
+function stageGridCapacity(count, width, height, immersive) {
+  var max = immersive ? STAGE_MAX_GRID_TILES_IMMERSIVE : STAGE_MAX_GRID_TILES_DESKTOP;
+  var cap = Math.min(count, max);
+  if (cap <= 1) return cap;
+  // Nothing to measure yet (first layout, or the stage is hidden): trust the cap
+  // rather than committing to a wrong one — the next tick measures for real.
+  if (!(width > 0) || !(height > 0)) return cap;
+  while (cap > 1) {
+    // A ribbon appears as soon as the grid cannot hold everyone, and it takes
+    // its height off the grid.
+    var usable = cap < count ? Math.max(0, height - STAGE_RIBBON_RESERVE) : height;
+    var layout = bestGridLayout(cap, width, usable, STAGE_TILE_ASPECT);
+    // The cell is what ends up on screen, so the floor is measured against it.
+    if (layout.cellW >= STAGE_MIN_TILE_W && layout.cellH >= STAGE_MIN_TILE_H) break;
+    cap--;
+  }
+  return cap;
+}
+
+// A screen share always outranks a camera (it is nearly always the thing to look
+// at), then it is whoever spoke most recently — the order the user asked for and
+// the only ordering in a voice-first app that tracks who matters right now.
+function stageTileRank(tile) {
+  if (!tile) return 0;
+  if (tile.kind === 'screen') return Infinity;
+  return _speakerRecency.get(tile.peerId) || 0;
+}
+
+// Split the tiles the grid would otherwise hold into the grid itself and the
+// overflow ribbon.
+//
+// Membership is by rank, but it is STICKY: a tile already in the grid keeps its
+// slot until someone the grid does not hold out-ranks it. A grid that re-sorts
+// itself on every press would be unreadable, so only the displacement actually
+// moves anyone, and the survivors keep their relative order.
+function partitionStageTiles(tiles, capacity) {
+  var gridKeys = [];
+  var ribbonKeys = [];
+  var i;
+  if (capacity >= tiles.length) {
+    for (i = 0; i < tiles.length; i++) gridKeys.push(tiles[i].key);
+    _stageGridKeys = gridKeys.slice();
+    _stageRibbonKeys = ribbonKeys;
+    return { gridKeys: gridKeys, ribbonKeys: ribbonKeys };
+  }
+
+  var byRank = tiles.map(function(t, index) {
+    return { key: t.key, rank: stageTileRank(t), index: index };
+  }).sort(function(a, b) {
+    if (b.rank !== a.rank) return b.rank > a.rank ? 1 : -1;
+    return a.index - b.index;   // never-spoken peers keep their natural order
+  });
+
+  var promoted = {};
+  for (i = 0; i < capacity && i < byRank.length; i++) promoted[byRank[i].key] = true;
+
+  // Incumbents first, in the order they already occupy, then the newcomers that
+  // displaced someone — so a promotion fills the freed slot instead of reshuffling.
+  var taken = {};
+  for (i = 0; i < _stageGridKeys.length && gridKeys.length < capacity; i++) {
+    var key = _stageGridKeys[i];
+    if (!promoted[key] || taken[key]) continue;
+    taken[key] = true;
+    gridKeys.push(key);
+  }
+  for (i = 0; i < byRank.length && gridKeys.length < capacity; i++) {
+    if (!promoted[byRank[i].key] || taken[byRank[i].key]) continue;
+    taken[byRank[i].key] = true;
+    gridKeys.push(byRank[i].key);
+  }
+  // The ribbon is plain rank order: most recent speaker nearest the grid.
+  for (i = 0; i < byRank.length; i++) {
+    if (!taken[byRank[i].key]) ribbonKeys.push(byRank[i].key);
+  }
+
+  _stageGridKeys = gridKeys.slice();
+  _stageRibbonKeys = ribbonKeys.slice();
+  return { gridKeys: gridKeys, ribbonKeys: ribbonKeys };
+}
+
+// Stamp the speaking order. Cheap enough to run on every press: one Map write,
+// and a stage re-render ONLY when the talker is currently minimized — i.e. when
+// there is genuinely something to promote.
+function noteStageSpeaker(peerId, active) {
+  if (!peerId || !active) return;
+  _speakerSeq++;
+  _speakerRecency.set(peerId, _speakerSeq);
+  if (!_stageRibbonKeys.length) return;
+  if (_stageRibbonKeys.indexOf('camera:' + peerId) === -1) return;
+  updateVideoStage();
 }
 
 // In immersive mode the stage is edge-to-edge and the header/roster panels
@@ -8333,9 +8602,14 @@ var STAGE_HANDLE_CLEARANCE = 26;
 function applyImmersiveStageInsets(gridEl) {
   if (!gridEl) return;
   var stage = document.getElementById('video-stage');
+  var ribbonWrap = document.getElementById('video-stage-ribbon-wrap');
+  var ribbonOpen = !!ribbonWrap && !ribbonWrap.classList.contains('hidden');
+  document.documentElement.style.setProperty(
+    '--stage-ribbon-height', ribbonOpen ? STAGE_RIBBON_RESERVE + 'px' : '0px');
   if (!document.body.classList.contains('video-stage-immersive')) {
     gridEl.style.removeProperty('padding-top');
     gridEl.style.removeProperty('padding-bottom');
+    if (ribbonWrap) ribbonWrap.style.removeProperty('padding-bottom');
     document.documentElement.style.removeProperty('--stage-inset-top');
     document.documentElement.style.removeProperty('--stage-inset-bottom');
     return;
@@ -8353,7 +8627,10 @@ function applyImmersiveStageInsets(gridEl) {
     : 0;
 
   gridEl.style.paddingTop = insetTop + 'px';
-  gridEl.style.paddingBottom = insetBottom + 'px';
+  // The clearance belongs to whatever is actually at the bottom of the stack: a
+  // ribbon under a grid that still carried the inset would sit on the controls.
+  gridEl.style.paddingBottom = ribbonOpen ? '0px' : insetBottom + 'px';
+  if (ribbonWrap) ribbonWrap.style.paddingBottom = ribbonOpen ? insetBottom + 'px' : '';
   // Published on the root, not the stage, because two things outside the stage
   // need them: the self-view badge (corner-anchored, would otherwise park on the
   // control stack) and the panel scrim (must stop above the talk button).
@@ -8363,20 +8640,41 @@ function applyImmersiveStageInsets(gridEl) {
 
 function layoutVideoStageGrid(gridEl, count) {
   if (!gridEl) return;
-  if (count <= 0) { gridEl.style.removeProperty('grid-template-columns'); return; }
+  if (count <= 0) { _clearGridPlacement(gridEl); return; }
   applyImmersiveStageInsets(gridEl);
   var rect = gridEl.getBoundingClientRect();
   // Before first layout (or while hidden) there is nothing to measure — leave
   // the CSS fallback in place rather than committing to a wrong column count.
-  if (!rect.width || !rect.height) { gridEl.style.removeProperty('grid-template-columns'); return; }
+  if (!rect.width || !rect.height) { _clearGridPlacement(gridEl); return; }
   // The rect is the border box; the tiles only get the content box, so the
   // immersive insets above have to come off before choosing a column count.
   var style = window.getComputedStyle(gridEl);
   var innerW = rect.width - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
   var innerH = rect.height - (parseFloat(style.paddingTop) || 0) - (parseFloat(style.paddingBottom) || 0);
-  if (innerW <= 0 || innerH <= 0) { gridEl.style.removeProperty('grid-template-columns'); return; }
-  var cols = bestGridColumns(count, innerW, innerH, 16 / 9);
-  gridEl.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0, 1fr))';
+  if (innerW <= 0 || innerH <= 0) { _clearGridPlacement(gridEl); return; }
+  var layout = bestGridLayout(count, innerW, innerH, STAGE_TILE_ASPECT);
+
+  // Twice the tracks, every tile spanning two of them: the gaps work out to
+  // exactly the same widths as `repeat(cols, 1fr)`, but a last row that does not
+  // fill can be offset by half a tile and end up CENTRED instead of jammed
+  // against the left edge — which is what an unbalanced final row looks like.
+  var cols = layout.cols;
+  gridEl.style.gridTemplateColumns = 'repeat(' + (cols * 2) + ', minmax(0, 1fr))';
+  var remainder = count % cols;
+  var firstOfLastRow = cols * (layout.rows - 1);
+  for (var i = 0; i < gridEl.children.length; i++) {
+    var el = gridEl.children[i];
+    el.style.gridColumn = (remainder && i === firstOfLastRow)
+      ? (cols - remainder + 1) + ' / span 2'
+      : 'span 2';
+  }
+}
+
+function _clearGridPlacement(gridEl) {
+  gridEl.style.removeProperty('grid-template-columns');
+  for (var i = 0; i < gridEl.children.length; i++) {
+    gridEl.children[i].style.removeProperty('grid-column');
+  }
 }
 
 // Tile keys are built from peer ids (UUIDs) plus a fixed prefix, but a
@@ -8463,6 +8761,21 @@ window.addEventListener('resize', function() {
     _stageResizeRaf = null;
     updateVideoStage();
   });
+});
+
+// The "+N still hidden" count is a property of the scroll position, not of the
+// roster, so it is the one piece of stage state that updates without a render.
+var _stageRibbonScrollRaf = null;
+document.addEventListener('DOMContentLoaded', function() {
+  var ribbon = document.getElementById('video-stage-ribbon');
+  if (!ribbon) return;
+  ribbon.addEventListener('scroll', function() {
+    if (_stageRibbonScrollRaf) return;
+    _stageRibbonScrollRaf = requestAnimationFrame(function() {
+      _stageRibbonScrollRaf = null;
+      updateStageRibbonOverflow();
+    });
+  }, { passive: true });
 });
 
 // --- Screen wake lock ---------------------------------------------------------
@@ -10431,6 +10744,11 @@ function resetVideoState() {
   closeStagePanels();
   // Choosing not to watch someone is scoped to the room you chose it in.
   _hiddenStageKeys.clear();
+  // Grid membership and speaking order describe one call and nothing else.
+  _stageGridKeys = [];
+  _stageRibbonKeys = [];
+  _speakerRecency.clear();
+  _speakerSeq = 0;
   window._voxalVideoStream = null;
   connections.forEach(function(c) {
     c.videoMedia = null;

@@ -572,6 +572,15 @@
       <div id="video-stage" class="video-stage hidden" role="region" aria-label="Video">
         <div id="video-stage-focus" class="video-stage-focus hidden"></div>
         <div id="video-stage-grid" class="video-stage-grid"></div>
+        <!-- Overflow ribbon: the participants the grid has no room for (max 4
+             tiles on a phone), most recent speaker first. Scrolls horizontally,
+             and the pill counts whoever is still off the end of it. -->
+        <div id="video-stage-ribbon-wrap" class="video-stage-ribbon-wrap hidden">
+          <div id="video-stage-ribbon" class="video-stage-ribbon" role="group"
+               aria-label="More participants"></div>
+          <div id="video-stage-ribbon-more" class="video-stage-ribbon-more hidden"
+               aria-hidden="true"></div>
+        </div>
         <!-- Your own camera, minimized: a small badge floating over the stage
              that can be dragged to any corner. It only holds a tile while
              someone else has a camera on — see selfBadgeTileKey(). -->

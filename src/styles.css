@@ -1631,7 +1631,7 @@ body.video-stage-immersive #video-stage-self[data-corner="tr"] {
 }
 body.video-stage-immersive #video-stage-self[data-corner="bl"],
 body.video-stage-immersive #video-stage-self[data-corner="br"] {
-  bottom: calc(var(--stage-inset-bottom, 0px) + 12px);
+  bottom: calc(var(--stage-inset-bottom, 0px) + var(--stage-ribbon-height, 0px) + 12px);
 }
 
 /* Grid of equal tiles. The column count is set inline by layoutVideoStageGrid()
@@ -1650,6 +1650,71 @@ body.video-stage-immersive #video-stage-self[data-corner="br"] {
 .video-stage-focus { flex: 1; min-height: 0; display: flex; }
 .video-stage-focus.hidden { display: none; }
 .video-stage-focus .video-tile { flex: 1; }
+
+/* ── Overflow ribbon ──────────────────────────────────────────────────────
+   Past a bounded number of tiles (a hard 4 on a phone) another face makes
+   every face worse, so the rest are minimized into a strip along the bottom,
+   most recent speaker first. The strip scrolls horizontally and the pill says
+   how many are still off the end of it — the overflow of the overflow has to
+   be reachable, not merely implied.
+   Kept in step with STAGE_RIBBON_RESERVE in main.js, which is what the grid
+   gives up for it. */
+:root { --stage-ribbon-tile-h: 68px; }
+
+.video-stage-ribbon-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  min-height: 0;
+}
+.video-stage-ribbon-wrap.hidden { display: none; }
+.video-stage-ribbon {
+  /* Positioned so a tile's offsetLeft is measured against the strip itself —
+     that is what updateStageRibbonOverflow() counts against the scroll port. */
+  position: relative;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* Or flicking past the last thumbnail drags the room behind it. */
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  padding-bottom: 2px;
+}
+.video-stage-ribbon .video-tile {
+  flex: 0 0 auto;
+  height: var(--stage-ribbon-tile-h);
+  width: calc(var(--stage-ribbon-tile-h) * 16 / 9);
+  border-radius: 8px;
+  scroll-snap-align: end;
+}
+/* A thumbnail has room for a name and nothing else. `.video-tile-mini` is set
+   on the tile itself by renderVideoStage(), so it travels with the element. */
+.video-tile-mini .video-tile-bar { padding: 2px 5px; font-size: 10px; }
+.video-tile-mini .video-tile-badges { display: none; }
+.video-tile-mini .video-tile-flip { display: none; }
+.video-tile-mini .video-tile-placeholder { font-size: 20px; }
+/* A chip rather than a gradient fade: the strip sits over black bars and bright
+   frames alike, and only the app's own surface colour is legible on both. */
+.video-stage-ribbon-more {
+  position: absolute;
+  right: 4px;
+  top: calc(var(--stage-ribbon-tile-h) / 2);
+  transform: translateY(-50%);
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+.video-stage-ribbon-more.hidden { display: none; }
+body.video-stage-immersive #screen-room .video-stage-ribbon { gap: 4px; padding: 0 4px 2px; }
+body.video-stage-immersive #screen-room .video-stage-ribbon .video-tile { border-radius: 6px; }
 
 /* With a focus tile present the grid becomes a filmstrip beneath it. */
 .video-stage.has-focus .video-stage-grid {
@@ -1792,8 +1857,10 @@ body.video-stage-immersive #video-stage-self[data-corner="br"] {
 }
 .video-stage-self[data-corner="tl"] { top: 12px; left: 12px; }
 .video-stage-self[data-corner="tr"] { top: 12px; right: 12px; }
-.video-stage-self[data-corner="bl"] { bottom: 12px; left: 12px; }
-.video-stage-self[data-corner="br"] { bottom: 12px; right: 12px; }
+/* The ribbon owns the bottom of the stage while it is up, so the badge steps
+   over it rather than covering somebody's thumbnail. */
+.video-stage-self[data-corner="bl"] { bottom: calc(12px + var(--stage-ribbon-height, 0px)); left: 12px; }
+.video-stage-self[data-corner="br"] { bottom: calc(12px + var(--stage-ribbon-height, 0px)); right: 12px; }
 /* The tile fills the badge and inherits its grab cursor — the whole badge is
    the drag handle, and a click that did not move it still pins as usual. */
 .video-stage-self .video-tile { cursor: inherit; }
