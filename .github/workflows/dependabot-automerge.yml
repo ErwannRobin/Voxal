@@ -1,8 +1,12 @@
 name: Dependabot auto-merge
 
+# Runs after either CI workflow finishes, because whichever one finishes last
+# is the point at which the head SHA can first be fully green. Every firing
+# re-verifies the complete check state of the head SHA before merging, so a
+# green "Tests" run alone is never enough to merge.
 on:
   workflow_run:
-    workflows: ["Tests"]
+    workflows: ["Tests", "CodeQL"]
     types: [completed]
 
 permissions:
@@ -12,17 +16,32 @@ permissions:
 jobs:
   auto-merge:
     runs-on: ubuntu-latest
-    # Only act when Tests passed and the triggering actor was Dependabot
+    # Only act on pull requests opened by Dependabot. The triggering run's own
+    # conclusion is checked again (with every other check) in the script below.
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.actor.login == 'dependabot[bot]'
     steps:
-      - name: Merge minor/patch Dependabot PR
+      - name: Merge minor/patch Dependabot PR once every check is green
         uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const headSha = context.payload.workflow_run.head_sha;
+
+            // The one job that is allowed to be red: the mesh E2E suite runs
+            // with continue-on-error because real WebRTC over loopback ICE is
+            // timing-sensitive (see tests.yml). Plus this workflow's own check,
+            // which is still in progress while it runs.
+            const NON_BLOCKING = new Set([
+              'E2E (mesh, non-blocking)',
+              'auto-merge',
+            ]);
+
+            // The aggregate check produced by tests.yml. It must exist and be
+            // green — its absence means the test suite never reported, which is
+            // not the same thing as passing.
+            const GATE_CHECK = 'All tests green';
 
             const { data: prs } = await github.rest.pulls.list({
               owner: context.repo.owner,
@@ -46,10 +65,56 @@ jobs:
               }
             }
 
+            // ── Verify the full check state of the head SHA ──────────────────
+            const checkRuns = await github.paginate(
+              github.rest.checks.listForRef,
+              { owner: context.repo.owner, repo: context.repo.repo, ref: headSha, per_page: 100 },
+            );
+
+            const relevant = checkRuns.filter(run => !NON_BLOCKING.has(run.name));
+            const pending  = relevant.filter(run => run.status !== 'completed');
+            const failed   = relevant.filter(
+              run => run.status === 'completed' &&
+                     !['success', 'neutral', 'skipped'].includes(run.conclusion),
+            );
+
+            if (failed.length) {
+              console.log(
+                'Not merging — failing checks:',
+                failed.map(r => `${r.name} (${r.conclusion})`).join(', '),
+              );
+              return;
+            }
+            if (pending.length) {
+              console.log(
+                'Not merging yet — checks still running:',
+                pending.map(r => r.name).join(', '),
+              );
+              return;
+            }
+
+            const gate = relevant.find(run => run.name === GATE_CHECK);
+            if (!gate || gate.conclusion !== 'success') {
+              console.log(`Not merging — "${GATE_CHECK}" did not report success.`);
+              return;
+            }
+
+            // Legacy commit statuses (e.g. deployment previews) count too.
+            const { data: combined } = await github.rest.repos.getCombinedStatusForRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: headSha,
+            });
+            if (combined.total_count > 0 && combined.state !== 'success') {
+              console.log('Not merging — commit status state is', combined.state);
+              return;
+            }
+
             console.log(`Merging PR #${pr.number}: ${pr.title}`);
             await github.rest.pulls.merge({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: pr.number,
+              sha: headSha, // refuse to merge if new commits landed meanwhile
               merge_method: 'merge',
             });

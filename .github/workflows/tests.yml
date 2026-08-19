@@ -20,6 +20,25 @@ jobs:
       - name: Run Rust tests
         run: cd src-tauri && cargo test
 
+  api-tests:
+    name: API tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run API tests
+        run: npm run test:api
+
   # Fast, deterministic suite (pure-logic unit tests + UI flows). This is the
   # gating check — keep it green.
   unit-e2e:
@@ -71,3 +90,37 @@ jobs:
 
       - name: Run mesh E2E (mesh project)
         run: npm run test:mesh
+
+  # Single aggregate check that summarises every gating job above. Branch
+  # protection on `main` requires exactly this one check ("All tests green"),
+  # so adding or renaming a test job never means re-editing the ruleset —
+  # add it to `needs:` here instead.
+  #
+  # `if: always()` makes it run even when a dependency failed or was skipped,
+  # and the step fails closed: anything that is not `success` (failure,
+  # cancelled, skipped) blocks the merge. `mesh-e2e` is deliberately absent —
+  # it is non-blocking by design (see above).
+  all-tests-green:
+    name: All tests green
+    if: always()
+    needs: [rust-tests, api-tests, unit-e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify every gating job succeeded
+        env:
+          RUST_RESULT: ${{ needs.rust-tests.result }}
+          API_RESULT: ${{ needs.api-tests.result }}
+          UNIT_E2E_RESULT: ${{ needs.unit-e2e.result }}
+        run: |
+          echo "Rust tests : $RUST_RESULT"
+          echo "API tests  : $API_RESULT"
+          echo "E2E (unit) : $UNIT_E2E_RESULT"
+          failed=0
+          for result in "$RUST_RESULT" "$API_RESULT" "$UNIT_E2E_RESULT"; do
+            [ "$result" = "success" ] || failed=1
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::Not every gating test job succeeded — this pull request must not be merged."
+            exit 1
+          fi
+          echo "All gating test jobs succeeded."
