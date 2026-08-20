@@ -3990,19 +3990,48 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
    in-page settings modal and the desktop preferences window) from the one
    renderer in video-effects.js. */
 
-.room-action-wrap {
-  position: relative;
-  display: inline-flex;
+/* The button lives on the self-view tile, next to the flip; the popover is
+   positioned against it at open time by positionVideoBackgroundPopover(),
+   because that tile gets moved between the stage grid and the minimized
+   badge. */
+.video-tile-bg {
+  position: absolute;
+  top: 6px;
+  right: 42px;
+  z-index: 2;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  cursor: pointer;
 }
-.room-action-wrap:has(> .room-action-btn.hidden) { display: none; }
+.video-tile-bg svg { display: block; }
+.video-tile-self.video-tile-camera .video-tile-bg.available { display: flex; }
+.video-tile-bg.is-on { background: var(--accent); }
+/* With no flip button to sit beside — a laptop with one camera — take its slot
+   rather than leaving a gap. */
+.video-tile-self.video-tile-camera .video-tile-flip:not(.available) ~ .video-tile-bg { right: 6px; }
+#video-stage-self .video-tile-bg { width: 26px; height: 26px; top: 4px; right: 34px; }
+#video-stage-self .video-tile-flip:not(.available) ~ .video-tile-bg { right: 4px; }
+/* The tile is mirrored on the front camera — the control on top of it must not
+   be, or its icon reads backwards. */
+.video-tile-self.video-tile-camera .video-tile-bg { transform: scaleX(-1); }
+.video-tile-self.video-tile-camera[data-facing="environment"] .video-tile-bg { transform: none; }
+.video-tile-mini .video-tile-bg { display: none; }
 
 .video-bg-popover {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  right: 0;
+  position: fixed;
+  top: 0;
+  left: 0;
   width: max-content;
   max-width: min(380px, calc(100vw - 24px));
-  z-index: 40;
+  z-index: 60;
   padding: 10px 12px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -4031,6 +4060,35 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
 .video-bg-popover .bg-picker { flex-wrap: nowrap; }
 
 .bg-picker + .settings-hint { margin-top: 10px; }
+
+/* First run only: the segmentation runtime is not bundled, so say what is
+   being downloaded, how far along it is, and offer a way out. */
+.video-bg-progress {
+  margin: 0 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.video-bg-progress.hidden { display: none; }
+.video-bg-progress-text {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.video-bg-progress-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+.video-bg-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.2s linear;
+}
+.video-bg-progress .btn { align-self: flex-start; }
 
 .bg-chip {
   flex: 0 0 auto;
@@ -4096,7 +4154,7 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
 .bg-chip-clear.hidden { display: none; }
 
 @media (max-width: 480px) {
-  .video-bg-popover { max-width: calc(100vw - 24px); }
+  .video-bg-popover { max-width: calc(100vw - 16px); }
   /* A 360 px screen has no room for seven chips in a line. Keep the strip and
      let it scroll sideways rather than wrap into a tall block that covers the
      video it is meant to be previewing. */

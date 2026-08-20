@@ -171,16 +171,33 @@ test.describe('the room control', () => {
     await page.evaluate(() => showScreen('room'));
   });
 
-  test('stays hidden until a camera is actually running', async ({ page }) => {
+  // The control belongs to your camera, not to the room, so it rides on the
+  // self-view tile beside the flip button rather than sitting in the bottom bar.
+  test('rides on the self-view tile, and only once a camera is running', async ({ page }) => {
     await seedEffectsRoom(page);
     await page.evaluate(() => { updateVideoModeUI(); });
-    await expect(page.locator('#btn-video-bg')).toBeHidden();
+    expect(await page.locator('.video-tile-bg').count()).toBe(0);
 
     await page.evaluate(() => startVideoShare());
-    await expect(page.locator('#btn-video-bg')).toBeVisible();
+    const btn = page.locator('.video-tile-self.video-tile-camera .video-tile-bg');
+    await expect(btn).toBeVisible();
+    // Next to the flip control, on the tile — not in the room's control row.
+    expect(await page.locator('.ctrl-row .video-tile-bg').count()).toBe(0);
+    expect(await page.evaluate(() =>
+      !!document.querySelector('.video-tile-self .video-tile-bg')
+      && !!document.querySelector('.video-tile-self .video-tile-flip'))).toBe(true);
 
     await page.evaluate(() => stopVideoShare());
-    await expect(page.locator('#btn-video-bg')).toBeHidden();
+    await expect(page.locator('.video-tile-self.video-tile-camera .video-tile-bg')).toHaveCount(0);
+  });
+
+  test('is icon-only', async ({ page }) => {
+    await seedEffectsRoom(page);
+    await page.evaluate(() => startVideoShare());
+    const btn = page.locator('.video-tile-self.video-tile-camera .video-tile-bg');
+    // No label text — the affordance is the icon plus the tooltip.
+    expect((await btn.innerText()).trim()).toBe('');
+    await expect(btn).toHaveAttribute('aria-label', /background/i);
   });
 
   test('stays hidden where the pipeline cannot run', async ({ page }) => {
@@ -190,18 +207,32 @@ test.describe('the room control', () => {
       // Pretend this device has no WebGL2; the probe result is cached, so
       // override the accessor the way an unsupported webview would behave.
       VideoEffects.isSupported = () => false;
-      updateVideoModeUI();
+      updatePeerList();
     });
-    await expect(page.locator('#btn-video-bg')).toBeHidden();
+    await expect(page.locator('.video-tile-self.video-tile-camera .video-tile-bg')).toBeHidden();
   });
 
-  test('opens and closes its popover', async ({ page }) => {
+  test('opens a popover anchored to it, and closes on Escape', async ({ page }) => {
     await seedEffectsRoom(page);
     await page.evaluate(() => startVideoShare());
     await expect(page.locator('#video-bg-popover')).toBeHidden();
-    await page.click('#btn-video-bg');
+
+    await page.locator('.video-tile-self.video-tile-camera .video-tile-bg').click();
     await expect(page.locator('#video-bg-popover')).toBeVisible();
-    await expect(page.locator('#btn-video-bg')).toHaveAttribute('aria-expanded', 'true');
+
+    // Anchored, not parked in a corner: the popover sits near its button and
+    // inside the viewport.
+    const fits = await page.evaluate(() => {
+      const pop = document.getElementById('video-bg-popover').getBoundingClientRect();
+      const btn = document.querySelector('.video-tile-self .video-tile-bg').getBoundingClientRect();
+      return {
+        inViewport: pop.left >= 0 && pop.top >= 0 &&
+                    pop.right <= innerWidth + 1 && pop.bottom <= innerHeight + 1,
+        near: Math.abs((pop.left + pop.width / 2) - (btn.left + btn.width / 2)) < pop.width,
+      };
+    });
+    expect(fits).toEqual({ inViewport: true, near: true });
+
     await page.keyboard.press('Escape');
     await expect(page.locator('#video-bg-popover')).toBeHidden();
   });
@@ -395,6 +426,69 @@ test.describe('the effect and the rest of the camera lifecycle', () => {
     expect(seen.wrapped).toBe(false);
     expect(seen.processor).toBe(null);
     expect(seen.original).toBe(undefined);
+  });
+});
+
+test.describe('the first-run download', () => {
+  // The runtime is not bundled, so the first effect anybody turns on pays for a
+  // ~12 MB fetch. Silence there reads as a broken feature.
+  test('reports progress and names the size', async ({ page }) => {
+    await page.evaluate(() => showScreen('room'));
+    await seedEffectsRoom(page);
+    const seen = await page.evaluate(async () => {
+      // Drive the reporter directly: the stub never touches the network, and a
+      // real 12 MB fetch is not something to put in this suite. Note we do NOT
+      // register a listener of our own — onLoadProgress has a single slot, so
+      // that would displace the one main.js installed and there would be
+      // nothing left to render the row.
+      VideoEffects._reportForTest('download', 3 * 1024 * 1024, 12 * 1024 * 1024);
+      const row = document.getElementById('video-bg-progress');
+      return {
+        visible: !row.classList.contains('hidden'),
+        text: row.querySelector('.video-bg-progress-text').textContent,
+        fill: row.querySelector('.video-bg-progress-fill').style.width,
+      };
+    });
+    expect(seen.visible).toBe(true);
+    expect(seen.text).toMatch(/12 MB/);
+    expect(seen.text).toMatch(/25%/);
+    expect(seen.fill).toBe('25%');
+  });
+
+  test('the row goes away once the runtime is ready', async ({ page }) => {
+    const hidden = await page.evaluate(() => {
+      VideoEffects._reportForTest('download', 1, 2);
+      VideoEffects._reportForTest('ready', 1, 1);
+      return document.getElementById('video-bg-progress').classList.contains('hidden');
+    });
+    expect(hidden).toBe(true);
+  });
+
+  test('cancelling leaves the plain camera sharing and the effect off', async ({ page }) => {
+    await page.evaluate(() => showScreen('room'));
+    await seedEffectsRoom(page);
+    const seen = await page.evaluate(async () => {
+      await startVideoShare();
+      const rawStream = localVideoStream;
+      // A load that never resolves until it is aborted — what a slow 12 MB
+      // fetch looks like from the picker's point of view.
+      window.__voxalSegStub = { fail: true, abort: true };
+      window.__swaps = [];
+      await applyVideoBackground('blur');
+      return {
+        stillRaw: localVideoStream === rawStream,
+        wrapped: !!localVideoStream._effectsProcessor,
+        swaps: window.__swaps.length,
+        stored: localStorage.getItem('video-background'),
+        sharing: localVideoActive,
+      };
+    });
+    // Cancelling is an answer, not a failure: nothing on the wire changes.
+    expect(seen.stillRaw).toBe(true);
+    expect(seen.wrapped).toBe(false);
+    expect(seen.swaps).toBe(0);
+    expect(seen.stored).toBe(null);
+    expect(seen.sharing).toBe(true);
   });
 });
 

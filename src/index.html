@@ -605,6 +605,20 @@
       <button id="stage-handle-roster" class="stage-handle stage-handle-right" type="button"
               aria-label="Show the participant list" aria-expanded="false"></button>
 
+      <!-- Background picker. Anchored at open time to the button on the
+           self-view tile (see positionVideoBackgroundPopover): that tile gets
+           moved between the stage grid and the minimized badge, so the popover
+           has to live outside it. -->
+      <div id="video-bg-popover" class="video-bg-popover hidden" role="dialog" aria-label="Background">
+        <p class="video-bg-popover-title">Background</p>
+        <div id="video-bg-progress" class="video-bg-progress hidden" aria-live="polite">
+          <p class="video-bg-progress-text"></p>
+          <div class="video-bg-progress-track"><div class="video-bg-progress-fill"></div></div>
+          <button type="button" id="btn-video-bg-cancel" class="btn btn-secondary btn-sm">Cancel</button>
+        </div>
+        <div id="video-bg-picker"></div>
+      </div>
+
       <div id="room-peers-panel" class="room-peers-panel">
         <button id="btn-toggle-peers" class="btn btn-secondary btn-sm room-peers-toggle hidden" aria-expanded="false">Peers</button>
         <div id="peers-list" class="peers-list"></div>
@@ -641,18 +655,6 @@
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
               <span>Camera</span>
             </button>
-            <div class="room-action-wrap">
-              <button id="btn-video-bg" class="room-action-btn hidden" aria-pressed="false"
-                      aria-expanded="false" aria-haspopup="true" aria-controls="video-bg-popover"
-                      title="Change your background">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.2"/><path d="M5.5 20a6.5 6.5 0 0 1 13 0"/><path d="M3 4.5h3"/><path d="M18 4.5h3"/><path d="M3 9.5h1.5"/><path d="M19.5 9.5H21"/><path d="M3 14.5h1"/><path d="M20 14.5h1"/></svg>
-                <span>Background</span>
-              </button>
-              <div id="video-bg-popover" class="video-bg-popover hidden" role="dialog" aria-label="Background">
-                <p class="video-bg-popover-title">Background</p>
-                <div id="video-bg-picker"></div>
-              </div>
-            </div>
             <button id="btn-share-screen" class="room-action-btn hidden" aria-pressed="false" title="Share your screen">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
               <span>Screen</span>

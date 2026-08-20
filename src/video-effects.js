@@ -55,9 +55,23 @@ var VideoEffects = (function () {
   var BUNDLE_FILE = 'vision_bundle.mjs';
   var ASSET_DIR   = 'assets/seg/';
 
-  // The landscape selfie model's input. Segmenting at the capture resolution
-  // would cost an order of magnitude more for a mask nobody can tell apart.
-  var SEG_W = 256, SEG_H = 144;
+  // The mask's working resolution: the long side, with the short side derived
+  // from the camera's actual aspect (see segSizeFor).
+  //
+  // This is not cosmetic. ImageSegmenter returns its mask at the dimensions of
+  // the frame you hand it, NOT at the model's own input size — so feeding it
+  // the raw video meant a 640x480 mask read back per inference (300 KB, not the
+  // 37 KB a 256x144 mask would be) and then resampled into a hardcoded 16:9
+  // buffer, crushing 480 rows into 144 and clipping the subject. Downscaling
+  // the frame ourselves first fixes the readback cost and the geometry at once.
+  var SEG_LONG = 256;
+
+  // How far to expand the mask before feathering it, in mask pixels. The model
+  // errs slightly inside the subject, the feather blur erodes a little more,
+  // and a mask that lags the frame by a segmentation interval erodes it again
+  // at exactly the moment you move. Three small erosions compound into a
+  // visibly clipped face, so the pipeline deliberately errs outward instead.
+  var MASK_DILATE = 2;
 
   // Segmentation rates, in Hz, stepped down under load in this order.
   var SEG_HZ_DESKTOP = [15, 10, 6];
@@ -95,6 +109,18 @@ var VideoEffects = (function () {
       else localStorage.setItem(STORAGE_KEY, mode);
     } catch (e) { /* private mode — the effect still works for this session */ }
     return mode;
+  }
+
+  // Long side SEG_LONG, short side to match the frame, both even. A 16:9 camera
+  // gives 256x144; the 4:3 one on most laptops gives 256x192; a phone held
+  // upright gives 144x256.
+  function segSizeFor(w, h) {
+    if (!w || !h) return { width: SEG_LONG, height: Math.round(SEG_LONG * 9 / 16) };
+    var scale = SEG_LONG / Math.max(w, h);
+    return {
+      width:  Math.max(2, Math.round(w * scale / 2) * 2),
+      height: Math.max(2, Math.round(h * scale / 2) * 2)
+    };
   }
 
   function presetById(id) {
@@ -204,22 +230,50 @@ var VideoEffects = (function () {
   // --- asset locations ------------------------------------------------------
   //
   // The model and the preset artwork are small and ship with the app, so they
-  // are always same-origin. The ~12 MB MediaPipe runtime is NOT bundled: on the
-  // web it is served from our own origin (which the COEP require-corp header
-  // already covers); on Tauri and Capacitor it is fetched from voxal.app, or
-  // from whatever a self-hoster set as `service-url`.
+  // are always same-origin. The ~12 MB MediaPipe runtime is NOT bundled, so it
+  // has to be fetched — and the resolution follows exactly the rule
+  // anonymousTurnUrl() and the SFU endpoints in main.js already use:
+  //
+  //   * an explicit override wins (self-hosters, tests);
+  //   * on plain web over http(s), a SAME-ORIGIN path, so a self-hosted deploy
+  //     serves its own copy (and the COEP require-corp header is satisfied for
+  //     free);
+  //   * native (Capacitor/Tauri) has no same-origin server — the page comes
+  //     from capacitor:// or the Tauri asset protocol — so it needs the
+  //     absolute URL of the static site.
+  //
+  // That last line is the one that matters: this must point at the host serving
+  // src/, which is ptt.voxal.app. It is NOT presenceBase()/`service-url` —
+  // that is the presence API, which defaults to a Supabase edge function and
+  // has never served static assets. Getting this wrong is silent on the web and
+  // breaks the whole feature on the desktop and mobile apps.
 
-  function isNative() {
-    if (window.__TAURI__) return true;
+  var DEFAULT_SEG_BASE = 'https://ptt.voxal.app/' + ASSET_DIR;
+  var SEG_BASE_KEY = 'seg-assets-url';
+
+  function isTauri() { return !!window.__TAURI__; }
+
+  function isCapacitor() {
     return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   }
 
+  function isNative() { return isTauri() || isCapacitor(); }
+
   function runtimeBase() {
-    if (!isNative()) return ASSET_DIR;
-    var base;
-    try { base = localStorage.getItem(SERVICE_URL_KEY) || DEFAULT_SERVICE_URL; }
-    catch (e) { base = DEFAULT_SERVICE_URL; }
-    return String(base).replace(/\/+$/, '') + '/' + ASSET_DIR;
+    var override;
+    try { override = localStorage.getItem(SEG_BASE_KEY); } catch (e) { override = null; }
+    if (override) return override.trim().replace(/\/*$/, '/');
+    // Desktop ships the runtime inside the app: tauri.conf.json's frontendDist
+    // is the whole of src/, and the build targets stage the runtime before
+    // bundling. So there is nothing to download, nothing to go wrong offline,
+    // and no dependency on the static host being reachable.
+    if (isTauri()) return ASSET_DIR;
+    // Capacitor is the opposite trade — cap-sync strips the runtime, because
+    // 12 MB in every App Store and Play download is not worth it for a feature
+    // most people never switch on — so it fetches, with a progress bar.
+    if (isCapacitor()) return DEFAULT_SEG_BASE;
+    if (/^https?:$/.test(location.protocol)) return ASSET_DIR;
+    return DEFAULT_SEG_BASE;
   }
 
   // import() needs a real URL: 'assets/seg/x.mjs' is a *bare* specifier and
@@ -230,49 +284,132 @@ var VideoEffects = (function () {
 
   function modelUrl() { return ASSET_DIR + MODEL_FILE; }
 
-  // Best-effort offline cache for the one asset big enough to be worth it.
-  // There is no service worker, so a CacheStorage entry only helps if we hand
-  // MediaPipe a blob: URL made from it. Any failure falls back to the plain URL
-  // and the HTTP cache, which the immutable Cache-Control header already makes
-  // effective for repeat launches.
-  function cachedBinaryUrl(url) {
-    // Same-origin web is already served with an immutable Cache-Control, so the
-    // HTTP cache does this job without holding a 12 MB blob in memory.
-    if (!isNative() || !window.caches) return Promise.resolve(url);
-    return caches.open(CACHE_NAME).then(function (cache) {
-      return cache.match(url).then(function (hit) {
-        if (hit) return hit;
-        return cache.add(url).then(function () { return cache.match(url); });
-      }).then(function (res) {
-        if (!res) return url;
-        return res.blob().then(function (blob) { return URL.createObjectURL(blob); });
+  // --- MediaPipe loading, with progress and a way out -----------------------
+  //
+  // Twelve megabytes on a phone tether is not instant, and a picker that just
+  // sits there looking broken is worse than a slow one. So the binary is
+  // fetched by hand rather than left to MediaPipe's loader: a streamed read
+  // gives us a byte count to report, and an AbortController gives the user a
+  // way to change their mind.
+
+  var _runtime = null;         // Promise<{ ImageSegmenter, fileset }>
+  var _loadAbort = null;       // AbortController for the in-flight fetch
+  var _onProgress = null;      // fn({ phase, loaded, total, ratio })
+
+  // Rough, and deliberately so — it is a "this will take a moment" signal, not
+  // an invoice. Read once at load time from the real Content-Length when the
+  // server sends one.
+  var APPROX_RUNTIME_BYTES = 12 * 1024 * 1024;
+
+  // Single slot, not a list: main.js is the only consumer, and a second
+  // registration displacing the first would silently stop the UI updating.
+  function onLoadProgress(fn) { _onProgress = fn; }
+
+  function report(phase, loaded, total) {
+    if (!_onProgress) return;
+    // Content-Length is the *compressed* size whenever the server encodes the
+    // response, while the reader hands back decompressed bytes — so the header
+    // is a hint, not a denominator to trust. Fall back to the approximate size,
+    // and never show 100% before the runtime is actually ready.
+    var denom = total || APPROX_RUNTIME_BYTES;
+    var ratio = phase === 'ready' || phase === 'cache'
+      ? 1
+      : Math.min(0.99, (loaded || 0) / denom);
+    try {
+      _onProgress({
+        phase: phase,
+        loaded: loaded || 0,
+        total: total || 0,
+        ratio: ratio
       });
-    }).catch(function () { return url; });
+    } catch (e) { /* a broken progress UI must not break the load */ }
   }
 
-  // --- MediaPipe loading ----------------------------------------------------
+  function isLoading() { return !!_loadAbort; }
+  function isLoaded() { return !!_runtime && !_loadAbort; }
 
-  var _runtime = null;   // Promise<{ ImageSegmenter, fileset }>
+  // Cancel an in-flight first load. The fetch rejects with AbortError, which
+  // wrap() turns into "leave the plain camera alone".
+  function cancelLoad() {
+    if (_loadAbort) { try { _loadAbort.abort(); } catch (e) { /* ignore */ } }
+  }
+
+  // Fetch with a byte counter. Without ReadableStream (or without a
+  // Content-Length) it still works — you just get an indeterminate bar, which
+  // is the honest thing to show when the size is genuinely unknown.
+  function fetchBinary(url, signal) {
+    return fetch(url, { signal: signal }).then(function (res) {
+      if (!res.ok) throw new Error('runtime fetch failed: HTTP ' + res.status);
+      var total = Number(res.headers.get('content-length')) || 0;
+      if (!res.body || typeof res.body.getReader !== 'function') {
+        report('download', 0, total);
+        return res.blob();
+      }
+      var reader = res.body.getReader();
+      var chunks = [], loaded = 0;
+      report('download', 0, total);
+      return (function pump() {
+        return reader.read().then(function (r) {
+          if (r.done) return new Blob(chunks, { type: 'application/wasm' });
+          chunks.push(r.value);
+          loaded += r.value.length;
+          report('download', loaded, total);
+          return pump();
+        });
+      })();
+    });
+  }
+
+  // The binary is the only asset big enough to be worth caching by hand. There
+  // is no service worker, so a CacheStorage entry only helps if we hand
+  // MediaPipe a blob: URL made from it — but that is exactly what the progress
+  // fetch produces anyway, so the two fall out together.
+  function runtimeBinaryUrl(url, signal) {
+    var open = window.caches ? caches.open(CACHE_NAME) : Promise.reject();
+    return open.then(function (cache) {
+      return cache.match(url).then(function (hit) {
+        if (hit) { report('cache', 1, 1); return hit.blob(); }
+        return fetchBinary(url, signal).then(function (blob) {
+          // Best effort: a full quota must not fail the load.
+          try { cache.put(url, new Response(blob)); } catch (e) { /* ignore */ }
+          return blob;
+        });
+      });
+    }, function () {
+      return fetchBinary(url, signal);
+    }).then(function (blob) { return URL.createObjectURL(blob); });
+  }
 
   function loadRuntime() {
     if (_runtime) return _runtime;
     var base = runtimeBase();
-    // Dynamic import is legal from a classic script and keeps the ~12 MB
-    // runtime off the critical path — nothing is fetched until the user
-    // actually turns an effect on.
+    var ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    _loadAbort = ctl;
+    report('start', 0, APPROX_RUNTIME_BYTES);
+
+    // Dynamic import is legal from a classic script and keeps the runtime off
+    // the critical path — nothing is fetched until an effect is turned on.
     _runtime = Promise.all([
       import(absolute(base + BUNDLE_FILE)),
-      cachedBinaryUrl(absolute(base + WASM_BINARY))
+      runtimeBinaryUrl(absolute(base + WASM_BINARY), ctl && ctl.signal)
     ]).then(function (r) {
+      _loadAbort = null;
+      report('ready', 1, 1);
       return {
         ImageSegmenter: r[0].ImageSegmenter,
         fileset: { wasmLoaderPath: absolute(base + WASM_LOADER), wasmBinaryPath: r[1] }
       };
-    }).catch(function (err) {
+    }, function (err) {
+      _loadAbort = null;
       _runtime = null;   // let a later attempt retry rather than latch a failure
+      report(isAbort(err) ? 'cancelled' : 'failed', 0, 0);
       throw err;
     });
     return _runtime;
+  }
+
+  function isAbort(err) {
+    return !!err && (err.name === 'AbortError' || /abort/i.test(err.message || ''));
   }
 
   // Tests drive the whole pipeline — the GL passes, the track swaps, the
@@ -283,25 +420,35 @@ var VideoEffects = (function () {
   // strikes for the audio worklet.
   function stubSegmenter() {
     var stub = window.__voxalSegStub;
-    if (stub && stub.fail) return Promise.reject(new Error('stubbed segmenter failure'));
-    var data = new Uint8Array(SEG_W * SEG_H);
-    for (var y = 0; y < SEG_H; y++) {
-      for (var x = 0; x < SEG_W; x++) {
-        // A centred oval stands in for a person.
-        var dx = (x - SEG_W / 2) / (SEG_W * 0.22);
-        var dy = (y - SEG_H * 0.6) / (SEG_H * 0.45);
-        data[y * SEG_W + x] = (dx * dx + dy * dy) < 1 ? 255 : 0;
-      }
+    if (stub && stub.fail) {
+      var err = new Error(stub.abort ? 'The user aborted a request.' : 'stubbed segmenter failure');
+      if (stub.abort) err.name = 'AbortError';
+      return Promise.reject(err);
     }
-    var mask = {
-      width: SEG_W, height: SEG_H,
-      getAsUint8Array: function () { return data; }
-    };
+    // Sized from the frame it is handed, exactly as the real segmenter is.
+    var cache = {};
+    function maskFor(w, h) {
+      var key = w + 'x' + h;
+      if (cache[key]) return cache[key];
+      var data = new Uint8Array(w * h);
+      for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w; x++) {
+          // A centred oval stands in for a person.
+          var dx = (x - w / 2) / (w * 0.22);
+          var dy = (y - h * 0.6) / (h * 0.45);
+          data[y * w + x] = (dx * dx + dy * dy) < 1 ? 255 : 0;
+        }
+      }
+      cache[key] = { width: w, height: h, getAsUint8Array: function () { return data; } };
+      return cache[key];
+    }
     return Promise.resolve({
       close: function () {},
       segmentForVideo: function (frame, ts, cb) {
         window.__voxalSegCalls = (window.__voxalSegCalls || 0) + 1;
-        cb({ confidenceMasks: [mask, mask] });
+        var w = frame.width || frame.videoWidth || SEG_LONG;
+        var h = frame.height || frame.videoHeight || Math.round(SEG_LONG * 9 / 16);
+        cb({ confidenceMasks: [maskFor(w, h)] });
       }
     });
   }
@@ -314,7 +461,7 @@ var VideoEffects = (function () {
       // and blend state. Sharing ours would mean saving and restoring GL state
       // around every inference on five different webviews.
       var segCanvas = document.createElement('canvas');
-      segCanvas.width = SEG_W; segCanvas.height = SEG_H;
+      segCanvas.width = SEG_LONG; segCanvas.height = SEG_LONG;
       return rt.ImageSegmenter.createFromOptions(rt.fileset, {
         baseOptions: { modelAssetPath: modelUrl(), delegate: 'GPU' },
         canvas: segCanvas,
@@ -377,6 +524,24 @@ var VideoEffects = (function () {
     '}'
   ].join('\n');
 
+  // Separable max filter. Expands the subject by uDir per pass; the mask is a
+  // single channel, so three taps is enough to matter and cheap enough to be
+  // free at this size.
+  var FRAG_DILATE = [
+    '#version 300 es',
+    'precision mediump float;',
+    'in vec2 vUv;',
+    'uniform sampler2D uTex;',
+    'uniform vec2 uDir;',
+    'out vec4 outColor;',
+    'void main() {',
+    '  float m = texture(uTex, vUv).r;',
+    '  m = max(m, texture(uTex, vUv + uDir).r);',
+    '  m = max(m, texture(uTex, vUv - uDir).r);',
+    '  outColor = vec4(m, 0.0, 0.0, 1.0);',
+    '}'
+  ].join('\n');
+
   // Temporal smoothing. Blending each new mask into the previous one is what
   // stops the edge crawling between frames, and is also why dropping to 10 Hz
   // segmentation does not read as stutter.
@@ -417,7 +582,11 @@ var VideoEffects = (function () {
     '  } else {',
     '    bg = texture(uBlur, flip).rgb;',
     '  }',
-    '  float m = smoothstep(0.35, 0.65, texture(uMask, flip).r);',
+    // Biased low on purpose. The confidence mask is not a clean 0/1 field: it
+    // falls off gradually at the subject, and a symmetric window around 0.5
+    // cuts inside the face rather than outside it. Better to keep a sliver of
+    // background sharp than to blur somebody's ear off.
+    '  float m = smoothstep(0.10, 0.42, texture(uMask, flip).r);',
     '  outColor = vec4(mix(bg, sharp, m), 1.0);',
     '}'
   ].join('\n');
@@ -604,6 +773,7 @@ var VideoEffects = (function () {
     this.pCopy = program(gl, FRAG_COPY);
     this.pBlur = program(gl, FRAG_BLUR);
     this.pMix  = program(gl, FRAG_MASK_MIX);
+    this.pDilate = program(gl, FRAG_DILATE);
     this.pComp = program(gl, FRAG_COMPOSITE);
 
     this.texCam = texture(gl, 1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
@@ -619,9 +789,18 @@ var VideoEffects = (function () {
     this.fbBlurA = framebuffer(gl, this.texBlurA);
     this.fbBlurB = framebuffer(gl, this.texBlurB);
 
-    this.texMaskRaw = texture(gl, SEG_W, SEG_H, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
-    this.texMaskA = texture(gl, SEG_W, SEG_H, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
-    this.texMaskB = texture(gl, SEG_W, SEG_H, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
+    // Matched to the camera's aspect, not to a fixed 16:9 — see SEG_LONG.
+    var seg = segSizeFor(size.w, size.h);
+    this.segW = seg.width; this.segH = seg.height;
+    // The frame is downscaled into this before inference, so the mask comes
+    // back at segW x segH instead of at the capture resolution.
+    this.segCanvas = document.createElement('canvas');
+    this.segCanvas.width = this.segW; this.segCanvas.height = this.segH;
+    this.segCtx = this.segCanvas.getContext('2d', { willReadFrequently: false });
+
+    this.texMaskRaw = texture(gl, this.segW, this.segH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
+    this.texMaskA = texture(gl, this.segW, this.segH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
+    this.texMaskB = texture(gl, this.segW, this.segH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
     this.fbMaskA = framebuffer(gl, this.texMaskA);
     this.fbMaskB = framebuffer(gl, this.texMaskB);
     this.maskPrimed = false;
@@ -737,9 +916,17 @@ var VideoEffects = (function () {
     var ts = Math.max(Math.round(now), this.lastTs + 1);
     this.lastTs = ts;
     try {
-      this.segmenter.segmentForVideo(this.video, ts, function (result) {
+      // Segment a downscaled copy, not the camera frame. ImageSegmenter returns
+      // its mask at the size of whatever you hand it, so passing the raw video
+      // means reading back a full-resolution mask every inference and then
+      // resampling it — expensive, and lossy in the one direction that clips
+      // the subject. The model resizes its input internally anyway, so nothing
+      // is lost by doing the downscale ourselves.
+      this.segCtx.drawImage(this.video, 0, 0, this.segW, this.segH);
+      this.segmenter.segmentForVideo(this.segCanvas, ts, function (result) {
         var masks = result && result.confidenceMasks;
-        // Category 1 is the person; 0 is the background.
+        // The selfie model publishes a single confidence mask ("selfie"); other
+        // segmenters put the person at index 1 behind the background.
         var mask = masks && (masks.length > 1 ? masks[1] : masks[0]);
         if (!mask) return;
         try { self.uploadMask(mask.getAsUint8Array(), mask.width, mask.height); }
@@ -755,38 +942,72 @@ var VideoEffects = (function () {
   Processor.prototype.uploadMask = function (data, w, h) {
     var gl = this.gl;
     if (!gl) return;
+    var W = this.segW, H = this.segH;
+
     gl.bindTexture(gl.TEXTURE_2D, this.texMaskRaw);
-    if (w !== SEG_W || h !== SEG_H) {
+    if (w !== W || h !== H) {
+      // Should not happen now that we control the input size, but a mask of an
+      // unexpected shape is better re-allocated than silently misread.
+      this.segW = W = w; this.segH = H = h;
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, w, h, 0, gl.RED, gl.UNSIGNED_BYTE, data);
+      this.resizeMaskBuffers(w, h);
+      gl.bindTexture(gl.TEXTURE_2D, this.texMaskRaw);
     } else {
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, SEG_W, SEG_H, gl.RED, gl.UNSIGNED_BYTE, data);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RED, gl.UNSIGNED_BYTE, data);
     }
 
     // texMaskA holds the smoothed mask. The very first mask is taken whole,
     // otherwise the first second of video fades in from an empty matte.
-    var alpha = this.maskPrimed ? 0.5 : 1.0;
+    // Weighted towards the new mask: at 10-15 Hz an even blend lags far enough
+    // behind a moving head to shave its edge off.
+    var alpha = this.maskPrimed ? 0.7 : 1.0;
     gl.useProgram(this.pMix);
     this.bindTex(this.pMix, 'uPrev', 0, this.texMaskA);
     this.bindTex(this.pMix, 'uNext', 1, this.texMaskRaw);
     gl.uniform1f(uloc(gl, this.pMix, 'uAlpha'), alpha);
-    this.drawQuad(this.fbMaskB, SEG_W, SEG_H);
+    this.drawQuad(this.fbMaskB, W, H);
 
-    // Feather: blur the smoothed mask so the composite's smoothstep has a real
-    // gradient to work with instead of the model's hard 256×144 staircase.
+    // Dilate before feathering. Everything downstream shrinks the subject a
+    // little — the feather blur, the smoothstep, and the mask's own lag behind
+    // a moving frame — so expand it first and let those take the slack back.
+    // Separable, like the blur: two passes of a 3-tap max.
+    gl.useProgram(this.pDilate);
+    this.bindTex(this.pDilate, 'uTex', 0, this.texMaskB);
+    gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), MASK_DILATE / W, 0);
+    this.drawQuad(this.fbMaskA, W, H);
+
+    this.bindTex(this.pDilate, 'uTex', 0, this.texMaskA);
+    gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), 0, MASK_DILATE / H);
+    this.drawQuad(this.fbMaskB, W, H);
+
+    // Feather: blur the dilated mask so the composite's smoothstep has a real
+    // gradient to work with instead of the model's staircase.
     gl.useProgram(this.pBlur);
     this.bindTex(this.pBlur, 'uTex', 0, this.texMaskB);
-    gl.uniform2f(uloc(gl, this.pBlur, 'uDir'), 1 / SEG_W, 0);
-    this.drawQuad(this.fbMaskA, SEG_W, SEG_H);
+    gl.uniform2f(uloc(gl, this.pBlur, 'uDir'), 1 / W, 0);
+    this.drawQuad(this.fbMaskA, W, H);
 
     this.bindTex(this.pBlur, 'uTex', 0, this.texMaskA);
-    gl.uniform2f(uloc(gl, this.pBlur, 'uDir'), 0, 1 / SEG_H);
-    this.drawQuad(this.fbMaskB, SEG_W, SEG_H);
+    gl.uniform2f(uloc(gl, this.pBlur, 'uDir'), 0, 1 / H);
+    this.drawQuad(this.fbMaskB, W, H);
 
     // Swap so texMaskA is always the current, feathered mask.
     var t = this.texMaskA, f = this.fbMaskA;
     this.texMaskA = this.texMaskB; this.fbMaskA = this.fbMaskB;
     this.texMaskB = t; this.fbMaskB = f;
     this.maskPrimed = true;
+  };
+
+  // Re-allocate just the mask ping-pong for a new mask shape, leaving the
+  // camera and blur buffers alone.
+  Processor.prototype.resizeMaskBuffers = function (w, h) {
+    var gl = this.gl;
+    [this.texMaskA, this.texMaskB].forEach(function (t) {
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, w, h, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+    });
+    this.maskPrimed = false;
+    if (this.segCanvas) { this.segCanvas.width = w; this.segCanvas.height = h; }
   };
 
   Processor.prototype.draw = function () {
@@ -902,7 +1123,7 @@ var VideoEffects = (function () {
     [this.fbBlurA, this.fbBlurB, this.fbMaskA, this.fbMaskB].forEach(function (f) {
       if (f) try { gl.deleteFramebuffer(f); } catch (e) { /* ignore */ }
     });
-    [this.pCopy, this.pBlur, this.pMix, this.pComp].forEach(function (p) {
+    [this.pCopy, this.pBlur, this.pMix, this.pDilate, this.pComp].forEach(function (p) {
       if (p) try { gl.deleteProgram(p); } catch (e) { /* ignore */ }
     });
     if (this.quad) try { gl.deleteBuffer(this.quad); } catch (e) { /* ignore */ }
@@ -1140,12 +1361,21 @@ var VideoEffects = (function () {
   return {
     STORAGE_KEY: STORAGE_KEY,
     PRESETS: PRESETS,
-    SEG_SIZE: { width: SEG_W, height: SEG_H },
+    SEG_LONG: SEG_LONG,
+    segSizeFor: segSizeFor,
     isSupported: isSupported,
     normalizeMode: normalizeMode,
     readMode: readMode,
     writeMode: writeMode,
     warmup: warmup,
+    onLoadProgress: onLoadProgress,
+    // Test hook: drives the progress reporter without a 12 MB fetch.
+    _reportForTest: report,
+    _runtimeBaseForTest: runtimeBase,
+    cancelLoad: cancelLoad,
+    isLoading: isLoading,
+    isLoaded: isLoaded,
+    isAbort: isAbort,
     wrap: wrap,
     setMode: setMode,
     setSource: setSource,

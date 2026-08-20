@@ -6179,6 +6179,12 @@ async function maybeApplyVideoEffects(rawStream) {
   try {
     return await VideoEffects.wrap(rawStream, mode);
   } catch (e) {
+    if (VideoEffects.isAbort(e)) {
+      devLog('[Video] Background effect download cancelled', 'info');
+      VideoEffects.writeMode('off');
+      syncVideoBackgroundControls();
+      return rawStream;
+    }
     devLog('[Video] Background effect failed to start: ' + (e && e.message ? e.message : String(e)), 'warn');
     showCopyToast('Background effect unavailable — sharing without it');
     return rawStream;
@@ -8216,6 +8222,25 @@ function _buildVideoTile(tile) {
     });
     flip.addEventListener('pointerdown', function(e) { e.stopPropagation(); });
     el.appendChild(flip);
+
+    // Your background belongs to your camera, so the control sits on your own
+    // picture rather than in the room's control row — icon only, next to the
+    // flip, and it rides along when renderVideoStage() moves the tile into the
+    // minimized badge.
+    var bg = document.createElement('button');
+    bg.type = 'button';
+    bg.className = 'video-tile-bg';
+    bg.setAttribute('aria-haspopup', 'true');
+    bg.setAttribute('aria-controls', 'video-bg-popover');
+    bg.setAttribute('aria-expanded', 'false');
+    bg.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.2"/><path d="M5.5 20a6.5 6.5 0 0 1 13 0"/><path d="M3 4.5h3"/><path d="M18 4.5h3"/><path d="M3 9.5h1.5"/><path d="M19.5 9.5H21"/><path d="M3 14.5h1"/><path d="M20 14.5h1"/></svg>';
+    bg.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleVideoBackgroundPopover(bg);
+    });
+    bg.addEventListener('pointerdown', function(e) { e.stopPropagation(); });
+    el.appendChild(bg);
   }
 
   var bar = document.createElement('div');
@@ -8260,6 +8285,14 @@ function _syncVideoTile(el, tile) {
       flip.title = _cameraFacing === 'user'
         ? 'Switch to the rear camera' : 'Switch to the front camera';
       flip.setAttribute('aria-label', flip.title);
+    }
+    var bg = el.querySelector('.video-tile-bg');
+    if (bg) {
+      var mode = videoBackgroundMode();
+      bg.classList.toggle('available', videoEffectsAvailable());
+      bg.classList.toggle('is-on', mode !== 'off');
+      bg.title = mode === 'off' ? 'Change your background' : 'Background: on';
+      bg.setAttribute('aria-label', bg.title);
     }
   }
 
@@ -9293,17 +9326,10 @@ function updateVideoModeUI() {
   }
   // Note there is no flip button here: front/back belongs to the self-view
   // tile (see _buildVideoTile), not to the room's control row.
-  // Background button — only meaningful with a camera actually running, so it
-  // appears alongside the live self-view rather than sitting there inert.
-  var bgBtn = document.getElementById('btn-video-bg');
-  if (bgBtn) {
-    var canPickBackground = videoModeEnabled && localVideoActive && videoEffectsAvailable();
-    bgBtn.classList.toggle('hidden', !canPickBackground);
-    if (!canPickBackground) closeVideoBackgroundPopover();
-    var bgOn = videoBackgroundMode() !== 'off';
-    bgBtn.classList.toggle('active', bgOn);
-    bgBtn.setAttribute('aria-pressed', String(bgOn));
-  }
+  // The background control is not here: it rides on the self-view tile, beside
+  // the flip button, because it belongs to your camera rather than to the room
+  // (see _buildVideoTile). Close its popover when the camera goes away.
+  if (!localVideoActive) closeVideoBackgroundPopover();
   // Share screen button (visible when video mode is active, hidden on mobile)
   var screenBtn = document.getElementById('btn-share-screen');
   if (screenBtn) {
@@ -9556,34 +9582,101 @@ var _videoBgPickers = [];
 function syncVideoBackgroundControls() {
   var mode = videoBackgroundMode();
   _videoBgPickers.forEach(function(p) { try { p.sync(mode); } catch (e) { /* ignore */ } });
-  var bgBtn = document.getElementById('btn-video-bg');
-  if (bgBtn) {
-    var on = mode !== 'off';
-    bgBtn.classList.toggle('active', on);
-    bgBtn.setAttribute('aria-pressed', String(on));
-  }
+  // The room control lives on the self-view tile; refreshing the stage is what
+  // re-reads its state.
+  if (inRoom) updatePeerList();
 }
 
 function closeVideoBackgroundPopover() {
   var pop = document.getElementById('video-bg-popover');
   if (!pop || pop.classList.contains('hidden')) return;
   pop.classList.add('hidden');
-  var btn = document.getElementById('btn-video-bg');
-  if (btn) btn.setAttribute('aria-expanded', 'false');
+  document.querySelectorAll('.video-tile-bg[aria-expanded="true"]').forEach(function(b) {
+    b.setAttribute('aria-expanded', 'false');
+  });
+  _videoBgAnchor = null;
 }
 
-function toggleVideoBackgroundPopover() {
+// The popover is a child of #screen-room, not of the tile: renderVideoStage()
+// moves the self-view tile between the grid and the minimized badge, and the
+// badge is far too small to contain a picker. So it is positioned by hand
+// against whichever button opened it, and clamped into the viewport.
+var _videoBgAnchor = null;
+
+function positionVideoBackgroundPopover() {
+  var pop = document.getElementById('video-bg-popover');
+  if (!pop || !_videoBgAnchor || pop.classList.contains('hidden')) return;
+  if (!_videoBgAnchor.isConnected) { closeVideoBackgroundPopover(); return; }
+
+  var a = _videoBgAnchor.getBoundingClientRect();
+  var box = pop.getBoundingClientRect();
+  var margin = 8;
+
+  // Prefer below the button; flip above when there is no room, which is the
+  // usual case for a badge parked in a bottom corner.
+  var top = a.bottom + margin;
+  if (top + box.height > window.innerHeight - margin) {
+    top = Math.max(margin, a.top - box.height - margin);
+  }
+  var left = a.left + a.width / 2 - box.width / 2;
+  left = Math.max(margin, Math.min(left, window.innerWidth - box.width - margin));
+
+  pop.style.top = Math.round(top) + 'px';
+  pop.style.left = Math.round(left) + 'px';
+}
+
+function toggleVideoBackgroundPopover(anchor) {
   var pop = document.getElementById('video-bg-popover');
   if (!pop) return;
-  var opening = pop.classList.contains('hidden');
-  pop.classList.toggle('hidden', !opening);
-  var btn = document.getElementById('btn-video-bg');
-  if (btn) btn.setAttribute('aria-expanded', String(opening));
-  if (opening) {
-    syncVideoBackgroundControls();
-    var first = pop.querySelector('.bg-chip[aria-checked="true"]') || pop.querySelector('.bg-chip');
-    if (first) first.focus();
+  var opening = pop.classList.contains('hidden') || anchor !== _videoBgAnchor;
+  if (!opening) { closeVideoBackgroundPopover(); return; }
+
+  _videoBgAnchor = anchor || _videoBgAnchor;
+  pop.classList.remove('hidden');
+  if (anchor) anchor.setAttribute('aria-expanded', 'true');
+  syncVideoBackgroundControls();
+  renderVideoBackgroundProgress();
+  positionVideoBackgroundPopover();
+  var first = pop.querySelector('.bg-chip[aria-checked="true"]') || pop.querySelector('.bg-chip');
+  if (first) first.focus();
+}
+
+// --- First run: 12 MB, and a way out -----------------------------------------
+//
+// The segmentation runtime is not bundled (see docs/video-effects.md), so the
+// first time anybody turns an effect on it has to be downloaded. On a phone
+// tether that is not instant, and a picker that sits there looking broken is
+// worse than a slow one — so say what is happening, how far along it is, and
+// offer to stop.
+
+var _videoBgLoad = null;   // last progress event, or null when nothing is loading
+
+function renderVideoBackgroundProgress() {
+  var row = document.getElementById('video-bg-progress');
+  if (!row) return;
+  var active = !!_videoBgLoad && _videoBgLoad.phase !== 'ready' &&
+               _videoBgLoad.phase !== 'cancelled' && _videoBgLoad.phase !== 'failed';
+  row.classList.toggle('hidden', !active);
+  if (!active) { positionVideoBackgroundPopover(); return; }
+
+  var pct = Math.round((_videoBgLoad.ratio || 0) * 100);
+  var text = row.querySelector('.video-bg-progress-text');
+  var fill = row.querySelector('.video-bg-progress-fill');
+  if (text) {
+    // Name the size up front: this is a one-off download, and a user who does
+    // not want to spend it on the connection they are on should be able to tell
+    // before it finishes rather than after.
+    text.textContent = _videoBgLoad.phase === 'cache'
+      ? 'Preparing background effects…'
+      : 'Downloading background effects (about 12 MB) — ' + pct + '%';
   }
+  if (fill) fill.style.width = pct + '%';
+  positionVideoBackgroundPopover();
+}
+
+function cancelVideoBackgroundLoad() {
+  if (typeof VideoEffects === 'undefined') return;
+  VideoEffects.cancelLoad();
 }
 
 function initVideoBackgroundUI() {
@@ -9600,18 +9693,29 @@ function initVideoBackgroundUI() {
     if (picker) _videoBgPickers.push(picker);
   });
 
-  var btn = document.getElementById('btn-video-bg');
-  if (btn) {
-    btn.addEventListener('click', function(ev) {
-      ev.stopPropagation();
-      toggleVideoBackgroundPopover();
-    });
-  }
   var pop = document.getElementById('video-bg-popover');
   if (pop) pop.addEventListener('click', function(ev) { ev.stopPropagation(); });
   document.addEventListener('click', closeVideoBackgroundPopover);
   document.addEventListener('keydown', function(ev) {
     if (ev.key === 'Escape') closeVideoBackgroundPopover();
+  });
+  // An anchored popover has to follow its anchor, and the self-view badge moves
+  // with the layout.
+  window.addEventListener('resize', positionVideoBackgroundPopover);
+  window.addEventListener('scroll', positionVideoBackgroundPopover, true);
+
+  var cancelBtn = document.getElementById('btn-video-bg-cancel');
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', function(ev) {
+      ev.stopPropagation();
+      cancelVideoBackgroundLoad();
+    });
+  }
+
+  VideoEffects.onLoadProgress(function(e) {
+    var done = e.phase === 'ready' || e.phase === 'cancelled' || e.phase === 'failed';
+    _videoBgLoad = done ? null : e;
+    renderVideoBackgroundProgress();
   });
 
   // A device that cannot sustain the effect gets dropped back to a plain
@@ -9694,10 +9798,15 @@ async function applyVideoBackground(mode) {
         next = await VideoEffects.wrap(source, mode);
       } catch (e) {
         // Keep the plain camera wired up, exactly as flipCamera does on failure.
-        devLog('[Video] Background effect failed: ' + (e && e.message ? e.message : String(e)), 'warn');
-        showCopyToast('Background effect unavailable on this device');
         VideoEffects.writeMode('off');
         syncVideoBackgroundControls();
+        if (VideoEffects.isAbort(e)) {
+          // The user pressed Cancel. That is an answer, not an error.
+          devLog('[Video] Background effect download cancelled', 'info');
+          return;
+        }
+        devLog('[Video] Background effect failed: ' + (e && e.message ? e.message : String(e)), 'warn');
+        showCopyToast('Background effect unavailable on this device');
         return;
       }
       var nextTrack = next.getVideoTracks()[0];

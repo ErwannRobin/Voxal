@@ -549,10 +549,41 @@ Full design in `docs/video-effects.md`. What is not derivable from the code:
   from `storage.googleapis.com/mediapipe-models/…` and have to be vendored
   separately. `selfie_segmenter_landscape.tflite` is 250 KB.
 
-- **A confidence mask read via `getAsUint8Array()` is 0–255, not 0–1**, and the
-  selfie model returns *two* confidence masks: index 0 is background, index 1 is
-  the person. Reading index 0 gives a perfectly plausible-looking inverted matte
-  that only reveals itself when you notice the background is the sharp part.
+- **`ImageSegmenter` returns its mask at the size of the frame you hand it**, not
+  at the model's input size. Passing a 640x480 video back gives a 640x480 mask
+  (300 KB read across per inference, not the 37 KB a 256x144 one would be), and
+  if you then resample it into a hardcoded 16:9 buffer you crush 480 rows into
+  144 and clip the subject. Downscale the frame yourself first — the model
+  resizes internally anyway, so nothing is lost and the geometry comes out
+  right. `mask.width`/`mask.height` will tell you this in about a minute; the
+  docs will not.
+
+- **Every stage of a mask pipeline erodes the subject** — the feather blur, the
+  composite's `smoothstep`, and the mask's own lag behind a moving frame. Each
+  is small, they compound, and the result is somebody's face getting blurred at
+  the edges. Dilate before feathering and bias the threshold low: a sliver of
+  sharp background is far less noticeable than a soft ear.
+
+- **A confidence mask read via `getAsUint8Array()` is 0–255, not 0–1.** The
+  selfie model publishes a *single* confidence mask (`getLabels()` → `["selfie"]`),
+  not one per class — so index 1 is `undefined` there, while other segmenters
+  put the person at index 1 behind the background. Handle both, and check
+  `getLabels()` rather than assuming.
+
+- **The static site is `ptt.voxal.app`, and `presenceBase()` is not it.**
+  `localStorage['service-url']` defaults to a Supabase edge function
+  (`…supabase.co/functions/v1/session`) and has never served files out of
+  `src/`. Anything a native build needs to fetch from the site itself must use
+  the `DEFAULT_ANON_TURN_URL` / SFU pattern — an override key, same-origin on
+  web, absolute `https://ptt.voxal.app/…` on native. Getting this wrong is
+  completely invisible on the web, where the same-origin branch wins, and breaks
+  the feature outright on the desktop and mobile apps.
+
+- **`Content-Length` is the compressed size** when the response is encoded,
+  while a `ReadableStream` reader gives you decompressed bytes — so a progress
+  bar computed as `loaded / contentLength` sails past 100%. Treat the header as
+  a hint, keep an approximate total as a fallback, and clamp below 1 until the
+  work is actually done.
 
 - **`captureStream(0)` + `track.requestFrame()` is the precise path**, but
   Safari has `captureStream` without `requestFrame`. Feature-detect and fall

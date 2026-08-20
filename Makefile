@@ -38,7 +38,7 @@ help:
 
 # ── Desktop (Tauri) ───────────────────────────────────────────────────────────
 
-run:
+run: seg-assets
 	npm run tauri build -- --no-bundle
 	./src-tauri/target/release/voxal
 
@@ -71,11 +71,11 @@ debug:
 	echo "→ Launching Voxal (debug)..."; \
 	open "$$APP"
 
-build: gen-build-info
+build: gen-build-info seg-assets
 	@echo "→ Building release (unsigned, no updater artifacts). Use 'make build-signed' to sign."
 	npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
-build-signed: gen-build-info
+build-signed: gen-build-info seg-assets
 	@export TAURI_SIGNING_PRIVATE_KEY="$${TAURI_SIGNING_PRIVATE_KEY:-$$(cat ~/.tauri/voxal.key 2>/dev/null)}"; \
 	if [ -z "$$TAURI_SIGNING_PRIVATE_KEY" ]; then \
 		echo "Error: No signing key found."; exit 1; \
@@ -87,7 +87,7 @@ build-signed: gen-build-info
 	fi; \
 	npm run tauri build
 
-build-debug: gen-build-info
+build-debug: gen-build-info seg-assets
 	npm run tauri build -- --debug
 	@echo ""
 	@echo "Debug bundle: src-tauri/target/debug/bundle/macos/Voxal.app"
