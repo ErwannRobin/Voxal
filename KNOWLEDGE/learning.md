@@ -470,3 +470,47 @@ Use Python string replacement scripts for multi-line patches to avoid manual err
 - Two fixes, both needed: the handler now **mutates in place**, and `sfuSubscribeTrack` **re-reads the map after its awaits** (also closing a real leak — a peer that leaves mid-negotiation would otherwise strand a live `RTCPeerConnection`).
 - Idempotency that keys off a *live* peer connection has a hole exactly as wide as the negotiation: there is no connection yet while one is being built. `_sfuSubscribeInFlight` closes it by returning the pending promise, the same shape as `_sfuCapabilityInFlight` for mints. A guard against duplicate work must cover the window *before* the work's evidence exists, not just after.
 - Testing the window: stub the endpoints with `page.route` and **hold the negotiate open** with a promise the test resolves, then drive the concurrent event in between. Asserting on the *number of negotiate calls* is what distinguishes "joined the in-flight subscribe" from "started a second one" — the end state looks identical either way, which is why the first version of this test passed against the unfixed code and proved nothing.
+
+## Testing main.js: what makes a path reachable, and what makes it unreachable
+
+Raising `main.js` coverage past 80% turned on four techniques, in order of how
+much they unlocked:
+
+- **Swap the global, not the module.** `main.js` is a classic script, so
+  `Peer`, `fetch`, `navigator.mediaDevices.getUserMedia` and
+  `getDisplayMedia` are all replaceable with a `page.evaluate` before the code
+  under test runs. A stub `Peer` whose `connect()` returns an `on`/`emit`
+  object drives `createRoom`, `joinRoom`, `connectToHost`, the retry ladder and
+  `handleJoinerDataConnection` end to end with no broker — PeerJS connections
+  are EventEmitters, and nothing else about them is load-bearing.
+  Note the ordering trap already recorded above: `addInitScript` is too early
+  (`peerjs.min.js` overwrites `window.Peer` afterwards); `page.evaluate` after
+  `goto` is right.
+- **A synthetic MediaStream is a real MediaStream.** `canvas.captureStream()`
+  for video and an `AudioContext` + `MediaStreamAudioDestinationNode` for audio
+  give real tracks with real `readyState`, so "did this release the device?"
+  is directly assertable. Two `RTCPeerConnection`s in one page also make the
+  network echo test testable for real — `startEchoTest({iceTransportPolicy:
+  'all'})` is the documented entry point, since production forces `'relay'` and
+  CI has no TURN server.
+- **Bootstrap listeners are only reachable through events.** Everything inside
+  the `DOMContentLoaded` handler — the keyboard PTT path, the settings
+  controls, the `storage` bridge, the pointer handlers — has no exported
+  function to call. Dispatch a real `KeyboardEvent`/`PointerEvent`/
+  `StorageEvent`, or click the element. Two gotchas: a `storage` event never
+  fires in the window that wrote the value, so the test must dispatch it by
+  hand; and the settings modal shows one card at a time with the rest at
+  `display:none`, so `.focus()` silently does nothing until the test reveals
+  them.
+- **Mode constants are frozen at load, so the URL is the switch.**
+  `IS_TINY_EMBED`, `FORCE_WEB_JOIN`, `ALLOW_POPOUT` and `_isIframe` are IIFEs
+  evaluated once. `page.goto('/?embed=tiny')` is the only way into the compact
+  roster and the Start-first invite screen; a same-origin child iframe is the
+  only way into the `postMessage` command handler.
+
+What stays out of reach, and is not worth contorting the code for:
+`IS_TAURI_DESKTOP` / `IS_NATIVE_MOBILE` branches (the pop-out `WebviewWindow`
+plumbing, the native audio-route plugin, the global-shortcut re-registration)
+and `IS_MOBILE_DEVICE` ones (`cameraFlipAvailable`, the mobile capture caps).
+A desktop Chromium answers `false` to all of them at load, so the tests assert
+the desktop behaviour and say so, rather than faking a platform.

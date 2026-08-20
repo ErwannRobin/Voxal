@@ -4,6 +4,34 @@ Things to implement or investigate, ordered roughly by priority.
 
 ---
 
+## 🧪 What is still untested in `main.js`
+
+**Status:** the E2E `unit` project now covers >80% of `main.js` (see
+`make coverage-e2e`). The remainder is deliberate, and splits three ways:
+
+- **Platform branches a desktop Chromium can never take.** `IS_TAURI_DESKTOP`
+  (`popOutVideoViewer`/`popOutScreenViewer`'s `WebviewWindow` + loopback
+  plumbing, the preferences/about/dev-log windows, the global-shortcut
+  re-registration, `presence_fetch` via `tauriFetch`), `IS_NATIVE_MOBILE`
+  (the Capacitor audio-route plugin, PushToTalk listeners) and
+  `IS_MOBILE_DEVICE` (`cameraFlipAvailable`, the mobile capture caps). These
+  need a device or a real bundle, not a cleverer test.
+- **RNNoise's success path.** `initRNNoise()` is covered only through its
+  failure branch: the worklet needs `assets/rnnoise.wasm` plus a 48 kHz
+  AudioWorklet, which the container's headless audio stack will not sustain.
+  `tests/e2e/unit-rnnoise-worklet.spec.js` loads the real processor file
+  separately; the two together are as close as this environment gets.
+- **The SFU's happy path.** Minting, publishing and subscribing are covered
+  against stubbed endpoints (`tests/e2e/unit-video-routing.spec.js`), but no
+  test talks to Cloudflare Realtime, so `sfuNegotiate`/`sfuRenegotiate`'s real
+  responses are never exercised.
+
+Worth doing if the number needs to go higher: a `mesh`-style project for the
+Tauri build, driven by `tauri-driver`. Nothing above is reachable from the
+`unit` project as it stands.
+
+---
+
 ## 🧩 Revisit glib security update unblock
 
 **Goal:** Remove temporary Dependabot ignore for `glib` and upgrade to `glib >= 0.20` once upstream supports it.
