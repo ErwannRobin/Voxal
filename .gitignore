@@ -39,3 +39,7 @@ src/.well-known/appspecific/com.chrome.devtools.json
 # Generated at build/deploy time (make build-web, Vercel buildCommand)
 src/build-info.js
 
+# Background-effects runtime: ~12 MB of MediaPipe WASM staged out of
+# node_modules by `make seg-assets` (and by vercel.json on deploy). The model
+# and the preset artwork next to it ARE committed — they are small.
+src/assets/seg/vision_*

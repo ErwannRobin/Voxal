@@ -520,3 +520,45 @@ plumbing, the native audio-route plugin, the global-shortcut re-registration)
 and `IS_MOBILE_DEVICE` ones (`cameraFlipAvailable`, the mobile capture caps).
 A desktop Chromium answers `false` to all of them at load, so the tests assert
 the desktop behaviour and say so, rather than faking a platform.
+
+## Camera background effects — the five things that bit
+
+Full design in `docs/video-effects.md`. What is not derivable from the code:
+
+- **A canvas that is never redrawn emits exactly one frame.** The E2E fake
+  camera (`canvas.captureStream(15)` over a static fill) delivers a single frame
+  and then stops, so `requestVideoFrameCallback` fires once and the render loop
+  stalls silently — the pipeline looks broken when it is the *source* that has
+  stopped. `unit-video-effects.spec.js` repaints its fake camera on an interval.
+  Anything driving a real capture loop in a test needs the same.
+
+- **`import('assets/seg/x.mjs')` throws — that is a *bare* specifier**, not a
+  relative URL, and dynamic import does not resolve it against the document.
+  It must be `./assets/…`, or an absolute URL. `video-effects.js` runs every
+  runtime path through `new URL(u, document.baseURI).href` for this reason.
+
+- **MediaPipe's `canvas:` option takes over that canvas's GL context** and
+  freely resets viewport, framebuffer and blend state. Handing it your own
+  render canvas means saving and restoring GL state around every inference, on
+  five different webviews. Give it a throwaway canvas and take the mask back as
+  a `Uint8Array` — 37 KB at 256×144, well under the cost of being clever.
+
+- **`@mediapipe/tasks-vision` unpacks to ~36 MB**, of which the SIMD build we
+  actually use (`vision_wasm_internal.{js,wasm}` + `vision_bundle.mjs`) is
+  ~12 MB. The npm package does *not* contain the `.tflite` models — those come
+  from `storage.googleapis.com/mediapipe-models/…` and have to be vendored
+  separately. `selfie_segmenter_landscape.tflite` is 250 KB.
+
+- **A confidence mask read via `getAsUint8Array()` is 0–255, not 0–1**, and the
+  selfie model returns *two* confidence masks: index 0 is background, index 1 is
+  the person. Reading index 0 gives a perfectly plausible-looking inverted matte
+  that only reveals itself when you notice the background is the sharp part.
+
+- **`captureStream(0)` + `track.requestFrame()` is the precise path**, but
+  Safari has `captureStream` without `requestFrame`. Feature-detect and fall
+  back to `captureStream(fps)`; do not assume the manual path exists.
+
+- Heavily blurred gradient artwork compresses absurdly well: the four bundled
+  1280×720 WebP backgrounds total ~20 KB. Generated artwork (see
+  `resources/make-backgrounds.py`) is cheaper *and* smaller than anything you
+  would license.

@@ -6144,6 +6144,54 @@ function stopMicStreamFully(s) {
   s._rnnoiseOriginal = null;
 }
 
+// --- Camera background effects ------------------------------------------------
+//
+// The video counterpart to applyRNNoise() above, and it obeys the same
+// contract: the stream we hand back is a *processed* stream that wraps the real
+// capture, and it carries the original on itself so teardown can find it. The
+// whole pipeline lives in video-effects.js, which index.html loads before this
+// file; everything here is the glue.
+//
+// With the effect off nothing is constructed and localVideoStream stays the raw
+// getUserMedia stream, so a user who never turns this on pays nothing for it —
+// not a canvas, not a fetch, not a frame of work.
+
+// The key itself is declared in video-effects.js and nowhere else — see the
+// note in CLAUDE.md. Mirror the reference rather than the literal so the two
+// can never drift, and tolerate the script being absent.
+var VIDEO_BACKGROUND_STORAGE_KEY =
+  (typeof VideoEffects === 'undefined') ? null : VideoEffects.STORAGE_KEY;
+
+function videoBackgroundMode() {
+  return (typeof VideoEffects === 'undefined') ? 'off' : VideoEffects.readMode();
+}
+
+function videoEffectsAvailable() {
+  return typeof VideoEffects !== 'undefined' && VideoEffects.isSupported();
+}
+
+// Wrap a freshly acquired camera stream if a background is selected. Falls back
+// to the raw stream on any failure — a background effect is a nicety, and it
+// must never be the reason a camera fails to share.
+async function maybeApplyVideoEffects(rawStream) {
+  var mode = videoBackgroundMode();
+  if (mode === 'off' || !videoEffectsAvailable()) return rawStream;
+  try {
+    return await VideoEffects.wrap(rawStream, mode);
+  } catch (e) {
+    devLog('[Video] Background effect failed to start: ' + (e && e.message ? e.message : String(e)), 'warn');
+    showCopyToast('Background effect unavailable — sharing without it');
+    return rawStream;
+  }
+}
+
+// The real capture behind a stream, whether or not it is wrapped. Anything that
+// wants the camera itself — to stop it, to disable it, to read its settings —
+// must go through here rather than assuming localVideoStream is the device.
+function rawCameraStream(stream) {
+  return (stream && stream._effectsOriginal) || stream;
+}
+
 function getNoiseSuppressionMode() {
   var stored = localStorage.getItem(NOISE_SUPPRESSION_KEY);
   if (stored) return stored;
@@ -7477,7 +7525,7 @@ async function toggleEchoTest() {
 
 function stopCameraPreview() {
   if (_cameraPreviewStream) {
-    _cameraPreviewStream.getTracks().forEach(function(t) { t.stop(); });
+    stopStreamTracks(_cameraPreviewStream);
     _cameraPreviewStream = null;
   }
   var video = document.getElementById('camera-preview-video');
@@ -7492,10 +7540,14 @@ function stopCameraPreview() {
 async function startCameraPreview() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
   stopCameraPreview();
-  _cameraPreviewStream = await navigator.mediaDevices.getUserMedia({
+  var rawPreview = await navigator.mediaDevices.getUserMedia({
     video: selectedCameraConstraints(),
     audio: false
   });
+  // Show the preview through the chosen background, so the picker in Settings
+  // means something outside a call. Not while sharing, though: there is one
+  // pipeline, and stealing it would blank the call's outgoing video.
+  _cameraPreviewStream = localVideoActive ? rawPreview : await maybeApplyVideoEffects(rawPreview);
   var video = document.getElementById('camera-preview-video');
   if (video) {
     video.srcObject = _cameraPreviewStream;
@@ -9241,6 +9293,17 @@ function updateVideoModeUI() {
   }
   // Note there is no flip button here: front/back belongs to the self-view
   // tile (see _buildVideoTile), not to the room's control row.
+  // Background button — only meaningful with a camera actually running, so it
+  // appears alongside the live self-view rather than sitting there inert.
+  var bgBtn = document.getElementById('btn-video-bg');
+  if (bgBtn) {
+    var canPickBackground = videoModeEnabled && localVideoActive && videoEffectsAvailable();
+    bgBtn.classList.toggle('hidden', !canPickBackground);
+    if (!canPickBackground) closeVideoBackgroundPopover();
+    var bgOn = videoBackgroundMode() !== 'off';
+    bgBtn.classList.toggle('active', bgOn);
+    bgBtn.setAttribute('aria-pressed', String(bgOn));
+  }
   // Share screen button (visible when video mode is active, hidden on mobile)
   var screenBtn = document.getElementById('btn-share-screen');
   if (screenBtn) {
@@ -9339,8 +9402,9 @@ function _setTrackState(participantId, kind, patch) {
 
 async function startVideoShare() {
   if (localVideoActive) return;
+  var rawStream;
   try {
-    localVideoStream = await navigator.mediaDevices.getUserMedia({
+    rawStream = await navigator.mediaDevices.getUserMedia({
       video: selectedCameraConstraints(),
       audio: false
     });
@@ -9349,6 +9413,9 @@ async function startVideoShare() {
     showCopyToast(cameraAccessHint(e));
     return;
   }
+  // Wrap before publishing, so peers only ever see the composited track and
+  // nobody catches a frame of the unprocessed room.
+  localVideoStream = await maybeApplyVideoEffects(rawStream);
   localVideoActive = true;
   // Auto-activate hands-free when sharing camera
   if (!freeHandMode) setFreeHand(true);
@@ -9367,7 +9434,7 @@ function stopVideoShare() {
   if (!localVideoActive && !localVideoStream) return;
   unpublishLocalTrack('video'); // closes the outgoing mesh calls or the SFU session
   if (localVideoStream) {
-    localVideoStream.getTracks().forEach(function(t) { t.stop(); });
+    stopStreamTracks(localVideoStream);
     localVideoStream = null;
   }
   if (peer && inRoom) {
@@ -9450,23 +9517,24 @@ async function flipCamera() {
       return;
     }
 
-    localVideoStream = newStream;
     // A flip that lands while backgrounded must not silently un-pause capture.
     if (_localCameraSuspended) { try { newTrack.enabled = false; } catch (e) { /* ignore */ } }
-    var swaps = localVideoSenders().map(function(sender) {
-      return Promise.resolve(sender.replaceTrack(newTrack)).catch(function(e) {
-        devLog('[Video] replaceTrack failed on flip: ' + (e && e.message ? e.message : String(e)), 'warn');
-      });
-    });
-    await Promise.all(swaps);
 
-    // A replaced track carries none of the old one's encoder parameters.
-    connections.forEach(function(conn) {
-      videoPeerConnections(conn).forEach(function(pc) { tuneVideoSenders(pc, 'video'); });
-    });
-    if (_sfuPublishSessions.video && _sfuPublishSessions.video.pc) {
-      tuneVideoSenders(_sfuPublishSessions.video.pc, 'video');
+    // With a background effect running, the thing we publish is the canvas, not
+    // the camera — so repointing the effect at the new camera swaps nothing on
+    // the wire at all. No replaceTrack, no re-tune, no glare window.
+    if (localVideoStream && localVideoStream._effectsProcessor) {
+      var previousRaw = localVideoStream._effectsOriginal;
+      await VideoEffects.setSource(newStream);
+      localVideoStream._effectsOriginal = newStream;
+      if (previousRaw && previousRaw !== newStream) stopStreamTracks(previousRaw);
+      updateVideoModeUI();
+      updatePeerList();
+      return;
     }
+
+    localVideoStream = newStream;
+    await swapLocalVideoTrack(newTrack);
 
     if (oldStream) stopStreamTracks(oldStream);
     updateVideoModeUI();
@@ -9476,9 +9544,211 @@ async function flipCamera() {
   }
 }
 
+// --- Background effect: the picker --------------------------------------------
+//
+// One chip row, rendered by VideoEffects.renderPicker() into two places: the
+// room's popover and the settings card. The markup and the preset list live in
+// video-effects.js so settings.html can render the identical row without a
+// third hand-written copy of it.
+
+var _videoBgPickers = [];
+
+function syncVideoBackgroundControls() {
+  var mode = videoBackgroundMode();
+  _videoBgPickers.forEach(function(p) { try { p.sync(mode); } catch (e) { /* ignore */ } });
+  var bgBtn = document.getElementById('btn-video-bg');
+  if (bgBtn) {
+    var on = mode !== 'off';
+    bgBtn.classList.toggle('active', on);
+    bgBtn.setAttribute('aria-pressed', String(on));
+  }
+}
+
+function closeVideoBackgroundPopover() {
+  var pop = document.getElementById('video-bg-popover');
+  if (!pop || pop.classList.contains('hidden')) return;
+  pop.classList.add('hidden');
+  var btn = document.getElementById('btn-video-bg');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+
+function toggleVideoBackgroundPopover() {
+  var pop = document.getElementById('video-bg-popover');
+  if (!pop) return;
+  var opening = pop.classList.contains('hidden');
+  pop.classList.toggle('hidden', !opening);
+  var btn = document.getElementById('btn-video-bg');
+  if (btn) btn.setAttribute('aria-expanded', String(opening));
+  if (opening) {
+    syncVideoBackgroundControls();
+    var first = pop.querySelector('.bg-chip[aria-checked="true"]') || pop.querySelector('.bg-chip');
+    if (first) first.focus();
+  }
+}
+
+function initVideoBackgroundUI() {
+  if (typeof VideoEffects === 'undefined') return;
+
+  _videoBgPickers = [];
+  ['video-bg-picker', 'settings-bg-picker'].forEach(function(id) {
+    var host = document.getElementById(id);
+    if (!host) return;
+    var picker = VideoEffects.renderPicker(host, {
+      onPick: function(mode) { applyVideoBackground(mode); },
+      onError: function(msg) { showCopyToast(msg); }
+    });
+    if (picker) _videoBgPickers.push(picker);
+  });
+
+  var btn = document.getElementById('btn-video-bg');
+  if (btn) {
+    btn.addEventListener('click', function(ev) {
+      ev.stopPropagation();
+      toggleVideoBackgroundPopover();
+    });
+  }
+  var pop = document.getElementById('video-bg-popover');
+  if (pop) pop.addEventListener('click', function(ev) { ev.stopPropagation(); });
+  document.addEventListener('click', closeVideoBackgroundPopover);
+  document.addEventListener('keydown', function(ev) {
+    if (ev.key === 'Escape') closeVideoBackgroundPopover();
+  });
+
+  // A device that cannot sustain the effect gets dropped back to a plain
+  // camera rather than a slideshow. VideoEffects has already stepped the
+  // segmentation rate down as far as it goes by the time this fires.
+  VideoEffects.onOverload(function(why) {
+    devLog('[Video] Background effect disabled: ' + why, 'warn');
+    showCopyToast('Background effect turned off — this device can\'t keep up');
+    applyVideoBackground('off');
+  });
+
+  syncVideoBackgroundControls();
+}
+
+// --- Background effect: switching it live -------------------------------------
+//
+// Same rules as flipCamera() above, for the same reasons: acquire before you
+// swap, keep the working stream on any failure, and say NOTHING on the wire —
+// changing your background is not a start and not a stop, and re-announcing
+// would make every peer tear the tile down and rebuild it.
+//
+// The one thing worth spelling out is what does *not* happen here. Once the
+// camera is wrapped, the published track is the canvas, and the canvas does not
+// change when the background does. So blur → image → other image is a texture
+// swap inside the shader: no replaceTrack, no renegotiation, no tile flicker.
+// Only crossing the off↔on boundary swaps a track.
+
+var _videoBackgroundInFlight = false;
+
+async function applyVideoBackground(mode) {
+  if (typeof VideoEffects === 'undefined') return;
+  mode = VideoEffects.normalizeMode(mode);
+  VideoEffects.writeMode(mode);
+  syncVideoBackgroundControls();
+
+  // Not sharing. The preference is all that needs to change, unless the
+  // settings preview happens to be running the pipeline — then keep it in step
+  // so the chips show what they claim to.
+  if (!localVideoActive || !localVideoStream) {
+    if (_cameraPreviewStream) {
+      if (_cameraPreviewStream._effectsProcessor && mode !== 'off') await VideoEffects.setMode(mode);
+      else await startCameraPreview().catch(function() { /* the preview is not load-bearing */ });
+    }
+    return;
+  }
+  if (_videoBackgroundInFlight) return;
+  _videoBackgroundInFlight = true;
+
+  try {
+    var wrapped = !!localVideoStream._effectsProcessor;
+
+    // Already running: just repoint the shader.
+    if (wrapped && mode !== 'off') {
+      await VideoEffects.setMode(mode);
+      return;
+    }
+
+    // Turning it off: publish the camera again, then tear the pipeline down.
+    if (wrapped && mode === 'off') {
+      var raw = localVideoStream._effectsOriginal;
+      var rawTrack = raw && raw.getVideoTracks()[0];
+      if (!rawTrack) return;
+      var processed = localVideoStream;
+      localVideoStream = raw;
+      await swapLocalVideoTrack(rawTrack);
+      processed._effectsOriginal = null;   // the camera lives on in localVideoStream
+      VideoEffects.stop(processed);
+      try { processed.getTracks().forEach(function(t) { t.stop(); }); } catch (e) { /* ignore */ }
+      updateVideoModeUI();
+      updatePeerList();
+      return;
+    }
+
+    // Turning it on over a live camera.
+    if (!wrapped && mode !== 'off') {
+      if (!videoEffectsAvailable()) { showCopyToast('Background effects are not available here'); return; }
+      var source = localVideoStream;
+      var next;
+      try {
+        next = await VideoEffects.wrap(source, mode);
+      } catch (e) {
+        // Keep the plain camera wired up, exactly as flipCamera does on failure.
+        devLog('[Video] Background effect failed: ' + (e && e.message ? e.message : String(e)), 'warn');
+        showCopyToast('Background effect unavailable on this device');
+        VideoEffects.writeMode('off');
+        syncVideoBackgroundControls();
+        return;
+      }
+      var nextTrack = next.getVideoTracks()[0];
+      if (!nextTrack) { VideoEffects.stop(next); return; }
+      if (_localCameraSuspended) { try { nextTrack.enabled = false; } catch (e) { /* ignore */ } }
+      localVideoStream = next;
+      await swapLocalVideoTrack(nextTrack);
+      updateVideoModeUI();
+      updatePeerList();
+    }
+  } finally {
+    _videoBackgroundInFlight = false;
+    syncVideoBackgroundControls();
+  }
+}
+
+// Point every live sender — mesh and relay alike — at a new local video track,
+// then re-tune. A replaced track carries none of the old one's encoder
+// parameters, which is why the tuning pass is not optional.
+async function swapLocalVideoTrack(track) {
+  var swaps = localVideoSenders().map(function(sender) {
+    return Promise.resolve(sender.replaceTrack(track)).catch(function(e) {
+      devLog('[Video] replaceTrack failed on background change: ' +
+             (e && e.message ? e.message : String(e)), 'warn');
+    });
+  });
+  await Promise.all(swaps);
+  connections.forEach(function(conn) {
+    videoPeerConnections(conn).forEach(function(pc) { tuneVideoSenders(pc, 'video'); });
+  });
+  if (_sfuPublishSessions.video && _sfuPublishSessions.video.pc) {
+    tuneVideoSenders(_sfuPublishSessions.video.pc, 'video');
+  }
+}
+
+// Release a camera or screen stream completely. The unwrap matters for the same
+// reason stopMicStreamFully()'s does: with a background effect on, the stream
+// being stopped is a *canvas capture*, and stopping its track leaves the real
+// camera running with the indicator light on and the render loop spinning.
 function stopStreamTracks(stream) {
   if (!stream) return;
+  var raw = stream._effectsOriginal;
+  if (stream._effectsProcessor && typeof VideoEffects !== 'undefined') {
+    try { VideoEffects.stop(stream); } catch (e) { /* ignore */ }
+  }
+  if (raw) {
+    try { raw.getTracks().forEach(function(t) { t.stop(); }); } catch (e) { /* ignore */ }
+  }
   try { stream.getTracks().forEach(function(t) { t.stop(); }); } catch (e) { /* ignore */ }
+  stream._effectsOriginal = null;
+  stream._effectsProcessor = null;
 }
 
 // Backgrounding the app should stop burning battery on an encode nobody can
@@ -9493,9 +9763,19 @@ function setLocalCameraSuspended(suspended) {
   if (suspended === _localCameraSuspended) return;
   _localCameraSuspended = suspended;
   if (!localVideoStream) return;
-  try {
-    localVideoStream.getVideoTracks().forEach(function(t) { t.enabled = !suspended; });
-  } catch (e) { /* track already ended */ }
+  // With an effect on, the tracks on localVideoStream belong to a canvas.
+  // Disabling only those would leave the real camera capturing and the render
+  // loop spinning — exactly the battery drain this function exists to avoid.
+  if (localVideoStream._effectsProcessor && typeof VideoEffects !== 'undefined') {
+    try { VideoEffects.setPaused(suspended); } catch (e) { /* ignore */ }
+  }
+  var raw = rawCameraStream(localVideoStream);
+  [raw, localVideoStream].forEach(function(s) {
+    if (!s) return;
+    try {
+      s.getVideoTracks().forEach(function(t) { t.enabled = !suspended; });
+    } catch (e) { /* track already ended */ }
+  });
 }
 
 // Only worth offering where there is more than one camera to flip between, and
@@ -13618,8 +13898,14 @@ window.addEventListener('DOMContentLoaded', function() {
                           METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY,
                           SPEAKER_DEVICE_KEY, JITTER_BUFFER_KEY, ECHO_BRIDGE_REQUEST_KEY,
                           NOISE_SUPPRESSION_KEY, MIC_DEVICE_KEY, VIDEO_ROUTING_KEY,
-                          NETWORK_USAGE_REQUEST_KEY];
+                          NETWORK_USAGE_REQUEST_KEY, VIDEO_BACKGROUND_STORAGE_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
+    if (e.key === VIDEO_BACKGROUND_STORAGE_KEY) {
+      // Changed from the desktop preferences window, which has no capture
+      // pipeline of its own — same reason the mic keys are handled here.
+      applyVideoBackground(e.newValue || 'off');
+      return;
+    }
     if (e.key === NOISE_SUPPRESSION_KEY || e.key === MIC_DEVICE_KEY) {
       // Changed from the desktop preferences window — that window cannot touch
       // the capture pipeline (no module system, so no getMicStream there), so
@@ -14000,6 +14286,7 @@ window.addEventListener('DOMContentLoaded', function() {
     if (localVideoActive) stopVideoShare(); else startVideoShare();
   });
   initSelfVideoBadge();
+  initVideoBackgroundUI();
   var screenBtnEl = $('btn-share-screen');
   if (screenBtnEl) {
     screenBtnEl.addEventListener('click', function() {

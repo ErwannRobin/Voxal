@@ -1075,6 +1075,8 @@ html[data-theme="light"] .ac-unheard { color: #dc2626; }
 .ctrl-row {
   display: flex;
   align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -3981,4 +3983,126 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
   line-height: 1.4;
   color: var(--text-muted);
   margin-top: 2px;
+}
+
+/* ── Background effects: the chip picker ───────────────────────────────
+   One row of round chips, used in three places (the room popover, the
+   in-page settings modal and the desktop preferences window) from the one
+   renderer in video-effects.js. */
+
+.room-action-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.room-action-wrap:has(> .room-action-btn.hidden) { display: none; }
+
+.video-bg-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  width: max-content;
+  max-width: min(380px, calc(100vw - 24px));
+  z-index: 40;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+.video-bg-popover.hidden { display: none; }
+.video-bg-popover-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.bg-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  position: relative;
+}
+/* In the popover the chips are one strip; the settings card is wide enough to
+   let them wrap naturally. */
+.video-bg-popover .bg-picker { flex-wrap: nowrap; }
+
+.bg-picker + .settings-hint { margin-top: 10px; }
+
+.bg-chip {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-raised);
+  background-size: cover;
+  background-position: center;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s, box-shadow 0.15s, color 0.15s;
+}
+.bg-chip:hover { border-color: var(--accent); color: var(--text); }
+.bg-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* The ring sits outside the chip so it never crops the artwork. */
+.bg-chip.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--accent);
+  color: #fff;
+}
+.bg-chip-image { background-color: var(--bg-raised); }
+.bg-chip-plus {
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 300;
+}
+.bg-chip.is-busy {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.bg-chip-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.bg-chip-clear {
+  position: absolute;
+  right: -4px;
+  top: -4px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+.bg-chip-clear:hover { color: var(--text); border-color: var(--accent); }
+.bg-chip-clear.hidden { display: none; }
+
+@media (max-width: 480px) {
+  .video-bg-popover { max-width: calc(100vw - 24px); }
+  /* A 360 px screen has no room for seven chips in a line. Keep the strip and
+     let it scroll sideways rather than wrap into a tall block that covers the
+     video it is meant to be previewing. */
+  .video-bg-popover .bg-picker {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
 }

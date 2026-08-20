@@ -289,6 +289,13 @@
                 <video id="camera-preview-video" class="camera-preview hidden" autoplay playsinline muted></video>
               </div>
             </div>
+            <div class="settings-device-row">
+              <div class="settings-device-head">
+                <label id="settings-bg-label">Background</label>
+              </div>
+              <div id="settings-bg-picker" aria-labelledby="settings-bg-label"></div>
+              <p class="settings-hint">Blur what is behind you, or replace it. Applies to your camera only, and everything is computed on this device — no frame is ever sent anywhere to do it.</p>
+            </div>
           </div>
 
           <div id="settings-system" class="settings-card">
@@ -634,6 +641,18 @@
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
               <span>Camera</span>
             </button>
+            <div class="room-action-wrap">
+              <button id="btn-video-bg" class="room-action-btn hidden" aria-pressed="false"
+                      aria-expanded="false" aria-haspopup="true" aria-controls="video-bg-popover"
+                      title="Change your background">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.2"/><path d="M5.5 20a6.5 6.5 0 0 1 13 0"/><path d="M3 4.5h3"/><path d="M18 4.5h3"/><path d="M3 9.5h1.5"/><path d="M19.5 9.5H21"/><path d="M3 14.5h1"/><path d="M20 14.5h1"/></svg>
+                <span>Background</span>
+              </button>
+              <div id="video-bg-popover" class="video-bg-popover hidden" role="dialog" aria-label="Background">
+                <p class="video-bg-popover-title">Background</p>
+                <div id="video-bg-picker"></div>
+              </div>
+            </div>
             <button id="btn-share-screen" class="room-action-btn hidden" aria-pressed="false" title="Share your screen">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
               <span>Screen</span>
@@ -748,9 +767,11 @@
     </div>
 
     <script src="assets/peerjs.min.js"></script>
-    <!-- Shared with settings.html — must load before main.js, which uses its
-         constants (NET_USAGE_KINDS, NET_USAGE_HISTORY_MAX). -->
+    <!-- Shared with settings.html — both must load before main.js, which uses
+         net-usage.js's constants (NET_USAGE_KINDS, NET_USAGE_HISTORY_MAX) and
+         video-effects.js's VideoEffects.STORAGE_KEY. -->
     <script src="net-usage.js"></script>
+    <script src="video-effects.js"></script>
     <script src="main.js"></script>
   </body>
 </html>
