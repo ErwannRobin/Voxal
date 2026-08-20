@@ -30,6 +30,7 @@ test-results
 
 # Coverage reports
 coverage
+coverage-api
 playwright-report
 
 # Chrome DevTools Automatic Workspace Folders — machine-specific, never commit

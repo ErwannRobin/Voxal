@@ -8,7 +8,9 @@
     "test:rust": "cd src-tauri && cargo test",
     "test:e2e": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test --project=unit",
     "test:mesh": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test --project=mesh",
-    "test:api": "node --test \"api/*.test.js\""
+    "test:api": "node --test \"api/*.test.js\"",
+    "test:api:coverage": "node -e \"require('fs').mkdirSync('coverage-api',{recursive:true})\" && node --test --experimental-test-coverage --test-reporter=lcov --test-reporter-destination=coverage-api/lcov.info \"api/*.test.js\"",
+    "coverage:report": "node scripts/coverage-report.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

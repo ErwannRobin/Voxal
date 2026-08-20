@@ -91,6 +91,126 @@ jobs:
       - name: Run mesh E2E (mesh project)
         run: npm run test:mesh
 
+  # Coverage: reported, never gating. It runs the same three suites the other
+  # jobs do, but only to measure them — a drop in coverage is information for
+  # the reviewer, not a reason to block a merge, so this is continue-on-error
+  # and it is deliberately absent from `all-tests-green`'s `needs:` below.
+  #
+  # Everything lands in the run summary; the HTML reports are uploaded as
+  # artifacts. On a push to main the README badge is refreshed from the same
+  # number, which is the only step that writes anything back.
+  coverage:
+    name: Coverage (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 30
+    permissions:
+      contents: write # only used by the badge commit on main, below
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      # The unit project only: the mesh project needs real WebRTC between
+      # browser contexts and is allowed to be flaky, which is not a property
+      # you want in a number people read.
+      - name: Frontend coverage (E2E unit project)
+        continue-on-error: true
+        run: COVERAGE=1 NODE_OPTIONS=--disable-warning=DEP0205 npx playwright test --project=unit
+
+      - name: API handler coverage
+        continue-on-error: true
+        run: npm run test:api:coverage
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      # A prebuilt binary — `cargo install cargo-llvm-cov` would spend several
+      # minutes compiling it on every run.
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      # The same set release-linux.yml builds Tauri with — cargo llvm-cov has
+      # to compile the crate, so it needs them too.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev \
+            libssl-dev
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-llvm-cov-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-llvm-cov-
+
+      - name: Rust coverage
+        continue-on-error: true
+        run: |
+          cd src-tauri
+          cargo llvm-cov --no-report
+          cargo llvm-cov report --html
+          cargo llvm-cov report --lcov --output-path target/llvm-cov/lcov.info
+
+      - name: Write the run summary
+        run: node scripts/coverage-report.mjs >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload HTML reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-reports
+          path: |
+            coverage/
+            coverage-api/
+            src-tauri/target/llvm-cov/html/
+          retention-days: 14
+          if-no-files-found: warn
+
+      # Only on main, and only when the number actually moved — a no-op commit
+      # on every push would bury the history. `[skip ci]` stops it re-triggering
+      # this workflow.
+      - name: Refresh the README badge
+        id: badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: node scripts/coverage-report.mjs --write-badge > /dev/null
+
+      # `HEAD:main` because checkout leaves a detached HEAD on a push event, and
+      # continue-on-error because losing a race with another push to main is not
+      # worth a red job over a badge.
+      - name: Commit the badge
+        if: steps.badge.outputs.badge == 'updated'
+        continue-on-error: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "chore(coverage): main.js at ${{ steps.badge.outputs.pct }}% [skip ci]"
+          git push origin HEAD:main
+
   # Single aggregate check that summarises every gating job above. Branch
   # protection on `main` requires exactly this one check ("All tests green"),
   # so adding or renaming a test job never means re-editing the ruleset —
