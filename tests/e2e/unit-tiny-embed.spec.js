@@ -103,6 +103,120 @@ test.describe('the compact roster', () => {
     expect(seen.later).toBe('');
   });
 
+  test('holding your own chip transmits, releasing stops', async ({ page }) => {
+    await seedRoom(page, { selfId: 'self', isHost: true });
+    const seen = await page.evaluate(() => {
+      stream = new MediaStream();
+      audioTrack = { enabled: false };
+      freeHandMode = false;
+      isTalking = false;
+      updatePeerList();
+      const chip = document.getElementById('peer-item-self');
+      const press = (type, button = 0) => chip.dispatchEvent(new PointerEvent(type, {
+        pointerId: 1, button, bubbles: true, cancelable: true,
+      }));
+      press('pointerdown');
+      const down = isTalking;
+      press('pointerup');
+      const up = isTalking;
+      press('pointerdown');
+      press('pointercancel');
+      return { down, up, cancelled: isTalking };
+    });
+    expect(seen).toEqual({ down: true, up: false, cancelled: false });
+  });
+
+  test('a right-click on the chip is not a press', async ({ page }) => {
+    await seedRoom(page, { selfId: 'self', isHost: true });
+    const talking = await page.evaluate(() => {
+      stream = new MediaStream();
+      audioTrack = { enabled: false };
+      isTalking = false;
+      updatePeerList();
+      document.getElementById('peer-item-self').dispatchEvent(new PointerEvent('pointerdown', {
+        pointerId: 1, button: 2, bubbles: true, cancelable: true,
+      }));
+      return isTalking;
+    });
+    expect(talking).toBe(false);
+  });
+
+  test('tapping another peer\'s chip shows their full name', async ({ page }) => {
+    await seedRoom(page, {
+      selfId: 'self',
+      isHost: true,
+      connections: [{ id: 'p1', pseudo: 'A Rather Long Name' }],
+    });
+    const seen = await page.evaluate(() => {
+      updatePeerList();
+      document.getElementById('peer-item-p1').click();
+      const tip = document.querySelector('.tiny-tooltip');
+      return { text: tip && tip.textContent, shown: tip && tip.style.display };
+    });
+    expect(seen.text).toBe('A Rather Long Name');
+    expect(seen.shown).toBe('block');
+  });
+
+  test('the chip row carries a peer count', async ({ page }) => {
+    await seedRoom(page, {
+      selfId: 'self',
+      isHost: true,
+      connections: [{ id: 'p1', pseudo: 'Ada' }],
+    });
+    const one = await page.evaluate(() => {
+      updatePeerList();
+      return document.querySelector('.tiny-peer-count').textContent;
+    });
+    expect(one).toContain('1 peer');
+
+    const two = await page.evaluate(() => {
+      connections.set('p2', { data: { open: true, closed: false, send() {}, close() {} }, pseudo: 'Grace' });
+      updatePeerList();
+      return document.querySelector('.tiny-peer-count').textContent;
+    });
+    expect(two).toContain('2 peers');
+  });
+
+  test('renaming yourself inline commits on Enter and abandons on Escape', async ({ page }) => {
+    await seedRoom(page, { selfId: 'self', isHost: true, myPseudo: 'Me' });
+    const seen = await page.evaluate(() => {
+      updatePeerList();
+      document.querySelector('#peer-item-self .peer-edit-btn').click();
+      const input = document.querySelector('#peer-item-self .peer-name-inline');
+      input.value = '  Renamed   Twice  ';
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      const committed = myPseudo;
+
+      document.querySelector('#peer-item-self .peer-edit-btn').click();
+      const second = document.querySelector('#peer-item-self .peer-name-inline');
+      second.value = 'Discarded';
+      second.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      return { committed, afterEscape: myPseudo, editing: editingSelfPseudo };
+    });
+    // Whitespace is collapsed on the way in — the chip has no room for it.
+    expect(seen.committed).toBe('Renamed Twice');
+    expect(seen.afterEscape).toBe('Renamed Twice');
+    expect(seen.editing).toBe(false);
+  });
+
+  test('a press while renaming types instead of transmitting', async ({ page }) => {
+    await seedRoom(page, { selfId: 'self', isHost: true, myPseudo: 'Me' });
+    const talking = await page.evaluate(() => {
+      stream = new MediaStream();
+      audioTrack = { enabled: false };
+      isTalking = false;
+      updatePeerList();
+      document.querySelector('#peer-item-self .peer-edit-btn').click();
+      document.getElementById('peer-item-self').dispatchEvent(new PointerEvent('pointerdown', {
+        pointerId: 1, button: 0, bubbles: true, cancelable: true,
+      }));
+      const out = isTalking;
+      editingSelfPseudo = false;
+      return out;
+    });
+    expect(talking).toBe(false);
+  });
+
   test('the mic spinner is shown on your own chip', async ({ page }) => {
     await seedRoom(page, { selfId: 'self', isHost: true });
     const seen = await page.evaluate(() => {
