@@ -476,3 +476,47 @@ Use Python string replacement scripts for multi-line patches to avoid manual err
 - `tests.yml` running on every PR only *reports*; nothing about it stops a red PR from being merged. Blocking the merge needs a **branch ruleset** on GitHub (Settings → Rules), which is not stored in the repository and therefore cannot be added by a commit. The ruleset is checked in at `.github/rulesets/main-required-tests.json` purely so it is reviewable and importable — GitHub never reads it from there. Applying it is a one-time manual step; see `docs/required-checks.md`.
 - Require **one aggregate check** (`All tests green`, the last job in `tests.yml`), not each job by name. A ruleset that lists jobs individually silently stops covering any job added later, and renaming a job quietly turns its rule into a check that will never report. The aggregate job uses `if: always()` and treats anything that is not `success` — including `skipped` and `cancelled` — as failure, so it fails closed.
 - A required check that never reports blocks the merge rather than allowing it, which is why "the check is missing" and "the check passed" must never be collapsed into one branch of an automation. The Dependabot auto-merge script had exactly that hole: it merged on the `Tests` workflow's own conclusion, which says nothing about CodeQL, nothing about a check still running, and nothing about a job that never started.
+
+## Testing main.js: what makes a path reachable, and what makes it unreachable
+
+Raising `main.js` coverage past 80% turned on four techniques, in order of how
+much they unlocked:
+
+- **Swap the global, not the module.** `main.js` is a classic script, so
+  `Peer`, `fetch`, `navigator.mediaDevices.getUserMedia` and
+  `getDisplayMedia` are all replaceable with a `page.evaluate` before the code
+  under test runs. A stub `Peer` whose `connect()` returns an `on`/`emit`
+  object drives `createRoom`, `joinRoom`, `connectToHost`, the retry ladder and
+  `handleJoinerDataConnection` end to end with no broker — PeerJS connections
+  are EventEmitters, and nothing else about them is load-bearing.
+  Note the ordering trap already recorded above: `addInitScript` is too early
+  (`peerjs.min.js` overwrites `window.Peer` afterwards); `page.evaluate` after
+  `goto` is right.
+- **A synthetic MediaStream is a real MediaStream.** `canvas.captureStream()`
+  for video and an `AudioContext` + `MediaStreamAudioDestinationNode` for audio
+  give real tracks with real `readyState`, so "did this release the device?"
+  is directly assertable. Two `RTCPeerConnection`s in one page also make the
+  network echo test testable for real — `startEchoTest({iceTransportPolicy:
+  'all'})` is the documented entry point, since production forces `'relay'` and
+  CI has no TURN server.
+- **Bootstrap listeners are only reachable through events.** Everything inside
+  the `DOMContentLoaded` handler — the keyboard PTT path, the settings
+  controls, the `storage` bridge, the pointer handlers — has no exported
+  function to call. Dispatch a real `KeyboardEvent`/`PointerEvent`/
+  `StorageEvent`, or click the element. Two gotchas: a `storage` event never
+  fires in the window that wrote the value, so the test must dispatch it by
+  hand; and the settings modal shows one card at a time with the rest at
+  `display:none`, so `.focus()` silently does nothing until the test reveals
+  them.
+- **Mode constants are frozen at load, so the URL is the switch.**
+  `IS_TINY_EMBED`, `FORCE_WEB_JOIN`, `ALLOW_POPOUT` and `_isIframe` are IIFEs
+  evaluated once. `page.goto('/?embed=tiny')` is the only way into the compact
+  roster and the Start-first invite screen; a same-origin child iframe is the
+  only way into the `postMessage` command handler.
+
+What stays out of reach, and is not worth contorting the code for:
+`IS_TAURI_DESKTOP` / `IS_NATIVE_MOBILE` branches (the pop-out `WebviewWindow`
+plumbing, the native audio-route plugin, the global-shortcut re-registration)
+and `IS_MOBILE_DEVICE` ones (`cameraFlipAvailable`, the mobile capture caps).
+A desktop Chromium answers `false` to all of them at load, so the tests assert
+the desktop behaviour and say so, rather than faking a platform.
