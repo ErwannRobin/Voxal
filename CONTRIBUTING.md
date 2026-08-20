@@ -143,6 +143,21 @@ make check            # fast Rust type-check
 
 PRs that pass `make check` and include a clear description are reviewed faster.
 
+### Required checks
+
+Every PR runs the `Tests` workflow (Rust tests, API tests, and the fast E2E
+suite). Those jobs feed a single aggregate check named **`All tests green`**,
+and `main` is protected so that a PR cannot be merged until that check is
+green — a red or still-running test suite disables the merge button. Push a fix
+and it re-runs; there is no override.
+
+The multi-peer WebRTC suite (`E2E (mesh, non-blocking)`) is advisory and does
+not block a merge, but a failure there is still worth investigating before
+merging.
+
+See [`docs/required-checks.md`](./docs/required-checks.md) for how the gate is
+configured (and how a maintainer applies it to a fresh clone or fork).
+
 ---
 
 ## Reporting bugs

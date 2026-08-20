@@ -471,6 +471,12 @@ Use Python string replacement scripts for multi-line patches to avoid manual err
 - Idempotency that keys off a *live* peer connection has a hole exactly as wide as the negotiation: there is no connection yet while one is being built. `_sfuSubscribeInFlight` closes it by returning the pending promise, the same shape as `_sfuCapabilityInFlight` for mints. A guard against duplicate work must cover the window *before* the work's evidence exists, not just after.
 - Testing the window: stub the endpoints with `page.route` and **hold the negotiate open** with a promise the test resolves, then drive the concurrent event in between. Asserting on the *number of negotiate calls* is what distinguishes "joined the in-flight subscribe" from "started a second one" — the end state looks identical either way, which is why the first version of this test passed against the unfixed code and proved nothing.
 
+## A green CI workflow is not a merge gate — the gate lives in repository settings
+
+- `tests.yml` running on every PR only *reports*; nothing about it stops a red PR from being merged. Blocking the merge needs a **branch ruleset** on GitHub (Settings → Rules), which is not stored in the repository and therefore cannot be added by a commit. The ruleset is checked in at `.github/rulesets/main-required-tests.json` purely so it is reviewable and importable — GitHub never reads it from there. Applying it is a one-time manual step; see `docs/required-checks.md`.
+- Require **one aggregate check** (`All tests green`, the last job in `tests.yml`), not each job by name. A ruleset that lists jobs individually silently stops covering any job added later, and renaming a job quietly turns its rule into a check that will never report. The aggregate job uses `if: always()` and treats anything that is not `success` — including `skipped` and `cancelled` — as failure, so it fails closed.
+- A required check that never reports blocks the merge rather than allowing it, which is why "the check is missing" and "the check passed" must never be collapsed into one branch of an automation. The Dependabot auto-merge script had exactly that hole: it merged on the `Tests` workflow's own conclusion, which says nothing about CodeQL, nothing about a check still running, and nothing about a job that never started.
+
 ## Testing main.js: what makes a path reachable, and what makes it unreachable
 
 Raising `main.js` coverage past 80% turned on four techniques, in order of how
