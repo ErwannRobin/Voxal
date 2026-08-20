@@ -49,7 +49,7 @@ No framework, no bundler. The frontend is plain HTML/CSS/JS served as static fil
 - `version.js` — exports `VOXAL_VERSION` and `VOXAL_BUILD_DATE`
 - `video-effects.js` — camera background blur / virtual backgrounds (see `docs/video-effects.md`)
 - PeerJS is bundled at `src/assets/peerjs.min.js` — never loaded from a CDN.
-- The MediaPipe segmentation runtime (`src/assets/seg/vision_*`, ~12 MB) is the one exception to "everything is vendored": it is gitignored, staged out of `node_modules` by `make seg-assets`, served from our own origin, and fetched lazily on first use. `make cap-sync` strips it from the mobile bundles.
+- The MediaPipe segmentation runtime (`src/assets/seg/vision_*`, ~12 MB) is the one exception to "everything is vendored": it is gitignored, staged out of `node_modules` by `seg-assets.sh` (run by `make seg-assets` and by the Vercel deploy's `vercel-build.sh`), served from our own origin, and fetched lazily on first use. `make cap-sync` strips it from the mobile bundles.
 
 After any `src/` change, run `make cap-sync` to mirror changes to `ios/App/App/public/` and `android/app/src/main/assets/public/`.
 

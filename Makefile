@@ -105,24 +105,11 @@ gen-build-info:
 	BUILD_DATE=$$(date -u +%FT%TZ); \
 	echo "window.VOXAL_COMMIT='$$COMMIT';window.VOXAL_WEB_BUILD_DATE='$$BUILD_DATE';" > src/build-info.js
 
-# Stages the MediaPipe vision runtime into src/assets/seg/. Roughly 12 MB of
-# WASM, which is why it is neither committed nor bundled into the mobile apps:
-# it is copied out of node_modules at build time, served from our own origin,
-# and fetched lazily by video-effects.js the first time somebody turns a
-# background on. Vercel does the same copy in vercel.json's buildCommand.
-SEG_SRC := node_modules/@mediapipe/tasks-vision
-SEG_DST := src/assets/seg
-
+# Stages the ~12 MB MediaPipe vision runtime into src/assets/seg/. The copy
+# itself lives in seg-assets.sh so this target and the Vercel deploy
+# (vercel-build.sh) share one definition of it — see docs/video-effects.md.
 seg-assets:
-	@if [ ! -d "$(SEG_SRC)" ]; then \
-		echo "→ @mediapipe/tasks-vision not installed; run: npm install"; \
-		exit 1; \
-	fi
-	@mkdir -p $(SEG_DST)
-	@cp $(SEG_SRC)/vision_bundle.mjs $(SEG_DST)/
-	@cp $(SEG_SRC)/wasm/vision_wasm_internal.js $(SEG_DST)/
-	@cp $(SEG_SRC)/wasm/vision_wasm_internal.wasm $(SEG_DST)/
-	@echo "→ Background-effects runtime staged in $(SEG_DST)"
+	@sh seg-assets.sh
 
 run-web: gen-build-info seg-assets
 	@command -v npx >/dev/null 2>&1 || { echo "npx not found — install Node.js"; exit 1; }

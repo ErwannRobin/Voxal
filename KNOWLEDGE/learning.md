@@ -558,6 +558,12 @@ Full design in `docs/video-effects.md`. What is not derivable from the code:
   Safari has `captureStream` without `requestFrame`. Feature-detect and fall
   back to `captureStream(fps)`; do not assume the manual path exists.
 
+- **Vercel caps `buildCommand` at 256 characters**, and enforces it as *schema
+  validation* — the deploy fails before the build starts, so the error names the
+  schema and says nothing about what you were trying to run. Anything beyond a
+  one-liner belongs in a script (`vercel-build.sh`) with the JSON side kept to
+  `sh vercel-build.sh`.
+
 - Heavily blurred gradient artwork compresses absurdly well: the four bundled
   1280×720 WebP backgrounds total ~20 KB. Generated artwork (see
   `resources/make-backgrounds.py`) is cheaper *and* smaller than anything you

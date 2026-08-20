@@ -1,6 +1,6 @@
 {
   "outputDirectory": "src",
-  "buildCommand": "mkdir -p src/assets/seg && cp node_modules/@mediapipe/tasks-vision/vision_bundle.mjs src/assets/seg/ && cp node_modules/@mediapipe/tasks-vision/wasm/vision_wasm_internal.js src/assets/seg/ && cp node_modules/@mediapipe/tasks-vision/wasm/vision_wasm_internal.wasm src/assets/seg/ && COMMIT=$(echo \"${VERCEL_GIT_COMMIT_SHA:-unknown}\" | cut -c1-7); BUILD_DATE=$(date -u +%FT%TZ); echo \"window.VOXAL_COMMIT='$COMMIT';window.VOXAL_WEB_BUILD_DATE='$BUILD_DATE';\" > src/build-info.js",
+  "buildCommand": "sh vercel-build.sh",
   "cleanUrls": true,
   "trailingSlash": false,
   "headers": [
