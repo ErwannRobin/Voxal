@@ -28,9 +28,11 @@
 //     Inference is the only expensive step and it runs a third of the time;
 //   * the mask is smoothed temporally (mix with the previous mask), which both
 //     kills edge flicker and is what makes the skipped frames invisible;
-//   * the blur is a downsample to a quarter resolution plus two separable
-//     9-tap passes — about 3 draws on a small buffer, versus 16× the work and a
-//     worse-looking result at full resolution;
+//   * the blur is a box downsample to a fixed 240-long buffer plus two H+V
+//     iterations of a separable 9-tap Gaussian — 5 draws on a small buffer,
+//     versus many times the work and a worse-looking result at full
+//     resolution. It runs in linear light, which is what keeps it from going
+//     grey;
 //   * the mask is feathered (blurred, then smoothstepped) before compositing.
 //     Without this the segmentation's blockiness is plainly visible.
 //
@@ -71,7 +73,38 @@ var VideoEffects = (function () {
   // and a mask that lags the frame by a segmentation interval erodes it again
   // at exactly the moment you move. Three small erosions compound into a
   // visibly clipped face, so the pipeline deliberately errs outward instead.
-  var MASK_DILATE = 2;
+  //
+  // It also has to cover half of the composite's soft band, which now reaches
+  // further inward than it used to — see MASK_EDGE_LO / MASK_EDGE_HI.
+  var MASK_DILATE = 3;
+
+  // Feather radius, in mask pixels, and the window the composite maps that
+  // feather through.
+  //
+  // These two together are the whole "how hard is the cutout" control, and they
+  // are easy to get wrong separately. The feather sets how wide the gradient
+  // is; the smoothstep window decides how much of that gradient survives as a
+  // visible transition. A narrow window on a wide gradient is still a hard
+  // edge — it just throws the gradient away.
+  //
+  // The window is deliberately wide (it keeps ~70% of the ramp) and biased low,
+  // so the soft band runs from about 3 mask pixels outside the dilated
+  // silhouette to about 2 inside it. With MASK_DILATE in front of it, that band
+  // sits wholly outside the real subject: a soft outline, not a bite out of an
+  // ear.
+  var MASK_FEATHER  = 1.4;
+  var MASK_EDGE_LO  = 0.12;
+  var MASK_EDGE_HI  = 0.78;
+
+  // The background blur runs at a FIXED size rather than at a fraction of the
+  // capture resolution, so a 1080p camera and a 720p one get the same-looking
+  // blur (and cost the same to blur). BLUR_STEP is the per-tap stride in that
+  // buffer; two H+V iterations of the 9-tap kernel below give an effective
+  // sigma of about 6 texels — roughly 2.5% of the frame width, which is the
+  // range a real lens would defocus a room behind someone at.
+  var BLUR_LONG  = 240;
+  var BLUR_STEP  = 2.5;
+  var BLUR_SIGMA = 1.75;   // sigma of one 9-tap pass, in taps
 
   // Temporal blend weights, per inference. Growing is nearly immediate so the
   // mask keeps up with a moving head; shrinking takes several inferences, which
@@ -496,37 +529,99 @@ var VideoEffects = (function () {
     '}'
   ].join('\n');
 
-  var FRAG_COPY = [
-    '#version 300 es',
-    'precision mediump float;',
-    'in vec2 vUv;',
-    'uniform sampler2D uTex;',
-    'out vec4 outColor;',
-    'void main() { outColor = texture(uTex, vUv); }'
-  ].join('\n');
+  // A normalised half-Gaussian, computed rather than typed.
+  //
+  // The hand-written table this replaces summed to 0.838, not 1 — so every
+  // separable pass quietly threw away 16% of what it was given. Two passes over
+  // the background left it at 70% brightness (the washed-out grey everyone
+  // noticed), and two more over the mask capped the feather at 0.7, which
+  // shifted the composite's threshold inward and hardened the very edge the
+  // feather exists to soften. Generating the weights makes that class of bug
+  // unrepresentable, so `_gaussianHalfKernel` is exported and pinned by a test.
+  function gaussianHalfKernel(sigma, taps) {
+    var w = [], sum = 0, i;
+    for (i = 0; i < taps; i++) {
+      var v = Math.exp(-(i * i) / (2 * sigma * sigma));
+      w.push(v);
+      sum += (i === 0 ? v : 2 * v);
+    }
+    for (i = 0; i < taps; i++) w[i] /= sum;
+    return w;
+  }
 
-  // Separable 9-tap Gaussian. uDir is the per-tap step in UV space, so the same
-  // program serves the horizontal pass, the vertical pass, the quarter-res
-  // background blur and the mask feather.
-  var FRAG_BLUR = [
+  // Separable 9-tap Gaussian, emitted twice: once for colour and once for the
+  // mask. uDir is the per-tap step in UV space, so one program serves both the
+  // horizontal and the vertical pass.
+  //
+  // The colour build blurs in LINEAR light. This is the other half of the "too
+  // grey" answer: averaging sRGB-encoded values is not averaging light, and it
+  // pulls every mixture toward the middle — a bright window behind you goes
+  // dull instead of blooming, and a colourful room turns to porridge. Each pass
+  // linearises its taps, sums, and re-encodes, which keeps the intermediate
+  // buffer sRGB-encoded (8 bits of linear light bands visibly in the darks).
+  // Gamma 2.0 rather than 2.2: a multiply and a sqrt, exact at both ends, and
+  // indistinguishable here from the real curve.
+  function fragBlur(gamma) {
+    var w = gaussianHalfKernel(BLUR_SIGMA, 5);
+    var src = [
+      '#version 300 es',
+      'precision mediump float;',
+      'in vec2 vUv;',
+      'uniform sampler2D uTex;',
+      'uniform vec2 uDir;',
+      'out vec4 outColor;'
+    ];
+    for (var i = 0; i < w.length; i++) src.push('const float w' + i + ' = ' + w[i].toFixed(7) + ';');
+    if (gamma) {
+      src.push('vec3 lin(vec3 c) { return c * c; }');
+      src.push('vec3 enc(vec3 c) { return sqrt(max(c, 0.0)); }');
+      src.push('vec3 tap(vec2 uv) { return lin(texture(uTex, uv).rgb); }');
+      src.push('void main() {');
+      src.push('  vec3 sum = tap(vUv) * w0;');
+      for (var j = 1; j < w.length; j++) {
+        src.push('  sum += (tap(vUv + uDir * ' + j + '.0) + tap(vUv - uDir * ' + j + '.0)) * w' + j + ';');
+      }
+      src.push('  outColor = vec4(enc(sum), 1.0);');
+      src.push('}');
+    } else {
+      src.push('void main() {');
+      src.push('  float sum = texture(uTex, vUv).r * w0;');
+      for (var k = 1; k < w.length; k++) {
+        src.push('  sum += (texture(uTex, vUv + uDir * ' + k + '.0).r' +
+                 ' + texture(uTex, vUv - uDir * ' + k + '.0).r) * w' + k + ';');
+      }
+      src.push('  outColor = vec4(sum, 0.0, 0.0, 1.0);');
+      src.push('}');
+    }
+    return src.join('\n');
+  }
+
+  var FRAG_BLUR    = fragBlur(true);
+  var FRAG_FEATHER = fragBlur(false);
+
+  // Box downsample into the blur buffer: four bilinear taps at the quarters of
+  // a destination texel, so each one averages a 2x2 source neighbourhood and
+  // the four together cover the destination texel's whole footprint.
+  //
+  // The single tap this replaces read 4 source texels out of the 16 (or more)
+  // that a destination texel covers, which is a point sample in all but name:
+  // the discarded texels come back as aliasing, and aliasing that moves with
+  // the frame is exactly the "boiling" you see in a cheap background blur.
+  // Averaging in linear light, for the same reason the blur does.
+  var FRAG_DOWNSAMPLE = [
     '#version 300 es',
     'precision mediump float;',
     'in vec2 vUv;',
     'uniform sampler2D uTex;',
-    'uniform vec2 uDir;',
+    'uniform vec2 uOff;',
     'out vec4 outColor;',
-    'const float w0 = 0.1621622;',
-    'const float w1 = 0.1459459;',
-    'const float w2 = 0.1216216;',
-    'const float w3 = 0.0540541;',
-    'const float w4 = 0.0162162;',
+    'vec3 lin(vec3 c) { return c * c; }',
     'void main() {',
-    '  vec4 sum = texture(uTex, vUv) * w0;',
-    '  sum += (texture(uTex, vUv + uDir * 1.0) + texture(uTex, vUv - uDir * 1.0)) * w1;',
-    '  sum += (texture(uTex, vUv + uDir * 2.0) + texture(uTex, vUv - uDir * 2.0)) * w2;',
-    '  sum += (texture(uTex, vUv + uDir * 3.0) + texture(uTex, vUv - uDir * 3.0)) * w3;',
-    '  sum += (texture(uTex, vUv + uDir * 4.0) + texture(uTex, vUv - uDir * 4.0)) * w4;',
-    '  outColor = sum;',
+    '  vec3 sum = lin(texture(uTex, vUv + vec2(-uOff.x, -uOff.y)).rgb);',
+    '  sum += lin(texture(uTex, vUv + vec2( uOff.x, -uOff.y)).rgb);',
+    '  sum += lin(texture(uTex, vUv + vec2(-uOff.x,  uOff.y)).rgb);',
+    '  sum += lin(texture(uTex, vUv + vec2( uOff.x,  uOff.y)).rgb);',
+    '  outColor = vec4(sqrt(max(sum * 0.25, 0.0)), 1.0);',
     '}'
   ].join('\n');
 
@@ -577,6 +672,7 @@ var VideoEffects = (function () {
   ].join('\n');
 
   // uBgXform packs a cover-fit for the background image: xy scale, zw offset.
+  // uEdge packs the smoothstep window the feathered mask is mapped through.
   var FRAG_COMPOSITE = [
     '#version 300 es',
     'precision mediump float;',
@@ -587,6 +683,7 @@ var VideoEffects = (function () {
     'uniform sampler2D uMask;',
     'uniform float uUseImage;',
     'uniform vec4 uBgXform;',
+    'uniform vec2 uEdge;',
     'out vec4 outColor;',
     'void main() {',
     '  vec2 flip = vec2(vUv.x, 1.0 - vUv.y);',
@@ -598,11 +695,14 @@ var VideoEffects = (function () {
     '  } else {',
     '    bg = texture(uBlur, flip).rgb;',
     '  }',
-    // Biased low on purpose. The confidence mask is not a clean 0/1 field: it
-    // falls off gradually at the subject, and a symmetric window around 0.5
-    // cuts inside the face rather than outside it. Better to keep a sliver of
-    // background sharp than to blur somebody's ear off.
-    '  float m = smoothstep(0.10, 0.42, texture(uMask, flip).r);',
+    // Wide, and biased low on purpose. Wide because a narrow window turns the
+    // feather back into the hard cutout it was meant to soften — it maps almost
+    // the whole gradient to 0 or 1 and keeps only a sliver as a transition.
+    // Biased low because the confidence mask is not a clean 0/1 field: it falls
+    // off gradually at the subject, and a window centred on 0.5 cuts inside the
+    // face rather than outside it. Better to keep a sliver of background sharp
+    // than to blur somebody's ear off. See MASK_EDGE_LO / MASK_EDGE_HI.
+    '  float m = smoothstep(uEdge.x, uEdge.y, texture(uMask, flip).r);',
     '  outColor = vec4(mix(bg, sharp, m), 1.0);',
     '}'
   ].join('\n');
@@ -786,8 +886,9 @@ var VideoEffects = (function () {
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
 
-    this.pCopy = program(gl, FRAG_COPY);
+    this.pDown = program(gl, FRAG_DOWNSAMPLE);
     this.pBlur = program(gl, FRAG_BLUR);
+    this.pFeather = program(gl, FRAG_FEATHER);
     this.pMix  = program(gl, FRAG_MASK_MIX);
     this.pDilate = program(gl, FRAG_DILATE);
     this.pComp = program(gl, FRAG_COMPOSITE);
@@ -795,10 +896,15 @@ var VideoEffects = (function () {
     this.texCam = texture(gl, 1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
     this.texImg = texture(gl, 1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
 
-    // Quarter resolution for the background blur: a 9-tap pass here is worth
-    // roughly a 36-tap pass at full size, for a sixteenth of the fill rate.
-    var bw = Math.max(1, Math.floor(size.w / 4));
-    var bh = Math.max(1, Math.floor(size.h / 4));
+    // The background is blurred at a fixed size, not at a fixed fraction of the
+    // frame, so the blur is the same *visible* strength on every camera and
+    // costs the same on a 4K one as on a 720p one. A 9-tap pass down here is
+    // worth a far wider one at full size, for a fraction of the fill rate — and
+    // it looks better, because a downsampled Gaussian upsamples into something
+    // closer to a real defocus than any single full-resolution pass.
+    var bscale = Math.min(1, BLUR_LONG / Math.max(size.w, size.h));
+    var bw = Math.max(1, Math.round(size.w * bscale));
+    var bh = Math.max(1, Math.round(size.h * bscale));
     this.blurW = bw; this.blurH = bh;
     this.texBlurA = texture(gl, bw, bh, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
     this.texBlurB = texture(gl, bw, bh, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
@@ -995,14 +1101,17 @@ var VideoEffects = (function () {
     this.drawQuad(this.fbMaskB, W, H);
 
     // Feather: blur the dilated mask so the composite's smoothstep has a real
-    // gradient to work with instead of the model's staircase.
-    gl.useProgram(this.pBlur);
-    this.bindTex(this.pBlur, 'uTex', 0, this.texMaskB);
-    gl.uniform2f(uloc(gl, this.pBlur, 'uDir'), 1 / W, 0);
+    // gradient to work with instead of the model's staircase. Its own program
+    // rather than the background's — coverage is not light, so this one must
+    // NOT be gamma-corrected, or the ramp would be bent and the edge would land
+    // somewhere other than where MASK_DILATE put it.
+    gl.useProgram(this.pFeather);
+    this.bindTex(this.pFeather, 'uTex', 0, this.texMaskB);
+    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), MASK_FEATHER / W, 0);
     this.drawQuad(this.fbMaskA, W, H);
 
-    this.bindTex(this.pBlur, 'uTex', 0, this.texMaskA);
-    gl.uniform2f(uloc(gl, this.pBlur, 'uDir'), 0, 1 / H);
+    this.bindTex(this.pFeather, 'uTex', 0, this.texMaskA);
+    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), 0, MASK_FEATHER / H);
     this.drawQuad(this.fbMaskB, W, H);
 
     // Swap so texMaskA is always the current, feathered mask.
@@ -1037,19 +1146,25 @@ var VideoEffects = (function () {
 
     var useImage = this.bgReady && this.mode !== 'blur';
     if (!useImage) {
-      // Downsample to a quarter, then two separable passes at that size.
-      gl.useProgram(this.pCopy);
-      this.bindTex(this.pCopy, 'uTex', 0, this.texCam);
+      // Box downsample into the blur buffer, then two H+V iterations at that
+      // size. Two iterations rather than one: successive Gaussians add
+      // variances, so this reaches sigma ~6 texels without stretching a 9-tap
+      // kernel far enough apart to show its individual taps as ghosts.
+      gl.useProgram(this.pDown);
+      this.bindTex(this.pDown, 'uTex', 0, this.texCam);
+      gl.uniform2f(uloc(gl, this.pDown, 'uOff'), 0.25 / this.blurW, 0.25 / this.blurH);
       this.drawQuad(this.fbBlurA, this.blurW, this.blurH);
 
       gl.useProgram(this.pBlur);
-      this.bindTex(this.pBlur, 'uTex', 0, this.texBlurA);
-      gl.uniform2f(uloc(gl, this.pBlur, 'uDir'), 1.5 / this.blurW, 0);
-      this.drawQuad(this.fbBlurB, this.blurW, this.blurH);
+      for (var pass = 0; pass < 2; pass++) {
+        this.bindTex(this.pBlur, 'uTex', 0, this.texBlurA);
+        gl.uniform2f(uloc(gl, this.pBlur, 'uDir'), BLUR_STEP / this.blurW, 0);
+        this.drawQuad(this.fbBlurB, this.blurW, this.blurH);
 
-      this.bindTex(this.pBlur, 'uTex', 0, this.texBlurB);
-      gl.uniform2f(uloc(gl, this.pBlur, 'uDir'), 0, 1.5 / this.blurH);
-      this.drawQuad(this.fbBlurA, this.blurW, this.blurH);
+        this.bindTex(this.pBlur, 'uTex', 0, this.texBlurB);
+        gl.uniform2f(uloc(gl, this.pBlur, 'uDir'), 0, BLUR_STEP / this.blurH);
+        this.drawQuad(this.fbBlurA, this.blurW, this.blurH);
+      }
     }
 
     gl.useProgram(this.pComp);
@@ -1058,6 +1173,7 @@ var VideoEffects = (function () {
     this.bindTex(this.pComp, 'uImage', 2, this.texImg);
     this.bindTex(this.pComp, 'uMask', 3, this.texMaskA);
     gl.uniform1f(uloc(gl, this.pComp, 'uUseImage'), useImage ? 1 : 0);
+    gl.uniform2f(uloc(gl, this.pComp, 'uEdge'), MASK_EDGE_LO, MASK_EDGE_HI);
     var x = this.bgXform();
     gl.uniform4f(uloc(gl, this.pComp, 'uBgXform'), x[0], x[1], x[2], x[3]);
     this.drawQuad(null, w, h);
@@ -1137,7 +1253,7 @@ var VideoEffects = (function () {
     [this.fbBlurA, this.fbBlurB, this.fbMaskA, this.fbMaskB].forEach(function (f) {
       if (f) try { gl.deleteFramebuffer(f); } catch (e) { /* ignore */ }
     });
-    [this.pCopy, this.pBlur, this.pMix, this.pDilate, this.pComp].forEach(function (p) {
+    [this.pDown, this.pBlur, this.pFeather, this.pMix, this.pDilate, this.pComp].forEach(function (p) {
       if (p) try { gl.deleteProgram(p); } catch (e) { /* ignore */ }
     });
     if (this.quad) try { gl.deleteBuffer(this.quad); } catch (e) { /* ignore */ }
@@ -1395,6 +1511,9 @@ var VideoEffects = (function () {
     onLoadProgress: onLoadProgress,
     // Test hook: drives the progress reporter without a 12 MB fetch.
     _reportForTest: report,
+    // Test hook: the blur/feather kernel. A pass that does not sum to 1 dims
+    // whatever it touches — that was the original "why is the blur grey".
+    _gaussianHalfKernel: gaussianHalfKernel,
     _runtimeBaseForTest: runtimeBase,
     cancelLoad: cancelLoad,
     isLoading: isLoading,

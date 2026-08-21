@@ -606,4 +606,56 @@ test.describe('the composited output', () => {
     expect(seen.centre[1]).toBeGreaterThan(seen.centre[0] + 40);
     expect(seen.centre[1]).toBeGreaterThan(seen.centre[2] + 40);
   });
+
+  // The "why is the blur grey" regression, pinned end to end.
+  //
+  // Blurring a flat colour must give that colour back. It did not: the
+  // hand-written Gaussian table summed to 0.838 rather than 1, so each
+  // separable pass dimmed what it touched and the two together left the
+  // background at 70% brightness — rgb(0,170,0) came out near rgb(0,119,0).
+  // The fake camera paints a flat #0a0, so any drift here is the pipeline's,
+  // not the picture's.
+  test('blurring a flat background preserves its brightness', async ({ page }) => {
+    await seedEffectsRoom(page);
+    const seen = await page.evaluate(async () => {
+      VideoEffects.writeMode('blur');
+      await startVideoShare();
+      await new Promise((r) => setTimeout(r, 600));
+      const src = VideoEffects.active().canvas;
+      const probe = document.createElement('canvas');
+      probe.width = src.width; probe.height = src.height;
+      const ctx = probe.getContext('2d');
+      ctx.drawImage(src, 0, 0);
+      // Left edge, mid-height: outside the stub's centred oval, and far from
+      // the moving marker pixel the fake camera draws along one edge.
+      return Array.from(ctx.getImageData(4, Math.floor(src.height / 2), 1, 1).data).slice(0, 3);
+    });
+    expect(seen[1]).toBeGreaterThan(158);
+    expect(seen[0]).toBeLessThan(12);
+    expect(seen[2]).toBeLessThan(12);
+  });
+});
+
+// A pass that does not sum to 1 is a brightness multiplier wearing a blur's
+// clothes, and it is invisible in isolation — you only see it two passes later
+// as a washed-out background, or as a feathered mask that never reaches 1 and
+// so drags the composite's threshold inward. The weights are generated for
+// exactly this reason; this is the guard on the generator.
+test.describe('the blur kernel', () => {
+  test('is normalised at every size the pipeline asks for', async ({ page }) => {
+    const sums = await page.evaluate(() => {
+      const out = {};
+      [[1.75, 5], [1.0, 3], [3.0, 8]].forEach(([sigma, taps]) => {
+        const w = VideoEffects._gaussianHalfKernel(sigma, taps);
+        let s = w[0];
+        for (let i = 1; i < w.length; i++) s += 2 * w[i];
+        out[sigma + '/' + taps] = { sum: s, monotonic: w.every((v, i) => i === 0 || v < w[i - 1]) };
+      });
+      return out;
+    });
+    Object.keys(sums).forEach((k) => {
+      expect(sums[k].sum).toBeCloseTo(1, 6);
+      expect(sums[k].monotonic).toBe(true);
+    });
+  });
 });

@@ -57,10 +57,64 @@ Four decisions carry almost all of the performance:
 | **Segment a downscaled copy**, long side 256, short side matching the camera | Inference costs ~3–6 ms instead of ~30 ms — and see the warning below, because this one is not optional. |
 | **Segment at 10–15 Hz while compositing at 24–30 fps** | Inference is the only expensive step in the whole pipeline, and it runs on a third to a half of the frames. |
 | **Blend each new mask into the previous one, asymmetrically** | Kills the edge crawl between frames, *and* is what makes the skipped frames invisible. See below — the asymmetry is the whole trick. |
-| **Blur by downsampling to a quarter and running two separable 9-tap passes** | Three draws on a sixteenth of the pixels. A full-resolution blur costs 16× more *and* looks worse — a quarter-res Gaussian upsamples into something closer to real bokeh. |
+| **Blur in a fixed 240-long buffer, box-downsampled, two H+V iterations of a 9-tap Gaussian** | Five draws on a small buffer. A full-resolution blur costs orders of magnitude more *and* looks worse — a downsampled Gaussian upsamples into something closer to real bokeh. |
 
-Per composited frame: one camera texture upload, plus about six small draw
+Per composited frame: one camera texture upload, plus about eight small draw
 calls. On any GPU from the last decade that is well under a millisecond.
+
+### The background blur is not a fraction of the frame
+
+The blur buffer is a **fixed 240 px on its long side**, not `frame / 4`. Two
+things follow. The blur is the same *visible* strength on a 720p camera and a
+4K one, instead of getting relatively weaker as the capture resolution rises;
+and it costs the same on both, instead of scaling with a number the user did
+not choose. Below 240 the buffer just tracks the frame, because there is
+nothing to gain by upscaling first.
+
+Getting into it is a **box downsample** — four bilinear taps at the quarters of
+a destination texel, so each averages a 2×2 source neighbourhood and the four
+cover the whole footprint. A single tap, which is what this replaces, reads 4
+source texels out of the 16-plus a destination texel covers. That is a point
+sample in all but name, and the texels it throws away come back as aliasing —
+aliasing that moves with the frame, which is precisely the "boiling" look of a
+cheap background blur.
+
+Two H+V iterations rather than one, because successive Gaussians add variances:
+that reaches an effective sigma of about 6 texels (~2.5% of the frame width)
+without stretching a 9-tap kernel far enough apart for its individual taps to
+show up as ghosts.
+
+### Colour is blurred in linear light; coverage is not
+
+Averaging sRGB-encoded values is not averaging light. It pulls every mixture
+toward the middle, so a bright window behind you goes dull instead of blooming
+and a colourful room turns to porridge — the flat, grey blur that this pipeline
+used to produce. Each colour pass therefore linearises its taps, sums, and
+re-encodes on the way out. Gamma 2.0 rather than 2.2: a multiply and a `sqrt`,
+exact at both ends, mediump-safe, and indistinguishable from the real curve at
+this scale. Keeping the intermediate buffer sRGB-*encoded* matters too — eight
+bits of linear light bands visibly in the darks.
+
+The mask feather runs the **same kernel through a second program with the gamma
+step compiled out**, because a coverage value is not light. Bending that ramp
+would move the edge somewhere other than where `MASK_DILATE` put it.
+
+### The kernel is generated, not typed
+
+`gaussianHalfKernel(sigma, taps)` computes normalised weights at load time and
+the shader sources are built from them. This is a direct response to a real
+bug: the hand-written table it replaces summed to **0.838**, not 1.
+
+A pass that does not sum to 1 is a brightness multiplier wearing a blur's
+clothes, and it is invisible in isolation. Two passes over the background left
+it at 70% brightness — a flat `rgb(0,170,0)` came out as `rgb(0,120,0)` — which
+is most of the answer to "why is the blur grey". Two more passes over the mask
+capped the feather at 0.7, which quietly shifted the composite's threshold
+inward and *hardened* the very edge the feather exists to soften.
+
+`tests/e2e/unit-video-effects.spec.js` pins both ends: the generator's
+normalisation, and — through the real GL pipeline — that blurring a flat colour
+gives that colour back.
 
 ### `ImageSegmenter` returns the mask at *your* frame's size
 
@@ -81,9 +135,25 @@ together.
 
 The erosions are answered directly too: the mask is **dilated** by a separable
 3-tap max filter before it is feathered, and the composite's threshold is
-deliberately biased low — `smoothstep(0.10, 0.42)` rather than a symmetric
+deliberately biased low — `smoothstep(0.12, 0.78)` rather than a symmetric
 window around 0.5. Keeping a sliver of background sharp is a much smaller sin
 than blurring somebody's ear off.
+
+### How hard the cutout looks is two numbers, not one
+
+The feather radius (`MASK_FEATHER`) sets how wide the gradient is. The
+composite's window (`MASK_EDGE_LO` / `MASK_EDGE_HI`) decides how much of that
+gradient survives as a visible transition. They are easy to tune separately and
+wrong to think about separately: **a narrow window on a wide gradient is still
+a hard edge** — it maps almost the whole ramp to 0 or 1 and keeps a sliver as
+the transition. That is how the effect ended up looking like a paper cutout
+even with a feather in front of it.
+
+The window is wide on purpose — it keeps roughly 70% of the ramp — and biased
+low, so the soft band runs from about 3 mask pixels outside the dilated
+silhouette to about 2 inside it. With `MASK_DILATE = 3` in front, that band
+sits wholly outside the real subject: a soft outline, never a bite out of an
+ear. At 720p the band works out around 20 px.
 
 ### The temporal blend is asymmetric, and that is the point
 
@@ -299,7 +369,7 @@ microphone-device selectors use.
 
 | File | What it holds |
 |---|---|
-| `src/video-effects.js` | The whole pipeline, the shaders, the mode storage, the picker |
+| `src/video-effects.js` | The whole pipeline, the shaders (generated from `gaussianHalfKernel`), the mode storage, the picker |
 | `src/main.js` | `maybeApplyVideoEffects()`, `applyVideoBackground()`, `swapLocalVideoTrack()`, the unwrap in `stopStreamTracks()`, the effects branches in `flipCamera()` and `setLocalCameraSuspended()`, the tile button in `_buildVideoTile()`, and `positionVideoBackgroundPopover()` / `renderVideoBackgroundProgress()` |
 | `resources/make-backgrounds.py` | Generates the four preset images |
 | `tests/e2e/unit-video-effects.spec.js` | Coverage, with inference stubbed via `window.__voxalSegStub` |
