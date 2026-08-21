@@ -13,6 +13,7 @@
     "coverage:report": "node scripts/coverage-report.mjs"
   },
   "devDependencies": {
+    "@mediapipe/tasks-vision": "1.0.1",
     "@playwright/test": "^1.62.1",
     "@tauri-apps/cli": "^2",
     "monocart-coverage-reports": "^2.12.12",

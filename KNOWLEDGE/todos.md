@@ -32,6 +32,34 @@ Tauri build, driven by `tauri-driver`. Nothing above is reachable from the
 
 ---
 
+## 🎥 Camera background effects — follow-ups
+
+Shipped: blur, four generated presets, custom image. See `docs/video-effects.md`.
+
+Deliberately left for later:
+
+- **Share the WebGL context with MediaPipe.** The mask currently crosses the CPU
+  as a 37 KB `Uint8Array` per inference. Keeping it a GPU texture would remove
+  the readback, at the cost of saving/restoring GL state around every inference
+  on five webviews. Worth measuring on a low-end Android before attempting.
+- **Native `applyConstraints({ backgroundBlur: true })` as a free tier 0.** Where
+  the platform exposes it, the OS blurs at zero CPU and zero bytes. Gate on
+  `getSupportedConstraints().backgroundBlur` *and* the track's capabilities, and
+  fall through to the WASM path everywhere else. Only covers blur — never
+  images — so it is an optimisation, not a replacement.
+- **Real-device thermal testing.** The adaptive step-down (15 → 10 → 6 Hz, then
+  give up) is tuned by reasoning, not by measurement. Needs a sustained call on
+  a mid-range Android and an older iPhone to confirm the thresholds are right.
+- **`watchVideoTrackEnded()`.** Pre-existing gap, surfaced while doing this: a
+  dead camera track is never detected or re-acquired, unlike the microphone's
+  `watchMicTrackEnded()`. Now slightly more visible, since a camera behind a
+  canvas fails less obviously.
+- **`selectedCameraConstraints()` is forked** between `main.js:6232` and
+  `settings.html`, and the copies already disagree (the settings one has no
+  resolution cap and no mobile `facingMode` branch).
+
+---
+
 ## 🧩 Revisit glib security update unblock
 
 **Goal:** Remove temporary Dependabot ignore for `glib` and upgrade to `glib >= 0.20` once upstream supports it.

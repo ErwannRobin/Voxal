@@ -1,7 +1,8 @@
 .PHONY: help run run-web gen-build-info dev debug build build-debug build-signed build-web install clean lint check test \
         test-rust test-api test-e2e test-mesh coverage coverage-rust coverage-e2e \
         coverage-api coverage-summary \
-        cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version
+        cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
+        seg-assets
 
 # Default target
 help:
@@ -15,6 +16,7 @@ help:
 	@echo "  build-signed Build release with updater signing (requires key)"
 	@echo "  build-debug  Build the Tauri desktop app (debug bundle — registers voxal:// scheme)"
 	@echo "  build-web    Bundle the web version into dist/"
+	@echo "  seg-assets   Stage the background-effects runtime into src/assets/seg"
 	@echo "  cap-sync     Sync web assets to iOS & Android"
 	@echo "  cap-ios      Open Xcode (iOS)"
 	@echo "  cap-android  Open Android Studio"
@@ -39,11 +41,11 @@ help:
 
 # ── Desktop (Tauri) ───────────────────────────────────────────────────────────
 
-run:
+run: seg-assets
 	npm run tauri build -- --no-bundle
 	./src-tauri/target/release/voxal
 
-dev:
+dev: seg-assets
 	npm run tauri dev
 
 # Build and run the debug .app bundle (registers voxal:// URL scheme).
@@ -72,11 +74,11 @@ debug:
 	echo "→ Launching Voxal (debug)..."; \
 	open "$$APP"
 
-build: gen-build-info
+build: gen-build-info seg-assets
 	@echo "→ Building release (unsigned, no updater artifacts). Use 'make build-signed' to sign."
 	npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
-build-signed: gen-build-info
+build-signed: gen-build-info seg-assets
 	@export TAURI_SIGNING_PRIVATE_KEY="$${TAURI_SIGNING_PRIVATE_KEY:-$$(cat ~/.tauri/voxal.key 2>/dev/null)}"; \
 	if [ -z "$$TAURI_SIGNING_PRIVATE_KEY" ]; then \
 		echo "Error: No signing key found."; exit 1; \
@@ -88,7 +90,7 @@ build-signed: gen-build-info
 	fi; \
 	npm run tauri build
 
-build-debug: gen-build-info
+build-debug: gen-build-info seg-assets
 	npm run tauri build -- --debug
 	@echo ""
 	@echo "Debug bundle: src-tauri/target/debug/bundle/macos/Voxal.app"
@@ -106,7 +108,13 @@ gen-build-info:
 	BUILD_DATE=$$(date -u +%FT%TZ); \
 	echo "window.VOXAL_COMMIT='$$COMMIT';window.VOXAL_WEB_BUILD_DATE='$$BUILD_DATE';" > src/build-info.js
 
-run-web: gen-build-info
+# Stages the ~12 MB MediaPipe vision runtime into src/assets/seg/. The copy
+# itself lives in seg-assets.sh so this target and the Vercel deploy
+# (vercel-build.sh) share one definition of it — see docs/video-effects.md.
+seg-assets:
+	@sh seg-assets.sh
+
+run-web: gen-build-info seg-assets
 	@command -v npx >/dev/null 2>&1 || { echo "npx not found — install Node.js"; exit 1; }
 	@mkdir -p src/.well-known/appspecific
 	@[ -f .devtools-workspace-uuid ] || uuidgen > .devtools-workspace-uuid
@@ -115,7 +123,7 @@ run-web: gen-build-info
 	@echo "Serving web app on http://localhost:8080"
 	npx --yes serve src -l 8080
 
-build-web: gen-build-info
+build-web: gen-build-info seg-assets
 	mkdir -p dist
 	cp -r src/* dist/
 	@echo "Web app copied to dist/"
@@ -124,6 +132,12 @@ build-web: gen-build-info
 
 cap-sync: gen-build-info
 	npx cap sync
+	@# The vision runtime is fetched from the service at runtime, not shipped:
+	@# 12 MB of WASM in every App Store / Play download, for a feature most
+	@# users never turn on, is not a trade worth making. The 250 KB model and
+	@# the preset artwork stay bundled — those are small and save a round-trip.
+	@rm -f ios/App/App/public/assets/seg/vision_* \
+	      android/app/src/main/assets/public/assets/seg/vision_*
 
 cap-ios: cap-sync
 	npx cap open ios
@@ -168,6 +182,7 @@ install:
 	npm install
 	@echo "→ Fetching Rust crates..."
 	cd src-tauri && cargo fetch
+	@$(MAKE) --no-print-directory seg-assets
 
 # Build a signed release and publish it as a GitHub Release.
 # If VERSION is set (for example: make release VERSION=1.2.3), it syncs:
