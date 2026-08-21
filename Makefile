@@ -1,5 +1,6 @@
 .PHONY: help run run-web gen-build-info dev debug build build-debug build-signed build-web install clean lint check test \
         test-rust test-api test-e2e test-mesh coverage coverage-rust coverage-e2e \
+        coverage-api coverage-summary \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
         seg-assets
 
@@ -30,9 +31,11 @@ help:
 	@echo "  test-rust    Run Rust unit tests"
 	@echo "  test-e2e     Run fast Playwright E2E tests (unit project)"
 	@echo "  test-mesh    Run multi-peer WebRTC E2E tests (mesh project)"
-	@echo "  coverage     Generate Rust + E2E coverage reports"
+	@echo "  coverage     Generate Rust + E2E + API coverage reports"
 	@echo "  coverage-rust Generate Rust coverage report (cargo-llvm-cov)"
 	@echo "  coverage-e2e Generate E2E JS coverage report (Playwright + monocart)"
+	@echo "  coverage-api Generate API handler coverage (node --test)"
+	@echo "  coverage-summary Print one markdown summary of whatever has been measured"
 	@echo "  clean        Remove build artifacts"
 	@echo ""
 
@@ -326,11 +329,13 @@ test-mesh:
 
 # ── Coverage ──────────────────────────────────────────────────────────────────
 
-coverage: coverage-rust coverage-e2e
+coverage: coverage-rust coverage-e2e coverage-api
 	@echo ""
 	@echo "→ Coverage reports generated:"
 	@echo "    Rust : src-tauri/target/llvm-cov/html/index.html"
 	@echo "    E2E  : coverage/index.html"
+	@echo "    API  : coverage-api/lcov.info"
+	@$(MAKE) --no-print-directory coverage-summary
 
 # Rust line/region coverage via cargo-llvm-cov.
 coverage-rust:
@@ -353,6 +358,17 @@ coverage-rust:
 coverage-e2e:
 	COVERAGE=1 NODE_OPTIONS=--disable-warning=DEP0205 npx playwright test
 	@echo "→ E2E coverage: coverage/index.html (lcov: coverage/lcov.info)"
+
+# API handler coverage, straight out of node:test. Its own directory because
+# monocart CLEARS coverage/ on every E2E report.
+coverage-api:
+	npm run test:api:coverage
+	@echo "→ API coverage: coverage-api/lcov.info"
+
+# One markdown table over whatever reports exist on disk — the same text the CI
+# job puts in its run summary. Safe to run with only some of them present.
+coverage-summary:
+	@node scripts/coverage-report.mjs
 
 clean:
 	cd src-tauri && cargo clean

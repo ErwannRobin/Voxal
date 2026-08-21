@@ -17,9 +17,11 @@ make test         # Full suite: Rust type-check + Rust unit tests + Playwright E
 make test-rust    # Rust unit tests only
 make test-e2e     # Fast Playwright E2E (unit project: pure-logic + UI flows)
 make test-mesh    # Multi-peer WebRTC E2E (mesh project: real PeerJS + migration)
-make coverage     # Rust + E2E coverage reports (see below)
+make coverage     # Rust + E2E + API coverage reports (see below)
 make coverage-rust # Rust coverage via cargo-llvm-cov → src-tauri/target/llvm-cov/html/
 make coverage-e2e # main.js V8 coverage via Playwright+monocart → coverage/index.html
+make coverage-api # api/ handler coverage via node --test → coverage-api/lcov.info
+make coverage-summary # one markdown table over whatever has been measured
 make build-debug  # macOS debug bundle — registers voxal:// URL scheme
 make build        # Release build
 make seg-assets   # Stage the background-effects WASM runtime into src/assets/seg/
@@ -36,7 +38,13 @@ make release      # Bump version, build signed release, publish GitHub Release
 
 **Mesh tests** (`tests/e2e/mesh.spec.js`, tagged `@mesh`) spin up a real local PeerServer (the `peer` dev dep) and drive N isolated Chromium contexts through real PeerJS signaling + WebRTC — covering room formation, rename propagation, audio mesh, and host migration. They use Chromium fake-media flags + `--disable-features=WebRtcHideLocalIpsWithMdns` (loopback ICE) and run with `retries: 2`. The app points PeerJS at the local broker via `localStorage['peerjs-server']` (read by `peerServerOptions()` in `main.js`; defaults to `{}` = cloud broker in production). Kept out of `make test`/`make test-e2e` so the fast suite stays flake-free.
 
-**Coverage:** `make coverage-e2e` sets `COVERAGE=1`, which turns on the monocart V8 collector wired into `tests/e2e/fixtures.js`; the report (HTML + lcov, scoped to `main.js`) is written to `coverage/` by `tests/e2e/coverage-teardown.js`. Normal test runs never load the coverage dependency. `make coverage-rust` needs a one-time `cargo install cargo-llvm-cov` + `rustup component add llvm-tools-preview` (the target prints these if missing).
+**Coverage:** `make coverage-e2e` sets `COVERAGE=1`, which turns on the monocart V8 collector wired into `tests/e2e/fixtures.js`; the report is written to `coverage/` by `tests/e2e/coverage-teardown.js` — HTML plus lcov, and two machine-readable outputs CI reads (`coverage-summary.md`, `coverage-report.json`). Normal test runs never load the coverage dependency. `make coverage-rust` needs a one-time `cargo install cargo-llvm-cov` + `rustup component add llvm-tools-preview` (the target prints these if missing).
+
+The API suite writes to **`coverage-api/`**, not `coverage/`: monocart *clears* `coverage/` every time it generates, so anything else put there is destroyed by the next E2E run.
+
+`scripts/coverage-report.mjs` folds all three into one markdown table (`make coverage-summary`). Every source is optional — a suite that was not run is reported as such rather than failing — so the same script serves a partial local run and CI. With `--write-badge` it also rewrites the README badge between its `<!-- coverage-badge -->` markers, from `main.js`'s own line coverage.
+
+**In CI** (`.github/workflows/tests.yml`), the `coverage` job runs all three, puts the table in the run summary and uploads the HTML as an artifact. It is `continue-on-error`, and so is each measurement leg inside it — coverage is information for the reviewer, never a merge gate, so it stays out of `all-tests-green`'s `needs:`. On a push to `main` it refreshes the README badge and commits it with `[skip ci]`, but only when the number actually moved.
 
 ## Architecture
 
