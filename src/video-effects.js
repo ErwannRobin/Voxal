@@ -73,6 +73,12 @@ var VideoEffects = (function () {
   // visibly clipped face, so the pipeline deliberately errs outward instead.
   var MASK_DILATE = 2;
 
+  // Temporal blend weights, per inference. Growing is nearly immediate so the
+  // mask keeps up with a moving head; shrinking takes several inferences, which
+  // is what stops the model's frame-to-frame noise turning into a boiling edge.
+  var MASK_ALPHA_UP   = 0.85;
+  var MASK_ALPHA_DOWN = 0.20;
+
   // Segmentation rates, in Hz, stepped down under load in this order.
   var SEG_HZ_DESKTOP = [15, 10, 6];
   var SEG_HZ_MOBILE  = [10, 6];
@@ -542,21 +548,31 @@ var VideoEffects = (function () {
     '}'
   ].join('\n');
 
-  // Temporal smoothing. Blending each new mask into the previous one is what
-  // stops the edge crawling between frames, and is also why dropping to 10 Hz
-  // segmentation does not read as stutter.
+  // Temporal smoothing, and the reason it is asymmetric.
+  //
+  // A single blend factor forces a choice between two bad outcomes: blend
+  // slowly and the mask lags a moving head, clipping it; blend quickly and the
+  // model's frame-to-frame noise goes straight through, so the blur boils.
+  //
+  // So the mask grows quickly and shrinks slowly. A pixel the model has just
+  // decided is part of you is trusted almost immediately; one it has just
+  // dropped is given several inferences to prove it. Motion is tracked without
+  // the flicker, because flicker is overwhelmingly pixels dropping out for a
+  // frame and coming straight back.
   var FRAG_MASK_MIX = [
     '#version 300 es',
     'precision mediump float;',
     'in vec2 vUv;',
     'uniform sampler2D uPrev;',
     'uniform sampler2D uNext;',
-    'uniform float uAlpha;',
+    'uniform float uAlphaUp;',
+    'uniform float uAlphaDown;',
     'out vec4 outColor;',
     'void main() {',
     '  float p = texture(uPrev, vUv).r;',
     '  float n = texture(uNext, vUv).r;',
-    '  outColor = vec4(mix(p, n, uAlpha), 0.0, 0.0, 1.0);',
+    '  float a = (n > p) ? uAlphaUp : uAlphaDown;',
+    '  outColor = vec4(mix(p, n, a), 0.0, 0.0, 1.0);',
     '}'
   ].join('\n');
 
@@ -958,13 +974,11 @@ var VideoEffects = (function () {
 
     // texMaskA holds the smoothed mask. The very first mask is taken whole,
     // otherwise the first second of video fades in from an empty matte.
-    // Weighted towards the new mask: at 10-15 Hz an even blend lags far enough
-    // behind a moving head to shave its edge off.
-    var alpha = this.maskPrimed ? 0.7 : 1.0;
     gl.useProgram(this.pMix);
     this.bindTex(this.pMix, 'uPrev', 0, this.texMaskA);
     this.bindTex(this.pMix, 'uNext', 1, this.texMaskRaw);
-    gl.uniform1f(uloc(gl, this.pMix, 'uAlpha'), alpha);
+    gl.uniform1f(uloc(gl, this.pMix, 'uAlphaUp'), this.maskPrimed ? MASK_ALPHA_UP : 1.0);
+    gl.uniform1f(uloc(gl, this.pMix, 'uAlphaDown'), this.maskPrimed ? MASK_ALPHA_DOWN : 1.0);
     this.drawQuad(this.fbMaskB, W, H);
 
     // Dilate before feathering. Everything downstream shrinks the subject a
@@ -1259,7 +1273,9 @@ var VideoEffects = (function () {
       fileInput = document.createElement('input');
       fileInput.type = 'file';
       fileInput.accept = 'image/*';
-      fileInput.className = 'hidden';
+      // Visually hidden rather than display:none — WKWebView will not open a
+      // picker for an input that is not rendered.
+      fileInput.className = 'bg-file-input';
     }
 
     chips.forEach(function (c) {
@@ -1275,9 +1291,16 @@ var VideoEffects = (function () {
     });
     if (fileInput) el.appendChild(fileInput);
 
+    // Whether a custom image is stored, kept as a plain flag rather than read
+    // from IndexedDB at click time. See the click handler: the read is async,
+    // and an async hop before input.click() loses the user activation, which is
+    // why the "+" chip silently did nothing on iOS and Android.
+    var hasCustom = false;
+
     function paintCustom() {
       if (!custom) return Promise.resolve();
       return getCustomImage().then(function (blob) {
+        hasCustom = !!blob;
         if (blob) {
           if (custom._url) URL.revokeObjectURL(custom._url);
           custom._url = URL.createObjectURL(blob);
@@ -1315,11 +1338,11 @@ var VideoEffects = (function () {
     chips.forEach(function (c) {
       c.addEventListener('click', function () {
         var mode = c.dataset.mode;
-        if (mode === 'custom') {
-          getCustomImage().then(function (blob) {
-            if (blob) pick('custom');
-            else fileInput.click();
-          });
+        if (mode === 'custom' && !hasCustom) {
+          // Synchronous, deliberately: a file picker only opens while the
+          // browser still considers itself inside a user gesture, and even one
+          // resolved promise in between is enough to lose that on WebKit.
+          fileInput.click();
           return;
         }
         pick(mode);
@@ -1347,6 +1370,7 @@ var VideoEffects = (function () {
     if (clearBtn) {
       clearBtn.addEventListener('click', function (ev) {
         ev.stopPropagation();
+        hasCustom = false;
         clearCustomImage().then(paintCustom).then(function () {
           if (readMode() === 'custom') pick('blur');
         });

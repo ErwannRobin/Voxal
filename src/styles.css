@@ -4153,14 +4153,30 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
 .bg-chip-clear:hover { color: var(--text); border-color: var(--accent); }
 .bg-chip-clear.hidden { display: none; }
 
+/* Rendered, but invisible and out of the way. `display: none` would be simpler
+   and would stop WKWebView opening the file dialog at all. */
+.bg-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 @media (max-width: 480px) {
   .video-bg-popover { max-width: calc(100vw - 16px); }
   /* A 360 px screen has no room for seven chips in a line. Keep the strip and
      let it scroll sideways rather than wrap into a tall block that covers the
-     video it is meant to be previewing. */
+     video it is meant to be previewing.
+
+     The padding is not decoration: overflow-x clips on BOTH axes, and the
+     selected chip's ring is a box-shadow drawn 4px outside its box — without
+     room to breathe, the ring gets sliced off along the top and bottom edges.
+     The negative margin keeps the strip visually where it was. */
   .video-bg-popover .bg-picker {
     flex-wrap: nowrap;
     overflow-x: auto;
-    padding-bottom: 4px;
+    padding: 6px 4px;
+    margin: -6px -4px;
   }
 }

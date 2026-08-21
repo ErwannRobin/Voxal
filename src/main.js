@@ -9687,7 +9687,14 @@ function initVideoBackgroundUI() {
     var host = document.getElementById(id);
     if (!host) return;
     var picker = VideoEffects.renderPicker(host, {
-      onPick: function(mode) { applyVideoBackground(mode); },
+      onPick: function(mode) {
+        // Choosing is the whole point of the popover, so get it out of the way
+        // of the preview the choice was made for. onPick only fires on an
+        // actual selection — the "+" chip opens a file dialog first and only
+        // reaches here once an image has been picked.
+        closeVideoBackgroundPopover();
+        applyVideoBackground(mode);
+      },
       onError: function(msg) { showCopyToast(msg); }
     });
     if (picker) _videoBgPickers.push(picker);

@@ -579,6 +579,25 @@ Full design in `docs/video-effects.md`. What is not derivable from the code:
   completely invisible on the web, where the same-origin branch wins, and breaks
   the feature outright on the desktop and mobile apps.
 
+- **A file input must be `.click()`ed synchronously inside the user gesture.**
+  One awaited promise beforehand — an IndexedDB read, a `caches.match`, anything
+  — spends the user activation, and WebKit then silently declines to open the
+  picker. No error, no console warning; the tap just does nothing. Read whatever
+  you need *ahead* of the click and keep the handler synchronous. Related: an
+  input with `display: none` will not open a picker in WKWebView either, so hide
+  it with `opacity: 0` and a 1px box instead.
+
+- **`overflow-x: auto` clips vertically too.** A horizontally scrolling strip
+  will slice the tops and bottoms off anything drawn outside its children's
+  boxes — `box-shadow` rings, focus outlines, badges. Pad the container and pull
+  it back with a negative margin.
+
+- **A single temporal blend factor on a segmentation mask cannot win.** Slow
+  blending lags a moving subject and clips it; fast blending lets per-inference
+  noise through and the matte boils. Blend asymmetrically — grow fast (~0.85),
+  shrink slowly (~0.2) — because flicker is almost entirely pixels dropping out
+  for one inference and returning.
+
 - **`Content-Length` is the compressed size** when the response is encoded,
   while a `ReadableStream` reader gives you decompressed bytes — so a progress
   bar computed as `loaded / contentLength` sails past 100%. Treat the header as

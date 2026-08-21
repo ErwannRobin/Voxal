@@ -56,7 +56,7 @@ Four decisions carry almost all of the performance:
 |---|---|
 | **Segment a downscaled copy**, long side 256, short side matching the camera | Inference costs ~3–6 ms instead of ~30 ms — and see the warning below, because this one is not optional. |
 | **Segment at 10–15 Hz while compositing at 24–30 fps** | Inference is the only expensive step in the whole pipeline, and it runs on a third to a half of the frames. |
-| **Temporally blend each new mask into the previous one** | Kills the edge crawl between frames, *and* is what makes the skipped frames invisible. Without it, dropping to 10 Hz reads as stutter. |
+| **Blend each new mask into the previous one, asymmetrically** | Kills the edge crawl between frames, *and* is what makes the skipped frames invisible. See below — the asymmetry is the whole trick. |
 | **Blur by downsampling to a quarter and running two separable 9-tap passes** | Three draws on a sixteenth of the pixels. A full-resolution blur costs 16× more *and* looks worse — a quarter-res Gaussian upsamples into something closer to real bokeh. |
 
 Per composited frame: one camera texture upload, plus about six small draw
@@ -80,11 +80,22 @@ phone held upright → 144×256). That fixes the readback cost and the geometry
 together.
 
 The erosions are answered directly too: the mask is **dilated** by a separable
-3-tap max filter before it is feathered, the temporal blend is weighted toward
-the newest mask (0.7, not an even 0.5) so it lags less, and the composite's
-threshold is deliberately biased low — `smoothstep(0.10, 0.42)` rather than a
-symmetric window around 0.5. Keeping a sliver of background sharp is a much
-smaller sin than blurring somebody's ear off.
+3-tap max filter before it is feathered, and the composite's threshold is
+deliberately biased low — `smoothstep(0.10, 0.42)` rather than a symmetric
+window around 0.5. Keeping a sliver of background sharp is a much smaller sin
+than blurring somebody's ear off.
+
+### The temporal blend is asymmetric, and that is the point
+
+A single blend factor forces a choice between two bad outcomes. Blend slowly and
+the mask lags a moving head, clipping it. Blend quickly and the model's
+frame-to-frame noise goes straight through, so the blur boils.
+
+So the mask **grows fast and shrinks slowly** — 0.85 up, 0.20 down, per
+inference. A pixel the model has just decided belongs to you is trusted almost
+immediately; one it has just dropped is given several inferences to prove it.
+That tracks motion without the flicker, because flicker is overwhelmingly pixels
+dropping out for a single inference and coming straight back.
 
 ### Why the mask crosses the CPU
 
@@ -241,6 +252,15 @@ a person.
 
 Images are drawn cover-fit — fill the frame, crop the overflow, never stretch.
 
+The **"+" chip opens the file dialog synchronously**, from inside the click
+handler, and reads whether an image is already stored from a flag rather than
+from IndexedDB. This is not a micro-optimisation: a browser only opens a file
+picker while it still considers itself inside a user gesture, and a single
+awaited promise is enough to spend that activation. The first version read the
+store first, and the chip silently did nothing on iOS and Android. For the same
+reason the input is visually hidden rather than `display: none` — WKWebView will
+not open a picker for an input it is not rendering.
+
 ## The UI
 
 One icon-only button, on **your own camera tile**, beside the front/back flip —
@@ -258,7 +278,14 @@ None · Blur · Aurora · Dusk · Studio · Linen · +
 ```
 
 The button appears only while a camera is actually running, and only where the
-pipeline is supported.
+pipeline is supported. Picking a background closes the popover — the choice is
+about the picture the popover is sitting on top of.
+
+On a narrow screen the chip strip scrolls sideways rather than wrapping into a
+block that would cover the preview. It carries vertical padding for a reason
+that is easy to delete by accident: `overflow-x` clips on *both* axes, and the
+selected chip's ring is a `box-shadow` drawn outside its box, so without the
+padding the ring is sliced off along the top and bottom.
 
 The same row appears in Settings → Video, rendered by the same
 `VideoEffects.renderPicker()` so there is one definition rather than three

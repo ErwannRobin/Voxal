@@ -429,6 +429,92 @@ test.describe('the effect and the rest of the camera lifecycle', () => {
   });
 });
 
+test.describe('choosing a background', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.evaluate(() => showScreen('room'));
+    await seedEffectsRoom(page);
+    await page.evaluate(() => startVideoShare());
+    await page.click('.video-tile-self.video-tile-camera .video-tile-bg');
+    await expect(page.locator('#video-bg-popover')).toBeVisible();
+  });
+
+  test('closes the popover, since the choice is about the picture behind it', async ({ page }) => {
+    await page.click('#video-bg-popover .bg-chip[data-mode="preset:studio"]');
+    await expect(page.locator('#video-bg-popover')).toBeHidden();
+    expect(await page.evaluate(() => localStorage.getItem('video-background')))
+      .toBe('preset:studio');
+  });
+
+  // The selected chip's ring is a box-shadow drawn outside its box, and on a
+  // narrow screen the strip is a scroll container — which clips both axes.
+  test('the selected chip\'s ring is not clipped by the scrolling strip', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 780 });
+    await page.click('#video-bg-popover .bg-chip[data-mode="preset:dusk"]');
+    await page.click('.video-tile-self.video-tile-camera .video-tile-bg');
+    const clearance = await page.evaluate(() => {
+      const strip = document.querySelector('#video-bg-popover .bg-picker');
+      const chip = strip.querySelector('.bg-chip.is-active');
+      const s = strip.getBoundingClientRect(), c = chip.getBoundingClientRect();
+      const RING = 4;   // the box-shadow's spread beyond the chip
+      return {
+        scrolls: getComputedStyle(strip).overflowX,
+        top: Math.round((c.top - RING) - s.top),
+        bottom: Math.round(s.bottom - (c.bottom + RING)),
+      };
+    });
+    expect(clearance.scrolls).toBe('auto');
+    expect(clearance.top).toBeGreaterThanOrEqual(0);
+    expect(clearance.bottom).toBeGreaterThanOrEqual(0);
+  });
+});
+
+test.describe('a custom image', () => {
+  // The "+" chip used to read IndexedDB before opening the dialog. That await
+  // spends the user activation, and WebKit will not open a file picker without
+  // one — so on iOS and Android the chip silently did nothing.
+  test('opens the file dialog straight from the tap', async ({ page }) => {
+    await page.evaluate(() => showScreen('room'));
+    await seedEffectsRoom(page);
+    await page.evaluate(() => startVideoShare());
+    await page.click('.video-tile-self.video-tile-camera .video-tile-bg');
+
+    const chooser = page.waitForEvent('filechooser', { timeout: 5000 });
+    await page.click('#video-bg-popover .bg-chip[data-mode="custom"]');
+    expect(await chooser).toBeTruthy();
+  });
+
+  test('the input is rendered, not display:none', async ({ page }) => {
+    // WKWebView refuses to open a picker for an input it is not rendering.
+    const display = await page.evaluate(() =>
+      getComputedStyle(document.querySelector('#video-bg-picker input[type=file]')).display);
+    expect(display).not.toBe('none');
+  });
+
+  test('a stored image is selected rather than re-prompted for', async ({ page }) => {
+    await page.evaluate(() => showScreen('room'));
+    await seedEffectsRoom(page);
+    await page.evaluate(() => startVideoShare());
+    await page.click('.video-tile-self.video-tile-camera .video-tile-bg');
+
+    const chooser = page.waitForEvent('filechooser');
+    await page.click('#video-bg-popover .bg-chip[data-mode="custom"]');
+    await (await chooser).setFiles('src/assets/backgrounds/aurora.webp');
+    await expect(page.locator('#video-bg-popover')).toBeHidden();
+    expect(await page.evaluate(() => localStorage.getItem('video-background'))).toBe('custom');
+
+    // Second time round the chip holds the image, so it must select it rather
+    // than ask again.
+    await page.evaluate(() => VideoEffects.writeMode('blur'));
+    await page.click('.video-tile-self.video-tile-camera .video-tile-bg');
+    let reprompted = false;
+    page.on('filechooser', () => { reprompted = true; });
+    await page.click('#video-bg-popover .bg-chip[data-mode="custom"]');
+    await page.waitForTimeout(300);
+    expect(reprompted).toBe(false);
+    expect(await page.evaluate(() => localStorage.getItem('video-background'))).toBe('custom');
+  });
+});
+
 test.describe('the first-run download', () => {
   // The runtime is not bundled, so the first effect anybody turns on pays for a
   // ~12 MB fetch. Silence there reads as a broken feature.
