@@ -44,7 +44,7 @@ The API suite writes to **`coverage-api/`**, not `coverage/`: monocart *clears* 
 
 `scripts/coverage-report.mjs` folds all three into one markdown table (`make coverage-summary`). Every source is optional — a suite that was not run is reported as such rather than failing — so the same script serves a partial local run and CI. With `--write-badge` it also rewrites the README badge between its `<!-- coverage-badge -->` markers, from `main.js`'s own line coverage.
 
-**In CI** (`.github/workflows/tests.yml`), the `coverage` job runs all three, puts the table in the run summary and uploads the HTML as an artifact. It is `continue-on-error`, and so is each measurement leg inside it — coverage is information for the reviewer, never a merge gate, so it stays out of `all-tests-green`'s `needs:`. On a push to `main` it refreshes the README badge and commits it with `[skip ci]`, but only when the number actually moved.
+**In CI** (`.github/workflows/tests.yml`), the `coverage` job runs all three, puts the table in the run summary and uploads the HTML as an artifact. It is `continue-on-error`, and so is each measurement leg inside it — coverage is information for the reviewer, never a merge gate, so it stays out of `all-tests-green`'s `needs:`. On a push to `main` it refreshes the README badge — but `main`'s ruleset requires every change to arrive by pull request, so the job force-updates a `chore/coverage-badge` branch and opens (or refreshes) one PR rather than pushing. It only fires when the rendered number moves, which is a tenth of a percent, since the badge is written to one decimal.
 
 ## Architecture
 
