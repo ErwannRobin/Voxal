@@ -18,6 +18,11 @@
 		B43478372F957079008A7C3D /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B43478362F957079008A7C3D /* SceneDelegate.swift */; };
 		A1A1A1A10000000000000002 /* PTTPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A1A1A10000000000000001 /* PTTPlugin.swift */; };
 		A1A1A1A10000000000000004 /* AudioRoutePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A1A1A10000000000000003 /* AudioRoutePlugin.swift */; };
+		A1A1A1A20000000000000002 /* ScreenCapturePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A1A1A20000000000000001 /* ScreenCapturePlugin.swift */; };
+		A1A1A1A20000000000000004 /* BroadcastFrameChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A1A1A20000000000000003 /* BroadcastFrameChannel.swift */; };
+		A1A1A1A20000000000000006 /* SampleHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A1A1A20000000000000005 /* SampleHandler.swift */; };
+		A1A1A1A20000000000000008 /* BroadcastFrameChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A1A1A20000000000000003 /* BroadcastFrameChannel.swift */; };
+		A1A1A1A2000000000000000A /* VoxalBroadcast.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A1A1A1A2000000000000000B /* VoxalBroadcast.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,7 +39,27 @@
 		B43478362F957079008A7C3D /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		A1A1A1A10000000000000001 /* PTTPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PTTPlugin.swift; sourceTree = "<group>"; };
 		A1A1A1A10000000000000003 /* AudioRoutePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRoutePlugin.swift; sourceTree = "<group>"; };
+		A1A1A1A20000000000000001 /* ScreenCapturePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenCapturePlugin.swift; sourceTree = "<group>"; };
+		A1A1A1A20000000000000003 /* BroadcastFrameChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastFrameChannel.swift; sourceTree = "<group>"; };
+		A1A1A1A20000000000000005 /* SampleHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
+		A1A1A1A20000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A1A1A1A20000000000000009 /* VoxalBroadcast.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = VoxalBroadcast.entitlements; sourceTree = "<group>"; };
+		A1A1A1A2000000000000000B /* VoxalBroadcast.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = VoxalBroadcast.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A1A1A1A20000000000000011 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A1A1A1A2000000000000000A /* VoxalBroadcast.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		504EC3011FED79650016851F /* Frameworks */ = {
@@ -42,6 +67,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1A1A1A2000000000000000F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -54,6 +86,7 @@
 				B43478362F957079008A7C3D /* SceneDelegate.swift */,
 				958DCC722DB07C7200EA8C5F /* debug.xcconfig */,
 				504EC3061FED79650016851F /* App */,
+				A1A1A1A2000000000000000C /* VoxalBroadcast */,
 				504EC3051FED79650016851F /* Products */,
 			);
 			sourceTree = "<group>";
@@ -62,6 +95,7 @@
 			isa = PBXGroup;
 			children = (
 				504EC3041FED79650016851F /* App.app */,
+				A1A1A1A2000000000000000B /* VoxalBroadcast.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -73,6 +107,7 @@
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				A1A1A1A10000000000000001 /* PTTPlugin.swift */,
 				A1A1A1A10000000000000003 /* AudioRoutePlugin.swift */,
+				A1A1A1A20000000000000001 /* ScreenCapturePlugin.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -81,6 +116,17 @@
 				50B271D01FEDC1A000F3C39B /* public */,
 			);
 			path = App;
+			sourceTree = "<group>";
+		};
+		A1A1A1A2000000000000000C /* VoxalBroadcast */ = {
+			isa = PBXGroup;
+			children = (
+				A1A1A1A20000000000000005 /* SampleHandler.swift */,
+				A1A1A1A20000000000000003 /* BroadcastFrameChannel.swift */,
+				A1A1A1A20000000000000007 /* Info.plist */,
+				A1A1A1A20000000000000009 /* VoxalBroadcast.entitlements */,
+			);
+			path = VoxalBroadcast;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -93,10 +139,12 @@
 				504EC3001FED79650016851F /* Sources */,
 				504EC3011FED79650016851F /* Frameworks */,
 				504EC3021FED79650016851F /* Resources */,
+				A1A1A1A20000000000000011 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A1A1A1A20000000000000012 /* PBXTargetDependency */,
 			);
 			name = App;
 			packageProductDependencies = (
@@ -105,6 +153,23 @@
 			productName = App;
 			productReference = 504EC3041FED79650016851F /* App.app */;
 			productType = "com.apple.product-type.application";
+		};
+		A1A1A1A2000000000000000D /* VoxalBroadcast */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1A1A1A20000000000000016 /* Build configuration list for PBXNativeTarget "VoxalBroadcast" */;
+			buildPhases = (
+				A1A1A1A2000000000000000E /* Sources */,
+				A1A1A1A2000000000000000F /* Frameworks */,
+				A1A1A1A20000000000000010 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = VoxalBroadcast;
+			productName = VoxalBroadcast;
+			productReference = A1A1A1A2000000000000000B /* VoxalBroadcast.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -119,6 +184,9 @@
 					504EC3031FED79650016851F = {
 						CreatedOnToolsVersion = 9.2;
 						LastSwiftMigration = 1100;
+					};
+					A1A1A1A2000000000000000D = {
+						CreatedOnToolsVersion = 16.0;
 					};
 				};
 			};
@@ -139,9 +207,20 @@
 			projectRoot = "";
 			targets = (
 				504EC3031FED79650016851F /* App */,
+				A1A1A1A2000000000000000D /* VoxalBroadcast */,
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXContainerItemProxy section */
+		A1A1A1A20000000000000013 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A1A1A1A2000000000000000D;
+			remoteInfo = VoxalBroadcast;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXResourcesBuildPhase section */
 		504EC3021FED79650016851F /* Resources */ = {
@@ -157,6 +236,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A1A1A1A20000000000000010 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -168,10 +254,29 @@
 				B43478372F957079008A7C3D /* SceneDelegate.swift in Sources */,
 				A1A1A1A10000000000000002 /* PTTPlugin.swift in Sources */,
 				A1A1A1A10000000000000004 /* AudioRoutePlugin.swift in Sources */,
+				A1A1A1A20000000000000002 /* ScreenCapturePlugin.swift in Sources */,
+				A1A1A1A20000000000000004 /* BroadcastFrameChannel.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1A1A1A2000000000000000E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1A1A1A20000000000000006 /* SampleHandler.swift in Sources */,
+				A1A1A1A20000000000000008 /* BroadcastFrameChannel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A1A1A1A20000000000000012 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A1A1A1A2000000000000000D /* VoxalBroadcast */;
+			targetProxy = A1A1A1A20000000000000013 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXVariantGroup section */
 		504EC30B1FED79650016851F /* Main.storyboard */ = {
@@ -366,6 +471,59 @@
 			};
 			name = Release;
 		};
+		A1A1A1A20000000000000014 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = VoxalBroadcast/VoxalBroadcast.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = RFJ383NTK7;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = VoxalBroadcast/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.4;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.9.7;
+				PRODUCT_BUNDLE_IDENTIFIER = com.erwann.voxal.app.VoxalBroadcast;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A1A1A1A20000000000000015 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = VoxalBroadcast/VoxalBroadcast.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = RFJ383NTK7;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = VoxalBroadcast/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.4;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.9.7;
+				PRODUCT_BUNDLE_IDENTIFIER = com.erwann.voxal.app.VoxalBroadcast;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -383,6 +541,15 @@
 			buildConfigurations = (
 				504EC3171FED79650016851F /* Debug */,
 				504EC3181FED79650016851F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1A1A1A20000000000000016 /* Build configuration list for PBXNativeTarget "VoxalBroadcast" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1A1A1A20000000000000014 /* Debug */,
+				A1A1A1A20000000000000015 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

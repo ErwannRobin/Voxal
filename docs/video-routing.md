@@ -371,14 +371,25 @@ What differs is the presentation and the capture budget:
 |---|---|---|---|
 | Layout | Tile grid, voice UI railed right | **Immersive** — tiles fill the screen; header and roster slide in over them from drag handles | Floating viewer panel / pop-out window |
 | Capture | 720p30 | 360p24 | 720p30 |
-| Bitrate cap | 600 kbps | 300 kbps, or 150 kbps on save-data / 2g / 3g | 600 kbps |
+| Bitrate cap (camera) | 600 kbps | 300 kbps, or 150 kbps on save-data / 2g / 3g | 600 kbps |
+| Bitrate cap (screen) | 1.5 Mbps | 800 kbps | 1.5 Mbps |
 | Camera flip | — | Front/back button on your own self-view tile | — |
-| Screen share | Yes | No — no mobile browser implements `getDisplayMedia` | Yes |
+| Screen share | Yes | Yes — via a native plugin, 1280px/24fps | Yes |
 
 Which layout applies is decided by `videoStageMode()` in `src/main.js`, not by
 CSS media queries, and published as the `video-stage` / `video-stage-immersive`
 body classes. Both are set **only** while a camera or screen is genuinely live,
 so an audio-only room renders exactly as it did before video existed.
+
+Screen sharing on a phone does not go through `getDisplayMedia` — no mobile
+browser or WebView implements it. A native plugin captures and encodes H.264
+(`MediaProjection` + `MediaCodec` on Android, a ReplayKit broadcast extension +
+`VTCompressionSession` on iOS), the frames cross into the WebView, and
+`src/main.js` decodes them with WebCodecs onto a canvas whose `captureStream()`
+is handed to the same `publishLocalTrack('screen', …)` as everywhere else.
+**Routing is therefore identical to desktop** — a phone set to "Direct only"
+still shares its screen peer-to-peer. See [the mobile guide](mobile.md#screen-sharing)
+for the platform requirements.
 
 In the immersive layout the room header and the participant list slide
 off-screen and are pulled back **over** the tiles by a drag handle — top-centre
