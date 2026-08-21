@@ -289,6 +289,13 @@
                 <video id="camera-preview-video" class="camera-preview hidden" autoplay playsinline muted></video>
               </div>
             </div>
+            <div class="settings-device-row">
+              <div class="settings-device-head">
+                <label id="settings-bg-label">Background</label>
+              </div>
+              <div id="settings-bg-picker" aria-labelledby="settings-bg-label"></div>
+              <p class="settings-hint">Blur what is behind you, or replace it. Applies to your camera only, and everything is computed on this device — no frame is ever sent anywhere to do it.</p>
+            </div>
           </div>
 
           <div id="settings-system" class="settings-card">
@@ -598,6 +605,20 @@
       <button id="stage-handle-roster" class="stage-handle stage-handle-right" type="button"
               aria-label="Show the participant list" aria-expanded="false"></button>
 
+      <!-- Background picker. Anchored at open time to the button on the
+           self-view tile (see positionVideoBackgroundPopover): that tile gets
+           moved between the stage grid and the minimized badge, so the popover
+           has to live outside it. -->
+      <div id="video-bg-popover" class="video-bg-popover hidden" role="dialog" aria-label="Background">
+        <p class="video-bg-popover-title">Background</p>
+        <div id="video-bg-progress" class="video-bg-progress hidden" aria-live="polite">
+          <p class="video-bg-progress-text"></p>
+          <div class="video-bg-progress-track"><div class="video-bg-progress-fill"></div></div>
+          <button type="button" id="btn-video-bg-cancel" class="btn btn-secondary btn-sm">Cancel</button>
+        </div>
+        <div id="video-bg-picker"></div>
+      </div>
+
       <div id="room-peers-panel" class="room-peers-panel">
         <button id="btn-toggle-peers" class="btn btn-secondary btn-sm room-peers-toggle hidden" aria-expanded="false">Peers</button>
         <div id="peers-list" class="peers-list"></div>
@@ -748,9 +769,11 @@
     </div>
 
     <script src="assets/peerjs.min.js"></script>
-    <!-- Shared with settings.html — must load before main.js, which uses its
-         constants (NET_USAGE_KINDS, NET_USAGE_HISTORY_MAX). -->
+    <!-- Shared with settings.html — both must load before main.js, which uses
+         net-usage.js's constants (NET_USAGE_KINDS, NET_USAGE_HISTORY_MAX) and
+         video-effects.js's VideoEffects.STORAGE_KEY. -->
     <script src="net-usage.js"></script>
+    <script src="video-effects.js"></script>
     <script src="main.js"></script>
   </body>
 </html>

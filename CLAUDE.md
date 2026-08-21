@@ -22,6 +22,7 @@ make coverage-rust # Rust coverage via cargo-llvm-cov → src-tauri/target/llvm-
 make coverage-e2e # main.js V8 coverage via Playwright+monocart → coverage/index.html
 make build-debug  # macOS debug bundle — registers voxal:// URL scheme
 make build        # Release build
+make seg-assets   # Stage the background-effects WASM runtime into src/assets/seg/
 make cap-sync     # Sync src/ assets to ios/ and android/ after any src/ change
 make cap-ios      # Open Xcode
 make cap-android  # Open Android Studio
@@ -46,7 +47,9 @@ No framework, no bundler. The frontend is plain HTML/CSS/JS served as static fil
 - `settings.html` — standalone page with its own inline `<script>`. It **duplicates** constants and helpers from `main.js` rather than importing them (no module system).
 - `screen-popup.html`, `video-popup.html` — feature popups
 - `version.js` — exports `VOXAL_VERSION` and `VOXAL_BUILD_DATE`
+- `video-effects.js` — camera background blur / virtual backgrounds (see `docs/video-effects.md`)
 - PeerJS is bundled at `src/assets/peerjs.min.js` — never loaded from a CDN.
+- The MediaPipe segmentation runtime (`src/assets/seg/vision_*`, ~12 MB) is the one exception to "everything is vendored": it is gitignored and staged out of `node_modules` by `seg-assets.sh` (run by `make seg-assets`, the desktop build targets, and the Vercel deploy's `vercel-build.sh`). Bundled into the Tauri app and served same-origin on web; `make cap-sync` strips it from the mobile bundles, which fetch it lazily from `ptt.voxal.app` — never from `presenceBase()`, which is the presence API. `make cap-sync` strips it from the mobile bundles.
 
 After any `src/` change, run `make cap-sync` to mirror changes to `ios/App/App/public/` and `android/app/src/main/assets/public/`.
 
@@ -100,6 +103,25 @@ Release a `getMicStream()` result with **`stopMicStreamFully(stream)`**, never `
 
 A setting that `getMicStream()` reads (`noise-suppression`, `mic-device-id`) is only sampled at acquisition, so changing one mid-call does nothing on its own — call **`reacquireMicForRoom()`** after writing it. It re-acquires and `replaceTrack`s every live sender without renegotiating, and is a no-op outside a room.
 
+### Camera access
+
+`startVideoShare()` wraps the raw `getUserMedia` stream with
+**`maybeApplyVideoEffects()`** when a background effect is selected, so
+`localVideoStream` may be a *canvas capture* rather than the device. Release it
+with **`stopStreamTracks(stream)`**, never `stream.getTracks().forEach(t => t.stop())`
+— exactly the `stopMicStreamFully()` rule, for exactly the same reason: the real
+camera hangs off the processed stream as `_effectsOriginal`, and stopping only
+the visible tracks leaves it capturing with the indicator light on.
+
+Anything that needs the device itself (settings, `enabled` gating) must go
+through **`rawCameraStream(stream)`**.
+
+Changing the background mid-call goes through **`applyVideoBackground(mode)`**.
+It only swaps a track when crossing off↔on; blur↔image is a shader uniform, so
+no renegotiation reaches the far side. Same for `flipCamera()`, which repoints
+the effect via `VideoEffects.setSource()` instead of replacing anything. See
+`docs/video-effects.md`.
+
 ### localStorage keys (defined as constants at top of `main.js`, duplicated in `settings.html`)
 
 | Key | Constant | Purpose |
@@ -122,7 +144,9 @@ A setting that `getMicStream()` reads (`noise-suppression`, `mic-device-id`) is 
 | `mic-device-id` | `MIC_DEVICE_KEY` | Selected microphone; same live re-acquire on change |
 | `video-mode-enabled` | `VIDEO_MODE_KEY` | Whether the room offers the Camera / Screen controls. Absent means "never chosen" = on (`readVideoModeEnabled()`) |
 | `video-routing-mode` | `VIDEO_ROUTING_KEY` | `prefer-p2p` / `allow-sfu` (default) / `p2p-only` — camera/screen-share routing ONLY, never audio (Settings → Advanced → Video routing). See `docs/video-routing.md` and `selectVideoTopology()` |
+| `seg-assets-url` | `VideoEffects` internal | Override for where the background-effects WASM runtime is fetched from (default: same-origin on web/Tauri, `https://ptt.voxal.app/assets/seg/` on mobile); self-host/test only |
 | `sfu-server` | `SFU_SERVER_OVERRIDE_KEY` | SFU allocation endpoint override (`{sessionUrl, trackUrl}`); test/self-host only |
+| `video-background` | `VideoEffects.STORAGE_KEY` | `off` (absent) / `blur` / `preset:<id>` / `custom`. The camera background effect. Declared **only** in `video-effects.js` — a second `const` in `main.js` would be a load-time `SyntaxError` (see *Shared classic scripts*). Applied live by `applyVideoBackground()`. See `docs/video-effects.md` |
 | `self-video-corner` | `SELF_VIDEO_CORNER_KEY` | Which corner of the video stage the minimized self-view badge was dragged to: `tl` / `tr` / `bl` / `br` |
 | `room-active` | `ROOM_ACTIVE_KEY` | Transient. Main window → preferences window: a call is live, so `settings.html` must not run its `getUserMedia` device-label probe (it would kill the call). Cleared on leave and on load |
 | `echo-test-request` | `ECHO_BRIDGE_REQUEST_KEY` | Transient. Desktop preferences window → main window: `{action:'start'\|'stop', at}` (see below) |
@@ -153,10 +177,13 @@ history is already populated when the panel opens.
 Anything both `index.html` and `settings.html` need should go in a plain classic
 script both documents load with `<script src>`, the way `version.js` already is —
 **not** hand-duplicated into `settings.html`. `net-usage.js` holds the usage
-constants, `formatBitrate()` and the chart renderers. Two constraints: it must
-load *before* `main.js` (which uses its constants), and a `const`/`let` declared
-there must not also be declared in `main.js` — classic scripts share one global
-lexical scope, so a duplicate declaration is a load-time `SyntaxError`.
+constants, `formatBitrate()` and the chart renderers; `video-effects.js` holds
+the camera background pipeline, its mode storage and the chip picker both
+documents render. Two constraints: such a script must load *before* `main.js`
+(which uses its constants), and a `const`/`let` declared there must not also be
+declared in `main.js` — classic scripts share one global lexical scope, so a
+duplicate declaration is a load-time `SyntaxError`. That is why the background
+mode's key is reached as `VideoEffects.STORAGE_KEY` rather than re-declared.
 
 ### Theme
 Applied before first paint via inline `<script>` at the top of both HTML files. `data-theme` on `<html>`. Dark is the default; light overrides via `html[data-theme="light"]`; system uses `@media (prefers-color-scheme: light) { html[data-theme="system"] }`.

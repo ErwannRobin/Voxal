@@ -9,8 +9,11 @@
     <script src="version.js"></script>
     <script src="build-info.js" onerror="this.remove()"></script>
     <!-- Shared verbatim with main.js/index.html — this window renders the same
-         usage charts from data relayed over the net-usage-state bridge. -->
+         usage charts from data relayed over the net-usage-state bridge, and the
+         same background picker, which writes its preference for the main window
+         to act on. -->
     <script src="net-usage.js"></script>
+    <script src="video-effects.js"></script>
     <script>
       // Apply theme before paint to avoid flash
       (function() {
@@ -280,6 +283,13 @@
           <div class="settings-test-result">
             <video id="camera-preview-video" class="camera-preview hidden" autoplay playsinline muted></video>
           </div>
+        </div>
+        <div class="settings-device-row">
+          <div class="settings-device-head">
+            <label id="settings-bg-label">Background</label>
+          </div>
+          <div id="settings-bg-picker" aria-labelledby="settings-bg-label"></div>
+          <p class="settings-hint">Blur what is behind you, or replace it. Applies to your camera only, and everything is computed on this device — no frame is ever sent anywhere to do it.</p>
         </div>
       </div>
 
@@ -1389,6 +1399,18 @@
         else localStorage.removeItem(CAMERA_DEVICE_KEY);
         if (_cameraPreviewStream) startCameraPreview().catch(function(err) { console.warn('[Camera preview]', err.message); stopCameraPreview(); });
       });
+      // Background picker. This window has no capture pipeline of its own — no
+      // module system, so no getMicStream/wrap here — so it only writes the
+      // preference and lets the main window's `storage` listener do the work.
+      // Same bridge the noise-suppression and mic-device selectors use.
+      if (typeof VideoEffects !== 'undefined') {
+        var bgPicker = VideoEffects.renderPicker($id('settings-bg-picker'), {
+          onPick: function(mode) { VideoEffects.writeMode(mode); }
+        });
+        window.addEventListener('storage', function(e) {
+          if (bgPicker && e.key === VideoEffects.STORAGE_KEY) bgPicker.sync();
+        });
+      }
       $id('select-speaker-device').addEventListener('change', function(e) {
         if (e.target.value) localStorage.setItem(SPEAKER_DEVICE_KEY, e.target.value);
         else localStorage.removeItem(SPEAKER_DEVICE_KEY);

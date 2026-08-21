@@ -520,3 +520,101 @@ plumbing, the native audio-route plugin, the global-shortcut re-registration)
 and `IS_MOBILE_DEVICE` ones (`cameraFlipAvailable`, the mobile capture caps).
 A desktop Chromium answers `false` to all of them at load, so the tests assert
 the desktop behaviour and say so, rather than faking a platform.
+
+## Camera background effects — the five things that bit
+
+Full design in `docs/video-effects.md`. What is not derivable from the code:
+
+- **A canvas that is never redrawn emits exactly one frame.** The E2E fake
+  camera (`canvas.captureStream(15)` over a static fill) delivers a single frame
+  and then stops, so `requestVideoFrameCallback` fires once and the render loop
+  stalls silently — the pipeline looks broken when it is the *source* that has
+  stopped. `unit-video-effects.spec.js` repaints its fake camera on an interval.
+  Anything driving a real capture loop in a test needs the same.
+
+- **`import('assets/seg/x.mjs')` throws — that is a *bare* specifier**, not a
+  relative URL, and dynamic import does not resolve it against the document.
+  It must be `./assets/…`, or an absolute URL. `video-effects.js` runs every
+  runtime path through `new URL(u, document.baseURI).href` for this reason.
+
+- **MediaPipe's `canvas:` option takes over that canvas's GL context** and
+  freely resets viewport, framebuffer and blend state. Handing it your own
+  render canvas means saving and restoring GL state around every inference, on
+  five different webviews. Give it a throwaway canvas and take the mask back as
+  a `Uint8Array` — 37 KB at 256×144, well under the cost of being clever.
+
+- **`@mediapipe/tasks-vision` unpacks to ~36 MB**, of which the SIMD build we
+  actually use (`vision_wasm_internal.{js,wasm}` + `vision_bundle.mjs`) is
+  ~12 MB. The npm package does *not* contain the `.tflite` models — those come
+  from `storage.googleapis.com/mediapipe-models/…` and have to be vendored
+  separately. `selfie_segmenter_landscape.tflite` is 250 KB.
+
+- **`ImageSegmenter` returns its mask at the size of the frame you hand it**, not
+  at the model's input size. Passing a 640x480 video back gives a 640x480 mask
+  (300 KB read across per inference, not the 37 KB a 256x144 one would be), and
+  if you then resample it into a hardcoded 16:9 buffer you crush 480 rows into
+  144 and clip the subject. Downscale the frame yourself first — the model
+  resizes internally anyway, so nothing is lost and the geometry comes out
+  right. `mask.width`/`mask.height` will tell you this in about a minute; the
+  docs will not.
+
+- **Every stage of a mask pipeline erodes the subject** — the feather blur, the
+  composite's `smoothstep`, and the mask's own lag behind a moving frame. Each
+  is small, they compound, and the result is somebody's face getting blurred at
+  the edges. Dilate before feathering and bias the threshold low: a sliver of
+  sharp background is far less noticeable than a soft ear.
+
+- **A confidence mask read via `getAsUint8Array()` is 0–255, not 0–1.** The
+  selfie model publishes a *single* confidence mask (`getLabels()` → `["selfie"]`),
+  not one per class — so index 1 is `undefined` there, while other segmenters
+  put the person at index 1 behind the background. Handle both, and check
+  `getLabels()` rather than assuming.
+
+- **The static site is `ptt.voxal.app`, and `presenceBase()` is not it.**
+  `localStorage['service-url']` defaults to a Supabase edge function
+  (`…supabase.co/functions/v1/session`) and has never served files out of
+  `src/`. Anything a native build needs to fetch from the site itself must use
+  the `DEFAULT_ANON_TURN_URL` / SFU pattern — an override key, same-origin on
+  web, absolute `https://ptt.voxal.app/…` on native. Getting this wrong is
+  completely invisible on the web, where the same-origin branch wins, and breaks
+  the feature outright on the desktop and mobile apps.
+
+- **A file input must be `.click()`ed synchronously inside the user gesture.**
+  One awaited promise beforehand — an IndexedDB read, a `caches.match`, anything
+  — spends the user activation, and WebKit then silently declines to open the
+  picker. No error, no console warning; the tap just does nothing. Read whatever
+  you need *ahead* of the click and keep the handler synchronous. Related: an
+  input with `display: none` will not open a picker in WKWebView either, so hide
+  it with `opacity: 0` and a 1px box instead.
+
+- **`overflow-x: auto` clips vertically too.** A horizontally scrolling strip
+  will slice the tops and bottoms off anything drawn outside its children's
+  boxes — `box-shadow` rings, focus outlines, badges. Pad the container and pull
+  it back with a negative margin.
+
+- **A single temporal blend factor on a segmentation mask cannot win.** Slow
+  blending lags a moving subject and clips it; fast blending lets per-inference
+  noise through and the matte boils. Blend asymmetrically — grow fast (~0.85),
+  shrink slowly (~0.2) — because flicker is almost entirely pixels dropping out
+  for one inference and returning.
+
+- **`Content-Length` is the compressed size** when the response is encoded,
+  while a `ReadableStream` reader gives you decompressed bytes — so a progress
+  bar computed as `loaded / contentLength` sails past 100%. Treat the header as
+  a hint, keep an approximate total as a fallback, and clamp below 1 until the
+  work is actually done.
+
+- **`captureStream(0)` + `track.requestFrame()` is the precise path**, but
+  Safari has `captureStream` without `requestFrame`. Feature-detect and fall
+  back to `captureStream(fps)`; do not assume the manual path exists.
+
+- **Vercel caps `buildCommand` at 256 characters**, and enforces it as *schema
+  validation* — the deploy fails before the build starts, so the error names the
+  schema and says nothing about what you were trying to run. Anything beyond a
+  one-liner belongs in a script (`vercel-build.sh`) with the JSON side kept to
+  `sh vercel-build.sh`.
+
+- Heavily blurred gradient artwork compresses absurdly well: the four bundled
+  1280×720 WebP backgrounds total ~20 KB. Generated artwork (see
+  `resources/make-backgrounds.py`) is cheaper *and* smaller than anything you
+  would license.

@@ -1,9 +1,22 @@
 {
   "outputDirectory": "src",
-  "buildCommand": "COMMIT=$(echo \"${VERCEL_GIT_COMMIT_SHA:-unknown}\" | cut -c1-7); BUILD_DATE=$(date -u +%FT%TZ); echo \"window.VOXAL_COMMIT='$COMMIT';window.VOXAL_WEB_BUILD_DATE='$BUILD_DATE';\" > src/build-info.js",
+  "buildCommand": "sh vercel-build.sh",
   "cleanUrls": true,
   "trailingSlash": false,
   "headers": [
+    {
+      "source": "/assets/seg/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
     {
       "source": "/.well-known/apple-app-site-association",
       "headers": [
