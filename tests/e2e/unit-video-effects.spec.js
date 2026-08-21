@@ -843,9 +843,22 @@ test.describe('the blur strength preference', () => {
     expect(seen.labels[2]).toMatch(/Maximum/);
   });
 
-  test('the slider is in Advanced, and moving it stores the value', async ({ page }) => {
+  // It belongs beside the picker it modifies, not off in Advanced.
+  test('the slider is in Video, under the picker, and moving it stores the value', async ({ page }) => {
     await page.click('#btn-open-settings');
-    await page.click('#modal-settings [data-target="settings-advanced"]');
+    await page.click('#modal-settings [data-target="settings-video"]');
+    // Same card, and after the chip row rather than before it.
+    const order = await page.evaluate(() => {
+      const card = document.getElementById('settings-video');
+      const picker = document.getElementById('settings-bg-picker');
+      const strength = document.getElementById('settings-blur-strength');
+      return {
+        inVideoCard: !!card && card.contains(picker) && card.contains(strength),
+        afterPicker: !!(picker.compareDocumentPosition(strength) &
+                        Node.DOCUMENT_POSITION_FOLLOWING),
+      };
+    });
+    expect(order).toEqual({ inVideoCard: true, afterPicker: true });
     const slider = page.locator('#settings-blur-strength input[type="range"]');
     await expect(slider).toBeVisible();
 

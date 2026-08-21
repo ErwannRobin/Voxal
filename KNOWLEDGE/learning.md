@@ -681,7 +681,7 @@ seems too sharp".
 - **"Blurred enough" is not a number you can pick for someone.** Three rounds
   of tuning (2.6% → 4.5% → "still not much") said the disagreement was about
   taste, not correctness — the rendered radius matched the declared one at every
-  step. It is now a preference (Settings → Advanced, `blur-strength`), default
+  step. It is now a preference (Settings → Video, `blur-strength`), default
   0.08, range 0.02–0.20. When a second round of visual feedback arrives on the
   same knob, that is the signal to ship the knob rather than guess again.
 

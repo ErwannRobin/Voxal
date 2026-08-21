@@ -9704,9 +9704,10 @@ function initVideoBackgroundUI() {
     if (picker) _videoBgPickers.push(picker);
   });
 
-  // Blur strength (Settings → Advanced). Unlike the mode, this never crosses
-  // the off↔on boundary, so it is a uniform change inside a pass that is
-  // already running: no replaceTrack, no renegotiation, nothing announced.
+  // Blur strength (Settings → Video, under the picker). Unlike the mode, this
+  // never crosses the off↔on boundary, so it is a uniform change inside a pass
+  // that is already running: no replaceTrack, no renegotiation, nothing
+  // announced.
   _videoBgStrength = VideoEffects.renderStrength(
     document.getElementById('settings-blur-strength'));
 

@@ -71,10 +71,11 @@ what makes it mean the same thing on every camera — a 4K webcam and a 720p one
 land on the same percentage, verified across four capture sizes and the whole
 slider range in the tests.
 
-It lives in **Settings → Advanced → Background blur strength**
-(`localStorage['blur-strength']`), because "blurred enough" turned out to vary
-far more between people than any single constant could serve. Default `0.08` —
-sigma ≈ 100 px on a 1280-wide frame — over a range of `0.02` to `0.20`.
+It lives in **Settings → Video → Blur strength**
+(`localStorage['blur-strength']`), directly under the chip row it modifies —
+because "blurred enough" turned out to vary far more between people than any
+single constant could serve. Default `0.08` — sigma ≈ 100 px on a 1280-wide
+frame — over a range of `0.02` to `0.20`.
 
 The slider's travel is **geometric, not linear**: each step is a constant
 *ratio*. Linear travel would spend most of the slider inside "already
@@ -97,7 +98,7 @@ and it costs the same on both, instead of scaling with a number the user did
 not choose. Below 160 the buffer just tracks the frame, because there is
 nothing to gain by upscaling first.
 
-The buffer is small on purpose. `BLUR_STRENGTH` is relative to the frame, so
+The buffer is small on purpose. The strength is relative to the frame, so
 shrinking the buffer *buys* radius rather than spending it, and the box
 downsample that fills it low-passes the frame on the way in.
 
@@ -413,8 +414,8 @@ padding the ring is sliced off along the top and bottom.
 
 The same row appears in Settings → Video, rendered by the same
 `VideoEffects.renderPicker()` so there is one definition rather than three
-drifting copies. The strength slider in Settings → Advanced follows the same
-rule via `VideoEffects.renderStrength()`. In the desktop preferences window (`settings.html`) the picker
+drifting copies. The strength slider sits directly beneath it in the same
+card, and follows the same rule via `VideoEffects.renderStrength()`. In the desktop preferences window (`settings.html`) the picker
 is write-only: that window has no module system and therefore no capture
 pipeline, so it writes `localStorage['video-background']` and the main window's
 `storage` listener does the work — the same bridge the noise-suppression and
