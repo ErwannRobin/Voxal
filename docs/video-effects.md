@@ -210,6 +210,39 @@ silhouette to about 2 inside it. With `MASK_DILATE = 3` in front, that band
 sits wholly outside the real subject: a soft outline, never a bite out of an
 ear. At 720p the band works out around 20 px.
 
+### The blend's memory is its own buffer, and that is not optional
+
+Three things run over the mask on every inference, in order: the temporal
+blend, the dilate, the feather. The blend's `uPrev` must be **the previous
+blended mask** — a buffer nothing downstream writes to.
+
+It was not. `uPrev` was the *finished* mask, so the dilate and the feather were
+re-applied to their own output ~15 times a second and compounded. Read off the
+GPU, on a silhouette edge at texel 71.7 of a 256-wide mask:
+
+| | 50% point | soft band |
+|---|---|---|
+| Compounding | texel 61 — **10.7 texels outside** the subject | texels 34–68 |
+| Correct | texel 69 — one dilate outside | texels 63–71 |
+
+From the outside that does not look like a mask bug. It looks like **the
+background blur is weak**: a wide halo around the person stays sharp, and
+turning the blur radius up cannot fix it, because the blur is not what is
+wrong. It was reported three times as "not blurred enough" before anyone
+looked at the mask.
+
+So there are two ping-pong pairs, not one. `texMaskS`/`texMaskSB` is the
+blend's memory; `texMaskA`/`texMaskB` is scratch for the dilate and the
+feather, rebuilt from the state every inference and never fed back. The work
+pair also has a fixed direction now — `texMaskA` is the finished mask by
+construction rather than by a swap — so there is no arrangement of the swaps
+that can reintroduce the loop.
+
+`tests/e2e/unit-video-effects.spec.js` reads the mask back off the GPU and
+asserts the edge does not move between an early and a late sample. That is the
+assertion that fails on the old code; the geometry assertions alone would not
+have caught it early, when the drift is still small.
+
 ### The temporal blend is asymmetric, and that is the point
 
 A single blend factor forces a choice between two bad outcomes. Blend slowly and

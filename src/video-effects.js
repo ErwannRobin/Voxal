@@ -1032,8 +1032,15 @@ var VideoEffects = (function () {
     this.segCtx = this.segCanvas.getContext('2d', { willReadFrequently: false });
 
     this.texMaskRaw = texture(gl, this.segW, this.segH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
+    // Two pairs, deliberately. S/SB is the temporal blend's own memory; A/B is
+    // scratch for the dilate and the feather. Sharing one pair is what let the
+    // filters compound into their own input — see uploadMask().
+    this.texMaskS = texture(gl, this.segW, this.segH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
+    this.texMaskSB = texture(gl, this.segW, this.segH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
     this.texMaskA = texture(gl, this.segW, this.segH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
     this.texMaskB = texture(gl, this.segW, this.segH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
+    this.fbMaskS = framebuffer(gl, this.texMaskS);
+    this.fbMaskSB = framebuffer(gl, this.texMaskSB);
     this.fbMaskA = framebuffer(gl, this.texMaskA);
     this.fbMaskB = framebuffer(gl, this.texMaskB);
     this.maskPrimed = false;
@@ -1202,27 +1209,49 @@ var VideoEffects = (function () {
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RED, gl.UNSIGNED_BYTE, data);
     }
 
-    // texMaskA holds the smoothed mask. The very first mask is taken whole,
-    // otherwise the first second of video fades in from an empty matte.
+    // Temporal blend, into a state buffer of its OWN.
+    //
+    // This separation is the whole point, and collapsing it is a genuinely
+    // nasty bug: feed the *finished* mask back in as `uPrev` and the dilate and
+    // the feather are re-applied to their own output on every single inference.
+    // They compound. Measured, at 15 Hz: the silhouette's 50% point crept 10.7
+    // texels OUTSIDE the subject and the feather ramp reached ~4x its
+    // configured width, so a wide halo around the person stayed sharp
+    // permanently — which reads, from the outside, as "the blur isn't strong
+    // enough", and no amount of blur radius can fix it because the blur is not
+    // what is wrong.
+    //
+    // So `uPrev` must be the previous *blended* mask, never a processed one.
+    // The very first mask is taken whole, otherwise the first second of video
+    // fades in from an empty matte.
     gl.useProgram(this.pMix);
-    this.bindTex(this.pMix, 'uPrev', 0, this.texMaskA);
+    this.bindTex(this.pMix, 'uPrev', 0, this.texMaskS);
     this.bindTex(this.pMix, 'uNext', 1, this.texMaskRaw);
     gl.uniform1f(uloc(gl, this.pMix, 'uAlphaUp'), this.maskPrimed ? MASK_ALPHA_UP : 1.0);
     gl.uniform1f(uloc(gl, this.pMix, 'uAlphaDown'), this.maskPrimed ? MASK_ALPHA_DOWN : 1.0);
-    this.drawQuad(this.fbMaskB, W, H);
+    this.drawQuad(this.fbMaskSB, W, H);
 
+    // Swap the state pair: texMaskS is the blend's memory, and nothing
+    // downstream ever writes to it.
+    var ts = this.texMaskS, fs = this.fbMaskS;
+    this.texMaskS = this.texMaskSB; this.fbMaskS = this.fbMaskSB;
+    this.texMaskSB = ts; this.fbMaskSB = fs;
+
+    // Everything from here is a fresh derivation of that state into the work
+    // pair, discarded and rebuilt next inference.
+    //
     // Dilate before feathering. Everything downstream shrinks the subject a
     // little — the feather blur, the smoothstep, and the mask's own lag behind
     // a moving frame — so expand it first and let those take the slack back.
     // Separable, like the blur: two passes of a 3-tap max.
     gl.useProgram(this.pDilate);
-    this.bindTex(this.pDilate, 'uTex', 0, this.texMaskB);
+    this.bindTex(this.pDilate, 'uTex', 0, this.texMaskS);
     gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), MASK_DILATE / W, 0);
-    this.drawQuad(this.fbMaskA, W, H);
-
-    this.bindTex(this.pDilate, 'uTex', 0, this.texMaskA);
-    gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), 0, MASK_DILATE / H);
     this.drawQuad(this.fbMaskB, W, H);
+
+    this.bindTex(this.pDilate, 'uTex', 0, this.texMaskB);
+    gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), 0, MASK_DILATE / H);
+    this.drawQuad(this.fbMaskA, W, H);
 
     // Feather: blur the dilated mask so the composite's smoothstep has a real
     // gradient to work with instead of the model's staircase. Its own program
@@ -1230,18 +1259,17 @@ var VideoEffects = (function () {
     // NOT be gamma-corrected, or the ramp would be bent and the edge would land
     // somewhere other than where MASK_DILATE put it.
     gl.useProgram(this.pFeather);
-    this.bindTex(this.pFeather, 'uTex', 0, this.texMaskB);
-    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), MASK_FEATHER / W, 0);
-    this.drawQuad(this.fbMaskA, W, H);
-
     this.bindTex(this.pFeather, 'uTex', 0, this.texMaskA);
-    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), 0, MASK_FEATHER / H);
+    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), MASK_FEATHER / W, 0);
     this.drawQuad(this.fbMaskB, W, H);
 
-    // Swap so texMaskA is always the current, feathered mask.
-    var t = this.texMaskA, f = this.fbMaskA;
-    this.texMaskA = this.texMaskB; this.fbMaskA = this.fbMaskB;
-    this.texMaskB = t; this.fbMaskB = f;
+    this.bindTex(this.pFeather, 'uTex', 0, this.texMaskB);
+    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), 0, MASK_FEATHER / H);
+    this.drawQuad(this.fbMaskA, W, H);
+
+    // texMaskA is the finished mask, by construction rather than by a swap —
+    // the work pair has a fixed direction now, so there is no way for the
+    // feedback above to come back.
     this.maskPrimed = true;
   };
 
@@ -1249,7 +1277,7 @@ var VideoEffects = (function () {
   // camera and blur buffers alone.
   Processor.prototype.resizeMaskBuffers = function (w, h) {
     var gl = this.gl;
-    [this.texMaskA, this.texMaskB].forEach(function (t) {
+    [this.texMaskS, this.texMaskSB, this.texMaskA, this.texMaskB].forEach(function (t) {
       gl.bindTexture(gl.TEXTURE_2D, t);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, w, h, 0, gl.RED, gl.UNSIGNED_BYTE, null);
     });
@@ -1370,11 +1398,12 @@ var VideoEffects = (function () {
   Processor.prototype.releaseGL = function () {
     var gl = this.gl;
     if (!gl) return;
-    [this.texCam, this.texImg, this.texBlurA, this.texBlurB,
-     this.texMaskRaw, this.texMaskA, this.texMaskB].forEach(function (t) {
+    [this.texCam, this.texImg, this.texBlurA, this.texBlurB, this.texMaskRaw,
+     this.texMaskS, this.texMaskSB, this.texMaskA, this.texMaskB].forEach(function (t) {
       if (t) try { gl.deleteTexture(t); } catch (e) { /* ignore */ }
     });
-    [this.fbBlurA, this.fbBlurB, this.fbMaskA, this.fbMaskB].forEach(function (f) {
+    [this.fbBlurA, this.fbBlurB, this.fbMaskS, this.fbMaskSB,
+     this.fbMaskA, this.fbMaskB].forEach(function (f) {
       if (f) try { gl.deleteFramebuffer(f); } catch (e) { /* ignore */ }
     });
     [this.pDown, this.pBlur, this.pFeather, this.pMix, this.pDilate, this.pComp].forEach(function (p) {

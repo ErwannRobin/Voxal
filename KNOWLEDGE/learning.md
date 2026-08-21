@@ -709,3 +709,27 @@ seems too sharp".
   (`window.__voxalSegStub`), so a pixel probe of the composited canvas catches
   a shader regression directly — the brightness guard fails at 120 against the
   old kernel and passes at 170 with the fix.
+
+- **A feedback filter must never read the buffer its own post-processing wrote.**
+  The mask pipeline is blend -> dilate -> feather, and the blend's `uPrev` was
+  the *finished* mask, so dilate and feather were re-applied to their own
+  output ~15x a second and compounded. Measured off the GPU on a silhouette
+  edge at texel 71.7 of a 256-wide mask: the 50% point sat at 61 — 10.7 texels
+  OUTSIDE the subject — and the soft band spanned texels 34-68 against a
+  feather configured for ~8. Fix: two ping-pong pairs, one for the blend's
+  memory and one for the derived mask, with the work pair given a fixed
+  direction so no swap can reintroduce the loop.
+
+- **A compounding-feedback bug does not present as itself.** This one was
+  reported three times as "the background blur isn't strong enough", because
+  what you see is a wide sharp halo around the person that no blur radius can
+  remove. Two rounds went into the blur — which was correct all along, and
+  measurably so — before anyone read the mask. **When turning a knob up does
+  not produce the expected effect, stop turning it and go measure the thing it
+  feeds.** Rendering the composited canvas to a PNG and looking at it found in
+  one step what three rounds of arithmetic missed.
+
+- **Test the steady state, not just the first frame.** A filter that compounds
+  looks correct on inference 1 and wrong on inference 20. The regression test
+  samples the mask edge early and late and asserts it has not moved; the
+  geometry assertions alone pass on the broken code while the drift is small.

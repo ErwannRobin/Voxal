@@ -717,6 +717,76 @@ test.describe('the composited output', () => {
   });
 });
 
+// The mask's own geometry, read straight off the GPU.
+//
+// The temporal blend, the dilate and the feather run in that order on every
+// inference, and the blend's memory has to be a buffer nothing else writes to.
+// It was not: `uPrev` was the finished mask, so the dilate and the feather were
+// re-applied to their own output ~15 times a second and compounded. Measured
+// before the fix, on a silhouette edge at texel 71.7: the 50% point sat at 61
+// (10.7 texels OUTSIDE the subject) and the ramp spanned texels 34-68 against a
+// feather configured for about 8.
+//
+// From the outside that is not a mask bug, it is "the background blur is weak"
+// — a wide halo around the person stays sharp no matter how far the blur radius
+// is turned up. Which is exactly how it was reported, three times.
+test.describe('the mask geometry', () => {
+  test('does not creep outward as inferences accumulate', async ({ page }) => {
+    await seedEffectsRoom(page);
+    const seen = await page.evaluate(async () => {
+      VideoEffects.writeMode('blur');
+      await startVideoShare();
+
+      // Where the stub's oval actually is, on the row it is widest, in texels.
+      function edgeOfStub(p) {
+        const row = Math.round(p.segH * 0.6);
+        const dy = (row - p.segH * 0.6) / (p.segH * 0.45);
+        return p.segW / 2 - (p.segW * 0.22) * Math.sqrt(Math.max(0, 1 - dy * dy));
+      }
+      // Read the feathered mask the composite is about to sample.
+      function profile(p) {
+        const gl = p.gl, W = p.segW, H = p.segH;
+        const buf = new Uint8Array(W * H * 4);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, p.fbMaskA);
+        gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        const row = Math.round(H * 0.6);
+        const out = [];
+        for (let x = 0; x < W; x++) out.push(buf[((row * W) + x) * 4] / 255);
+        return out;
+      }
+      const cross = (prof, thr) => {
+        for (let x = 0; x < prof.length; x++) if (prof[x] >= thr) return x;
+        return -1;
+      };
+      async function measure(ms) {
+        await new Promise((r) => setTimeout(r, ms));
+        const p = VideoEffects.active();
+        const prof = profile(p);
+        return { lo: cross(prof, 0.12), mid: cross(prof, 0.5), hi: cross(prof, 0.78) };
+      }
+      const early = await measure(400);
+      const late = await measure(1800);
+      const p = VideoEffects.active();
+      return { early, late, edge: edgeOfStub(p), seg: [p.segW, p.segH] };
+    });
+
+    // Stable: a second of further inferences must not move the edge at all.
+    // Before the fix this drifted outward every inference until it saturated.
+    expect(Math.abs(seen.late.mid - seen.early.mid)).toBeLessThanOrEqual(1);
+    expect(Math.abs(seen.late.lo - seen.early.lo)).toBeLessThanOrEqual(1);
+
+    // And it sits where the constants say: the 50% point one dilate outside the
+    // real silhouette, not ten.
+    const outset = seen.edge - seen.late.mid;
+    expect(outset).toBeGreaterThan(1);
+    expect(outset).toBeLessThan(6);
+
+    // The soft band is the feather's width, not a compounded multiple of it.
+    expect(seen.late.hi - seen.late.lo).toBeLessThanOrEqual(10);
+  });
+});
+
 // A pass that does not sum to 1 is a brightness multiplier wearing a blur's
 // clothes, and it is invisible in isolation — you only see it two passes later
 // as a washed-out background, or as a feathered mask that never reaches 1 and
