@@ -28,11 +28,11 @@
 //     Inference is the only expensive step and it runs a third of the time;
 //   * the mask is smoothed temporally (mix with the previous mask), which both
 //     kills edge flicker and is what makes the skipped frames invisible;
-//   * the blur is a box downsample to a fixed 240-long buffer plus two H+V
-//     iterations of a separable 9-tap Gaussian — 5 draws on a small buffer,
-//     versus many times the work and a worse-looking result at full
-//     resolution. It runs in linear light, which is what keeps it from going
-//     grey;
+//   * the blur is a box downsample to a fixed 160-long buffer plus three
+//     widening H+V iterations of a separable 9-tap Gaussian — 7 draws on a
+//     tiny buffer, versus many times the work and a worse-looking result at
+//     full resolution. It runs in linear light, which is what keeps it from
+//     going grey. Its strength is one number, BLUR_STRENGTH;
 //   * the mask is feathered (blurred, then smoothstepped) before compositing.
 //     Without this the segmentation's blockiness is plainly visible.
 //
@@ -96,15 +96,38 @@ var VideoEffects = (function () {
   var MASK_EDGE_LO  = 0.12;
   var MASK_EDGE_HI  = 0.78;
 
-  // The background blur runs at a FIXED size rather than at a fraction of the
+  // HOW STRONG THE BLUR LOOKS IS THIS ONE NUMBER: the Gaussian's sigma, as a
+  // fraction of the frame's long side. Everything else below is derived from
+  // it, so this is the only line to touch to taste — turn it up and the
+  // pipeline widens the kernel without changing its cost or its look.
+  //
+  // Expressing it as a fraction of the frame rather than in pixels or in texels
+  // is what makes it mean the same thing on every camera. At 0.045 a 1280-wide
+  // frame gets sigma ~58 px: a room behind you is colour and shape, and nothing
+  // you could read.
+  var BLUR_STRENGTH = 0.045;
+
+  // The blur runs in a FIXED-size buffer rather than at a fraction of the
   // capture resolution, so a 1080p camera and a 720p one get the same-looking
-  // blur (and cost the same to blur). BLUR_STEP is the per-tap stride in that
-  // buffer; two H+V iterations of the 9-tap kernel below give an effective
-  // sigma of about 6 texels — roughly 2.5% of the frame width, which is the
-  // range a real lens would defocus a room behind someone at.
-  var BLUR_LONG  = 240;
-  var BLUR_STEP  = 2.5;
+  // blur and cost the same to blur. It is small on purpose: BLUR_STRENGTH is
+  // relative to the frame, so shrinking this buys radius rather than spending
+  // it, and the box downsample that fills it low-passes the frame first.
+  var BLUR_LONG  = 160;
   var BLUR_SIGMA = 1.75;   // sigma of one 9-tap pass, in taps
+
+  // Iterations of the separable pass, each with DOUBLE the previous stride.
+  //
+  // Successive Gaussians add variances, so N doubling iterations reach
+  // sqrt((4^N - 1) / 3) times the radius of the first one — three of them are
+  // worth 4.6x, which is how a 9-tap kernel gets a wide-lens radius at all.
+  //
+  // Doubling rather than repeating one stride is the part that matters. A
+  // stride wider than the detail it is sampling skips over that detail instead
+  // of averaging it, and what survives is structured, moving aliasing — you
+  // read it as "the blur isn't really blurring". So the first iteration steps
+  // less than a texel, and each later one may stride further precisely because
+  // the one before it has already smoothed what it is about to sample.
+  var BLUR_PASSES = 3;
 
   // Temporal blend weights, per inference. Growing is nearly immediate so the
   // mask keeps up with a moving head; shrinking takes several inferences, which
@@ -599,6 +622,21 @@ var VideoEffects = (function () {
   var FRAG_BLUR    = fragBlur(true);
   var FRAG_FEATHER = fragBlur(false);
 
+  // The per-iteration strides that add up to BLUR_STRENGTH.
+  //
+  // Each iteration strides twice the last, so their variances are in the ratio
+  // 1 : 4 : 16 and the total is `first * sqrt((4^N - 1) / 3)` — solve that for
+  // the first stride and the rest follow. Exported for the test that pins the
+  // arithmetic, since an error here is a blur that is quietly the wrong size
+  // and nothing else.
+  function blurSteps(sigmaTexels, passes) {
+    var growth = Math.sqrt((Math.pow(4, passes) - 1) / 3);
+    var first = sigmaTexels / (BLUR_SIGMA * growth);
+    var steps = [];
+    for (var i = 0; i < passes; i++) steps.push(first * Math.pow(2, i));
+    return steps;
+  }
+
   // Box downsample into the blur buffer: four bilinear taps at the quarters of
   // a destination texel, so each one averages a 2x2 source neighbourhood and
   // the four together cover the destination texel's whole footprint.
@@ -906,6 +944,9 @@ var VideoEffects = (function () {
     var bw = Math.max(1, Math.round(size.w * bscale));
     var bh = Math.max(1, Math.round(size.h * bscale));
     this.blurW = bw; this.blurH = bh;
+    // BLUR_STRENGTH is a fraction of the frame, and the buffer's long side
+    // spans exactly that, so the sigma in texels is the two multiplied.
+    this.blurSteps = blurSteps(BLUR_STRENGTH * Math.max(bw, bh), BLUR_PASSES);
     this.texBlurA = texture(gl, bw, bh, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
     this.texBlurB = texture(gl, bw, bh, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
     this.fbBlurA = framebuffer(gl, this.texBlurA);
@@ -1146,23 +1187,23 @@ var VideoEffects = (function () {
 
     var useImage = this.bgReady && this.mode !== 'blur';
     if (!useImage) {
-      // Box downsample into the blur buffer, then two H+V iterations at that
-      // size. Two iterations rather than one: successive Gaussians add
-      // variances, so this reaches sigma ~6 texels without stretching a 9-tap
-      // kernel far enough apart to show its individual taps as ghosts.
+      // Box downsample into the blur buffer, then one H+V pair per stride in
+      // blurSteps — widening each time, so the whole chain reaches a wide-lens
+      // radius while every individual pass is still sampling detail it can see.
       gl.useProgram(this.pDown);
       this.bindTex(this.pDown, 'uTex', 0, this.texCam);
       gl.uniform2f(uloc(gl, this.pDown, 'uOff'), 0.25 / this.blurW, 0.25 / this.blurH);
       this.drawQuad(this.fbBlurA, this.blurW, this.blurH);
 
       gl.useProgram(this.pBlur);
-      for (var pass = 0; pass < 2; pass++) {
+      for (var pass = 0; pass < this.blurSteps.length; pass++) {
+        var step = this.blurSteps[pass];
         this.bindTex(this.pBlur, 'uTex', 0, this.texBlurA);
-        gl.uniform2f(uloc(gl, this.pBlur, 'uDir'), BLUR_STEP / this.blurW, 0);
+        gl.uniform2f(uloc(gl, this.pBlur, 'uDir'), step / this.blurW, 0);
         this.drawQuad(this.fbBlurB, this.blurW, this.blurH);
 
         this.bindTex(this.pBlur, 'uTex', 0, this.texBlurB);
-        gl.uniform2f(uloc(gl, this.pBlur, 'uDir'), 0, BLUR_STEP / this.blurH);
+        gl.uniform2f(uloc(gl, this.pBlur, 'uDir'), 0, step / this.blurH);
         this.drawQuad(this.fbBlurA, this.blurW, this.blurH);
       }
     }
@@ -1514,6 +1555,9 @@ var VideoEffects = (function () {
     // Test hook: the blur/feather kernel. A pass that does not sum to 1 dims
     // whatever it touches — that was the original "why is the blur grey".
     _gaussianHalfKernel: gaussianHalfKernel,
+    // Test hook: the per-iteration strides, and the strength they add up to.
+    _blurSteps: blurSteps,
+    _blurConfig: { strength: BLUR_STRENGTH, long: BLUR_LONG, sigma: BLUR_SIGMA, passes: BLUR_PASSES },
     _runtimeBaseForTest: runtimeBase,
     cancelLoad: cancelLoad,
     isLoading: isLoading,

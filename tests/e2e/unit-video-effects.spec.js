@@ -634,6 +634,66 @@ test.describe('the composited output', () => {
     expect(seen[0]).toBeLessThan(12);
     expect(seen[2]).toBeLessThan(12);
   });
+
+  // How wide the blur actually is, measured off the rendered canvas rather
+  // than trusted from the constants. The camera paints a hard black/white edge
+  // in the background region, well clear of the stub's oval; a Gaussian of
+  // sigma s turns that step into a ramp, and how far the ramp has travelled a
+  // fixed distance out is a direct read of s.
+  //
+  // The arithmetic test below pins the strides. This pins the picture — a
+  // stride that never reaches the shader, a uniform in the wrong units or a
+  // dropped iteration all leave the arithmetic correct and the blur too small.
+  test('blurs the background over a wide radius', async ({ page }) => {
+    await seedEffectsRoom(page);
+    const seen = await page.evaluate(async () => {
+      // 640x480 so the stub's oval (x from 0.28w to 0.72w) leaves a wide clear
+      // run on the left to measure in.
+      window.__mkVideoStream = function () {
+        const c = document.createElement('canvas');
+        c.width = 640; c.height = 480;
+        const ctx = c.getContext('2d');
+        let n = 0;
+        const paint = () => {
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0, 0, 640, 480);
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(80, 0, 560, 480);
+          // Keep the capture from stalling on an unchanging canvas, out where
+          // it cannot reach the probes.
+          ctx.fillStyle = n++ % 2 ? '#fff' : '#eee';
+          ctx.fillRect(620, 470, 4, 4);
+        };
+        paint();
+        const stream = c.captureStream(15);
+        const timer = setInterval(paint, 40);
+        stream.getVideoTracks()[0].addEventListener('ended', () => clearInterval(timer));
+        return stream;
+      };
+      VideoEffects.writeMode('blur');
+      await startVideoShare();
+      await new Promise((r) => setTimeout(r, 700));
+      const src = VideoEffects.active().canvas;
+      const probe = document.createElement('canvas');
+      probe.width = src.width; probe.height = src.height;
+      const ctx = probe.getContext('2d');
+      ctx.drawImage(src, 0, 0);
+      const row = Math.floor(src.height / 2);
+      const at = (x) => ctx.getImageData(x, row, 1, 1).data[1];
+      // sigma is BLUR_STRENGTH of the long side; one sigma inside the dark half
+      // a Gaussian edge has travelled ~16% of the step (in linear light).
+      const cfg = VideoEffects._blurConfig;
+      const sigma = Math.round(cfg.strength * src.width);
+      return { sigma, atOneSigma: at(80 - sigma), atThreeSigma: at(Math.max(0, 80 - 3 * sigma)), plateau: at(300) };
+    });
+    // Far outside the ramp it is still black, and deep in the white half still
+    // white — a blur, not an overall fog.
+    expect(seen.atThreeSigma).toBeLessThan(30);
+    expect(seen.plateau).toBeGreaterThan(230);
+    // One sigma out the edge has visibly bled. Narrower blur, smaller number:
+    // at the previous strength this point sat at 63.
+    expect(seen.atOneSigma).toBeGreaterThan(85);
+  });
 });
 
 // A pass that does not sum to 1 is a brightness multiplier wearing a blur's
@@ -656,6 +716,43 @@ test.describe('the blur kernel', () => {
     Object.keys(sums).forEach((k) => {
       expect(sums[k].sum).toBeCloseTo(1, 6);
       expect(sums[k].monotonic).toBe(true);
+    });
+  });
+
+  // BLUR_STRENGTH is stated as a fraction of the frame so that it means the
+  // same thing on every camera. That only holds if the strides derived from it
+  // actually add up to it — successive Gaussians add *variances*, not radii,
+  // and summing them the obvious (wrong) way silently under-blurs.
+  test('the strides add up to the strength that was asked for', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const cfg = VideoEffects._blurConfig;
+      // Every capture size lands on the same fraction of its own frame.
+      const frames = [[1280, 720], [640, 480], [1920, 1080], [320, 240]].map(([w, h]) => {
+        const scale = Math.min(1, cfg.long / Math.max(w, h));
+        const bw = Math.round(w * scale), bh = Math.round(h * scale);
+        const want = cfg.strength * Math.max(bw, bh);
+        const steps = VideoEffects._blurSteps(want, cfg.passes);
+        let variance = 0;
+        steps.forEach((s) => { variance += Math.pow(cfg.sigma * s, 2); });
+        return {
+          fraction: Math.sqrt(variance) / Math.max(bw, bh),
+          // Each stride doubles, and the first stays under a texel so the very
+          // first pass cannot skip past detail it is meant to be averaging.
+          doubling: steps.every((s, i) => i === 0 || Math.abs(s / steps[i - 1] - 2) < 1e-9),
+          firstStride: steps[0],
+        };
+      });
+      return { frames, passes: cfg.passes, strength: cfg.strength };
+    });
+    expect(seen.passes).toBeGreaterThanOrEqual(2);
+    // A floor, not a target. The blur has been reported as too weak once
+    // already; this is here so it cannot drift back down unnoticed. Retuning
+    // upward is free, and lowering it should be a deliberate edit to this line.
+    expect(seen.strength).toBeGreaterThanOrEqual(0.04);
+    seen.frames.forEach((f) => {
+      expect(f.fraction).toBeCloseTo(seen.strength, 6);
+      expect(f.doubling).toBe(true);
+      expect(f.firstStride).toBeLessThan(1);
     });
   });
 });

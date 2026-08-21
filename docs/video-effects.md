@@ -57,19 +57,35 @@ Four decisions carry almost all of the performance:
 | **Segment a downscaled copy**, long side 256, short side matching the camera | Inference costs ~3–6 ms instead of ~30 ms — and see the warning below, because this one is not optional. |
 | **Segment at 10–15 Hz while compositing at 24–30 fps** | Inference is the only expensive step in the whole pipeline, and it runs on a third to a half of the frames. |
 | **Blend each new mask into the previous one, asymmetrically** | Kills the edge crawl between frames, *and* is what makes the skipped frames invisible. See below — the asymmetry is the whole trick. |
-| **Blur in a fixed 240-long buffer, box-downsampled, two H+V iterations of a 9-tap Gaussian** | Five draws on a small buffer. A full-resolution blur costs orders of magnitude more *and* looks worse — a downsampled Gaussian upsamples into something closer to real bokeh. |
+| **Blur in a fixed 160-long buffer, box-downsampled, three widening H+V iterations of a 9-tap Gaussian** | Seven draws on a tiny buffer. A full-resolution blur costs orders of magnitude more *and* looks worse — a downsampled Gaussian upsamples into something closer to real bokeh. |
 
-Per composited frame: one camera texture upload, plus about eight small draw
-calls. On any GPU from the last decade that is well under a millisecond.
+Per composited frame: one camera texture upload, plus about a dozen small draw
+calls on buffers of a few thousand pixels. On any GPU from the last decade that
+is well under a millisecond.
+
+### How strong the blur looks is one number
+
+`BLUR_STRENGTH` — the Gaussian's sigma **as a fraction of the frame's long
+side**. Everything else is derived from it, so it is the only line to touch to
+taste. At the current `0.045`, a 1280-wide frame gets sigma ≈ 58 px: the room
+behind you is colour and shape, and nothing you could read.
+
+Stating it as a fraction rather than in pixels or texels is what makes it mean
+the same thing on every camera — a 4K webcam and a 720p one land on the same
+4.5%, verified across four capture sizes in the tests.
 
 ### The background blur is not a fraction of the frame
 
-The blur buffer is a **fixed 240 px on its long side**, not `frame / 4`. Two
+The blur buffer is a **fixed 160 px on its long side**, not `frame / 4`. Two
 things follow. The blur is the same *visible* strength on a 720p camera and a
 4K one, instead of getting relatively weaker as the capture resolution rises;
 and it costs the same on both, instead of scaling with a number the user did
-not choose. Below 240 the buffer just tracks the frame, because there is
+not choose. Below 160 the buffer just tracks the frame, because there is
 nothing to gain by upscaling first.
+
+The buffer is small on purpose. `BLUR_STRENGTH` is relative to the frame, so
+shrinking the buffer *buys* radius rather than spending it, and the box
+downsample that fills it low-passes the frame on the way in.
 
 Getting into it is a **box downsample** — four bilinear taps at the quarters of
 a destination texel, so each averages a 2×2 source neighbourhood and the four
@@ -79,10 +95,26 @@ sample in all but name, and the texels it throws away come back as aliasing —
 aliasing that moves with the frame, which is precisely the "boiling" look of a
 cheap background blur.
 
-Two H+V iterations rather than one, because successive Gaussians add variances:
-that reaches an effective sigma of about 6 texels (~2.5% of the frame width)
-without stretching a 9-tap kernel far enough apart for its individual taps to
-show up as ghosts.
+### Each iteration strides twice the last
+
+Successive Gaussians add **variances**, so N doubling iterations reach
+`sqrt((4ᴺ − 1) / 3)` times the radius of the first — three of them are worth
+4.6×, which is how a 9-tap kernel gets a wide-lens radius at all. `blurSteps()`
+solves that for the first stride, and the rest follow.
+
+Doubling rather than repeating one stride is the part that matters, and it is
+the fix for a blur that reads as *weak*. **A stride wider than the detail it is
+sampling skips over that detail instead of averaging it**, and what survives is
+structured, moving aliasing — which the eye reads as "the blur isn't really
+blurring", however large the sigma on paper. So the first iteration steps less
+than a texel, and each later one may stride further precisely because the one
+before it has already smoothed what it is about to sample.
+
+The tests pin both halves: that the strides add up to `BLUR_STRENGTH` on every
+capture size, and — by probing a blurred black/white edge on the rendered
+canvas — that the strides actually reach the shader. The second catches what
+the first cannot: a stride in the wrong units, or a dropped iteration, leaves
+the arithmetic correct and the picture under-blurred.
 
 ### Colour is blurred in linear light; coverage is not
 

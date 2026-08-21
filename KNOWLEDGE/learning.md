@@ -659,8 +659,32 @@ seems too sharp".
 
 - **Blur at a fixed buffer size, not a fixed fraction of the frame.** `frame/4`
   means a 4K camera gets a relatively *weaker* blur than a 720p one and pays
-  ~9× more for it. A fixed 240-long buffer makes the strength and the cost
-  constant across cameras.
+  ~9× more for it. A fixed-size buffer makes the strength and the cost constant
+  across cameras.
+
+- **A stride wider than the detail it samples does not blur that detail, it
+  skips it** — and what survives is structured, moving aliasing, which the eye
+  reads as "the blur isn't really blurring" however large the sigma is on
+  paper. This is why repeating one stride N times is the wrong way to get a big
+  radius. Successive Gaussians add *variances*, so N iterations with
+  **doubling** strides reach `sqrt((4^N - 1)/3)` times the first one's radius —
+  three are worth 4.6× — while every pass is still sampling detail it can
+  actually see, because the pass before it just smoothed that detail. First
+  stride stays under a texel.
+
+- **Express a visual knob in units that mean something.** Blur strength is now
+  one constant, `BLUR_STRENGTH`, stated as sigma over the frame's long side;
+  buffer size, stride count and stride widths are all derived. Before that it
+  was an emergent property of three unrelated constants, which is how it ended
+  up mis-tuned twice without anyone being able to point at the number.
+
+- **Test the arithmetic AND the picture; they fail differently.** That the
+  strides sum to the declared strength is arithmetic. That the strides reach
+  the shader is not — a uniform in the wrong units or a dropped iteration
+  leaves the arithmetic perfect and the blur small. Probing a blurred
+  black/white edge on the rendered canvas catches the second: with the strides
+  wired up, one sigma into the dark side reads 99; with the shader stuck on the
+  first stride, 13.
 
 - **This is all testable headlessly.** `unit-video-effects.spec.js` already
   runs the real GL pipeline with only inference stubbed
