@@ -635,34 +635,40 @@ test.describe('the composited output', () => {
     expect(seen[2]).toBeLessThan(12);
   });
 
-  // How wide the blur actually is, measured off the rendered canvas rather
-  // than trusted from the constants. The camera paints a hard black/white edge
-  // in the background region, well clear of the stub's oval; a Gaussian of
-  // sigma s turns that step into a ramp, and how far the ramp has travelled a
-  // fixed distance out is a direct read of s.
+  // How wide the blur actually is, measured off the rendered canvas rather than
+  // trusted from the constants — and that the strength preference is what sets
+  // it. The camera paints a hard black/white edge across a column that is
+  // background at every height; a Gaussian of sigma s turns that step into a
+  // ramp, so the value a fixed distance into the dark side is a direct read of
+  // s. Raise the strength and that point must come up.
   //
   // The arithmetic test below pins the strides. This pins the picture — a
-  // stride that never reaches the shader, a uniform in the wrong units or a
-  // dropped iteration all leave the arithmetic correct and the blur too small.
-  test('blurs the background over a wide radius', async ({ page }) => {
+  // stride that never reaches the shader, a uniform in the wrong units, a
+  // dropped iteration or a preference that is stored but never applied all
+  // leave the arithmetic correct and the blur wrong.
+  test('the strength preference sets the rendered blur radius', async ({ page }) => {
     await seedEffectsRoom(page);
     const seen = await page.evaluate(async () => {
-      // 640x480 so the stub's oval (x from 0.28w to 0.72w) leaves a wide clear
-      // run on the left to measure in.
+      const W = 1280, H = 720, SPLIT = H / 2;
+      // A horizontal edge, sampled down a column the stub's oval never reaches
+      // (it spans x from 0.28W to 0.72W at its widest, so 0.1W is clear at
+      // every height). Canvas y matches camera y: the composite's `1.0 - vUv.y`
+      // cancels GL's bottom-up framebuffer convention rather than adding a flip
+      // of its own, so the dark half stays the top half.
       window.__mkVideoStream = function () {
         const c = document.createElement('canvas');
-        c.width = 640; c.height = 480;
+        c.width = W; c.height = H;
         const ctx = c.getContext('2d');
         let n = 0;
         const paint = () => {
           ctx.fillStyle = '#000';
-          ctx.fillRect(0, 0, 640, 480);
+          ctx.fillRect(0, 0, W, SPLIT);
           ctx.fillStyle = '#fff';
-          ctx.fillRect(80, 0, 560, 480);
-          // Keep the capture from stalling on an unchanging canvas, out where
-          // it cannot reach the probes.
+          ctx.fillRect(0, SPLIT, W, H - SPLIT);
+          // Keep the capture from stalling on an unchanging canvas, in the far
+          // corner where it cannot reach the probes.
           ctx.fillStyle = n++ % 2 ? '#fff' : '#eee';
-          ctx.fillRect(620, 470, 4, 4);
+          ctx.fillRect(W - 6, SPLIT + 4, 4, 4);
         };
         paint();
         const stream = c.captureStream(15);
@@ -672,27 +678,42 @@ test.describe('the composited output', () => {
       };
       VideoEffects.writeMode('blur');
       await startVideoShare();
-      await new Promise((r) => setTimeout(r, 700));
+
       const src = VideoEffects.active().canvas;
       const probe = document.createElement('canvas');
       probe.width = src.width; probe.height = src.height;
       const ctx = probe.getContext('2d');
-      ctx.drawImage(src, 0, 0);
-      const row = Math.floor(src.height / 2);
-      const at = (x) => ctx.getImageData(x, row, 1, 1).data[1];
-      // sigma is BLUR_STRENGTH of the long side; one sigma inside the dark half
-      // a Gaussian edge has travelled ~16% of the step (in linear light).
-      const cfg = VideoEffects._blurConfig;
-      const sigma = Math.round(cfg.strength * src.width);
-      return { sigma, atOneSigma: at(80 - sigma), atThreeSigma: at(Math.max(0, 80 - 3 * sigma)), plateau: at(300) };
+      const col = Math.round(src.width * 0.1);
+      const edge = Math.round(src.height / 2);
+
+      async function sample(strength) {
+        VideoEffects.setStrength(strength);
+        await new Promise((r) => setTimeout(r, 500));
+        ctx.drawImage(src, 0, 0);
+        const at = (y) => ctx.getImageData(col, y, 1, 1).data[1];
+        const sigma = strength * src.width;
+        return {
+          // 60 px into the dark half — near the ramp for a weak blur, well
+          // inside it for a strong one.
+          nearEdge: at(edge - 60),
+          // Three sigma out on either side is past the ramp in both directions.
+          deepDark: at(Math.max(0, Math.round(edge - 3 * sigma))),
+          deepLight: at(Math.min(src.height - 1, Math.round(edge + 3 * sigma))),
+        };
+      }
+      return { size: [src.width, src.height], weak: await sample(0.03), strong: await sample(0.09) };
     });
-    // Far outside the ramp it is still black, and deep in the white half still
-    // white — a blur, not an overall fog.
-    expect(seen.atThreeSigma).toBeLessThan(30);
-    expect(seen.plateau).toBeGreaterThan(230);
-    // One sigma out the edge has visibly bled. Narrower blur, smaller number:
-    // at the previous strength this point sat at 63.
-    expect(seen.atOneSigma).toBeGreaterThan(85);
+    expect(seen.size).toEqual([1280, 720]);
+    // Past the ramp it is still black on one side and white on the other, at
+    // both strengths — a blur, not an overall fog.
+    [seen.weak, seen.strong].forEach((s) => {
+      expect(s.deepDark).toBeLessThan(40);
+      expect(s.deepLight).toBeGreaterThan(215);
+    });
+    // The preference is what moves the ramp. At 60 px in, a sigma-38 blur has
+    // barely reached and a sigma-115 one is halfway to the far side.
+    expect(seen.weak.nearEdge).toBeLessThan(90);
+    expect(seen.strong.nearEdge).toBeGreaterThan(120);
   });
 });
 
@@ -719,40 +740,154 @@ test.describe('the blur kernel', () => {
     });
   });
 
-  // BLUR_STRENGTH is stated as a fraction of the frame so that it means the
-  // same thing on every camera. That only holds if the strides derived from it
+  // The strength is stated as a fraction of the frame so that it means the same
+  // thing on every camera. That only holds if the strides derived from it
   // actually add up to it — successive Gaussians add *variances*, not radii,
   // and summing them the obvious (wrong) way silently under-blurs.
   test('the strides add up to the strength that was asked for', async ({ page }) => {
     const seen = await page.evaluate(() => {
       const cfg = VideoEffects._blurConfig;
-      // Every capture size lands on the same fraction of its own frame.
-      const frames = [[1280, 720], [640, 480], [1920, 1080], [320, 240]].map(([w, h]) => {
-        const scale = Math.min(1, cfg.long / Math.max(w, h));
-        const bw = Math.round(w * scale), bh = Math.round(h * scale);
-        const want = cfg.strength * Math.max(bw, bh);
-        const steps = VideoEffects._blurSteps(want, cfg.passes);
-        let variance = 0;
-        steps.forEach((s) => { variance += Math.pow(cfg.sigma * s, 2); });
-        return {
-          fraction: Math.sqrt(variance) / Math.max(bw, bh),
-          // Each stride doubles, and the first stays under a texel so the very
-          // first pass cannot skip past detail it is meant to be averaging.
-          doubling: steps.every((s, i) => i === 0 || Math.abs(s / steps[i - 1] - 2) < 1e-9),
-          firstStride: steps[0],
-        };
+      const sizes = [[1280, 720], [640, 480], [1920, 1080], [320, 240]];
+      const out = [];
+      // Across the whole slider, not just the default: the top end asks for a
+      // sigma 10x the bottom end's, and that is exactly where a fixed pass
+      // count would start skipping detail instead of blurring it.
+      [0, 25, 50, 75, 100].forEach((pos) => {
+        const strength = VideoEffects.strengthFromSlider(pos);
+        sizes.forEach(([w, h]) => {
+          const scale = Math.min(1, cfg.long / Math.max(w, h));
+          const bw = Math.round(w * scale), bh = Math.round(h * scale);
+          const steps = VideoEffects._blurPlan(strength * Math.max(bw, bh));
+          let variance = 0;
+          steps.forEach((s) => { variance += Math.pow(cfg.sigma * s, 2); });
+          out.push({
+            pos,
+            strength,
+            fraction: Math.sqrt(variance) / Math.max(bw, bh),
+            // Each stride doubles, and the first stays under a texel so no pass
+            // ever strides past detail it is meant to be averaging.
+            doubling: steps.every((s, i) => i === 0 || Math.abs(s / steps[i - 1] - 2) < 1e-9),
+            firstStride: steps[0],
+            passes: steps.length,
+          });
+        });
       });
-      return { frames, passes: cfg.passes, strength: cfg.strength };
+      return { out, max: cfg.maxPasses };
     });
-    expect(seen.passes).toBeGreaterThanOrEqual(2);
-    // A floor, not a target. The blur has been reported as too weak once
-    // already; this is here so it cannot drift back down unnoticed. Retuning
-    // upward is free, and lowering it should be a deliberate edit to this line.
-    expect(seen.strength).toBeGreaterThanOrEqual(0.04);
-    seen.frames.forEach((f) => {
-      expect(f.fraction).toBeCloseTo(seen.strength, 6);
+    seen.out.forEach((f) => {
+      expect(f.fraction).toBeCloseTo(f.strength, 6);
       expect(f.doubling).toBe(true);
-      expect(f.firstStride).toBeLessThan(1);
+      expect(f.firstStride).toBeLessThanOrEqual(1);
+      expect(f.passes).toBeLessThanOrEqual(seen.max);
     });
+    // A stronger blur buys itself more passes rather than degrading.
+    const weakest = seen.out.find((f) => f.pos === 0).passes;
+    const strongest = seen.out.find((f) => f.pos === 100).passes;
+    expect(strongest).toBeGreaterThan(weakest);
+  });
+});
+
+test.describe('the blur strength preference', () => {
+  test('defaults to the built-in, round-trips, and clamps to the slider range', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const cfg = VideoEffects._blurConfig;
+      const initial = VideoEffects.readStrength();
+      VideoEffects.writeStrength(0.12);
+      const set = [VideoEffects.readStrength(), localStorage.getItem(VideoEffects.STRENGTH_KEY)];
+      // Out of range in both directions, and outright junk.
+      VideoEffects.writeStrength(9);
+      const high = VideoEffects.readStrength();
+      VideoEffects.writeStrength(0);
+      const low = VideoEffects.readStrength();
+      localStorage.setItem(VideoEffects.STRENGTH_KEY, 'not-a-number');
+      const junk = VideoEffects.readStrength();
+      // Back to the default: stored as an absence, the way `off` is for mode.
+      VideoEffects.writeStrength(cfg.def);
+      return {
+        initial, set, high, low, junk, cfg,
+        cleared: localStorage.getItem(VideoEffects.STRENGTH_KEY),
+      };
+    });
+    expect(seen.initial).toBe(seen.cfg.def);
+    expect(seen.set).toEqual([0.12, '0.12']);
+    expect(seen.high).toBe(seen.cfg.max);
+    expect(seen.low).toBe(seen.cfg.min);
+    expect(seen.junk).toBe(seen.cfg.def);
+    expect(seen.cleared).toBe(null);
+  });
+
+  // Linear travel would spend most of the slider inside "already unreadable":
+  // 2%→4% is a dramatic change and 18%→20% is invisible, because the eye reads
+  // blur as a ratio.
+  test('the slider is geometric, so every part of its travel is worth the same', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const cfg = VideoEffects._blurConfig;
+      const at = (p) => VideoEffects.strengthFromSlider(p);
+      return {
+        ends: [at(0), at(100)],
+        // Equal travel, equal ratio — that is what geometric means.
+        ratios: [at(25) / at(0), at(50) / at(25), at(75) / at(50), at(100) / at(75)],
+        roundTrip: [0, 17, 50, 83, 100].map((p) => VideoEffects.sliderFromStrength(at(p))),
+        defaultPos: VideoEffects.sliderFromStrength(cfg.def),
+        labels: [at(0), cfg.def, at(100)].map((v) => VideoEffects.strengthLabel(v)),
+        cfg,
+      };
+    });
+    expect(seen.ends).toEqual([seen.cfg.min, seen.cfg.max]);
+    seen.ratios.forEach((r) => expect(r).toBeCloseTo(seen.ratios[0], 6));
+    expect(seen.roundTrip).toEqual([0, 17, 50, 83, 100]);
+    // The default sits mid-travel, so there is real room in both directions.
+    expect(seen.defaultPos).toBeGreaterThan(35);
+    expect(seen.defaultPos).toBeLessThan(85);
+    expect(seen.labels[0]).toMatch(/Subtle/);
+    expect(seen.labels[2]).toMatch(/Maximum/);
+  });
+
+  test('the slider is in Advanced, and moving it stores the value', async ({ page }) => {
+    await page.click('#btn-open-settings');
+    await page.click('#modal-settings [data-target="settings-advanced"]');
+    const slider = page.locator('#settings-blur-strength input[type="range"]');
+    await expect(slider).toBeVisible();
+
+    // Start from a known position, then drag to the far end.
+    await slider.fill('100');
+    await slider.dispatchEvent('input');
+    const strong = await page.evaluate(() => VideoEffects.readStrength());
+    expect(strong).toBe((await page.evaluate(() => VideoEffects._blurConfig)).max);
+    await expect(page.locator('#settings-blur-strength .blur-strength-value'))
+      .toHaveText(/Maximum/);
+
+    await slider.fill('0');
+    await slider.dispatchEvent('input');
+    expect(await page.evaluate(() => VideoEffects.readStrength()))
+      .toBe((await page.evaluate(() => VideoEffects._blurConfig)).min);
+  });
+
+  // The whole reason the strength is a uniform and not a capture setting. If
+  // this ever starts swapping tracks, every peer's tile blinks each time
+  // somebody drags the slider — and a slider fires an event per pixel.
+  test('dragging it mid-call swaps nothing on the wire', async ({ page }) => {
+    await seedEffectsRoom(page);
+    const seen = await page.evaluate(async () => {
+      await startVideoShare();
+      await applyVideoBackground('blur');
+      const track = localVideoStream.getVideoTracks()[0];
+      const before = VideoEffects.active().blurSteps.slice();
+      window.__swaps = [];
+      // Sweep it the way a drag would.
+      for (let p = 0; p <= 100; p += 5) VideoEffects.setStrength(VideoEffects.strengthFromSlider(p));
+      const after = VideoEffects.active().blurSteps.slice();
+      return {
+        swaps: window.__swaps.length,
+        sameTrack: localVideoStream.getVideoTracks()[0] === track,
+        // It did actually take effect, rather than being a silent no-op.
+        widened: after[after.length - 1] > before[before.length - 1],
+        stored: VideoEffects.readStrength(),
+      };
+    });
+    expect(seen.swaps).toBe(0);
+    expect(seen.sameTrack).toBe(true);
+    expect(seen.widened).toBe(true);
+    expect(seen.stored).toBe(0.2);
   });
 });

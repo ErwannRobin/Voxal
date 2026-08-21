@@ -384,6 +384,14 @@
                 </div>
               </div>
             </div>
+            <p class="settings-sublabel" style="margin-top:16px">Background blur strength</p>
+            <p class="settings-hint">
+              How far the camera background blur reaches, as a share of the
+              picture — so it looks the same whatever your camera's resolution.
+              Applies while the background is set to <strong>Blur</strong>, and
+              reaches the main window immediately, even mid-call.
+            </p>
+            <div id="settings-blur-strength"></div>
             <p class="settings-sublabel" style="margin-top:16px">Video routing</p>
             <p class="settings-hint">
               Camera and screen-share video can route directly between
@@ -1407,8 +1415,16 @@
         var bgPicker = VideoEffects.renderPicker($id('settings-bg-picker'), {
           onPick: function(mode) { VideoEffects.writeMode(mode); }
         });
+        // The strength slider rides the same bridge, and for the same reason:
+        // writeStrength() only stores, so the running pipeline in the main
+        // window picks it up from `storage`. setStrength() would try to apply
+        // it to a processor this window does not have.
+        var bgStrength = VideoEffects.renderStrength($id('settings-blur-strength'), {
+          onChange: function(v) { VideoEffects.writeStrength(v); }
+        });
         window.addEventListener('storage', function(e) {
           if (bgPicker && e.key === VideoEffects.STORAGE_KEY) bgPicker.sync();
+          if (bgStrength && e.key === VideoEffects.STRENGTH_KEY) bgStrength.sync();
         });
       }
       $id('select-speaker-device').addEventListener('change', function(e) {

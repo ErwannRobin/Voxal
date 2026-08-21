@@ -28,11 +28,11 @@
 //     Inference is the only expensive step and it runs a third of the time;
 //   * the mask is smoothed temporally (mix with the previous mask), which both
 //     kills edge flicker and is what makes the skipped frames invisible;
-//   * the blur is a box downsample to a fixed 160-long buffer plus three
-//     widening H+V iterations of a separable 9-tap Gaussian — 7 draws on a
-//     tiny buffer, versus many times the work and a worse-looking result at
-//     full resolution. It runs in linear light, which is what keeps it from
-//     going grey. Its strength is one number, BLUR_STRENGTH;
+//   * the blur is a box downsample to a fixed 160-long buffer plus a few
+//     widening H+V iterations of a separable 9-tap Gaussian — a handful of
+//     draws on a tiny buffer, versus many times the work and a worse-looking
+//     result at full resolution. It runs in linear light, which is what keeps
+//     it from going grey. Its radius is one preference, `blur-strength`;
 //   * the mask is feathered (blurred, then smoothstepped) before compositing.
 //     Without this the segmentation's blockiness is plainly visible.
 //
@@ -96,20 +96,26 @@ var VideoEffects = (function () {
   var MASK_EDGE_LO  = 0.12;
   var MASK_EDGE_HI  = 0.78;
 
-  // HOW STRONG THE BLUR LOOKS IS THIS ONE NUMBER: the Gaussian's sigma, as a
-  // fraction of the frame's long side. Everything else below is derived from
-  // it, so this is the only line to touch to taste — turn it up and the
-  // pipeline widens the kernel without changing its cost or its look.
+  // HOW STRONG THE BLUR LOOKS IS ONE NUMBER: the Gaussian's sigma, as a
+  // fraction of the frame's long side. Everything else is derived from it.
   //
   // Expressing it as a fraction of the frame rather than in pixels or in texels
-  // is what makes it mean the same thing on every camera. At 0.045 a 1280-wide
-  // frame gets sigma ~58 px: a room behind you is colour and shape, and nothing
-  // you could read.
-  var BLUR_STRENGTH = 0.045;
+  // is what makes it mean the same thing on every camera. At the 0.08 default a
+  // 1280-wide frame gets sigma ~100 px — the room behind you is colour and
+  // shape and nothing more.
+  //
+  // It is a preference (Settings → Advanced) rather than a constant because
+  // "blurred enough" turned out to vary far more between people than any single
+  // number could serve. The range is geometric, not linear: each step of the
+  // slider is a constant *ratio*, which is how the eye reads blur.
+  var STRENGTH_KEY      = 'blur-strength';
+  var STRENGTH_DEFAULT  = 0.08;
+  var STRENGTH_MIN      = 0.02;
+  var STRENGTH_MAX      = 0.20;
 
   // The blur runs in a FIXED-size buffer rather than at a fraction of the
   // capture resolution, so a 1080p camera and a 720p one get the same-looking
-  // blur and cost the same to blur. It is small on purpose: BLUR_STRENGTH is
+  // blur and cost the same to blur. It is small on purpose: the strength is
   // relative to the frame, so shrinking this buys radius rather than spending
   // it, and the box downsample that fills it low-passes the frame first.
   var BLUR_LONG  = 160;
@@ -127,7 +133,12 @@ var VideoEffects = (function () {
   // read it as "the blur isn't really blurring". So the first iteration steps
   // less than a texel, and each later one may stride further precisely because
   // the one before it has already smoothed what it is about to sample.
-  var BLUR_PASSES = 3;
+  //
+  // Which is why the pass COUNT is derived rather than fixed: the slider's top
+  // end needs a sigma three times its bottom end's, and holding the pass count
+  // still while the strength climbs is exactly how the first stride grows past
+  // a texel and the blur starts skipping instead of blurring.
+  var BLUR_PASSES_MAX = 6;
 
   // Temporal blend weights, per inference. Growing is nearly immediate so the
   // mask keeps up with a moving head; shrinking takes several inferences, which
@@ -171,6 +182,56 @@ var VideoEffects = (function () {
       else localStorage.setItem(STORAGE_KEY, mode);
     } catch (e) { /* private mode — the effect still works for this session */ }
     return mode;
+  }
+
+  // --- blur strength: read, write, and the slider's mapping ------------------
+
+  function clampStrength(v) {
+    v = Number(v);
+    if (!isFinite(v)) return STRENGTH_DEFAULT;
+    return Math.min(STRENGTH_MAX, Math.max(STRENGTH_MIN, v));
+  }
+
+  function readStrength() {
+    try {
+      var raw = localStorage.getItem(STRENGTH_KEY);
+      if (raw === null || raw === '') return STRENGTH_DEFAULT;
+      return clampStrength(raw);
+    } catch (e) { return STRENGTH_DEFAULT; }
+  }
+
+  function writeStrength(v) {
+    v = clampStrength(v);
+    try {
+      // The default is stored as an absence, the way `off` is for the mode —
+      // so a later change of taste in the default reaches everyone who never
+      // moved the slider.
+      if (Math.abs(v - STRENGTH_DEFAULT) < 1e-9) localStorage.removeItem(STRENGTH_KEY);
+      else localStorage.setItem(STRENGTH_KEY, String(v));
+    } catch (e) { /* private mode — it still applies for this session */ }
+    return v;
+  }
+
+  // Slider position (0-100) <-> strength, geometrically.
+  //
+  // Linear travel would spend most of the slider inside "already unreadable":
+  // going from 2% to 4% is a dramatic change and from 18% to 20% is invisible,
+  // because the eye reads blur as a ratio. A geometric map gives every part of
+  // the travel the same perceived weight.
+  function strengthFromSlider(pos) {
+    var t = Math.min(100, Math.max(0, Number(pos) || 0)) / 100;
+    return clampStrength(STRENGTH_MIN * Math.pow(STRENGTH_MAX / STRENGTH_MIN, t));
+  }
+
+  function sliderFromStrength(v) {
+    v = clampStrength(v);
+    return Math.round(100 * Math.log(v / STRENGTH_MIN) / Math.log(STRENGTH_MAX / STRENGTH_MIN));
+  }
+
+  function strengthLabel(v) {
+    v = clampStrength(v);
+    var word = v < 0.035 ? 'Subtle' : v < 0.065 ? 'Medium' : v < 0.12 ? 'Strong' : 'Maximum';
+    return word + ' · ' + (v * 100).toFixed(1) + '%';
   }
 
   // Long side SEG_LONG, short side to match the frame, both even. A 16:9 camera
@@ -622,16 +683,27 @@ var VideoEffects = (function () {
   var FRAG_BLUR    = fragBlur(true);
   var FRAG_FEATHER = fragBlur(false);
 
-  // The per-iteration strides that add up to BLUR_STRENGTH.
+  // The per-iteration strides that add up to a requested sigma.
   //
   // Each iteration strides twice the last, so their variances are in the ratio
-  // 1 : 4 : 16 and the total is `first * sqrt((4^N - 1) / 3)` — solve that for
-  // the first stride and the rest follow. Exported for the test that pins the
-  // arithmetic, since an error here is a blur that is quietly the wrong size
-  // and nothing else.
-  function blurSteps(sigmaTexels, passes) {
-    var growth = Math.sqrt((Math.pow(4, passes) - 1) / 3);
-    var first = sigmaTexels / (BLUR_SIGMA * growth);
+  // 1 : 4 : 16 : … and the total is `first * sqrt((4^N - 1) / 3)` — solve that
+  // for the first stride and the rest follow.
+  //
+  // The pass count is chosen, not passed in: take the fewest passes whose first
+  // stride still lands under a texel, because a first stride wider than that is
+  // the "skips detail instead of averaging it" failure. A stronger blur
+  // therefore buys itself another pass rather than quietly degrading, which is
+  // what lets one slider span a 10x range without changing character.
+  //
+  // Exported for the test that pins the arithmetic: an error here is a blur
+  // that is silently the wrong size, and nothing else.
+  function blurPlan(sigmaTexels) {
+    var passes = 1;
+    while (passes < BLUR_PASSES_MAX &&
+           sigmaTexels / (BLUR_SIGMA * Math.sqrt((Math.pow(4, passes) - 1) / 3)) > 1) {
+      passes++;
+    }
+    var first = sigmaTexels / (BLUR_SIGMA * Math.sqrt((Math.pow(4, passes) - 1) / 3));
     var steps = [];
     for (var i = 0; i < passes; i++) steps.push(first * Math.pow(2, i));
     return steps;
@@ -944,9 +1016,7 @@ var VideoEffects = (function () {
     var bw = Math.max(1, Math.round(size.w * bscale));
     var bh = Math.max(1, Math.round(size.h * bscale));
     this.blurW = bw; this.blurH = bh;
-    // BLUR_STRENGTH is a fraction of the frame, and the buffer's long side
-    // spans exactly that, so the sigma in texels is the two multiplied.
-    this.blurSteps = blurSteps(BLUR_STRENGTH * Math.max(bw, bh), BLUR_PASSES);
+    this.applyStrength();
     this.texBlurA = texture(gl, bw, bh, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
     this.texBlurB = texture(gl, bw, bh, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
     this.fbBlurA = framebuffer(gl, this.texBlurA);
@@ -987,6 +1057,19 @@ var VideoEffects = (function () {
     gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.uniform1i(uloc(gl, prog, name), unit);
+  };
+
+  // Re-derive the strides for the current preference.
+  //
+  // Nothing is reallocated and nothing is renegotiated: the strength lives
+  // entirely in the uniforms of a pass that already runs, so moving the slider
+  // mid-call is the same kind of non-event as switching blur to an image. The
+  // published track is still the canvas.
+  Processor.prototype.applyStrength = function () {
+    if (!this.blurW) return;
+    // The strength is a fraction of the frame and the buffer's long side spans
+    // exactly that, so the sigma in texels is the two multiplied.
+    this.blurSteps = blurPlan(readStrength() * Math.max(this.blurW, this.blurH));
   };
 
   // --- background source ----------------------------------------------------
@@ -1363,6 +1446,15 @@ var VideoEffects = (function () {
     if (p) p.destroy();
   }
 
+  // Store a new blur strength and push it at whatever is running. Safe to call
+  // on every `input` event of a dragged slider: it writes one small string and
+  // rebuilds an array of at most six numbers.
+  function setStrength(v) {
+    v = writeStrength(v);
+    if (_active) { try { _active.applyStrength(); } catch (e) { /* ignore */ } }
+    return v;
+  }
+
   function active() { return _active; }
 
   function onOverload(fn) { _onOverload = fn; }
@@ -1539,8 +1631,62 @@ var VideoEffects = (function () {
     return { sync: sync, refreshCustom: paintCustom, element: el };
   }
 
+  // --- the strength slider --------------------------------------------------
+  //
+  // One definition, rendered into the in-page settings modal and the desktop
+  // preferences window alike — the same bargain renderPicker() strikes, for the
+  // same reason. settings.html has no capture pipeline, so there it is
+  // write-only: it stores the value and the main window's `storage` listener
+  // applies it.
+  function renderStrength(el, opts) {
+    if (!el) return null;
+    opts = opts || {};
+    el.innerHTML = '';
+    el.classList.add('blur-strength');
+
+    var slider = document.createElement('input');
+    slider.type = 'range';
+    slider.min = '0';
+    slider.max = '100';
+    slider.step = '1';
+    slider.className = 'blur-strength-slider';
+    slider.setAttribute('aria-label', 'Background blur strength');
+
+    var out = document.createElement('output');
+    out.className = 'blur-strength-value';
+
+    var row = document.createElement('div');
+    row.className = 'blur-strength-row';
+    row.appendChild(slider);
+    row.appendChild(out);
+    el.appendChild(row);
+
+    function paint(v) {
+      out.textContent = strengthLabel(v);
+      slider.setAttribute('aria-valuetext', strengthLabel(v));
+    }
+
+    function sync(v) {
+      v = (v === undefined || v === null) ? readStrength() : clampStrength(v);
+      slider.value = String(sliderFromStrength(v));
+      paint(v);
+    }
+
+    slider.addEventListener('input', function () {
+      var v = strengthFromSlider(slider.value);
+      paint(v);
+      if (opts.onChange) opts.onChange(v);
+      else setStrength(v);
+    });
+
+    sync();
+    return { sync: sync, element: el, slider: slider };
+  }
+
   return {
     STORAGE_KEY: STORAGE_KEY,
+    STRENGTH_KEY: STRENGTH_KEY,
+    STRENGTH_DEFAULT: STRENGTH_DEFAULT,
     PRESETS: PRESETS,
     SEG_LONG: SEG_LONG,
     segSizeFor: segSizeFor,
@@ -1555,10 +1701,20 @@ var VideoEffects = (function () {
     // Test hook: the blur/feather kernel. A pass that does not sum to 1 dims
     // whatever it touches — that was the original "why is the blur grey".
     _gaussianHalfKernel: gaussianHalfKernel,
-    // Test hook: the per-iteration strides, and the strength they add up to.
-    _blurSteps: blurSteps,
-    _blurConfig: { strength: BLUR_STRENGTH, long: BLUR_LONG, sigma: BLUR_SIGMA, passes: BLUR_PASSES },
+    // Test hook: the per-iteration strides, and the geometry they come from.
+    _blurPlan: blurPlan,
+    _blurConfig: {
+      long: BLUR_LONG, sigma: BLUR_SIGMA, maxPasses: BLUR_PASSES_MAX,
+      min: STRENGTH_MIN, max: STRENGTH_MAX, def: STRENGTH_DEFAULT
+    },
     _runtimeBaseForTest: runtimeBase,
+    readStrength: readStrength,
+    writeStrength: writeStrength,
+    setStrength: setStrength,
+    strengthFromSlider: strengthFromSlider,
+    sliderFromStrength: sliderFromStrength,
+    strengthLabel: strengthLabel,
+    renderStrength: renderStrength,
     cancelLoad: cancelLoad,
     isLoading: isLoading,
     isLoaded: isLoaded,

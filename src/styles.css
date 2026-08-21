@@ -881,6 +881,30 @@ html[data-theme="light"] .debug-consent-text strong { color: #b45309; }
   white-space: nowrap;
 }
 
+/* Background blur strength slider (Settings → Advanced).
+   Rendered by VideoEffects.renderStrength() into both index.html and
+   settings.html, which is why this lives here rather than inline in either. */
+.blur-strength-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 2px;
+}
+.blur-strength-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+.blur-strength-value {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  color: var(--text);
+  flex-shrink: 0;
+  min-width: 96px;
+  text-align: right;
+  white-space: nowrap;
+}
+
 /* Device info button + popover (dev-mode diagnostics) */
 .peer-info-btn {
   flex-shrink: 0;

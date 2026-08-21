@@ -672,11 +672,29 @@ seems too sharp".
   actually see, because the pass before it just smoothed that detail. First
   stride stays under a texel.
 
-- **Express a visual knob in units that mean something.** Blur strength is now
-  one constant, `BLUR_STRENGTH`, stated as sigma over the frame's long side;
-  buffer size, stride count and stride widths are all derived. Before that it
-  was an emergent property of three unrelated constants, which is how it ended
-  up mis-tuned twice without anyone being able to point at the number.
+- **Express a visual knob in units that mean something.** Blur strength is one
+  value, sigma over the frame's long side; buffer size, stride count and stride
+  widths are all derived. Before that it was an emergent property of three
+  unrelated constants, which is how it ended up mis-tuned twice without anyone
+  being able to point at the number.
+
+- **"Blurred enough" is not a number you can pick for someone.** Three rounds
+  of tuning (2.6% → 4.5% → "still not much") said the disagreement was about
+  taste, not correctness — the rendered radius matched the declared one at every
+  step. It is now a preference (Settings → Advanced, `blur-strength`), default
+  0.08, range 0.02–0.20. When a second round of visual feedback arrives on the
+  same knob, that is the signal to ship the knob rather than guess again.
+
+- **A perceptual slider should be geometric, not linear.** The eye reads blur as
+  a ratio: 2% → 4% is dramatic, 18% → 20% is invisible. A linear range input
+  spends most of its travel inside "already unreadable". Map slider position to
+  value with `MIN * (MAX/MIN)^t` so every part of the travel is worth the same.
+
+- **Derive the pass count, not just the stride.** One slider spanning a 10x
+  sigma range cannot hold its pass count still: the first stride grows past a
+  texel at the top end and the blur starts skipping detail instead of averaging
+  it. Take the fewest passes whose first stride is still under a texel (2 at the
+  bottom of the range, 5 at the top) and the character stays constant.
 
 - **Test the arithmetic AND the picture; they fail differently.** That the
   strides sum to the declared strength is arithmetic. That the strides reach
