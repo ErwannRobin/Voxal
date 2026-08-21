@@ -6161,6 +6161,8 @@ function stopMicStreamFully(s) {
 // can never drift, and tolerate the script being absent.
 var VIDEO_BACKGROUND_STORAGE_KEY =
   (typeof VideoEffects === 'undefined') ? null : VideoEffects.STORAGE_KEY;
+var VIDEO_BLUR_STRENGTH_KEY =
+  (typeof VideoEffects === 'undefined') ? null : VideoEffects.STRENGTH_KEY;
 
 function videoBackgroundMode() {
   return (typeof VideoEffects === 'undefined') ? 'off' : VideoEffects.readMode();
@@ -9578,10 +9580,12 @@ async function flipCamera() {
 // third hand-written copy of it.
 
 var _videoBgPickers = [];
+var _videoBgStrength = null;
 
 function syncVideoBackgroundControls() {
   var mode = videoBackgroundMode();
   _videoBgPickers.forEach(function(p) { try { p.sync(mode); } catch (e) { /* ignore */ } });
+  if (_videoBgStrength) { try { _videoBgStrength.sync(); } catch (e) { /* ignore */ } }
   // The room control lives on the self-view tile; refreshing the stage is what
   // re-reads its state.
   if (inRoom) updatePeerList();
@@ -9699,6 +9703,13 @@ function initVideoBackgroundUI() {
     });
     if (picker) _videoBgPickers.push(picker);
   });
+
+  // Blur strength (Settings → Video, under the picker). Unlike the mode, this
+  // never crosses the off↔on boundary, so it is a uniform change inside a pass
+  // that is already running: no replaceTrack, no renegotiation, nothing
+  // announced.
+  _videoBgStrength = VideoEffects.renderStrength(
+    document.getElementById('settings-blur-strength'));
 
   var pop = document.getElementById('video-bg-popover');
   if (pop) pop.addEventListener('click', function(ev) { ev.stopPropagation(); });
@@ -14014,8 +14025,17 @@ window.addEventListener('DOMContentLoaded', function() {
                           METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY,
                           SPEAKER_DEVICE_KEY, JITTER_BUFFER_KEY, ECHO_BRIDGE_REQUEST_KEY,
                           NOISE_SUPPRESSION_KEY, MIC_DEVICE_KEY, VIDEO_ROUTING_KEY,
-                          NETWORK_USAGE_REQUEST_KEY, VIDEO_BACKGROUND_STORAGE_KEY];
+                          NETWORK_USAGE_REQUEST_KEY, VIDEO_BACKGROUND_STORAGE_KEY,
+                          VIDEO_BLUR_STRENGTH_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
+    if (e.key === VIDEO_BLUR_STRENGTH_KEY) {
+      // Changed from the desktop preferences window, which stores but cannot
+      // apply — it has no capture pipeline. Re-deriving the strides is the
+      // whole of the change: no track swap, so peers see nothing at all.
+      if (VideoEffects.active()) VideoEffects.active().applyStrength();
+      if (_videoBgStrength) _videoBgStrength.sync();
+      return;
+    }
     if (e.key === VIDEO_BACKGROUND_STORAGE_KEY) {
       // Changed from the desktop preferences window, which has no capture
       // pipeline of its own — same reason the mic keys are handled here.

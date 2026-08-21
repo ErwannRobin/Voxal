@@ -290,6 +290,16 @@
           </div>
           <div id="settings-bg-picker" aria-labelledby="settings-bg-label"></div>
           <p class="settings-hint">Blur what is behind you, or replace it. Applies to your camera only, and everything is computed on this device — no frame is ever sent anywhere to do it.</p>
+          <div class="settings-device-head" style="margin-top:12px">
+            <label id="settings-blur-strength-label">Blur strength</label>
+          </div>
+          <div id="settings-blur-strength" aria-labelledby="settings-blur-strength-label"></div>
+          <p class="settings-hint">
+            How far the blur reaches, as a share of the picture — so it looks
+            the same whatever your camera's resolution. Applies while the
+            background is set to <strong>Blur</strong>, and reaches the main
+            window immediately, even mid-call.
+          </p>
         </div>
       </div>
 
@@ -1407,8 +1417,16 @@
         var bgPicker = VideoEffects.renderPicker($id('settings-bg-picker'), {
           onPick: function(mode) { VideoEffects.writeMode(mode); }
         });
+        // The strength slider rides the same bridge, and for the same reason:
+        // writeStrength() only stores, so the running pipeline in the main
+        // window picks it up from `storage`. setStrength() would try to apply
+        // it to a processor this window does not have.
+        var bgStrength = VideoEffects.renderStrength($id('settings-blur-strength'), {
+          onChange: function(v) { VideoEffects.writeStrength(v); }
+        });
         window.addEventListener('storage', function(e) {
           if (bgPicker && e.key === VideoEffects.STORAGE_KEY) bgPicker.sync();
+          if (bgStrength && e.key === VideoEffects.STRENGTH_KEY) bgStrength.sync();
         });
       }
       $id('select-speaker-device').addEventListener('change', function(e) {

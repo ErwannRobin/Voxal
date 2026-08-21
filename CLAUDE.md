@@ -127,8 +127,9 @@ through **`rawCameraStream(stream)`**.
 Changing the background mid-call goes through **`applyVideoBackground(mode)`**.
 It only swaps a track when crossing off↔on; blur↔image is a shader uniform, so
 no renegotiation reaches the far side. Same for `flipCamera()`, which repoints
-the effect via `VideoEffects.setSource()` instead of replacing anything. See
-`docs/video-effects.md`.
+the effect via `VideoEffects.setSource()` instead of replacing anything, and for
+**`VideoEffects.setStrength(v)`** (the blur-radius slider), which never crosses
+off↔on at all. See `docs/video-effects.md`.
 
 ### localStorage keys (defined as constants at top of `main.js`, duplicated in `settings.html`)
 
@@ -155,6 +156,7 @@ the effect via `VideoEffects.setSource()` instead of replacing anything. See
 | `seg-assets-url` | `VideoEffects` internal | Override for where the background-effects WASM runtime is fetched from (default: same-origin on web/Tauri, `https://ptt.voxal.app/assets/seg/` on mobile); self-host/test only |
 | `sfu-server` | `SFU_SERVER_OVERRIDE_KEY` | SFU allocation endpoint override (`{sessionUrl, trackUrl}`); test/self-host only |
 | `video-background` | `VideoEffects.STORAGE_KEY` | `off` (absent) / `blur` / `preset:<id>` / `custom`. The camera background effect. Declared **only** in `video-effects.js` — a second `const` in `main.js` would be a load-time `SyntaxError` (see *Shared classic scripts*). Applied live by `applyVideoBackground()`. See `docs/video-effects.md` |
+| `blur-strength` | `VideoEffects.STRENGTH_KEY` | Blur radius as a fraction of the frame's long side, `0.02`–`0.20` (default `0.08`, stored as an absence). Settings → Video → Blur strength (beneath the background picker). Applied live by `VideoEffects.setStrength()` — a uniform change, so it never swaps a track. Declared only in `video-effects.js`, same rule as above |
 | `self-video-corner` | `SELF_VIDEO_CORNER_KEY` | Which corner of the video stage the minimized self-view badge was dragged to: `tl` / `tr` / `bl` / `br` |
 | `room-active` | `ROOM_ACTIVE_KEY` | Transient. Main window → preferences window: a call is live, so `settings.html` must not run its `getUserMedia` device-label probe (it would kill the call). Cleared on leave and on load |
 | `echo-test-request` | `ECHO_BRIDGE_REQUEST_KEY` | Transient. Desktop preferences window → main window: `{action:'start'\|'stop', at}` (see below) |
@@ -186,8 +188,8 @@ Anything both `index.html` and `settings.html` need should go in a plain classic
 script both documents load with `<script src>`, the way `version.js` already is —
 **not** hand-duplicated into `settings.html`. `net-usage.js` holds the usage
 constants, `formatBitrate()` and the chart renderers; `video-effects.js` holds
-the camera background pipeline, its mode storage and the chip picker both
-documents render. Two constraints: such a script must load *before* `main.js`
+the camera background pipeline, its mode and strength storage, and the two
+controls both documents render (`renderPicker()`, `renderStrength()`). Two constraints: such a script must load *before* `main.js`
 (which uses its constants), and a `const`/`let` declared there must not also be
 declared in `main.js` — classic scripts share one global lexical scope, so a
 duplicate declaration is a load-time `SyntaxError`. That is why the background
