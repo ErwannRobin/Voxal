@@ -534,11 +534,63 @@ stays dark until a build carrying the permission ships. Exit criteria: bump
   designed for portrait rather than unlocking rotation, which would need
   `Info.plist` + `AndroidManifest` changes *and* a landscape review of every
   other screen.
-- **Screen sharing on mobile.** No mobile browser implements `getDisplayMedia`;
-  Android would need a native MediaProjection bridge.
 - **A swipe anywhere on the video** to reveal the panels. Today the gesture has
   to start on one of the two drag handles; a swipe from anywhere on the stage
   would be nicer but competes with the tile's click-to-pin.
+
+---
+
+## 🖥️ Screen sharing on mobile — implemented, unverified on device
+
+**Status:** ✅ Implemented, ⏳ **not yet run on real hardware.** See
+`KNOWLEDGE/learning.md` → "Screen sharing on mobile".
+
+No mobile browser or WebView implements `getDisplayMedia`, so capture is native
+and the frames are carried into the WebView: `MediaProjection` → `MediaCodec` on
+Android, a ReplayKit Broadcast Upload Extension → `VTCompressionSession` on iOS,
+both emitting Annex-B H.264 that `src/main.js` decodes with WebCodecs onto a
+canvas. `canvas.captureStream()` then goes through the unchanged
+`publishLocalTrack('screen', …)`, so the mesh, the SFU, the routing preference
+and the stage all behave as on desktop.
+
+Regression-guarded by `tests/e2e/unit-screen-capture-native.spec.js` (24 cases)
+against a fake plugin and a stub `VideoDecoder` — which covers the whole JS
+seam, and none of the native half.
+
+**Exit criteria, in this order:**
+
+1. **Answer the iOS background question first, before anything else.** A
+   broadcast runs precisely while the user is in another app, and
+   `learning.md` records that WKWebView suspends JS in the background even with
+   the `audio`/`voip`/`push-to-talk` modes. The decode loop and the WebRTC
+   sender both live in that WebView. The always-on Web Audio graph plus live
+   call audio may hold the WebContent process open — but only a device can say.
+   If it does stall, the shape of the fix is libwebrtc inside the extension
+   publishing straight to the SFU, which is a different project, not a patch.
+2. Wire `CODE_SIGN_ENTITLEMENTS = App/App.entitlements` on the App target and
+   provision `group.com.erwann.voxal.app`. Until then `canCapture()` reports
+   false on iOS and the button never appears. Needs a paid membership.
+3. Android: bump `versionCode`, `make build-android`, upload. The new
+   `FOREGROUND_SERVICE_MEDIA_PROJECTION` / `POST_NOTIFICATIONS` permissions are
+   manifest changes and cannot ship over Capgo — same constraint as the camera
+   permission above, so the two can ride one release.
+4. Check `CanvasCaptureMediaStreamTrack.requestFrame()` on WKWebView. The code
+   falls back to a timed `captureStream(fps)` where it is missing, which works
+   but re-sends unchanged frames on a still screen.
+
+**Known trade-offs, accepted:**
+- **Double transcode.** Native H.264 encode → WebCodecs decode → WebRTC
+  re-encode. Both ends are hardware, and the 1280px/24fps cap is set where it
+  is to keep the thermal cost down; measure on a real device.
+- **iOS 16.4 floor**, the WebKit release that shipped `VideoDecoder`. Below it
+  `canCapture()` returns false rather than raising the app's deployment target.
+
+**Not done — deliberately out of scope:**
+- **Sharing device audio.** ReplayKit and MediaProjection can both capture it,
+  but Voxal's audio path is a deliberate, permanent P2P design (see the SFU
+  entry above) and mixing a second source into it is a separate decision.
+- **A picker for which app/window to share.** Neither platform offers one for
+  system capture; both share the whole screen.
 
 ---
 

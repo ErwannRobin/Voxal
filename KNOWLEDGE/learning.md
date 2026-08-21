@@ -618,3 +618,77 @@ Full design in `docs/video-effects.md`. What is not derivable from the code:
   1280×720 WebP backgrounds total ~20 KB. Generated artwork (see
   `resources/make-backgrounds.py`) is cheaper *and* smaller than anything you
   would license.
+
+## Screen sharing on mobile
+
+- **No mobile browser or WebView implements `getDisplayMedia` — including the
+  one you control.** WebKit has never shipped it, so iOS Safari and WKWebView
+  are out, and Chromium *deliberately hides* it on Android and in Android
+  WebView so that JS feature detection returns false rather than a call that
+  fails. Being the app embedding the WebView does not help; there is no flag.
+  The only route is native capture plus a way to get frames into the page.
+- **The seam is tiny, and that is the whole reason this was tractable.**
+  `startScreenShare()` never had a platform guard — only a `getDisplayMedia`
+  feature test — and `publishLocalTrack('screen', stream)` takes any
+  `MediaStream`. So the mesh, the SFU, `screen-offer`/`screen-stop`, the stage
+  focus tile and `contentHint: 'detail'` all worked unchanged the moment a
+  stream existed. Anything that "cannot be done on mobile" in this codebase is
+  worth re-checking for the same shape: one boolean and one capture call.
+- **Ship encoded H.264, not frames.** Raw or JPEG frames over the Capacitor
+  bridge cost ~1.6 MB/s of base64 at 720p; native H.264 plus a WebCodecs
+  `VideoDecoder` costs ~40 KB/s for the same picture. The double transcode
+  (native encode → WebCodecs decode → WebRTC re-encode) is real but hardware on
+  both ends.
+- **Annex-B, not AVCC.** `VideoDecoder.configure()` expects length-prefixed
+  AVCC *only* when given a `description`, and Annex-B without one. Annex-B is
+  the better choice here because SPS/PPS ride inline ahead of every IDR: no
+  parameter-set plumbing, and a decoder rebuilt mid-share (a rotation) resyncs
+  by itself on the next keyframe. Android's `MediaCodec` already emits Annex-B;
+  VideoToolbox emits AVCC with the parameter sets held separately, so the iOS
+  extension converts before sending.
+- **`VideoFrame.close()` is not optional.** Each frame holds a GPU buffer and a
+  handful of un-closed ones stalls the decoder within seconds. Close it in the
+  `output` callback, immediately after `drawImage`.
+- **`track.stop()` does NOT fire `ended`.** The spec only dispatches `ended`
+  when the *source* ends by itself, which is why the browser's own "Stop
+  sharing" button raises it and a programmatic stop does not. To route a native
+  stop through the same teardown as the web picker, dispatch the event
+  explicitly: `track.stop(); track.dispatchEvent(new Event('ended'))`. Missing
+  this leaves the share live with the capture already dead.
+- **`| 0` on a microsecond timestamp is a time bomb.** It truncates to int32, so
+  presentation times go negative about 36 minutes into a share. WebCodecs
+  timestamps are int64 in IDL and JS numbers hold them fine — just don't coerce.
+- **Android 14+ ordering is not negotiable, and getting it wrong kills the app.**
+  Consent Intent first, then `startForeground(..., FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)`,
+  then `getMediaProjection()`, then register a `MediaProjection.Callback`
+  (mandatory before `createVirtualDisplay()` on API 34+ or it throws
+  `IllegalStateException`), then create the display. Three further rules: the
+  consent Intent is **single-use**, one `MediaProjection` permits exactly **one**
+  virtual display, and every session needs fresh consent — so a re-share always
+  means a new prompt, never a cached projection.
+- **Android 15 QPR1+ auto-stops projection when the device locks**, and adds a
+  status-bar chip that stops it too. Both arrive as `MediaProjection.Callback.onStop()`,
+  which is the only signal you get — there is no separate "why".
+- **`sockaddr_un.sun_path` is 104 bytes on Darwin, and an App Group container
+  URL spends ~82 of them.** `/private/var/mobile/Containers/Shared/AppGroup/<uuid>/`
+  leaves barely 20 characters, so the extension↔app socket has to sit at the
+  container root under a very short name (`vx.sock`). Nesting it in a
+  subdirectory silently fails to bind.
+- **A Broadcast Upload Extension has a hard 50 MB memory cap**, which is why the
+  encode happens *inside* the extension rather than shipping `CVPixelBuffer`s to
+  the app: hardware VideoToolbox keeps the working set to a couple of frames.
+  Set `SO_NOSIGPIPE` on the socket, or a reader that goes away kills the
+  extension with a signal instead of a failed write.
+- **A new Xcode target has to be built by hand here.** `project.pbxproj` had
+  exactly one target, so the extension needed a `PBXNativeTarget`
+  (`com.apple.product-type.app-extension`), its own three build phases and
+  `XCConfigurationList`, a `PBXTargetDependency` + `PBXContainerItemProxy`, and
+  a `PBXCopyFilesBuildPhase` on App with **`dstSubfolderSpec = 13`** (PlugIns)
+  to embed it. The same rule as for plugin files applies to all of it: existing
+  on disk is not enough. A quick way to check the result without Xcode is to
+  parse the file as an OpenStep plist and assert every 24-hex reference
+  resolves.
+- **`make release` rewrites `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION`
+  globally across `project.pbxproj`**, which is exactly what you want with an
+  extension in the file — the App Store rejects an extension whose version does
+  not match its host app, and this keeps them in lockstep for free.

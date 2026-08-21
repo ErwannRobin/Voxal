@@ -1205,6 +1205,15 @@ var _screenViewerPeerId = null;  // whose screen is displayed in the fallback vi
 var _videoPopoutWindow = null;   // reference to video popup window
 var _screenPopoutWindow = null;  // reference to screen popup window
 
+// Native mobile screen capture (iOS/Android). No mobile WebView implements
+// getDisplayMedia, so on Capacitor the frames arrive from a native plugin as
+// H.264 access units, get decoded by WebCodecs and drawn to a canvas whose
+// captureStream() is the MediaStream the rest of the screen-share path sees.
+// Everything downstream — publishLocalTrack, the mesh, the SFU, the stage —
+// is identical to the desktop getDisplayMedia path.
+var _nativeScreenReady = false;   // ScreenCapture.canCapture() said yes (probed once)
+var _nativeScreenSession = null;  // { decoder, canvas, ctx, track, stream, listeners }
+
 // --- Video/screen topology state (P2P mesh vs Cloudflare SFU) ----------------
 // Never touches audio. See selectVideoTopology() and docs/video-routing.md.
 //
@@ -3240,6 +3249,7 @@ var CAMERA_MAX_BITRATE = 600000;    // ~600 kbps per listener
 var CAMERA_MAX_BITRATE_MOBILE = 300000;
 var CAMERA_MAX_BITRATE_FRUGAL = 150000;  // save-data, or a 2g/3g link
 var SCREEN_MAX_BITRATE = 1500000;   // screens need more; text must stay legible
+var SCREEN_MAX_BITRATE_MOBILE = 800000;  // a phone uploads one encode per listener
 
 // A phone uploads one encode per listener over a metered link, so it gets a
 // tighter ceiling than a desktop, tighter still when the connection says so.
@@ -3260,6 +3270,15 @@ function cameraMaxBitrate() {
   return CAMERA_MAX_BITRATE_MOBILE;
 }
 
+// Same reasoning as cameraMaxBitrate(), for the other kind: a phone sharing its
+// screen over the mesh uploads one encode per listener, so the desktop ceiling
+// would be 1.5 Mbps times the room. Resolution still never drops (see
+// tuneVideoSenders) — a screen that stays sharp at fewer frames is the trade
+// worth making, an unreadable one is not.
+function screenMaxBitrate() {
+  return IS_MOBILE_DEVICE ? SCREEN_MAX_BITRATE_MOBILE : SCREEN_MAX_BITRATE;
+}
+
 function videoScaleForPeerCount(count) {
   if (count <= 2) return 1;
   if (count <= 4) return 1.5;
@@ -3271,7 +3290,7 @@ function tuneVideoSenders(pc, kind) {
   var isScreen = kind === 'screen';
   // Computed once, so the "already tuned" comparison below stays stable across
   // the senders of one call even if the network readings shift mid-loop.
-  var maxBitrate = isScreen ? SCREEN_MAX_BITRATE : cameraMaxBitrate();
+  var maxBitrate = isScreen ? screenMaxBitrate() : cameraMaxBitrate();
   // A screen share must keep its resolution — dropping it to save frames makes
   // text unreadable, which defeats the point of sharing a screen at all.
   var degradation = isScreen ? 'maintain-resolution' : 'balanced';
@@ -9330,10 +9349,11 @@ function updateVideoModeUI() {
   // the flip button, because it belongs to your camera rather than to the room
   // (see _buildVideoTile). Close its popover when the camera goes away.
   if (!localVideoActive) closeVideoBackgroundPopover();
-  // Share screen button (visible when video mode is active, hidden on mobile)
+  // Share screen button. On native mobile this waits on the ScreenCapture
+  // probe (see screenShareSupported), so it appears a tick after load.
   var screenBtn = document.getElementById('btn-share-screen');
   if (screenBtn) {
-    var canShareScreen = videoModeEnabled && !IS_NATIVE_MOBILE && !!navigator.mediaDevices && !!navigator.mediaDevices.getDisplayMedia;
+    var canShareScreen = videoModeEnabled && screenShareSupported();
     screenBtn.classList.toggle('hidden', !canShareScreen);
     screenBtn.classList.toggle('active', localScreenActive);
     screenBtn.setAttribute('aria-pressed', String(localScreenActive));
@@ -9907,23 +9927,250 @@ async function cameraFlipAvailable() {
   }
 }
 
-// --- Screen sharing (dev mode) -----------------------------------------------
+// --- Screen sharing ----------------------------------------------------------
+
+// Native mobile screen capture.
+//
+// No mobile browser or WebView implements getDisplayMedia — Chromium hides it
+// on Android precisely so feature detection works, and WebKit has never shipped
+// it on iOS. So on Capacitor the capture happens natively (MediaProjection /
+// ReplayKit), is encoded to H.264 there, and crosses the bridge as base64
+// Annex-B access units. WebCodecs decodes them, each frame is drawn to a canvas,
+// and canvas.captureStream() produces the MediaStream everything downstream
+// already knows how to publish. The alternative — shipping raw or JPEG frames —
+// costs ~1.6 MB/s over the bridge instead of ~40 KB/s.
+//
+// Annex-B rather than AVCC on purpose: VideoDecoder.configure() expects
+// length-prefixed AVCC only when handed a `description`, and Annex-B without one
+// lets SPS/PPS ride inline ahead of every keyframe. That means no separate
+// parameter-set plumbing and a decoder that recovers by itself when the encoder
+// reconfigures (a device rotation). Android's MediaCodec emits Annex-B already;
+// the iOS side converts VideoToolbox's AVCC output before sending.
+
+var NATIVE_SCREEN_MAX_EDGE = 1280;  // cap the long edge; text stays legible, heat does not
+var NATIVE_SCREEN_FPS = 24;
+
+function nativeScreenPlugin() {
+  return (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.ScreenCapture) || null;
+}
+
+// Capability is established by CALLING the plugin, never by presence-checking
+// it: an OTA-updated JS bundle routinely runs on an older native binary where
+// window.Capacitor.Plugins.ScreenCapture exists but this method does not.
+// WebCodecs is the other half of the requirement (iOS 16.4+ / Android WebView).
+async function probeNativeScreenCapture() {
+  if (!IS_NATIVE_MOBILE) return false;
+  if (typeof window.VideoDecoder !== 'function') return false;
+  var plugin = nativeScreenPlugin();
+  if (!plugin) return false;
+  try {
+    var res = await plugin.canCapture();
+    _nativeScreenReady = !!(res && res.supported);
+  } catch (e) {
+    _nativeScreenReady = false;
+  }
+  return _nativeScreenReady;
+}
+
+// The one gate. On native it is the probe; everywhere else it is the web API.
+function screenShareSupported() {
+  if (IS_NATIVE_MOBILE) return _nativeScreenReady;
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+}
+
+function base64ToBytes(b64) {
+  var bin = atob(b64);
+  var out = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+// Ask the native side to start, then stand up the decode pipeline. Resolves to
+// a MediaStream, or null when the user cancelled / the device said no — in
+// which case the caller has already been told why via the returned reason.
+async function startNativeScreenCapture() {
+  var plugin = nativeScreenPlugin();
+  if (!plugin) return { stream: null, reason: 'unsupported' };
+
+  var session = {
+    decoder: null, canvas: null, ctx: null, track: null, stream: null,
+    listeners: [], configured: false, needKeyframe: true
+  };
+
+  function onConfig(cfg) {
+    // Also fires on a mid-share reconfigure (rotation): resize the canvas and
+    // rebuild the decoder, then wait for the next keyframe before decoding.
+    var w = Math.max(2, (cfg && cfg.width) | 0);
+    var h = Math.max(2, (cfg && cfg.height) | 0);
+    if (session.canvas.width !== w || session.canvas.height !== h) {
+      session.canvas.width = w;
+      session.canvas.height = h;
+    }
+    try { if (session.decoder && session.decoder.state !== 'closed') session.decoder.close(); } catch (_) {}
+    session.decoder = new VideoDecoder({
+      output: onFrame,
+      error: function(e) { devLog('[ScreenCapture] decoder error: ' + (e && e.message ? e.message : e), 'warn'); }
+    });
+    session.decoder.configure({
+      codec: (cfg && cfg.codec) || 'avc1.42E01E',
+      optimizeForLatency: true
+    });
+    session.configured = true;
+    session.needKeyframe = true;
+  }
+
+  function onFrame(frame) {
+    // close() is not optional — a VideoFrame holds a GPU buffer and a handful
+    // of un-closed frames stalls the decoder within a second or two.
+    try {
+      session.ctx.drawImage(frame, 0, 0, session.canvas.width, session.canvas.height);
+    } catch (_) { /* canvas resized mid-flight */ }
+    try { frame.close(); } catch (_) {}
+    // captureStream(0) emits nothing until asked, so a still screen costs no
+    // frames at all. Where requestFrame is missing the stream was created with
+    // a frame rate instead and samples the canvas by itself.
+    if (session.track && typeof session.track.requestFrame === 'function') {
+      try { session.track.requestFrame(); } catch (_) {}
+    }
+  }
+
+  function onChunk(msg) {
+    if (!session.configured || !session.decoder || session.decoder.state !== 'configured') return;
+    var key = !!(msg && msg.key);
+    if (session.needKeyframe) {
+      if (!key) return;         // a delta frame before the first IDR cannot decode
+      session.needKeyframe = false;
+    }
+    try {
+      session.decoder.decode(new EncodedVideoChunk({
+        type: key ? 'key' : 'delta',
+        timestamp: Number((msg && msg.timestamp) || 0),
+        data: base64ToBytes(msg.data)
+      }));
+    } catch (e) {
+      // A corrupt or out-of-order unit: resync on the next keyframe rather than
+      // tearing the share down.
+      session.needKeyframe = true;
+    }
+  }
+
+  function onStopped(msg) {
+    // The system "Stop sharing" control, the Android 15 status-bar chip and a
+    // device lock all land here. Rather than calling stopScreenShare()
+    // directly, end the track the way the browser's own picker does — because
+    // `track.stop()` alone does NOT dispatch 'ended' (the spec only fires it
+    // when the source ends by itself), the event has to be raised explicitly.
+    // That keeps native, web and programmatic stops on one teardown path.
+    devLog('[ScreenCapture] native capture stopped: ' + ((msg && msg.reason) || 'unknown'));
+    if (!session.track) return;
+    try { session.track.stop(); } catch (_) {}
+    try { session.track.dispatchEvent(new Event('ended')); } catch (_) {}
+  }
+
+  session.canvas = document.createElement('canvas');
+  session.canvas.width = NATIVE_SCREEN_MAX_EDGE;
+  session.canvas.height = Math.round(NATIVE_SCREEN_MAX_EDGE * 9 / 16);
+  session.ctx = session.canvas.getContext('2d', { alpha: false, desynchronized: true });
+
+  session.stream = session.canvas.captureStream(0);
+  session.track = session.stream.getVideoTracks()[0];
+  if (!session.track || typeof session.track.requestFrame !== 'function') {
+    // No requestFrame (Safari has not always had it): fall back to a timed
+    // capture, which duplicates frames on a still screen but always advances.
+    try { session.stream.getTracks().forEach(function(t) { t.stop(); }); } catch (_) {}
+    session.stream = session.canvas.captureStream(NATIVE_SCREEN_FPS);
+    session.track = session.stream.getVideoTracks()[0];
+  }
+
+  // Attach BEFORE start(): the native side begins emitting as soon as the user
+  // consents, and the config event is only re-sent when the geometry changes,
+  // so a config lost to a late listener is a share that never decodes.
+  session.listeners = [
+    plugin.addListener('screenCaptureConfig', onConfig),
+    plugin.addListener('screenCaptureChunk', onChunk),
+    plugin.addListener('screenCaptureStopped', onStopped)
+  ];
+  _nativeScreenSession = session;
+
+  try {
+    await plugin.start({
+      maxEdge: NATIVE_SCREEN_MAX_EDGE,
+      fps: NATIVE_SCREEN_FPS,
+      bitrate: screenMaxBitrate()
+    });
+  } catch (e) {
+    // Includes the user backing out of the consent dialog (Android) or the
+    // broadcast sheet (iOS), which is the common case, not an error.
+    stopNativeScreenCapture();
+    var code = (e && (e.code || e.message)) || '';
+    return { stream: null, reason: /cancel/i.test(String(code)) ? 'cancelled' : 'failed' };
+  }
+
+  return { stream: session.stream, reason: null };
+}
+
+// Tear down the decode pipeline and tell the native side to stop capturing.
+// Safe to call when nothing is running, and on web (where it is a no-op).
+function stopNativeScreenCapture() {
+  var session = _nativeScreenSession;
+  _nativeScreenSession = null;
+  if (session) {
+    session.listeners.forEach(function(h) {
+      // addListener returns a handle, or a promise for one depending on the
+      // Capacitor version — both shapes carry remove().
+      try {
+        if (h && typeof h.remove === 'function') h.remove();
+        else if (h && typeof h.then === 'function') h.then(function(x) { x && x.remove && x.remove(); });
+      } catch (_) {}
+    });
+    try { if (session.decoder && session.decoder.state !== 'closed') session.decoder.close(); } catch (_) {}
+    // On the cancel path nothing downstream ever took ownership of this stream,
+    // so it has to be released here; on the normal path stopScreenShare() has
+    // already stopped these same tracks and stopping twice is harmless.
+    try {
+      if (session.stream) session.stream.getTracks().forEach(function(t) { t.stop(); });
+    } catch (_) {}
+  }
+  var plugin = nativeScreenPlugin();
+  if (plugin && typeof plugin.stop === 'function') {
+    try {
+      var r = plugin.stop();
+      if (r && typeof r.catch === 'function') r.catch(function() {});
+    } catch (_) {}
+  }
+}
+
 
 async function startScreenShare() {
   if (localScreenActive) return;
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-    showCopyToast('Screen sharing not supported');
-    return;
+  var stream = null;
+  if (IS_NATIVE_MOBILE) {
+    if (!screenShareSupported()) {
+      showCopyToast('Screen sharing not supported');
+      return;
+    }
+    var native = await startNativeScreenCapture();
+    if (!native.stream) {
+      showCopyToast(native.reason === 'cancelled' ? 'Screen share cancelled' : 'Screen sharing not supported');
+      return;
+    }
+    stream = native.stream;
+  } else {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      showCopyToast('Screen sharing not supported');
+      return;
+    }
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { cursor: 'always' },
+        audio: false
+      });
+    } catch (e) {
+      showCopyToast('Screen share cancelled');
+      return;
+    }
   }
-  try {
-    localScreenStream = await navigator.mediaDevices.getDisplayMedia({
-      video: { cursor: 'always' },
-      audio: false
-    });
-  } catch (e) {
-    showCopyToast('Screen share cancelled');
-    return;
-  }
+  localScreenStream = stream;
   localScreenActive = true;
   // Auto-activate hands-free when sharing screen
   if (!freeHandMode) setFreeHand(true);
@@ -9938,6 +10185,7 @@ async function startScreenShare() {
 function stopScreenShare() {
   if (!localScreenActive && !localScreenStream) return;
   unpublishLocalTrack('screen'); // closes the outgoing mesh calls or the SFU session
+  stopNativeScreenCapture();     // no-op on web and when nothing native is running
   if (localScreenStream) {
     localScreenStream.getTracks().forEach(function(t) { t.stop(); });
     localScreenStream = null;
@@ -12960,6 +13208,14 @@ window.addEventListener('DOMContentLoaded', function() {
   // Notify capacitor-updater that the bundle loaded successfully (enables auto-revert on crash)
   if (IS_NATIVE_MOBILE && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorUpdater) {
     window.Capacitor.Plugins.CapacitorUpdater.notifyAppReady();
+  }
+
+  // Is native screen capture available on this binary? Asked once, off the
+  // critical path — the Screen button stays hidden until the answer arrives.
+  if (IS_NATIVE_MOBILE) {
+    probeNativeScreenCapture().then(function(ok) {
+      if (ok) updateVideoModeUI();
+    });
   }
 
   // Dev log panel: show/hide based on current dev mode state

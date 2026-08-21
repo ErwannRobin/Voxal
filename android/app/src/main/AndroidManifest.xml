@@ -44,6 +44,15 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
+        <!-- Screen sharing. Separate from the microphone service on purpose:
+             the two have independent lifetimes (you can share a screen without
+             transmitting, and vice versa) and Android ties each foreground
+             service type to the permission that grants it. -->
+        <service
+            android:name="com.erwann.voxal.app.ScreenCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -62,6 +71,14 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <!-- Screen share. No mobile WebView implements getDisplayMedia, so capture
+         goes through MediaProjection in a foreground service and the encoded
+         frames are handed to the WebView (see ScreenCapturePlugin).
+         POST_NOTIFICATIONS is needed on Android 13+ for that service's own
+         ongoing notification, which the system requires to be visible. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Camera share. Capacitor's BridgeWebChromeClient maps the WebView's
          RESOURCE_VIDEO_CAPTURE request onto a runtime CAMERA request, but a
