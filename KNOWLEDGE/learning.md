@@ -477,6 +477,38 @@ Use Python string replacement scripts for multi-line patches to avoid manual err
 - Require **one aggregate check** (`All tests green`, the last job in `tests.yml`), not each job by name. A ruleset that lists jobs individually silently stops covering any job added later, and renaming a job quietly turns its rule into a check that will never report. The aggregate job uses `if: always()` and treats anything that is not `success` — including `skipped` and `cancelled` — as failure, so it fails closed.
 - A required check that never reports blocks the merge rather than allowing it, which is why "the check is missing" and "the check passed" must never be collapsed into one branch of an automation. The Dependabot auto-merge script had exactly that hole: it merged on the `Tests` workflow's own conclusion, which says nothing about CodeQL, nothing about a check still running, and nothing about a job that never started.
 
+- **A workflow cannot open a pull request against its own protected branch.**
+  Two restrictions, and hitting the first hides the second. (1) `gh pr create`
+  with `GITHUB_TOKEN` fails with *"GitHub Actions is not permitted to create or
+  approve pull requests"* unless Settings → Actions → General → "Allow GitHub
+  Actions to create and approve pull requests" is on — a repository setting, so
+  no commit can fix it. (2) Even with that on, nothing `GITHUB_TOKEN` pushes or
+  opens starts a workflow run (GitHub suppresses those events so workflows
+  cannot trigger themselves), so `All tests green` never reports on that PR —
+  and per the bullet above, a required check that never reports blocks the
+  merge. **Ticking the setting therefore clears the error and leaves the PR
+  permanently unmergeable.** Escaping this needs a token belonging to a real
+  actor (a fine-grained PAT in a secret), which is a credential to create,
+  store and rotate.
+
+- **So don't have CI write to the repository at all if what it writes is
+  decoration.** The README coverage badge cost a `--write-badge` mode, a
+  ruleset-dodging branch-plus-PR dance, ~60 lines of workflow, and — the one
+  time it actually fired — a red X on the explicitly non-blocking `Coverage`
+  check, because `gh pr create` was refused and the step exited 1. It was
+  deleted rather than fixed. The number was already in every run's summary and
+  in the uploaded HTML report, which is where anyone asking the question
+  already is; the badge was a second, staler copy that could only ever be as
+  fresh as the machinery keeping it honest. **A cache of a number you can
+  already see is a liability, not a feature.**
+
+- **`continue-on-error` on a job stops it failing the *run*, not the check.**
+  That run's conclusion was `success` while `Coverage (non-blocking)` still
+  carried a red X of its own, next to a green merge. A job marked non-blocking
+  can still put a failure in front of a reviewer, so a step that is genuinely
+  advisory has to handle its own failure and exit 0 — the label on the job does
+  not do it.
+
 ## Testing main.js: what makes a path reachable, and what makes it unreachable
 
 Raising `main.js` coverage past 80% turned on four techniques, in order of how
