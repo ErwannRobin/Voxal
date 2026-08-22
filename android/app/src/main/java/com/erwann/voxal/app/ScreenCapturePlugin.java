@@ -53,8 +53,10 @@ public class ScreenCapturePlugin extends Plugin {
    */
   @PluginMethod
   public void canCapture(PluginCall call) {
+    boolean supported = hasAvcEncoder();
     JSObject ret = new JSObject();
-    ret.put("supported", hasAvcEncoder());
+    ret.put("supported", supported);
+    if (!supported) ret.put("reason", "no H.264 encoder on this device");
     call.resolve(ret);
   }
 

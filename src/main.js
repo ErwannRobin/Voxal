@@ -9994,13 +9994,26 @@ function nativeScreenPlugin() {
 // WebCodecs is the other half of the requirement (iOS 16.4+ / Android WebView).
 async function probeNativeScreenCapture() {
   if (!IS_NATIVE_MOBILE) return false;
-  if (typeof window.VideoDecoder !== 'function') return false;
+  // Every bail-out below says why. The button simply not appearing is otherwise
+  // indistinguishable between an old OS, an older native binary, and an
+  // unprovisioned App Group — which costs a whole build cycle to tell apart.
+  if (typeof window.VideoDecoder !== 'function') {
+    devLog('[ScreenCapture] no: this WebView has no WebCodecs VideoDecoder (needs iOS 16.4+)', 'warn');
+    return false;
+  }
   var plugin = nativeScreenPlugin();
-  if (!plugin) return false;
+  if (!plugin) {
+    devLog('[ScreenCapture] no: ScreenCapture plugin missing — older native binary, or not registered', 'warn');
+    return false;
+  }
   try {
     var res = await plugin.canCapture();
     _nativeScreenReady = !!(res && res.supported);
+    var why = (res && res.reason) ? ' (' + res.reason + ')' : '';
+    devLog('[ScreenCapture] canCapture -> ' + _nativeScreenReady + why, _nativeScreenReady ? 'info' : 'warn');
   } catch (e) {
+    // The method is absent on this binary even though the plugin object exists.
+    devLog('[ScreenCapture] no: canCapture() threw — ' + (e && e.message ? e.message : e), 'warn');
     _nativeScreenReady = false;
   }
   return _nativeScreenReady;

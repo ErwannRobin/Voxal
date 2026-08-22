@@ -34,7 +34,9 @@ async function fakeNativeScreen(page, opts = {}) {
       canCapture() {
         window.__screenPlugin.calls.push('canCapture');
         if (o.canCaptureThrows) return Promise.reject(new Error('not implemented'));
-        return Promise.resolve({ supported: o.supported !== false });
+        const res = { supported: o.supported !== false };
+        if (o.reason) res.reason = o.reason;
+        return Promise.resolve(res);
       },
       start(args) {
         window.__screenPlugin.calls.push('start');
@@ -168,13 +170,62 @@ test.describe('deciding whether the app can share a screen at all', () => {
     await expect(page.locator('#btn-share-screen')).toHaveClass(/hidden/);
   });
 
+  // "The button isn't there" is otherwise indistinguishable between an old OS,
+  // an older native binary and an unprovisioned App Group — and telling those
+  // apart costs a whole device build cycle, so each one has to say which it is.
+  test('every way of being unsupported says why in the log', async ({ page }) => {
+    const cases = [
+      { opts: { supported: false, reason: 'app group not provisioned' }, match: /app group not provisioned/ },
+      { opts: { canCaptureThrows: true }, match: /canCapture\(\) threw/ },
+    ];
+    for (const c of cases) {
+      await fakeNativeScreen(page, c.opts);
+      await page.goto('/');
+      const lines = await page.evaluate(async () => {
+        const seen = [];
+        const orig = console.warn;
+        console.warn = (...a) => { seen.push(a.join(' ')); orig.apply(console, a); };
+        await probeNativeScreenCapture();
+        console.warn = orig;
+        return seen;
+      });
+      expect(lines.join('\n')).toMatch(c.match);
+    }
+  });
+
+  test('a missing plugin says so rather than failing silently', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.Capacitor = { isNativePlatform: () => true, Plugins: {} };
+      window.VideoDecoder = class {};
+    });
+    await page.goto('/');
+    const lines = await page.evaluate(async () => {
+      const seen = [];
+      const orig = console.warn;
+      console.warn = (...a) => { seen.push(a.join(' ')); orig.apply(console, a); };
+      await probeNativeScreenCapture();
+      console.warn = orig;
+      return seen;
+    });
+    expect(lines.join('\n')).toMatch(/plugin missing/);
+  });
+
   // WebCodecs is the other half of the requirement: iOS shipped VideoDecoder in
   // 16.4, and the app's deployment target is older than that.
   test('no WebCodecs means no screen share, whatever the plugin says', async ({ page }) => {
     await fakeNativeScreen(page);
     await page.addInitScript(() => { delete window.VideoDecoder; });
     await page.goto('/');
-    expect(await page.evaluate(() => probeNativeScreenCapture())).toBe(false);
+    const seen = await page.evaluate(async () => {
+      const lines = [];
+      const orig = console.warn;
+      console.warn = (...a) => { lines.push(a.join(' ')); orig.apply(console, a); };
+      const ok = await probeNativeScreenCapture();
+      console.warn = orig;
+      return { ok, lines: lines.join('\n') };
+    });
+    expect(seen.ok).toBe(false);
+    expect(seen.lines).toMatch(/no WebCodecs VideoDecoder/);
   });
 
   test('the button appears once the probe answers', async ({ page }) => {

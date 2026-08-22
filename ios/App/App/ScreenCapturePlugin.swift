@@ -48,11 +48,20 @@ public class ScreenCapturePlugin: CAPPlugin, CAPBridgedPlugin {
     /// has nothing to decode with, so report unsupported rather than start a
     /// broadcast whose frames would go nowhere.
     @objc func canCapture(_ call: CAPPluginCall) {
-        var supported = false
-        if #available(iOS 16.4, *) {
-            supported = BroadcastFrameChannel.socketPath() != nil
+        guard #available(iOS 16.4, *) else {
+            call.resolve(["supported": false, "reason": "needs iOS 16.4 for WebCodecs"])
+            return
         }
-        call.resolve(["supported": supported])
+        guard BroadcastFrameChannel.socketPath() != nil else {
+            // containerURL() returns nil when the app is not a member of the
+            // group — the entitlement is missing or not provisioned.
+            call.resolve([
+                "supported": false,
+                "reason": "app group \(BroadcastFrameChannel.appGroup) not provisioned"
+            ])
+            return
+        }
+        call.resolve(["supported": true])
     }
 
     @objc func start(_ call: CAPPluginCall) {
