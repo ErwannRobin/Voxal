@@ -40,6 +40,7 @@
 		A1A1A1A10000000000000001 /* PTTPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PTTPlugin.swift; sourceTree = "<group>"; };
 		A1A1A1A10000000000000003 /* AudioRoutePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRoutePlugin.swift; sourceTree = "<group>"; };
 		A1A1A1A20000000000000001 /* ScreenCapturePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenCapturePlugin.swift; sourceTree = "<group>"; };
+		A1A1A1A20000000000000017 /* AppGroup.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AppGroup.entitlements; sourceTree = "<group>"; };
 		A1A1A1A20000000000000003 /* BroadcastFrameChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastFrameChannel.swift; sourceTree = "<group>"; };
 		A1A1A1A20000000000000005 /* SampleHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
 		A1A1A1A20000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -108,6 +109,7 @@
 				A1A1A1A10000000000000001 /* PTTPlugin.swift */,
 				A1A1A1A10000000000000003 /* AudioRoutePlugin.swift */,
 				A1A1A1A20000000000000001 /* ScreenCapturePlugin.swift */,
+				A1A1A1A20000000000000017 /* AppGroup.entitlements */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -426,6 +428,7 @@
 			baseConfigurationReference = 958DCC722DB07C7200EA8C5F /* debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/AppGroup.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -451,6 +454,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/AppGroup.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;

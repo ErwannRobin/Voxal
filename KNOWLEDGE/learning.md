@@ -922,3 +922,20 @@ seems too sharp".
   globally across `project.pbxproj`**, which is exactly what you want with an
   extension in the file — the App Store rejects an extension whose version does
   not match its host app, and this keeps them in lockstep for free.
+
+- **Entitlements are granted per FILE, not per key — so what you bundle
+  together decides what you can sign.** `App.entitlements` carried
+  PushToTalk, Associated Domains *and* the App Group the screen-share
+  extension needs. A free personal team cannot sign the first two, and one
+  unsignable key fails the whole file, which made the App Group look like it
+  needed a paid membership when Apple lists **App groups** as available to
+  free accounts. Splitting the one capability into its own
+  `App/AppGroup.entitlements` and pointing `CODE_SIGN_ENTITLEMENTS` there is
+  what makes the feature testable without enrolling. Generalise it: when a
+  capability appears to require a paid account, check whether it is genuinely
+  gated or merely sharing a file with something that is.
+- **`CODE_SIGN_ENTITLEMENTS` is a signing setting, not a distribution one.** It
+  applies to every build including a debug build on a device, so an entitlement
+  never needs TestFlight or App Store review to *work* — only to reach other
+  people. Easy to conflate with the separate, real constraint that native
+  changes cannot ship over Capgo OTA.

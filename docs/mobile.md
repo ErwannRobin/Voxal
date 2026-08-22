@@ -34,7 +34,9 @@ make cap-android
 > **iOS Push-to-Talk & Universal Links require a paid Apple Developer Program
 > membership.** The PushToTalk and Associated Domains capabilities cannot be
 > granted to a free "personal team", so on a personal team the system PTT UI and
-> HTTPS Universal Links do not work and `CODE_SIGN_ENTITLEMENTS` is left unset.
+> HTTPS Universal Links do not work. `App/App.entitlements` holds both keys but
+> the App target does **not** point at it — see the screen-sharing note below
+> for why, and for the one-line change that turns them on once you enrol.
 > The PTT plugin degrades gracefully to the in-app PTT fallback. These paths are
 > implemented and compile clean but are **unverified on a real device** pending
 > enrollment. The `voxal://` custom-scheme deep links work regardless.
@@ -60,27 +62,40 @@ Capture is capped to 1280 px on the long edge, 24 fps, and 800 kbps per
 listener (`screenMaxBitrate()`); resolution is never scaled down, because a
 screen that stays sharp at fewer frames is readable and a smaller one is not.
 
-> **iOS screen sharing needs the App Group wired up.** The `VoxalBroadcast`
-> extension and the app must share `group.com.erwann.voxal.app`. The extension
-> target carries its own `CODE_SIGN_ENTITLEMENTS`, but the **App target's is
-> still unset**, so until you set
-> `CODE_SIGN_ENTITLEMENTS = App/App.entitlements` on the App target,
-> `containerURL(forSecurityApplicationGroupIdentifier:)` returns nil,
-> `canCapture()` reports false and the Screen button simply never appears.
+> **iOS screen sharing needs the App Group.** The `VoxalBroadcast` extension
+> and the app must share `group.com.erwann.voxal.app`, which is where the frame
+> socket lives. Both targets carry `CODE_SIGN_ENTITLEMENTS`, so this is wired
+> and should build as-is.
+>
+> The App target points at **`App/AppGroup.entitlements`**, which holds the App
+> Group and nothing else, rather than at `App/App.entitlements`. Entitlements
+> are granted per *file*: `App.entitlements` also carries
+> `com.apple.developer.push-to-talk` and Associated Domains, which a free
+> personal team cannot sign — and one unsignable key fails the whole file,
+> taking the App Group down with it. Apple lists **App groups** as available to
+> free accounts, so splitting it out is what lets a personal team build and
+> test screen sharing at all.
+>
+> **On a paid membership, switch `CODE_SIGN_ENTITLEMENTS` back to
+> `App/App.entitlements`** — it carries the same App Group plus PushToTalk and
+> Associated Domains, so that one change turns on all three. Leaving it pointed
+> at `AppGroup.entitlements` is not a regression (the setting was unset
+> entirely before, so PTT and Universal Links were already off), but it does
+> mean a store build ships without them.
 >
 > This is a **signing** requirement, not a distribution one:
 > `CODE_SIGN_ENTITLEMENTS` applies to every build, so a development build run
 > on a device from Xcode is enough to test it. Nothing here needs TestFlight,
-> App Store review, or a release.
+> App Store review, or a release. One caveat if you are on a personal team:
+> Apple's capability table says App groups is available, but there are field
+> reports of `provisioning profile doesn't include
+> com.apple.developer.app-groups` on personal teams, and personal-team profiles
+> expire after 7 days — so treat it as probably-fine, verify on first build.
 >
-> It was left unset because `App/App.entitlements` also carries
-> `com.apple.developer.push-to-talk` and Associated Domains, which a free
-> personal team cannot sign (see the note above) — so wiring the file as it
-> stands breaks signing on a personal team. Apple lists **App groups** itself
-> as available to free accounts, so if you are still on a personal team and
-> want to try screen sharing without enrolling, give the App target its own
-> entitlements file containing only the app-group key rather than turning on
-> the whole file. On a paid membership, just point it at `App.entitlements`.
+> The App Group identifier appears in four places and they must agree:
+> `App/AppGroup.entitlements`, `App/App.entitlements`,
+> `VoxalBroadcast/VoxalBroadcast.entitlements`, and
+> `BroadcastFrameChannel.appGroup` in Swift.
 >
 > It also needs **iOS 16.4+**, the release where WebKit shipped the WebCodecs
 > `VideoDecoder` the frames are decoded with.

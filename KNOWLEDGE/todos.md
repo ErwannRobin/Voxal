@@ -578,9 +578,14 @@ seam, and none of the native half.
    call audio may hold the WebContent process open — but only a device can say.
    If it does stall, the shape of the fix is libwebrtc inside the extension
    publishing straight to the SFU, which is a different project, not a patch.
-2. Wire `CODE_SIGN_ENTITLEMENTS = App/App.entitlements` on the App target and
-   provision `group.com.erwann.voxal.app`. Until then `canCapture()` reports
-   false on iOS and the button never appears. Needs a paid membership.
+2. Provision `group.com.erwann.voxal.app` for both bundle IDs. The App target
+   is wired to `App/AppGroup.entitlements` (the App Group alone) rather than
+   `App/App.entitlements`, because entitlements are granted per file and one
+   key a personal team cannot sign fails the whole file — so bundling the App
+   Group with PushToTalk would have made screen sharing need a paid membership
+   it does not actually need. Apple lists App groups as free-tier; personal-team
+   reports are mixed, so verify on the first device build. On enrolment, point
+   `CODE_SIGN_ENTITLEMENTS` back at `App/App.entitlements` to get all three.
 3. Android: bump `versionCode`, `make build-android`, upload. The new
    `FOREGROUND_SERVICE_MEDIA_PROJECTION` / `POST_NOTIFICATIONS` permissions are
    manifest changes and cannot ship over Capgo — same constraint as the camera
