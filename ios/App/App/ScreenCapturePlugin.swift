@@ -199,6 +199,10 @@ public class ScreenCapturePlugin: CAPPlugin, CAPBridgedPlugin {
         guard fd >= 0 else { return }
         var on: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        // Non-blocking so the drain loop above can end on EAGAIN instead of
+        // parking ioQueue until the extension happens to send more.
+        let flags = fcntl(fd, F_GETFL, 0)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
         clientFD = fd
 
         // The extension is live: this is the first moment the share is real.
@@ -217,14 +221,28 @@ public class ScreenCapturePlugin: CAPPlugin, CAPBridgedPlugin {
     private func readAvailable() {
         guard clientFD >= 0 else { return }
         var chunk = [UInt8](repeating: 0, count: 64 * 1024)
-        let n = read(clientFD, &chunk, chunk.count)
-        if n <= 0 {
-            // The extension exited — the user tapped Stop in the system UI, or
-            // ReplayKit tore it down.
-            handleDisconnect()
+        // Drain everything available: one wakeup can cover several frames.
+        while true {
+            let n = read(clientFD, &chunk, chunk.count)
+            if n > 0 {
+                buffer.append(contentsOf: chunk[0..<n])
+                continue
+            }
+            if n == 0 {
+                // A real EOF: the extension closed its end, which is what the
+                // system Stop control and ReplayKit teardown both produce.
+                drainFrames()
+                handleDisconnect(reason: "ended")
+                return
+            }
+            // n < 0. Nothing left to read, or an interrupted syscall — neither
+            // is a disconnect. Treating them as one is what used to kill the
+            // share when the app was backgrounded and came back.
+            if errno == EAGAIN || errno == EWOULDBLOCK { break }
+            if errno == EINTR { continue }
+            handleDisconnect(reason: "socket error \(errno)")
             return
         }
-        buffer.append(contentsOf: chunk[0..<n])
         drainFrames()
     }
 
@@ -271,9 +289,9 @@ public class ScreenCapturePlugin: CAPPlugin, CAPBridgedPlugin {
         return (max(2, w - (w % 2)), max(2, h - (h % 2)))
     }
 
-    private func handleDisconnect() {
+    private func handleDisconnect(reason: String) {
         closeSockets()
-        notifyListeners("screenCaptureStopped", data: ["reason": "user"])
+        notifyListeners("screenCaptureStopped", data: ["reason": reason])
     }
 
     private func closeSockets() {

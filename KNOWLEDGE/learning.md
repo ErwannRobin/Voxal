@@ -978,3 +978,20 @@ seems too sharp".
   renders itself rendering itself. `selfScreenTileWouldRecurse()` suppresses
   just that one local tile; what is published to everyone else is unchanged.
   Desktop keeps its self-view deliberately — there the user picks a window.
+- **The same "any failure is fatal" bug existed on BOTH ends of the socket, and
+  fixing one hid the other.** The extension ended the broadcast on a failed
+  `write`; the app ended it on `read() <= 0`. Only `n == 0` is an EOF — `n < 0`
+  with `EAGAIN`/`EWOULDBLOCK` (nothing left to read) or `EINTR` (interrupted
+  syscall) is routine, and backgrounding-then-resuming produces both. Whenever
+  a raw socket is used, check `errno` before concluding the peer is gone, and
+  drain in a loop rather than assuming one wakeup is one read.
+- **A stop reason of "user" for every teardown disguised the bug for a whole
+  round.** The device log read `native capture stopped: user`, which looks like
+  the person pressed Stop, so the real cause was invisible. Failure paths must
+  report what actually happened; a plausible-looking wrong reason costs more
+  than no reason at all.
+- **Entitlements and `UIBackgroundModes` are not gated on App Store
+  distribution.** A development build has exactly the same runtime capabilities;
+  the store affects who can install it, never whether a capability works. When a
+  background feature misbehaves in a dev build, the cause is the code, not the
+  build channel.

@@ -32,9 +32,12 @@ class SampleHandler: RPBroadcastSampleHandler {
     /// ~1s of video at 30fps. Past this the app is not keeping up and the
     /// backlog is stale anyway — live video wants the newest frame, not a queue.
     private static let maxQueuedFrames = 30
-    /// How long delivery may stall before the broadcast gives up. Generous: the
-    /// whole point is to survive the user leaving the app.
-    private static let stallTimeout: TimeInterval = 60
+    /// A full send buffer means the app is alive but not draining — backgrounded,
+    /// or busy. That is the case this feature exists to survive, so be patient.
+    private static let backpressureTimeout: TimeInterval = 300
+    /// A socket we cannot even reconnect to means the app is gone. Give up much
+    /// sooner: an orphaned broadcast leaves the red recording bar up.
+    private static let disconnectedTimeout: TimeInterval = 30
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
         // All socket state lives on writeQueue; ReplayKit's own thread never
@@ -265,7 +268,7 @@ class SampleHandler: RPBroadcastSampleHandler {
             // frames quietly, and only give up once the stall has gone on too
             // long — otherwise a hard error would silence the watchdog forever.
             guard self.socketFD >= 0 else {
-                self.checkStalled()
+                self.checkStalled(connected: false)
                 return
             }
             self.flushPending()
@@ -296,7 +299,7 @@ class SampleHandler: RPBroadcastSampleHandler {
             }
             switch outcome {
             case .wouldBlock:
-                checkStalled()
+                checkStalled(connected: true)
                 return
             case .hardError:
                 // The reader is genuinely gone. Drop the socket and let the next
@@ -306,7 +309,7 @@ class SampleHandler: RPBroadcastSampleHandler {
                 pending.removeAll()
                 headOffset = 0
                 forceKeyframe = true
-                checkStalled()
+                checkStalled(connected: false)
                 return
             case .drained:
                 pending.removeFirst()
@@ -316,11 +319,12 @@ class SampleHandler: RPBroadcastSampleHandler {
         }
     }
 
-    /// End the broadcast only after nothing has been delivered for a long time.
+    /// End the broadcast only after nothing has reached the app for a long time.
     /// A backgrounded app must be able to come back; an app that is gone for
     /// good should not leave a broadcast running with the red bar up forever.
-    private func checkStalled() {
-        if Date().timeIntervalSince(lastWriteAt) > Self.stallTimeout {
+    private func checkStalled(connected: Bool) {
+        let limit = connected ? Self.backpressureTimeout : Self.disconnectedTimeout
+        if Date().timeIntervalSince(lastWriteAt) > limit {
             finishBroadcast()
         }
     }

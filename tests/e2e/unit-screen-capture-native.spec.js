@@ -452,6 +452,24 @@ test.describe('ending a share', () => {
     expect(seen).toEqual({ active: false, stream: null, stops: 2 });
   });
 
+  // The native reason string is the only signal for why a share died on a
+  // device, so it has to reach the log verbatim rather than being flattened.
+  test('the reason a share ended is logged verbatim', async ({ page }) => {
+    await fakeNativeScreen(page);
+    await page.goto('/');
+    await seedNativeRoom(page);
+    const logged = await page.evaluate(async () => {
+      await startScreenShare();
+      const lines = [];
+      const orig = console.log;
+      console.log = (...a) => { lines.push(a.join(' ')); orig.apply(console, a); };
+      window.__screenPlugin.emit('screenCaptureStopped', { reason: 'socket error 32' });
+      console.log = orig;
+      return lines.join('\n');
+    });
+    expect(logged).toMatch(/native capture stopped: socket error 32/);
+  });
+
   test('stopping tells the native side and closes the decoder', async ({ page }) => {
     await fakeNativeScreen(page);
     await page.goto('/');
