@@ -510,6 +510,46 @@ test.describe('ending a share', () => {
   });
 });
 
+test.describe('not filming your own screen', () => {
+  // The capture is the whole device display, so a self tile sits inside its own
+  // source and renders itself rendering itself. Everyone else must still get the
+  // share — this hides one local tile, it does not change what is published.
+  test('the sharing phone gets no tile of its own screen', async ({ page }) => {
+    await fakeNativeScreen(page);
+    await page.goto('/');
+    await seedNativeRoom(page);
+    const seen = await page.evaluate(async () => {
+      await startScreenShare();
+      return {
+        recurses: selfScreenTileWouldRecurse(),
+        keys: videoStageTiles().map((t) => t.key),
+        active: localScreenActive,
+        published: window.__calls.map((c) => c.metadata && c.metadata.type),
+      };
+    });
+    expect(seen.recurses).toBe(true);
+    expect(seen.keys).not.toContain('screen:self');
+    expect(seen.active).toBe(true);
+    expect(seen.published).toEqual(['screen', 'screen']);
+  });
+
+  test('a peer sharing their screen is still shown', async ({ page }) => {
+    await fakeNativeScreen(page);
+    await page.goto('/');
+    await seedNativeRoom(page);
+    const keys = await page.evaluate(() => {
+      connections.get('p1').screenActive = true;
+      return videoStageTiles().map((t) => t.key);
+    });
+    expect(keys).toContain('screen:p1');
+  });
+
+  test('desktop keeps its self-view — there the user picks a window', async ({ page }) => {
+    await page.goto('/');
+    expect(await page.evaluate(() => selfScreenTileWouldRecurse())).toBe(false);
+  });
+});
+
 test.describe('a phone-sized share on the wire', () => {
   test('screen senders get the mobile ceiling, and full resolution', async ({ page }) => {
     await fakeNativeScreen(page);

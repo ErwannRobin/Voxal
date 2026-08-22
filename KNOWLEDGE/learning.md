@@ -957,3 +957,24 @@ seems too sharp".
   never needs TestFlight or App Store review to *work* — only to reach other
   people. Easy to conflate with the separate, real constraint that native
   changes cannot ship over Capgo OTA.
+
+- **Backpressure is not an error, and treating it as one killed the share.** The
+  broadcast extension wrote frames to the app's socket and called
+  `finishBroadcastWithError` on any failed write. Backgrounding the app stops it
+  draining that socket, the send buffer fills, the write fails — and the whole
+  broadcast ended, which is precisely the situation the feature exists to
+  survive. Live video wants the newest frame, not a queue: the socket is now
+  non-blocking, `EAGAIN` means "drop the backlog and carry on", and the
+  broadcast only gives up after a long stall with nothing delivered. Two details
+  that make it correct rather than merely lenient: frames are length-prefixed,
+  so the queue holds **whole** frames and only the head may be partly written —
+  abandoning a half-written frame desynchronises the reader forever; and after
+  dropping a backlog the next frame must be forced to an IDR
+  (`kVTEncodeFrameOptionKey_ForceKeyFrame`), or the decoder renders garbage
+  until the encoder's own 2 s keyframe comes round.
+- **A self-view of a full-screen capture is a feedback loop.** On a phone both
+  MediaProjection and ReplayKit capture the whole display with no window picker,
+  so a "your screen" tile on the sharing device is inside its own source and
+  renders itself rendering itself. `selfScreenTileWouldRecurse()` suppresses
+  just that one local tile; what is published to everyone else is unchanged.
+  Desktop keeps its self-view deliberately — there the user picks a window.

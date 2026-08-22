@@ -8091,6 +8091,15 @@ function readVideoModeEnabled() {
 // Pure: the ordered list of tiles the stage should be showing, derived from the
 // same connection state the roster reads. Kept free of DOM so it can be unit
 // tested directly (main.js is a flat classic script — see KNOWLEDGE/learning.md).
+// Would showing your own screen tile capture that very tile? True wherever the
+// capture is unavoidably the whole device screen, which on a phone it always is
+// (MediaProjection and ReplayKit both capture the display, with no window
+// picker). Desktop is deliberately left alone: there the user chooses a window
+// or a screen, and a self-view is a useful confidence check.
+function selfScreenTileWouldRecurse() {
+  return IS_NATIVE_MOBILE;
+}
+
 function videoStageTiles() {
   var tiles = [];
   if (!videoModeEnabled) return tiles;
@@ -8114,7 +8123,11 @@ function videoStageTiles() {
       trackState: remoteTrackState(peerId, 'screen')
     });
   });
-  if (localScreenActive) {
+  // Not on the device doing the sharing when the capture is the whole screen:
+  // the tile would be inside its own source, so it renders itself rendering
+  // itself, forever. Everyone ELSE still sees the share normally — this hides
+  // one local tile, it does not change what is published.
+  if (localScreenActive && !selfScreenTileWouldRecurse()) {
     tiles.push({
       key: 'screen:self',
       peerId: selfId,

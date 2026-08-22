@@ -23,21 +23,33 @@ class SampleHandler: RPBroadcastSampleHandler {
     private let maxEdge: Int32 = 1280
     private let targetBitrate: Int32 = 1_200_000
 
+    // Outgoing frames, whole ones only; `headOffset` tracks how much of
+    // pending[0] has actually reached the socket.
+    private var pending: [Data] = []
+    private var headOffset = 0
+    private var forceKeyframe = false
+    private var lastWriteAt = Date()
+    /// ~1s of video at 30fps. Past this the app is not keeping up and the
+    /// backlog is stale anyway — live video wants the newest frame, not a queue.
+    private static let maxQueuedFrames = 30
+    /// How long delivery may stall before the broadcast gives up. Generous: the
+    /// whole point is to survive the user leaving the app.
+    private static let stallTimeout: TimeInterval = 60
+
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
-        connect()
+        // All socket state lives on writeQueue; ReplayKit's own thread never
+        // touches it, so there is nothing to race against.
+        writeQueue.async { [weak self] in self?.connect() }
         BroadcastFrameChannel.post(BroadcastFrameChannel.listenerReadyNotification)
     }
 
     override func broadcastFinished() {
-        teardown()
+        writeQueue.async { [weak self] in self?.teardown() }
     }
 
     override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer, with type: RPSampleBufferType) {
         guard type == .video,
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        if socketFD < 0 { connect() }
-        guard socketFD >= 0 else { return }
-
         let width = Int32(CVPixelBufferGetWidth(pixelBuffer))
         let height = Int32(CVPixelBufferGetHeight(pixelBuffer))
         let scaled = Self.scaleToMaxEdge(width: width, height: height, maxEdge: maxEdge)
@@ -50,9 +62,17 @@ class SampleHandler: RPBroadcastSampleHandler {
         guard let session else { return }
 
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        // After dropping a backlog the decoder is mid-GOP with missing frames,
+        // so the next one has to be an IDR or it decodes garbage until the
+        // encoder's own 2s keyframe comes round.
+        var frameProperties: CFDictionary?
+        if forceKeyframe {
+            frameProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue!] as CFDictionary
+            forceKeyframe = false
+        }
         VTCompressionSessionEncodeFrame(
             session, imageBuffer: pixelBuffer, presentationTimeStamp: pts,
-            duration: .invalid, frameProperties: nil,
+            duration: .invalid, frameProperties: frameProperties,
             sourceFrameRefcon: nil, infoFlagsOut: nil)
     }
 
@@ -207,29 +227,101 @@ class SampleHandler: RPBroadcastSampleHandler {
         // kill the extension, it must surface as a failed write.
         var on: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        // Non-blocking: a backgrounded app stops reading, and a blocking write
+        // would park the encoder's callback thread until iOS killed us.
+        let flags = fcntl(fd, F_GETFL, 0)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
         socketFD = fd
+        lastWriteAt = Date()
+        forceKeyframe = true
     }
 
+    /// Queue a whole frame and try to flush.
+    ///
+    /// Frames are length-prefixed, so a partial write that is then abandoned
+    /// desynchronises the reader permanently — the queue therefore holds whole
+    /// frames and only the head may be partially written.
     private func write(_ payload: Data, isKeyframe: Bool, timestampMicros: Int64) {
         writeQueue.async { [weak self] in
-            guard let self, self.socketFD >= 0 else { return }
+            guard let self else { return }
+            // Reconnect here rather than on ReplayKit's thread: the app may have
+            // restarted its listener while we were backgrounded.
+            if self.socketFD < 0 { self.connect() }
             var frame = BroadcastFrameChannel.encodeHeader(
                 length: payload.count, isKeyframe: isKeyframe, timestampMicros: timestampMicros)
             frame.append(payload)
-            frame.withUnsafeBytes { raw in
+            self.pending.append(frame)
+
+            // The app has stopped draining — it is backgrounded, or busy. Drop
+            // the backlog rather than grow it without bound, keeping only the
+            // head (which may be half-written and cannot be discarded), and ask
+            // the encoder for a keyframe so the decoder can resync on resume.
+            if self.pending.count > Self.maxQueuedFrames {
+                let head = self.pending.removeFirst()
+                self.pending = [head]
+                self.forceKeyframe = true
+            }
+            // Still no socket: the app has not come back yet. Keep dropping
+            // frames quietly, and only give up once the stall has gone on too
+            // long — otherwise a hard error would silence the watchdog forever.
+            guard self.socketFD >= 0 else {
+                self.checkStalled()
+                return
+            }
+            self.flushPending()
+        }
+    }
+
+    private enum FlushOutcome { case drained, wouldBlock, hardError }
+
+    private func flushPending() {
+        guard socketFD >= 0 else { return }
+        while let head = pending.first {
+            var outcome = FlushOutcome.drained
+            head.withUnsafeBytes { raw in
                 guard let base = raw.baseAddress else { return }
-                var sent = 0
-                while sent < raw.count {
-                    let n = Darwin.write(self.socketFD, base + sent, raw.count - sent)
-                    if n <= 0 {
-                        // The app went away or stopped reading: end the broadcast
-                        // rather than spin on a dead socket.
-                        self.finishBroadcast()
-                        return
+                while headOffset < raw.count {
+                    let n = Darwin.write(socketFD, base + headOffset, raw.count - headOffset)
+                    if n > 0 {
+                        headOffset += n
+                        continue
                     }
-                    sent += n
+                    if n < 0 && errno == EINTR { continue }
+                    // A full send buffer is normal backpressure, NOT a failure:
+                    // keep the frame and try again on the next one.
+                    outcome = (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+                        ? .wouldBlock : .hardError
+                    return
                 }
             }
+            switch outcome {
+            case .wouldBlock:
+                checkStalled()
+                return
+            case .hardError:
+                // The reader is genuinely gone. Drop the socket and let the next
+                // frame reconnect; only give up if that keeps failing.
+                close(socketFD)
+                socketFD = -1
+                pending.removeAll()
+                headOffset = 0
+                forceKeyframe = true
+                checkStalled()
+                return
+            case .drained:
+                pending.removeFirst()
+                headOffset = 0
+                lastWriteAt = Date()
+            }
+        }
+    }
+
+    /// End the broadcast only after nothing has been delivered for a long time.
+    /// A backgrounded app must be able to come back; an app that is gone for
+    /// good should not leave a broadcast running with the red bar up forever.
+    private func checkStalled() {
+        if Date().timeIntervalSince(lastWriteAt) > Self.stallTimeout {
+            finishBroadcast()
         }
     }
 
@@ -251,5 +343,7 @@ class SampleHandler: RPBroadcastSampleHandler {
             close(socketFD)
             socketFD = -1
         }
+        pending.removeAll()
+        headOffset = 0
     }
 }
