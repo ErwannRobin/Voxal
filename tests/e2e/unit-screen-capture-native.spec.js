@@ -401,6 +401,48 @@ test.describe('the decode pipeline', () => {
     expect(closed).toBe(true);
   });
 
+  // A stalled share and a working one look identical in a log otherwise, which
+  // is exactly what made "it stopped" ambiguous on device.
+  test('reports its frame count periodically, and warns when none arrive', async ({ page }) => {
+    await fakeNativeScreen(page);
+    await page.goto('/');
+    await share(page);
+    const seen = await page.evaluate(async () => {
+      const info = [];
+      const warn = [];
+      const oLog = console.log;
+      const oWarn = console.warn;
+      console.log = (...a) => { info.push(a.join(' ')); oLog.apply(console, a); };
+      console.warn = (...a) => { warn.push(a.join(' ')); oWarn.apply(console, a); };
+      window.__screenPlugin.emit('screenCaptureConfig', { codec: 'avc1.42E01E', width: 64, height: 64 });
+      window.__screenPlugin.emit('screenCaptureChunk', { data: btoa('k'), key: true, timestamp: 0 });
+      window.__screenPlugin.emit('screenCaptureChunk', { data: btoa('d'), key: false, timestamp: 1 });
+      await new Promise((r) => setTimeout(r, 5200));   // one heartbeat with frames
+      await new Promise((r) => setTimeout(r, 5200));   // one with none
+      console.log = oLog;
+      console.warn = oWarn;
+      return { info: info.join('\n'), warn: warn.join('\n') };
+    });
+    expect(seen.info).toMatch(/2 frames in the last 5s \(2 total\)/);
+    expect(seen.warn).toMatch(/0 frames in the last 5s \(2 total\)/);
+  });
+
+  test('the heartbeat stops with the share', async ({ page }) => {
+    await fakeNativeScreen(page);
+    await page.goto('/');
+    await share(page);
+    const stillTicking = await page.evaluate(async () => {
+      stopScreenShare();
+      const lines = [];
+      const orig = console.warn;
+      console.warn = (...a) => { lines.push(a.join(' ')); orig.apply(console, a); };
+      await new Promise((r) => setTimeout(r, 5400));
+      console.warn = orig;
+      return lines.join('\n');
+    });
+    expect(stillTicking).not.toMatch(/frames in the last/);
+  });
+
   test('a rotation reconfigures the decoder and resizes the canvas', async ({ page }) => {
     await fakeNativeScreen(page);
     await page.goto('/');

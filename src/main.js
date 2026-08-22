@@ -9996,6 +9996,7 @@ async function cameraFlipAvailable() {
 
 var NATIVE_SCREEN_MAX_EDGE = 1280;  // cap the long edge; text stays legible, heat does not
 var NATIVE_SCREEN_FPS = 24;
+var NATIVE_SCREEN_HEARTBEAT_MS = 5000;  // how often a live share reports its frame count
 
 function nativeScreenPlugin() {
   return (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.ScreenCapture) || null;
@@ -10064,8 +10065,21 @@ async function startNativeScreenCapture() {
 
   var session = {
     decoder: null, canvas: null, ctx: null, track: null, stream: null,
-    listeners: [], configured: false, needKeyframe: true
+    listeners: [], configured: false, needKeyframe: true,
+    decoded: 0, lastReported: 0, heartbeat: null
   };
+
+  // A share that has silently stalled and one that is working look identical in
+  // the log, which cost two rounds of misdiagnosis: "it stopped" could mean the
+  // capture ended, or that frames quietly stopped arriving. A periodic count
+  // separates them — a frozen counter is a stall, a missing counter is a stop.
+  session.heartbeat = setInterval(function() {
+    var delta = session.decoded - session.lastReported;
+    session.lastReported = session.decoded;
+    devLog('[ScreenCapture] ' + delta + ' frames in the last '
+      + (NATIVE_SCREEN_HEARTBEAT_MS / 1000) + 's (' + session.decoded + ' total)',
+      delta === 0 ? 'warn' : 'info');
+  }, NATIVE_SCREEN_HEARTBEAT_MS);
 
   function onConfig(cfg) {
     // Also fires on a mid-share reconfigure (rotation): resize the canvas and
@@ -10096,6 +10110,7 @@ async function startNativeScreenCapture() {
       session.ctx.drawImage(frame, 0, 0, session.canvas.width, session.canvas.height);
     } catch (_) { /* canvas resized mid-flight */ }
     try { frame.close(); } catch (_) {}
+    session.decoded++;
     // captureStream(0) emits nothing until asked, so a still screen costs no
     // frames at all. Where requestFrame is missing the stream was created with
     // a frame rate instead and samples the canvas by itself.
@@ -10193,6 +10208,7 @@ function stopNativeScreenCapture() {
         else if (h && typeof h.then === 'function') h.then(function(x) { x && x.remove && x.remove(); });
       } catch (_) {}
     });
+    if (session.heartbeat) { clearInterval(session.heartbeat); session.heartbeat = null; }
     try { if (session.decoder && session.decoder.state !== 'closed') session.decoder.close(); } catch (_) {}
     // On the cancel path nothing downstream ever took ownership of this stream,
     // so it has to be released here; on the normal path stopScreenShare() has
