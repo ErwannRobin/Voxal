@@ -619,6 +619,78 @@ Full design in `docs/video-effects.md`. What is not derivable from the code:
   `resources/make-backgrounds.py`) is cheaper *and* smaller than anything you
   would license.
 
+## Detection controls — edge sharpness, inference rate, low light
+
+Follow-up to the section below, from "can we control the sharpness and accuracy
+of the detection, and adapt it to brightness". Three preferences
+(`edge-sharpness`, `detection-quality`, `light-adapt`), and what was not obvious
+before building them:
+
+- **The mask's working size is NOT an accuracy knob, and it looks exactly like
+  one.** `ImageSegmenter` resizes whatever you hand it to the model's own
+  256-wide input, so raising `SEG_LONG` buys a bigger readback of identical
+  information. The honest knob is the inference *rate*: the mask lags the frame
+  by one segmentation interval, so 24 Hz sees ~40 ms of lag where 10 Hz sees
+  100 ms, and the temporal blend (per inference, not per frame) smooths over
+  less. `detection-quality` therefore picks a rate ladder, not a resolution.
+
+- **A quality setting has to hand the adaptive step-down a full ladder, not a
+  single rate.** Each rung is `[start, …, 6]`, and switching restarts at the
+  top: the rungs differ between ladders, so "keep the current index" means
+  different things in each, and a device that needs stepping down gets stepped
+  down again within one 5 s measurement window anyway. Reset that window too —
+  judging a new rate by a window that began under the old one is an instant
+  spurious step-down.
+
+- **Hand out a copy of the ladder, never the shared constant.** The processor
+  mutates its own ladder position; sharing the table would let one call's
+  step-down rewrite the defaults for every later one in the session.
+
+- **The three edge numbers are one control.** Feather radius, the composite's
+  `smoothstep` window and `MASK_DILATE` cannot be exposed separately — a narrow
+  window on a wide feather is a hard edge (see below). One preference derives
+  all three through `edgeProfile()`, and *softer dilates further*, because a
+  wider soft band still has to sit outside the real subject.
+
+- **Pin the midpoint of a slider you carved out of tuned constants.** The whole
+  risk of turning `MASK_FEATHER`/`MASK_EDGE_*`/`MASK_DILATE` into a preference
+  is that the default silently stops being the tuned value for everyone who
+  never opens the setting. A test asserts `_edgeProfile(0.5)` equals the four
+  constants exactly.
+
+- **Low light is fixable before inference and unfixable after.** The selfie
+  model degrades in the dark by collapsing its confidence toward the middle of
+  the range — no downstream filter recovers what it never saw. Brightening the
+  segmenter's own downscaled copy through a canvas `ctx.filter` of
+  `brightness() contrast()` costs one string assignment per inference and is
+  the entire mechanism.
+
+- **Measure the CENTRE, not the frame, or you make backlight worse.** The case
+  that breaks segmentation is a window behind you: the frame's average is high
+  while your face is the darkest thing in it, so a full-frame gain would darken
+  the one region the model needs. The centre half of a 12×8 probe is where a
+  webcam's subject is, near enough — and `getImageData` on 96 pixels a couple
+  of times a second is genuinely free.
+
+- **Ease the gain, and never darken.** A gain that jumps when you lean forward
+  makes the mask breathe; 25% per sample fixes that. Clamping to `[1, 2.6]`
+  means an ordinary room gets gain 1, which sets no filter at all — the feature
+  costs nothing where it is not needed.
+
+- **Never let the adaptation reach the published frame.** It brightens a private
+  256-wide copy; the picture on the wire is untouched. Pinned by a test that
+  reads the composited canvas while the gain is at full stretch — a dark room
+  must stay dark for everyone else.
+
+- **`ctx.filter` is not everywhere.** Older WebKit has no canvas filter at all;
+  feature-detect (`typeof ctx.filter === 'string'`) and leave the frame alone
+  there rather than half-applying anything.
+
+- **Measure the filter's own output and you have built a feedback loop.** The
+  luma probe reads a separate canvas drawn straight from the `<video>`, not the
+  seg canvas the gain was just applied to — same class of bug as the mask
+  compounding into its own input, below.
+
 ## Background blur quality — grey background, cardboard-cutout edge
 
 Two independent bugs, both invisible in isolation, both plainly visible in the
