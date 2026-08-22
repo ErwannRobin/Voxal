@@ -491,16 +491,27 @@ Use Python string replacement scripts for multi-line patches to avoid manual err
   actor (a fine-grained PAT in a secret), which is a credential to create,
   store and rotate.
 
-- **So don't have CI write to the repository at all if what it writes is
-  decoration.** The README coverage badge cost a `--write-badge` mode, a
-  ruleset-dodging branch-plus-PR dance, ~60 lines of workflow, and — the one
-  time it actually fired — a red X on the explicitly non-blocking `Coverage`
-  check, because `gh pr create` was refused and the step exited 1. It was
-  deleted rather than fixed. The number was already in every run's summary and
-  in the uploaded HTML report, which is where anyone asking the question
-  already is; the badge was a second, staler copy that could only ever be as
-  fresh as the machinery keeping it honest. **A cache of a number you can
-  already see is a liability, not a feature.**
+- **So when CI wants to write to the repository, make it a manual target
+  instead.** The README coverage badge cost a ruleset-dodging branch-plus-PR
+  dance and ~60 lines of workflow, and the one time it actually fired it put a
+  red X on the explicitly non-blocking `Coverage` check, because `gh pr create`
+  was refused and the step exited 1. The badge itself was never the problem —
+  writing it *from CI* was. It is now `make coverage-badge`, which is a
+  dependency on `coverage-e2e` plus the `--write-badge` flag the script already
+  had: no token, no permissions, no branch, and the diff lands in the same
+  commit as whatever changed the number. The cost is that it is only as fresh
+  as the last person who ran it, which is the honest trade — a badge nobody
+  refreshes is visibly stale, whereas a badge refreshed by broken automation
+  looks authoritative and isn't.
+
+- **A manual step must fail loudly where the CI version was allowed to shrug.**
+  `--write-badge` exited 0 with a warning when no report existed, which was
+  right for a non-blocking job and wrong the moment a human types the command:
+  it leaves the author believing the README was refreshed when nothing was
+  measured. It now exits 1. The same inversion applies to the staleness risk —
+  CI always had a fresh report by construction, a developer's working tree may
+  have one from last week, so the target re-measures rather than trusting
+  what is on disk.
 
 - **`continue-on-error` on a job stops it failing the *run*, not the check.**
   That run's conclusion was `success` while `Coverage (non-blocking)` still

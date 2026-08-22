@@ -1,6 +1,6 @@
 .PHONY: help run run-web gen-build-info dev debug build build-debug build-signed build-web install clean lint check test \
         test-rust test-api test-e2e test-mesh coverage coverage-rust coverage-e2e \
-        coverage-api coverage-summary \
+        coverage-api coverage-summary coverage-badge \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
         seg-assets
 
@@ -36,6 +36,7 @@ help:
 	@echo "  coverage-e2e Generate E2E JS coverage report (Playwright + monocart)"
 	@echo "  coverage-api Generate API handler coverage (node --test)"
 	@echo "  coverage-summary Print one markdown summary of whatever has been measured"
+	@echo "  coverage-badge Re-measure main.js and rewrite the README coverage badge"
 	@echo "  clean        Remove build artifacts"
 	@echo ""
 
@@ -369,6 +370,17 @@ coverage-api:
 # job puts in its run summary. Safe to run with only some of them present.
 coverage-summary:
 	@node scripts/coverage-report.mjs
+
+# Refresh the README coverage badge. Deliberately manual, and deliberately
+# re-measures first: CI cannot do this (`main` takes no direct push, and a
+# workflow's own GITHUB_TOKEN can neither open the pull request nor produce one
+# that is mergeable — see KNOWLEDGE/learning.md), so the badge is only ever as
+# honest as the last person to run this. Depending on coverage-e2e is what stops
+# it publishing a number off a stale report; run the script directly if you know
+# the report on disk is current and want to skip the ~3 minutes.
+coverage-badge: coverage-e2e
+	@node scripts/coverage-report.mjs --write-badge
+	@echo "→ README badge updated. Commit README.md to publish it."
 
 clean:
 	cd src-tauri && cargo clean
