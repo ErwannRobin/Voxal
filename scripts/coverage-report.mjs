@@ -6,6 +6,11 @@
 //   node scripts/coverage-report.mjs                  # markdown to stdout
 //   node scripts/coverage-report.mjs --write-badge    # also rewrite the badge
 //
+// --write-badge is a MANUAL step (`make coverage-badge`), never a CI one. CI
+// cannot commit it back: `main`'s ruleset means the change has to arrive as a
+// pull request, and a workflow's own GITHUB_TOKEN can neither open one nor
+// produce one that is mergeable. See KNOWLEDGE/learning.md.
+//
 // Each source is optional: a run that did not happen is reported as skipped
 // rather than failing the script, so the CI job can degrade to whatever it
 // managed to produce (the Rust leg, in particular, is the slow one).
@@ -90,7 +95,7 @@ function badgeMarkdown(pct) {
 
 /**
  * Rewrite the badge between its markers. Returns 'updated' | 'unchanged' |
- * 'no-markers' so the caller can skip a commit that would change nothing.
+ * 'no-markers'.
  */
 function writeBadge(pct) {
   const readme = fs.readFileSync(README, 'utf8');
@@ -154,14 +159,23 @@ process.stdout.write(`${lines.join('\n')}\n`);
 // ── Badge ────────────────────────────────────────────────────────────────────
 
 if (process.argv.includes('--write-badge')) {
+  // Unlike the report above, this one is not allowed to shrug: it is invoked by
+  // hand, and a silent no-op would leave the author believing the README was
+  // refreshed when nothing was measured.
   if (!front) {
-    process.stderr.write('coverage-report: no frontend report, leaving the badge alone\n');
-    process.exit(0);
+    process.stderr.write(
+      'coverage-report: no frontend report at coverage/coverage-report.json — ' +
+        'run `make coverage-e2e` first (or `make coverage-badge`, which does both).\n'
+    );
+    process.exit(1);
   }
   const result = writeBadge(front.lines.pct);
-  process.stderr.write(`coverage-report: badge ${result} (${front.lines.pct} %)\n`);
-  // Surface the outcome so a workflow can skip an empty commit.
-  if (process.env.GITHUB_OUTPUT) {
-    fs.appendFileSync(process.env.GITHUB_OUTPUT, `badge=${result}\npct=${front.lines.pct}\n`);
+  if (result === 'no-markers') {
+    process.stderr.write(
+      `coverage-report: no ${BADGE_START} … ${BADGE_END} markers in README.md, ` +
+        'nothing written.\n'
+    );
+    process.exit(1);
   }
+  process.stderr.write(`coverage-report: badge ${result} (${front.lines.pct} %)\n`);
 }
