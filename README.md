@@ -3,6 +3,9 @@
 [![License: MIT](https://img.shields.io/github/license/ErwannRobin/Voxal)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/ErwannRobin/Voxal?display_name=tag)](https://github.com/ErwannRobin/Voxal/releases)
 [![Tests](https://github.com/ErwannRobin/Voxal/actions/workflows/tests.yml/badge.svg)](https://github.com/ErwannRobin/Voxal/actions/workflows/tests.yml)
+<!-- coverage-badge -->
+[![main.js coverage](https://img.shields.io/badge/main.js%20coverage-80.1%25-green)](https://github.com/ErwannRobin/Voxal/actions/workflows/tests.yml)
+<!-- /coverage-badge -->
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20iOS%20%7C%20Android%20%7C%20Web-4c8bf5)
 
 Instant push-to-talk voice rooms.
@@ -142,6 +145,7 @@ If you modify files under `src/`, sync assets for mobile builds with `make cap-s
 | `make test-e2e` | Fast Playwright E2E only (pure-logic and UI flows) |
 | `make test-mesh` | Multi-peer WebRTC E2E against a real local PeerServer |
 | `make coverage` | Rust + E2E + API coverage reports, summarised in one table |
+| `make coverage-badge` | Re-measure `main.js` and rewrite the coverage badge above |
 
 `make test` is what CI gates on: `main` takes no merge whose tests are not green
 ([how that is enforced](docs/required-checks.md)). The multi-peer `make test-mesh`

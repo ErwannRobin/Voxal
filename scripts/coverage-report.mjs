@@ -1,8 +1,15 @@
 #!/usr/bin/env node
 //
-// Turn the three coverage runs into one human-readable report.
+// Turn the three coverage runs into one human-readable report, and (with
+// --write-badge) into the number on the README badge.
 //
 //   node scripts/coverage-report.mjs                  # markdown to stdout
+//   node scripts/coverage-report.mjs --write-badge    # also rewrite the badge
+//
+// --write-badge is a MANUAL step (`make coverage-badge`), never a CI one. CI
+// cannot commit it back: `main`'s ruleset means the change has to arrive as a
+// pull request, and a workflow's own GITHUB_TOKEN can neither open one nor
+// produce one that is mergeable. See KNOWLEDGE/learning.md.
 //
 // Each source is optional: a run that did not happen is reported as skipped
 // rather than failing the script, so the CI job can degrade to whatever it
@@ -16,11 +23,11 @@
 // `coverage/` when it generates, so anything else written there is destroyed by
 // the next E2E run.
 //
-// The headline number is main.js's *line* coverage as monocart reports it: the
-// `main.js` row of the table `make coverage-e2e` prints. (The Summary row
-// differs by a hair, because it also counts the four-line version.js.) Any
-// other denominator would make this report disagree with what a contributor
-// sees locally.
+// The headline number — the one on the badge — is main.js's *line* coverage as
+// monocart reports it: the `main.js` row of the table `make coverage-e2e`
+// prints. (The Summary row differs by a hair, because it also counts the
+// four-line version.js.) Any other denominator would make the badge disagree
+// with what a contributor sees locally, which is worse than no badge.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,6 +38,10 @@ const FRONTEND_JSON = path.join(ROOT, 'coverage/coverage-report.json');
 const FRONTEND_MD = path.join(ROOT, 'coverage/coverage-summary.md');
 const API_LCOV = path.join(ROOT, 'coverage-api/lcov.info');
 const RUST_LCOV = path.join(ROOT, 'src-tauri/target/llvm-cov/lcov.info');
+const README = path.join(ROOT, 'README.md');
+
+const BADGE_START = '<!-- coverage-badge -->';
+const BADGE_END = '<!-- /coverage-badge -->';
 
 /** Line coverage across every file in an lcov report, as a percentage. */
 function lcovLinePct(file) {
@@ -63,6 +74,41 @@ function frontendSummary() {
   const main = (report.files || []).find((f) => String(f.sourcePath || '').endsWith('main.js'));
   if (!main || !main.summary) return null;
   return main.summary;
+}
+
+/** The colour shields.io should use, on the same scale the HTML report uses. */
+function badgeColor(pct) {
+  if (pct >= 90) return 'brightgreen';
+  if (pct >= 80) return 'green';
+  if (pct >= 70) return 'yellowgreen';
+  if (pct >= 60) return 'yellow';
+  if (pct >= 50) return 'orange';
+  return 'red';
+}
+
+function badgeMarkdown(pct) {
+  const label = encodeURIComponent('main.js coverage');
+  const value = encodeURIComponent(`${pct.toFixed(1)}%`);
+  const url = `https://img.shields.io/badge/${label}-${value}-${badgeColor(pct)}`;
+  return `[![main.js coverage](${url})](https://github.com/ErwannRobin/Voxal/actions/workflows/tests.yml)`;
+}
+
+/**
+ * Rewrite the badge between its markers. Returns 'updated' | 'unchanged' |
+ * 'no-markers'.
+ */
+function writeBadge(pct) {
+  const readme = fs.readFileSync(README, 'utf8');
+  const start = readme.indexOf(BADGE_START);
+  const end = readme.indexOf(BADGE_END);
+  if (start === -1 || end === -1 || end < start) return 'no-markers';
+
+  const before = readme.slice(0, start + BADGE_START.length);
+  const after = readme.slice(end);
+  const next = `${before}\n${badgeMarkdown(pct)}\n${after}`;
+  if (next === readme) return 'unchanged';
+  fs.writeFileSync(README, next);
+  return 'updated';
 }
 
 // ── Report ───────────────────────────────────────────────────────────────────
@@ -102,10 +148,34 @@ lines.push('');
 
 if (front) {
   lines.push(
-    `Headline figure: **${front.lines.pct} %** — the \`main.js\` line coverage, the ` +
+    `Badge figure: **${front.lines.pct} %** — the \`main.js\` line coverage, the ` +
       'same figure the `main.js` row of `make coverage-e2e` prints locally.',
     ''
   );
 }
 
 process.stdout.write(`${lines.join('\n')}\n`);
+
+// ── Badge ────────────────────────────────────────────────────────────────────
+
+if (process.argv.includes('--write-badge')) {
+  // Unlike the report above, this one is not allowed to shrug: it is invoked by
+  // hand, and a silent no-op would leave the author believing the README was
+  // refreshed when nothing was measured.
+  if (!front) {
+    process.stderr.write(
+      'coverage-report: no frontend report at coverage/coverage-report.json — ' +
+        'run `make coverage-e2e` first (or `make coverage-badge`, which does both).\n'
+    );
+    process.exit(1);
+  }
+  const result = writeBadge(front.lines.pct);
+  if (result === 'no-markers') {
+    process.stderr.write(
+      `coverage-report: no ${BADGE_START} … ${BADGE_END} markers in README.md, ` +
+        'nothing written.\n'
+    );
+    process.exit(1);
+  }
+  process.stderr.write(`coverage-report: badge ${result} (${front.lines.pct} %)\n`);
+}
