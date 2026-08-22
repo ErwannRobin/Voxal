@@ -974,3 +974,359 @@ test.describe('the blur strength preference', () => {
     expect(seen.stored).toBe(0.2);
   });
 });
+
+// --- the detection controls ---------------------------------------------------
+//
+// Three preferences over the cut-out itself rather than over the picture behind
+// it: how hard its edge is, how often it is recomputed, and whether the
+// detector's own copy of the frame is brightened in a dim room. All three are
+// uniforms or a timer inside a pipeline that is already running, which is the
+// property the mid-call tests below exist to defend — a preference that swapped
+// a track would blink every peer's tile each time somebody dragged a slider.
+
+test.describe('the edge sharpness preference', () => {
+  // The tuned constants are the MIDDLE of the slider. If the midpoint drifts
+  // off them, everybody who never opened the setting silently gets a different
+  // cut-out than the one the pipeline was tuned for.
+  test('its midpoint is exactly the tuned constants, and the three numbers move together', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const cfg = VideoEffects._edgeConfig;
+      const at = (s) => VideoEffects._edgeProfile(s);
+      return { cfg, mid: at(cfg.def), soft: at(0), sharp: at(1), out: [at(-1), at(9), at('x')] };
+    });
+    expect(seen.mid.feather).toBeCloseTo(seen.cfg.feather, 9);
+    expect(seen.mid.dilate).toBeCloseTo(seen.cfg.dilate, 9);
+    expect(seen.mid.lo).toBeCloseTo(seen.cfg.lo, 9);
+    expect(seen.mid.hi).toBeCloseTo(seen.cfg.hi, 9);
+
+    // Sharper: a narrower gradient AND a narrower window mapping it. Moving one
+    // without the other is the mistake the MASK_FEATHER comment warns about — a
+    // narrow window on a wide feather is a hard edge with a wasted uniform.
+    expect(seen.sharp.feather).toBeLessThan(seen.mid.feather);
+    expect(seen.mid.feather).toBeLessThan(seen.soft.feather);
+    const width = (p) => p.hi - p.lo;
+    expect(width(seen.sharp)).toBeLessThan(width(seen.mid));
+    expect(width(seen.mid)).toBeLessThan(width(seen.soft));
+
+    // A softer edge is dilated FURTHER, not less: the soft band has to stay
+    // outside the subject however wide it gets.
+    expect(seen.soft.dilate).toBeGreaterThan(seen.sharp.dilate);
+
+    // The window never inverts or leaves the confidence range, even at the ends.
+    [seen.soft, seen.mid, seen.sharp].forEach((p) => {
+      expect(p.lo).toBeGreaterThanOrEqual(0.05);
+      expect(p.hi).toBeLessThanOrEqual(0.95);
+      expect(p.hi).toBeGreaterThan(p.lo);
+    });
+    // Out of range in both directions, and outright junk, all land inside.
+    seen.out.forEach((p) => {
+      expect(p.hi).toBeGreaterThan(p.lo);
+      expect(p.feather).toBeGreaterThan(0);
+    });
+  });
+
+  test('round-trips, clamps, and stores its default as an absence', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const def = VideoEffects.SHARPNESS_DEFAULT;
+      const initial = VideoEffects.readSharpness();
+      VideoEffects.writeSharpness(0.8);
+      const set = [VideoEffects.readSharpness(), localStorage.getItem(VideoEffects.SHARPNESS_KEY)];
+      VideoEffects.writeSharpness(4);
+      const high = VideoEffects.readSharpness();
+      VideoEffects.writeSharpness(-1);
+      const low = VideoEffects.readSharpness();
+      localStorage.setItem(VideoEffects.SHARPNESS_KEY, 'not-a-number');
+      const junk = VideoEffects.readSharpness();
+      VideoEffects.writeSharpness(def);
+      return {
+        def, initial, set, high, low, junk,
+        cleared: localStorage.getItem(VideoEffects.SHARPNESS_KEY),
+        roundTrip: [0, 25, 50, 75, 100].map(
+          (p) => VideoEffects.sliderFromSharpness(VideoEffects.sharpnessFromSlider(p))),
+        labels: [0, 0.5, 1].map((v) => VideoEffects.sharpnessLabel(v)),
+      };
+    });
+    expect(seen.initial).toBe(seen.def);
+    expect(seen.set).toEqual([0.8, '0.8']);
+    expect(seen.high).toBe(1);
+    expect(seen.low).toBe(0);
+    expect(seen.junk).toBe(seen.def);
+    expect(seen.cleared).toBe(null);
+    expect(seen.roundTrip).toEqual([0, 25, 50, 75, 100]);
+    expect(seen.labels).toEqual(['Very soft', 'Balanced', 'Sharp']);
+  });
+
+  test('sits in Video under the blur strength, and moving it stores the value', async ({ page }) => {
+    await page.click('#btn-open-settings');
+    await page.click('#modal-settings [data-target="settings-video"]');
+    const order = await page.evaluate(() => {
+      const card = document.getElementById('settings-video');
+      const strength = document.getElementById('settings-blur-strength');
+      const sharp = document.getElementById('settings-edge-sharpness');
+      return {
+        inVideoCard: !!card && card.contains(sharp),
+        afterStrength: !!(strength.compareDocumentPosition(sharp) &
+                          Node.DOCUMENT_POSITION_FOLLOWING),
+      };
+    });
+    expect(order).toEqual({ inVideoCard: true, afterStrength: true });
+
+    const slider = page.locator('#settings-edge-sharpness input[type="range"]');
+    await expect(slider).toBeVisible();
+    await slider.fill('100');
+    await slider.dispatchEvent('input');
+    expect(await page.evaluate(() => VideoEffects.readSharpness())).toBe(1);
+    await expect(page.locator('#settings-edge-sharpness .edge-sharpness-value')).toHaveText('Sharp');
+
+    await slider.fill('0');
+    await slider.dispatchEvent('input');
+    expect(await page.evaluate(() => VideoEffects.readSharpness())).toBe(0);
+  });
+
+  // The claim the whole design rests on: it re-cuts the mask, and it does it
+  // without touching the wire. Measured off the GPU, not trusted from the
+  // constants — the same read the mask-geometry test uses.
+  test('changing it mid-call re-cuts the mask and swaps nothing', async ({ page }) => {
+    await seedEffectsRoom(page);
+    const seen = await page.evaluate(async () => {
+      VideoEffects.writeMode('blur');
+      await startVideoShare();
+
+      function band() {
+        const p = VideoEffects.active(), gl = p.gl, W = p.segW, H = p.segH;
+        const buf = new Uint8Array(W * H * 4);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, p.fbMaskA);
+        gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        const row = Math.round(H * 0.6);
+        const prof = [];
+        for (let x = 0; x < W; x++) prof.push(buf[((row * W) + x) * 4] / 255);
+        const cross = (thr) => { for (let x = 0; x < prof.length; x++) if (prof[x] >= thr) return x; return -1; };
+        // The ramp the composite maps, in texels, at this processor's own window.
+        return cross(p.edge.hi) - cross(p.edge.lo);
+      }
+      async function settle() { await new Promise((r) => setTimeout(r, 500)); }
+
+      await settle();
+      const track = localVideoStream.getVideoTracks()[0];
+      window.__swaps = [];
+
+      VideoEffects.setSharpness(1);
+      await settle();
+      const sharp = { band: band(), edge: VideoEffects.active().edge };
+      VideoEffects.setSharpness(0);
+      await settle();
+      const soft = { band: band(), edge: VideoEffects.active().edge };
+
+      return {
+        sharp, soft,
+        swaps: window.__swaps.length,
+        sameTrack: localVideoStream.getVideoTracks()[0] === track,
+        stored: VideoEffects.readSharpness(),
+      };
+    });
+    // It reached the processor…
+    expect(seen.sharp.edge.feather).toBeLessThan(seen.soft.edge.feather);
+    // …and the mask on the GPU actually changed shape, not just the numbers.
+    expect(seen.sharp.band).toBeLessThan(seen.soft.band);
+    expect(seen.swaps).toBe(0);
+    expect(seen.sameTrack).toBe(true);
+    expect(seen.stored).toBe(0);
+  });
+});
+
+test.describe('the detection accuracy preference', () => {
+  test('every rung is a full ladder, descending to the same floor', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const ids = VideoEffects.QUALITIES.map((q) => q.id);
+      const ladders = {};
+      ids.forEach((id) => {
+        ladders[id] = { desktop: VideoEffects._segHzFor(id, false), mobile: VideoEffects._segHzFor(id, true) };
+      });
+      // A processor's ladder is its own mutable state; handing out the shared
+      // table would let one call's step-down rewrite it for every later one.
+      const a = VideoEffects._segHzFor('balanced', false);
+      a[0] = 999;
+      return { ids, ladders, shared: VideoEffects._segHzFor('balanced', false)[0], def: VideoEffects.QUALITY_DEFAULT };
+    });
+    expect(seen.ids).toEqual(['battery', 'balanced', 'high']);
+    expect(seen.def).toBe('balanced');
+    expect(seen.shared).not.toBe(999);
+    Object.keys(seen.ladders).forEach((id) => {
+      ['desktop', 'mobile'].forEach((k) => {
+        const rungs = seen.ladders[id][k];
+        expect(rungs.length).toBeGreaterThan(0);
+        expect(rungs[rungs.length - 1]).toBe(6);
+        for (let i = 1; i < rungs.length; i++) expect(rungs[i]).toBeLessThan(rungs[i - 1]);
+        // A phone never starts faster than a desktop on the same setting.
+        expect(rungs[0]).toBeLessThanOrEqual(seen.ladders[id].desktop[0]);
+      });
+    });
+    // Higher accuracy means starting faster, which is the whole of the claim.
+    expect(seen.ladders.high.desktop[0]).toBeGreaterThan(seen.ladders.balanced.desktop[0]);
+    expect(seen.ladders.balanced.desktop[0]).toBeGreaterThan(seen.ladders.battery.desktop[0]);
+  });
+
+  test('round-trips, rejects junk, and stores its default as an absence', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const initial = VideoEffects.readQuality();
+      VideoEffects.writeQuality('high');
+      const set = [VideoEffects.readQuality(), localStorage.getItem(VideoEffects.QUALITY_KEY)];
+      localStorage.setItem(VideoEffects.QUALITY_KEY, 'ludicrous');
+      const junk = VideoEffects.readQuality();
+      VideoEffects.writeQuality('balanced');
+      return { initial, set, junk, cleared: localStorage.getItem(VideoEffects.QUALITY_KEY) };
+    });
+    expect(seen.initial).toBe('balanced');
+    expect(seen.set).toEqual(['high', 'high']);
+    expect(seen.junk).toBe('balanced');
+    expect(seen.cleared).toBe(null);
+  });
+
+  test('picking a rung in Settings stores it and marks it', async ({ page }) => {
+    await page.click('#btn-open-settings');
+    await page.click('#modal-settings [data-target="settings-video"]');
+    const seg = page.locator('#settings-detection-quality');
+    await expect(seg.locator('button')).toHaveCount(3);
+    await seg.locator('button[data-quality="high"]').click();
+    expect(await page.evaluate(() => VideoEffects.readQuality())).toBe('high');
+    await expect(seg.locator('button[data-quality="high"]')).toHaveAttribute('aria-checked', 'true');
+    await expect(seg.locator('button[data-quality="balanced"]')).toHaveAttribute('aria-checked', 'false');
+  });
+
+  // Changing it retimes the inference clock and nothing else — no
+  // reallocation, no track swap. It also restarts at the top of the new
+  // ladder, because the rungs differ between ladders and a device that needs
+  // stepping down will be stepped down again within one measurement window.
+  test('changing it mid-call retimes inference and swaps nothing', async ({ page }) => {
+    await seedEffectsRoom(page);
+    const seen = await page.evaluate(async () => {
+      VideoEffects.writeMode('blur');
+      await startVideoShare();
+      await new Promise((r) => setTimeout(r, 300));
+      const p = VideoEffects.active();
+      const track = localVideoStream.getVideoTracks()[0];
+      window.__swaps = [];
+
+      // Pretend the device had already been stepped down once.
+      p.segStep = 1;
+      p.segInterval = 1000 / p.segHzSteps[1];
+      const steppedDown = p.segInterval;
+
+      VideoEffects.setQuality('high');
+      const high = { interval: p.segInterval, step: p.segStep, top: p.segHzSteps[0] };
+      VideoEffects.setQuality('battery');
+      const battery = { interval: p.segInterval, step: p.segStep, top: p.segHzSteps[0] };
+
+      return {
+        steppedDown, high, battery,
+        swaps: window.__swaps.length,
+        sameTrack: localVideoStream.getVideoTracks()[0] === track,
+      };
+    });
+    expect(seen.high.interval).toBeCloseTo(1000 / seen.high.top, 6);
+    expect(seen.high.step).toBe(0);
+    expect(seen.battery.interval).toBeGreaterThan(seen.high.interval);
+    expect(seen.swaps).toBe(0);
+    expect(seen.sameTrack).toBe(true);
+  });
+});
+
+test.describe('adapting the detector to low light', () => {
+  test('asks for gain only where there is not enough light, and never more than the cap', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const cfg = VideoEffects._lightConfig;
+      const at = (m) => VideoEffects._lightPlan(m);
+      return { cfg, bright: at(0.8), ok: at(cfg.target), dim: at(0.2), dark: at(0.01), junk: [at(0), at(-1), at('x')] };
+    });
+    // A well-lit frame is left alone entirely — gain 1 sets no canvas filter.
+    expect(seen.bright).toEqual({ gain: 1, contrast: 1 });
+    expect(seen.ok.gain).toBeCloseTo(1, 6);
+    // A dim one is brought to the target, a black one is capped rather than
+    // multiplied into noise.
+    expect(seen.dim.gain).toBeCloseTo(seen.cfg.target / 0.2, 6);
+    expect(seen.dark.gain).toBe(seen.cfg.maxGain);
+    // The contrast bump rides along with the gain and stays modest.
+    expect(seen.dim.contrast).toBeGreaterThan(1);
+    expect(seen.dark.contrast).toBeLessThan(1.3);
+    seen.junk.forEach((p) => expect(p).toEqual({ gain: 1, contrast: 1 }));
+  });
+
+  test('defaults on, and the toggle stores the opt-out', async ({ page }) => {
+    expect(await page.evaluate(() => VideoEffects.readLightAdapt())).toBe(true);
+    await page.click('#btn-open-settings');
+    await page.click('#modal-settings [data-target="settings-video"]');
+    const btn = page.locator('#settings-light-adapt .toggle-btn');
+    await expect(btn).toHaveAttribute('aria-checked', 'true');
+    await btn.click();
+    expect(await page.evaluate(() => [
+      VideoEffects.readLightAdapt(), localStorage.getItem(VideoEffects.LIGHT_ADAPT_KEY),
+    ])).toEqual([false, 'off']);
+    await btn.click();
+    // Back on is stored as an absence, like every other default here.
+    expect(await page.evaluate(() => [
+      VideoEffects.readLightAdapt(), localStorage.getItem(VideoEffects.LIGHT_ADAPT_KEY),
+    ])).toEqual([true, null]);
+  });
+
+  // The part that would be a genuine privacy bug if it were wrong: the gain is
+  // applied to the segmenter's own private downscale, never to the frame the
+  // call sees. A dark room must stay dark on the wire.
+  test('brightens what the detector sees, and nothing that anyone else sees', async ({ page }) => {
+    await seedEffectsRoom(page);
+    await page.evaluate(() => {
+      // A very dark camera: flat #111, with the moving marker kept in the top
+      // corner so it stays outside the centre box the probe measures.
+      window.__mkVideoStream = function () {
+        const c = document.createElement('canvas');
+        c.width = 320; c.height = 240;
+        const ctx = c.getContext('2d');
+        let n = 0;
+        const paint = () => {
+          ctx.fillStyle = '#111';
+          ctx.fillRect(0, 0, 320, 240);
+          ctx.fillStyle = '#151515';
+          ctx.fillRect((n++ * 7) % 320, 0, 2, 2);
+        };
+        paint();
+        const stream = c.captureStream(15);
+        const timer = setInterval(paint, 40);
+        stream.getVideoTracks()[0].addEventListener('ended', () => clearInterval(timer));
+        return stream;
+      };
+    });
+
+    const seen = await page.evaluate(async () => {
+      VideoEffects.writeMode('blur');
+      await startVideoShare();
+      const p = VideoEffects.active();
+      // The gain is eased in at LIGHT_SMOOTH per sample, so give it a few.
+      const deadline = Date.now() + 6000;
+      while (p.lightGain < 1.3 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+
+      const probe = document.createElement('canvas');
+      probe.width = p.canvas.width; probe.height = p.canvas.height;
+      const ctx = probe.getContext('2d');
+      ctx.drawImage(p.canvas, 0, 0);
+      // Left edge, mid-height: outside the stub's oval, so this is the blurred
+      // background — the darkest thing the far side would receive.
+      const corner = Array.from(ctx.getImageData(4, Math.floor(p.canvas.height / 2), 1, 1).data).slice(0, 3);
+
+      const dark = { gain: p.lightGain, filter: p.segCtx.filter, mean: p.lightMean, corner };
+      VideoEffects.setLightAdapt(false);
+      await new Promise((r) => setTimeout(r, 400));
+      return { dark, offGain: p.lightGain, offFilter: p.segCtx.filter, stored: VideoEffects.readLightAdapt() };
+    });
+
+    // The detector's copy is brightened…
+    expect(seen.dark.mean).toBeLessThan(0.2);
+    expect(seen.dark.gain).toBeGreaterThan(1.3);
+    expect(seen.dark.filter).toMatch(/brightness\(/);
+    // …and the published picture is not: #111 is 17, and 2.6x would be 44.
+    seen.dark.corner.forEach((c) => expect(c).toBeLessThan(30));
+    // Switching it off puts the frame back untouched.
+    expect(seen.offGain).toBe(1);
+    expect(seen.offFilter).toBe('none');
+    expect(seen.stored).toBe(false);
+  });
+});

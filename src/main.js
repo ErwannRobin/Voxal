@@ -6163,6 +6163,12 @@ var VIDEO_BACKGROUND_STORAGE_KEY =
   (typeof VideoEffects === 'undefined') ? null : VideoEffects.STORAGE_KEY;
 var VIDEO_BLUR_STRENGTH_KEY =
   (typeof VideoEffects === 'undefined') ? null : VideoEffects.STRENGTH_KEY;
+var VIDEO_EDGE_SHARPNESS_KEY =
+  (typeof VideoEffects === 'undefined') ? null : VideoEffects.SHARPNESS_KEY;
+var VIDEO_DETECTION_QUALITY_KEY =
+  (typeof VideoEffects === 'undefined') ? null : VideoEffects.QUALITY_KEY;
+var VIDEO_LIGHT_ADAPT_KEY =
+  (typeof VideoEffects === 'undefined') ? null : VideoEffects.LIGHT_ADAPT_KEY;
 
 function videoBackgroundMode() {
   return (typeof VideoEffects === 'undefined') ? 'off' : VideoEffects.readMode();
@@ -9581,11 +9587,16 @@ async function flipCamera() {
 
 var _videoBgPickers = [];
 var _videoBgStrength = null;
+var _videoBgSharpness = null;
+var _videoBgQuality = null;
+var _videoBgLight = null;
 
 function syncVideoBackgroundControls() {
   var mode = videoBackgroundMode();
   _videoBgPickers.forEach(function(p) { try { p.sync(mode); } catch (e) { /* ignore */ } });
-  if (_videoBgStrength) { try { _videoBgStrength.sync(); } catch (e) { /* ignore */ } }
+  [_videoBgStrength, _videoBgSharpness, _videoBgQuality, _videoBgLight].forEach(function(c) {
+    if (c) { try { c.sync(); } catch (e) { /* ignore */ } }
+  });
   // The room control lives on the self-view tile; refreshing the stage is what
   // re-reads its state.
   if (inRoom) updatePeerList();
@@ -9710,6 +9721,18 @@ function initVideoBackgroundUI() {
   // announced.
   _videoBgStrength = VideoEffects.renderStrength(
     document.getElementById('settings-blur-strength'));
+
+  // The three detection controls beneath it. Same rule as the strength: each
+  // one is uniforms or a timer inside a pipeline that is already running, so
+  // changing any of them mid-call swaps no track and announces nothing.
+  _videoBgSharpness = VideoEffects.renderSharpness(
+    document.getElementById('settings-edge-sharpness'));
+  _videoBgQuality = VideoEffects.renderQuality(
+    document.getElementById('settings-detection-quality'));
+  _videoBgLight = VideoEffects.renderLightAdapt(
+    document.getElementById('settings-light-adapt'),
+    { id: 'btn-light-adapt', label: 'Adapt to low light',
+      title: 'Brighten the detector\'s copy of the picture in a dim room' });
 
   var pop = document.getElementById('video-bg-popover');
   if (pop) pop.addEventListener('click', function(ev) { ev.stopPropagation(); });
@@ -14026,7 +14049,8 @@ window.addEventListener('DOMContentLoaded', function() {
                           SPEAKER_DEVICE_KEY, JITTER_BUFFER_KEY, ECHO_BRIDGE_REQUEST_KEY,
                           NOISE_SUPPRESSION_KEY, MIC_DEVICE_KEY, VIDEO_ROUTING_KEY,
                           NETWORK_USAGE_REQUEST_KEY, VIDEO_BACKGROUND_STORAGE_KEY,
-                          VIDEO_BLUR_STRENGTH_KEY];
+                          VIDEO_BLUR_STRENGTH_KEY, VIDEO_EDGE_SHARPNESS_KEY,
+                          VIDEO_DETECTION_QUALITY_KEY, VIDEO_LIGHT_ADAPT_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
     if (e.key === VIDEO_BLUR_STRENGTH_KEY) {
       // Changed from the desktop preferences window, which stores but cannot
@@ -14034,6 +14058,25 @@ window.addEventListener('DOMContentLoaded', function() {
       // whole of the change: no track swap, so peers see nothing at all.
       if (VideoEffects.active()) VideoEffects.active().applyStrength();
       if (_videoBgStrength) _videoBgStrength.sync();
+      return;
+    }
+    if (e.key === VIDEO_EDGE_SHARPNESS_KEY || e.key === VIDEO_DETECTION_QUALITY_KEY ||
+        e.key === VIDEO_LIGHT_ADAPT_KEY) {
+      // The other three halves of the same bridge. Each re-reads one
+      // preference into the running processor — uniforms for the edge, the
+      // segmentation timer for the accuracy, a flag for the low-light gain —
+      // and none of them touches the published track.
+      var proc = VideoEffects.active();
+      if (proc) {
+        try {
+          if (e.key === VIDEO_EDGE_SHARPNESS_KEY) proc.applyEdge();
+          else if (e.key === VIDEO_DETECTION_QUALITY_KEY) proc.applyQuality();
+          else proc.applyLightAdapt();
+        } catch (err) { /* a preference must never take the call's video down */ }
+      }
+      if (e.key === VIDEO_EDGE_SHARPNESS_KEY && _videoBgSharpness) _videoBgSharpness.sync();
+      else if (e.key === VIDEO_DETECTION_QUALITY_KEY && _videoBgQuality) _videoBgQuality.sync();
+      else if (e.key === VIDEO_LIGHT_ADAPT_KEY && _videoBgLight) _videoBgLight.sync();
       return;
     }
     if (e.key === VIDEO_BACKGROUND_STORAGE_KEY) {

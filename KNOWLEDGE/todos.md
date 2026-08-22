@@ -34,7 +34,9 @@ Tauri build, driven by `tauri-driver`. Nothing above is reachable from the
 
 ## 🎥 Camera background effects — follow-ups
 
-Shipped: blur, four generated presets, custom image. See `docs/video-effects.md`.
+Shipped: blur, four generated presets, custom image, blur strength, edge
+sharpness, detection accuracy and the low-light adaptation. See
+`docs/video-effects.md`.
 
 Deliberately left for later:
 
@@ -47,6 +49,15 @@ Deliberately left for later:
   `getSupportedConstraints().backgroundBlur` *and* the track's capabilities, and
   fall through to the WASM path everywhere else. Only covers blur — never
   images — so it is an optimisation, not a replacement.
+- **Tune the low-light response on a real dark room.** `LIGHT_TARGET` (0.42),
+  the 2.6x gain cap and the contrast bump that rides along with it are reasoned
+  from how the model degrades, not measured against a face in a dim room. The
+  centre-box probe is the part most worth checking: it is right for a webcam
+  framing and could be wrong for a phone held at arm's length.
+- **Consider a "match my lighting" auto-sharpness.** The edge that reads best in
+  a bright room is not the one that reads best in a dim one, and the pipeline
+  now measures the light anyway. Only worth doing if the manual slider turns out
+  to be a knob people fiddle with rather than set once.
 - **Real-device thermal testing.** The adaptive step-down (15 → 10 → 6 Hz, then
   give up) is tuned by reasoning, not by measurement. Needs a sustained call on
   a mid-range Android and an older iPhone to confirm the thresholds are right.

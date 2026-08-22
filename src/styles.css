@@ -881,21 +881,25 @@ html[data-theme="light"] .debug-consent-text strong { color: #b45309; }
   white-space: nowrap;
 }
 
-/* Background blur strength slider (Settings → Advanced).
-   Rendered by VideoEffects.renderStrength() into both index.html and
-   settings.html, which is why this lives here rather than inline in either. */
-.blur-strength-row {
+/* The Settings → Video sliders: background blur strength and cut-out edge
+   sharpness. Both are rendered by video-effects.js (renderStrength() /
+   renderSharpness(), one builder) into index.html and settings.html alike,
+   which is why this lives here rather than inline in either. */
+.blur-strength-row,
+.edge-sharpness-row {
   display: flex;
   align-items: center;
   gap: 10px;
   margin: 6px 0 2px;
 }
-.blur-strength-row input[type="range"] {
+.blur-strength-row input[type="range"],
+.edge-sharpness-row input[type="range"] {
   flex: 1;
   min-width: 0;
   accent-color: var(--accent);
 }
-.blur-strength-value {
+.blur-strength-value,
+.edge-sharpness-value {
   font-family: 'SF Mono', 'Fira Code', monospace;
   font-size: 11px;
   color: var(--text);
@@ -3294,7 +3298,11 @@ html.is-native #settings-handedness { display: none; }
 html.is-native #btn-close-settings-footer { display: none; }
 
 /* Theme toggle — segmented control */
-.theme-toggle {
+/* Segmented control. The theme picker's look, reused by
+   VideoEffects.renderQuality() for the detection-accuracy rungs — one
+   appearance for "pick one of a few", rather than a second one that drifts. */
+.theme-toggle,
+.fx-seg {
   display: flex;
   gap: 2px;
   margin-top: 2px;
@@ -3303,7 +3311,8 @@ html.is-native #btn-close-settings-footer { display: none; }
   border-radius: 999px;
   padding: 2px;
 }
-.theme-toggle button {
+.theme-toggle button,
+.fx-seg button {
   flex: 1;
   padding: 6px 8px;
   border: none;
@@ -3314,11 +3323,13 @@ html.is-native #btn-close-settings-footer { display: none; }
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
-.theme-toggle button.active {
+.theme-toggle button.active,
+.fx-seg button.active {
   background: var(--accent);
   color: #fff;
 }
-.theme-toggle button:hover:not(.active) {
+.theme-toggle button:hover:not(.active),
+.fx-seg button:hover:not(.active) {
   background: var(--bg-surface);
   color: var(--text);
 }

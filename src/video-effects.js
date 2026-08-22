@@ -96,6 +96,36 @@ var VideoEffects = (function () {
   var MASK_EDGE_LO  = 0.12;
   var MASK_EDGE_HI  = 0.78;
 
+  // Those three are the MIDDLE of a slider, not a fixed truth.
+  //
+  // "How hard should the cutout be" is a matter of taste and of what is behind
+  // you: a plain wall forgives a crisp edge, a cluttered room does not, and
+  // curly hair against a bright window is a different problem again from a
+  // shaved head against a door. So the tuned values above are what
+  // `edge-sharpness` 0.5 produces, and the preference moves the whole profile
+  // — feather, smoothstep window and dilate together, because moving one
+  // without the others is exactly the mistake the MASK_FEATHER comment warns
+  // about.
+  //
+  // Every one of the three is a shader uniform of a pass that already runs, so
+  // this costs nothing to change mid-call and swaps no track.
+  var SHARPNESS_KEY     = 'edge-sharpness';
+  var SHARPNESS_DEFAULT = 0.5;
+
+  // How far the ends reach, as a ratio against the midpoint. The feather moves
+  // further than the window does: a wide window on a narrow feather is a hard
+  // edge with a wasted uniform, so the window follows the gradient it is
+  // mapping rather than leading it.
+  var SHARP_FEATHER_RANGE = 2.0;
+  var SHARP_WINDOW_RANGE  = 1.6;
+
+  // The window keeps its centre and its low bias while it widens and narrows —
+  // see the FRAG_COMPOSITE comment for why 0.45 rather than 0.5 — and the
+  // dilate keeps the same relationship to the feather it has at the midpoint:
+  // it must cover half the soft band plus the model's own inward bias.
+  var MASK_EDGE_MID    = (MASK_EDGE_LO + MASK_EDGE_HI) / 2;
+  var MASK_DILATE_BASE = MASK_DILATE - MASK_FEATHER;
+
   // HOW STRONG THE BLUR LOOKS IS ONE NUMBER: the Gaussian's sigma, as a
   // fraction of the frame's long side. Everything else is derived from it.
   //
@@ -146,9 +176,55 @@ var VideoEffects = (function () {
   var MASK_ALPHA_UP   = 0.85;
   var MASK_ALPHA_DOWN = 0.20;
 
-  // Segmentation rates, in Hz, stepped down under load in this order.
-  var SEG_HZ_DESKTOP = [15, 10, 6];
-  var SEG_HZ_MOBILE  = [10, 6];
+  // Segmentation rates, in Hz, stepped down under load in the order listed.
+  //
+  // This ladder IS the accuracy knob, and it is the honest one. The mask's
+  // working size is not: ImageSegmenter resizes whatever you hand it to the
+  // model's own 256-wide input, so a bigger seg canvas buys a bigger readback
+  // and not one extra pixel of detail. What re-detecting more often actually
+  // buys is a mask that lags a moving head by less — the lag is one
+  // segmentation interval, so 24 Hz sees ~40 ms of it where 10 Hz sees 100 —
+  // and less of the temporal blend's smoothing, since the blend is per
+  // inference.
+  //
+  // Each entry is a full ladder: the first rate is what the device starts at,
+  // and measure() walks down the rest as it fails to keep up. The bottom rung
+  // is 6 Hz in every mode, because below that the effect is worse than not
+  // having it and giveUp() is the right answer instead.
+  var QUALITY_KEY     = 'detection-quality';
+  var QUALITY_DEFAULT = 'balanced';
+  var SEG_HZ = {
+    battery:  { desktop: [10, 6],         mobile: [6] },
+    balanced: { desktop: [15, 10, 6],     mobile: [10, 6] },
+    high:     { desktop: [24, 15, 10, 6], mobile: [15, 10, 6] }
+  };
+  var QUALITIES = [
+    { id: 'battery',  label: 'Battery',  hint: 'Fewest inferences' },
+    { id: 'balanced', label: 'Balanced', hint: 'The default' },
+    { id: 'high',     label: 'High',     hint: 'Tracks fast movement' }
+  ];
+
+  // --- low light ------------------------------------------------------------
+  //
+  // The selfie model is trained on ordinary indoor light and degrades in the
+  // dark exactly where it hurts: confidence collapses toward the middle of the
+  // range, the mask's edge goes soft and noisy, and the temporal blend turns
+  // that noise into a crawling outline. Brightening the frame first is worth
+  // more than any amount of downstream filtering, because it hands the model
+  // back the contrast it was trained on.
+  //
+  // Two things this deliberately does NOT do. It never touches the published
+  // picture — only the copy the segmenter sees, which is already a private
+  // 256-wide downscale — so nobody in the call sees you get brighter. And it
+  // never darkens: a well-lit scene gets gain 1.0, which sets no filter at all
+  // and therefore costs nothing.
+  var LIGHT_ADAPT_KEY = 'light-adapt';
+  var LIGHT_TARGET    = 0.42;   // mean luma, 0-1, that the segmenter's input aims for
+  var LIGHT_GAIN_MAX  = 2.6;
+  var LIGHT_SAMPLE_MS = 400;    // how often the scene is measured
+  var LIGHT_SMOOTH    = 0.25;   // EMA weight per sample — stops the gain pumping
+  var LIGHT_GRID_W    = 12;     // the luma probe is 12x8 = 96 pixels
+  var LIGHT_GRID_H    = 8;
 
   var PRESETS = [
     { id: 'aurora', label: 'Aurora', src: 'assets/backgrounds/aurora.webp' },
@@ -232,6 +308,147 @@ var VideoEffects = (function () {
     v = clampStrength(v);
     var word = v < 0.035 ? 'Subtle' : v < 0.065 ? 'Medium' : v < 0.12 ? 'Strong' : 'Maximum';
     return word + ' · ' + (v * 100).toFixed(1) + '%';
+  }
+
+  // --- edge sharpness: read, write, and the profile it derives --------------
+
+  function clampSharpness(v) {
+    v = Number(v);
+    if (!isFinite(v)) return SHARPNESS_DEFAULT;
+    return Math.min(1, Math.max(0, v));
+  }
+
+  function readSharpness() {
+    try {
+      var raw = localStorage.getItem(SHARPNESS_KEY);
+      if (raw === null || raw === '') return SHARPNESS_DEFAULT;
+      return clampSharpness(raw);
+    } catch (e) { return SHARPNESS_DEFAULT; }
+  }
+
+  function writeSharpness(v) {
+    v = clampSharpness(v);
+    try {
+      // Stored as an absence at the default, the way the mode and the strength
+      // are — so a later retune of the midpoint reaches everyone who never
+      // moved the slider.
+      if (Math.abs(v - SHARPNESS_DEFAULT) < 1e-9) localStorage.removeItem(SHARPNESS_KEY);
+      else localStorage.setItem(SHARPNESS_KEY, String(v));
+    } catch (e) { /* private mode — it still applies for this session */ }
+    return v;
+  }
+
+  // The one place the three edge numbers are derived, so they can never be
+  // moved apart. Linear travel, unlike the blur's: this is not a radius the eye
+  // reads as a ratio, it is a blend between two tunings.
+  //
+  // Exported as _edgeProfile and pinned by a test at s=0.5, because a profile
+  // whose midpoint has drifted off the tuned constants is a change nobody
+  // asked for applied to everybody who never opened the setting.
+  function edgeProfile(s) {
+    s = clampSharpness(s);
+    var k = Math.pow(SHARP_FEATHER_RANGE, 1 - 2 * s);
+    var feather = MASK_FEATHER * k;
+    var width = (MASK_EDGE_HI - MASK_EDGE_LO) * Math.pow(SHARP_WINDOW_RANGE, 1 - 2 * s);
+    return {
+      feather: feather,
+      // Softer means a wider soft band, and the band has to stay OUTSIDE the
+      // subject — so a softer edge is dilated further, not less.
+      dilate: MASK_DILATE_BASE + feather,
+      lo: Math.max(0.05, MASK_EDGE_MID - width / 2),
+      hi: Math.min(0.95, MASK_EDGE_MID + width / 2)
+    };
+  }
+
+  function sharpnessFromSlider(pos) {
+    return clampSharpness((Number(pos) || 0) / 100);
+  }
+
+  function sliderFromSharpness(v) {
+    return Math.round(clampSharpness(v) * 100);
+  }
+
+  function sharpnessLabel(v) {
+    v = clampSharpness(v);
+    if (v < 0.2) return 'Very soft';
+    if (v < 0.4) return 'Soft';
+    if (v < 0.6) return 'Balanced';
+    if (v < 0.8) return 'Crisp';
+    return 'Sharp';
+  }
+
+  // --- detection accuracy: read, write, and the ladder it picks -------------
+
+  function normalizeQuality(q) {
+    q = String(q || '');
+    return SEG_HZ[q] ? q : QUALITY_DEFAULT;
+  }
+
+  function readQuality() {
+    try { return normalizeQuality(localStorage.getItem(QUALITY_KEY)); }
+    catch (e) { return QUALITY_DEFAULT; }
+  }
+
+  function writeQuality(q) {
+    q = normalizeQuality(q);
+    try {
+      if (q === QUALITY_DEFAULT) localStorage.removeItem(QUALITY_KEY);
+      else localStorage.setItem(QUALITY_KEY, q);
+    } catch (e) { /* private mode — it still applies for this session */ }
+    return q;
+  }
+
+  // A copy, always: the returned array becomes a processor's mutable ladder
+  // position, and handing out the shared constant would let one call's
+  // step-down rewrite the table for every later one.
+  function segHzFor(quality, mobile) {
+    var row = SEG_HZ[normalizeQuality(quality)];
+    return (mobile ? row.mobile : row.desktop).slice();
+  }
+
+  function qualityLabel(q) {
+    q = normalizeQuality(q);
+    for (var i = 0; i < QUALITIES.length; i++) if (QUALITIES[i].id === q) return QUALITIES[i].label;
+    return q;
+  }
+
+  // --- low light: read, write, and the gain it asks for ---------------------
+
+  function readLightAdapt() {
+    // On unless switched off, so the people it helps most — the ones on a
+    // laptop in a dim room, who are also least likely to go looking for a
+    // setting — get it without asking.
+    try { return localStorage.getItem(LIGHT_ADAPT_KEY) !== 'off'; }
+    catch (e) { return true; }
+  }
+
+  function writeLightAdapt(on) {
+    on = !!on;
+    try {
+      if (on) localStorage.removeItem(LIGHT_ADAPT_KEY);
+      else localStorage.setItem(LIGHT_ADAPT_KEY, 'off');
+    } catch (e) { /* private mode — it still applies for this session */ }
+    return on;
+  }
+
+  // Mean luma of the subject's part of the frame -> what to do about it.
+  //
+  // Measured over the CENTRE, not the whole frame, and that is the whole
+  // difference between this helping and this hurting. The case that breaks
+  // segmentation is backlight: a window behind you drags the frame's average
+  // up while leaving your face the darkest thing in it, and a gain computed
+  // from the full-frame average would then darken the one region the model
+  // needs. The centre box is where a webcam's subject is, near enough.
+  //
+  // The contrast bump rides along with the gain rather than being its own
+  // number: brightening a dark frame lifts its noise floor with everything
+  // else, and a little contrast puts the edges back where the model can find
+  // them. Both are 1.0 — i.e. no filter at all — in ordinary light.
+  function lightPlan(meanLuma) {
+    var mean = Number(meanLuma);
+    if (!isFinite(mean) || mean <= 0) return { gain: 1, contrast: 1 };
+    var gain = Math.min(LIGHT_GAIN_MAX, Math.max(1, LIGHT_TARGET / mean));
+    return { gain: gain, contrast: 1 + 0.25 * (gain - 1) / (LIGHT_GAIN_MAX - 1) };
   }
 
   // Long side SEG_LONG, short side to match the frame, both even. A 16:9 camera
@@ -885,11 +1102,23 @@ var VideoEffects = (function () {
     this.stopped = false;
 
     this.segmenter = null;
-    this.segHzSteps = IS_MOBILE ? SEG_HZ_MOBILE : SEG_HZ_DESKTOP;
+    this.segHzSteps = segHzFor(readQuality(), IS_MOBILE);
     this.segStep = 0;
     this.segInterval = 1000 / this.segHzSteps[0];
     this.lastSeg = 0;
     this.lastTs = -1;
+
+    // The three edge numbers, derived together from one preference. Read once
+    // here and refreshed by applyEdge(); the draw loop must not touch
+    // localStorage.
+    this.edge = edgeProfile(readSharpness());
+
+    // Low-light state. gain 1 / contrast 1 means "set no canvas filter at
+    // all", which is both the well-lit case and the unsupported one.
+    this.lightAdapt = readLightAdapt();
+    this.lightGain = 1;
+    this.lightContrast = 1;
+    this.lastLight = 0;
 
     this.frames = 0;
     this.windowStart = 0;
@@ -1031,6 +1260,19 @@ var VideoEffects = (function () {
     this.segCanvas.width = this.segW; this.segCanvas.height = this.segH;
     this.segCtx = this.segCanvas.getContext('2d', { willReadFrequently: false });
 
+    // The luma probe: 96 pixels, read back a couple of times a second. Small
+    // enough that getImageData's synchronous readback is genuinely free, and
+    // large enough to tell a dim room from a bright one and a lit face from a
+    // backlit silhouette. Its own canvas, because the seg canvas is written by
+    // a filtered draw and measuring the *result* of the gain would make the
+    // adaptation a feedback loop.
+    this.lumaCanvas = document.createElement('canvas');
+    this.lumaCanvas.width = LIGHT_GRID_W; this.lumaCanvas.height = LIGHT_GRID_H;
+    this.lumaCtx = this.lumaCanvas.getContext('2d', { willReadFrequently: true });
+    // Canvas filters are what apply the gain. Older WebKit has no ctx.filter at
+    // all, and there the honest answer is to leave the frame alone.
+    this.lightFilterOk = (typeof this.segCtx.filter === 'string');
+
     this.texMaskRaw = texture(gl, this.segW, this.segH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
     // Two pairs, deliberately. S/SB is the temporal blend's own memory; A/B is
     // scratch for the dilate and the feather. Sharing one pair is what let the
@@ -1077,6 +1319,40 @@ var VideoEffects = (function () {
     // The strength is a fraction of the frame and the buffer's long side spans
     // exactly that, so the sigma in texels is the two multiplied.
     this.blurSteps = blurPlan(readStrength() * Math.max(this.blurW, this.blurH));
+  };
+
+  // Re-read the edge preference. Three uniforms of passes that already run, so
+  // this is the same kind of non-event as moving the blur slider: no
+  // reallocation, no track swap, nothing on the wire. The next inference
+  // rebuilds the mask with the new profile, which at 10-24 Hz is immediate.
+  Processor.prototype.applyEdge = function () {
+    this.edge = edgeProfile(readSharpness());
+  };
+
+  // Re-read the accuracy preference and start again at the top of the new
+  // ladder.
+  //
+  // Starting at the top rather than trying to hold the current rung is
+  // deliberate: the rungs are not the same between ladders, and a device that
+  // needed stepping down will be stepped down again within one measurement
+  // window anyway. Resetting that window is part of it — carrying a window
+  // that began under the old rate into a judgement about the new one is how
+  // you get an instant, spurious step-down.
+  Processor.prototype.applyQuality = function () {
+    this.segHzSteps = segHzFor(readQuality(), IS_MOBILE);
+    this.segStep = 0;
+    this.segInterval = 1000 / this.segHzSteps[0];
+    this.frames = 0;
+    this.windowStart = 0;
+    this.slowWindows = 0;
+  };
+
+  // Re-read the low-light preference. Switching it off drops the gain back to
+  // 1 at the next inference, which clears the canvas filter entirely.
+  Processor.prototype.applyLightAdapt = function () {
+    this.lightAdapt = readLightAdapt();
+    if (!this.lightAdapt) { this.lightGain = 1; this.lightContrast = 1; }
+    this.lastLight = 0;
   };
 
   // --- background source ----------------------------------------------------
@@ -1175,6 +1451,13 @@ var VideoEffects = (function () {
       // resampling it — expensive, and lossy in the one direction that clips
       // the subject. The model resizes its input internally anyway, so nothing
       // is lost by doing the downscale ourselves.
+      this.sampleLight(now);
+      if (this.lightFilterOk) {
+        this.segCtx.filter = this.lightGain > 1.01
+          ? 'brightness(' + this.lightGain.toFixed(3) + ') contrast(' +
+            this.lightContrast.toFixed(3) + ')'
+          : 'none';
+      }
       this.segCtx.drawImage(this.video, 0, 0, this.segW, this.segH);
       this.segmenter.segmentForVideo(this.segCanvas, ts, function (result) {
         var masks = result && result.confidenceMasks;
@@ -1190,6 +1473,53 @@ var VideoEffects = (function () {
       this.segFailures = (this.segFailures || 0) + 1;
       if (this.segFailures > 30) this.giveUp('segmentation kept failing');
     }
+  };
+
+  // Measure the scene and ease the gain toward what it asks for.
+  //
+  // On its own clock, not the segmenter's: the room's lighting changes on the
+  // scale of somebody turning a lamp on, and re-measuring every inference
+  // would be work spent to track nothing. Eased rather than applied outright,
+  // because a gain that jumps when you lean forward makes the mask breathe —
+  // and the mask is the only thing this gain is for.
+  Processor.prototype.sampleLight = function (now) {
+    if (!this.lightAdapt || !this.lightFilterOk || !this.lumaCtx) {
+      this.lightGain = 1; this.lightContrast = 1;
+      return;
+    }
+    if (now - this.lastLight < LIGHT_SAMPLE_MS) return;
+    this.lastLight = now;
+
+    var mean;
+    try {
+      this.lumaCtx.drawImage(this.video, 0, 0, LIGHT_GRID_W, LIGHT_GRID_H);
+      var px = this.lumaCtx.getImageData(0, 0, LIGHT_GRID_W, LIGHT_GRID_H).data;
+      // The centre half, in both axes — see lightPlan() for why not the whole
+      // frame.
+      var x0 = Math.floor(LIGHT_GRID_W * 0.25), x1 = Math.ceil(LIGHT_GRID_W * 0.75);
+      var y0 = Math.floor(LIGHT_GRID_H * 0.25), y1 = Math.ceil(LIGHT_GRID_H * 0.75);
+      var sum = 0, n = 0;
+      for (var y = y0; y < y1; y++) {
+        for (var x = x0; x < x1; x++) {
+          var i = (y * LIGHT_GRID_W + x) * 4;
+          // Rec. 709 luma on the encoded values, which is the space the gain
+          // is applied in too.
+          sum += (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
+          n++;
+        }
+      }
+      mean = n ? sum / n : 1;
+    } catch (e) {
+      // A tainted or not-yet-decodable frame is not a reason to leave a stale
+      // gain applied.
+      this.lightGain = 1; this.lightContrast = 1;
+      return;
+    }
+
+    var want = lightPlan(mean);
+    this.lightGain += (want.gain - this.lightGain) * LIGHT_SMOOTH;
+    this.lightContrast += (want.contrast - this.lightContrast) * LIGHT_SMOOTH;
+    this.lightMean = mean;
   };
 
   Processor.prototype.uploadMask = function (data, w, h) {
@@ -1246,11 +1576,11 @@ var VideoEffects = (function () {
     // Separable, like the blur: two passes of a 3-tap max.
     gl.useProgram(this.pDilate);
     this.bindTex(this.pDilate, 'uTex', 0, this.texMaskS);
-    gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), MASK_DILATE / W, 0);
+    gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), this.edge.dilate / W, 0);
     this.drawQuad(this.fbMaskB, W, H);
 
     this.bindTex(this.pDilate, 'uTex', 0, this.texMaskB);
-    gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), 0, MASK_DILATE / H);
+    gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), 0, this.edge.dilate / H);
     this.drawQuad(this.fbMaskA, W, H);
 
     // Feather: blur the dilated mask so the composite's smoothstep has a real
@@ -1260,11 +1590,11 @@ var VideoEffects = (function () {
     // somewhere other than where MASK_DILATE put it.
     gl.useProgram(this.pFeather);
     this.bindTex(this.pFeather, 'uTex', 0, this.texMaskA);
-    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), MASK_FEATHER / W, 0);
+    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), this.edge.feather / W, 0);
     this.drawQuad(this.fbMaskB, W, H);
 
     this.bindTex(this.pFeather, 'uTex', 0, this.texMaskB);
-    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), 0, MASK_FEATHER / H);
+    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), 0, this.edge.feather / H);
     this.drawQuad(this.fbMaskA, W, H);
 
     // texMaskA is the finished mask, by construction rather than by a swap —
@@ -1325,7 +1655,7 @@ var VideoEffects = (function () {
     this.bindTex(this.pComp, 'uImage', 2, this.texImg);
     this.bindTex(this.pComp, 'uMask', 3, this.texMaskA);
     gl.uniform1f(uloc(gl, this.pComp, 'uUseImage'), useImage ? 1 : 0);
-    gl.uniform2f(uloc(gl, this.pComp, 'uEdge'), MASK_EDGE_LO, MASK_EDGE_HI);
+    gl.uniform2f(uloc(gl, this.pComp, 'uEdge'), this.edge.lo, this.edge.hi);
     var x = this.bgXform();
     gl.uniform4f(uloc(gl, this.pComp, 'uBgXform'), x[0], x[1], x[2], x[3]);
     this.drawQuad(null, w, h);
@@ -1482,6 +1812,28 @@ var VideoEffects = (function () {
     v = writeStrength(v);
     if (_active) { try { _active.applyStrength(); } catch (e) { /* ignore */ } }
     return v;
+  }
+
+  // The other three preferences, stored and pushed at whatever is running.
+  // Each one is uniforms or a timer — never a reallocation and never a track
+  // swap — so all three are safe to call on every event of a dragged slider or
+  // a hammered toggle, mid-call included.
+  function setSharpness(v) {
+    v = writeSharpness(v);
+    if (_active) { try { _active.applyEdge(); } catch (e) { /* ignore */ } }
+    return v;
+  }
+
+  function setQuality(q) {
+    q = writeQuality(q);
+    if (_active) { try { _active.applyQuality(); } catch (e) { /* ignore */ } }
+    return q;
+  }
+
+  function setLightAdapt(on) {
+    on = writeLightAdapt(on);
+    if (_active) { try { _active.applyLightAdapt(); } catch (e) { /* ignore */ } }
+    return on;
   }
 
   function active() { return _active; }
@@ -1660,62 +2012,187 @@ var VideoEffects = (function () {
     return { sync: sync, refreshCustom: paintCustom, element: el };
   }
 
-  // --- the strength slider --------------------------------------------------
+  // --- the sliders ----------------------------------------------------------
   //
   // One definition, rendered into the in-page settings modal and the desktop
   // preferences window alike — the same bargain renderPicker() strikes, for the
-  // same reason. settings.html has no capture pipeline, so there it is
-  // write-only: it stores the value and the main window's `storage` listener
+  // same reason. settings.html has no capture pipeline, so there they are
+  // write-only: they store the value and the main window's `storage` listener
   // applies it.
-  function renderStrength(el, opts) {
+  //
+  // Blur strength and edge sharpness are the same control with different
+  // arithmetic behind it, so they are built by the same function and styled by
+  // the same rules. The class prefix differs so the two can be told apart in
+  // CSS and in a test.
+  function renderSlider(el, cfg) {
     if (!el) return null;
-    opts = opts || {};
     el.innerHTML = '';
-    el.classList.add('blur-strength');
+    el.classList.add(cfg.cls);
 
     var slider = document.createElement('input');
     slider.type = 'range';
     slider.min = '0';
     slider.max = '100';
     slider.step = '1';
-    slider.className = 'blur-strength-slider';
-    slider.setAttribute('aria-label', 'Background blur strength');
+    slider.className = cfg.cls + '-slider';
+    slider.setAttribute('aria-label', cfg.ariaLabel);
 
     var out = document.createElement('output');
-    out.className = 'blur-strength-value';
+    out.className = cfg.cls + '-value';
 
     var row = document.createElement('div');
-    row.className = 'blur-strength-row';
+    row.className = cfg.cls + '-row';
     row.appendChild(slider);
     row.appendChild(out);
     el.appendChild(row);
 
     function paint(v) {
-      out.textContent = strengthLabel(v);
-      slider.setAttribute('aria-valuetext', strengthLabel(v));
+      out.textContent = cfg.label(v);
+      slider.setAttribute('aria-valuetext', cfg.label(v));
     }
 
     function sync(v) {
-      v = (v === undefined || v === null) ? readStrength() : clampStrength(v);
-      slider.value = String(sliderFromStrength(v));
+      v = (v === undefined || v === null) ? cfg.read() : cfg.clamp(v);
+      slider.value = String(cfg.toSlider(v));
       paint(v);
     }
 
     slider.addEventListener('input', function () {
-      var v = strengthFromSlider(slider.value);
+      var v = cfg.fromSlider(slider.value);
       paint(v);
-      if (opts.onChange) opts.onChange(v);
-      else setStrength(v);
+      if (cfg.onChange) cfg.onChange(v);
+      else cfg.apply(v);
     });
 
     sync();
     return { sync: sync, element: el, slider: slider };
   }
 
+  function renderStrength(el, opts) {
+    opts = opts || {};
+    return renderSlider(el, {
+      cls: 'blur-strength',
+      ariaLabel: 'Background blur strength',
+      read: readStrength,
+      clamp: clampStrength,
+      toSlider: sliderFromStrength,
+      fromSlider: strengthFromSlider,
+      label: strengthLabel,
+      onChange: opts.onChange,
+      apply: setStrength
+    });
+  }
+
+  function renderSharpness(el, opts) {
+    opts = opts || {};
+    return renderSlider(el, {
+      cls: 'edge-sharpness',
+      ariaLabel: 'Cut-out edge sharpness',
+      read: readSharpness,
+      clamp: clampSharpness,
+      toSlider: sliderFromSharpness,
+      fromSlider: sharpnessFromSlider,
+      label: sharpnessLabel,
+      onChange: opts.onChange,
+      apply: setSharpness
+    });
+  }
+
+  // --- the accuracy picker --------------------------------------------------
+  //
+  // A segmented control rather than a slider: there are three rungs, they are
+  // not a continuum, and each one is a different bargain between how well the
+  // cut-out tracks a moving head and how much of the device it costs.
+  function renderQuality(el, opts) {
+    if (!el) return null;
+    opts = opts || {};
+    el.innerHTML = '';
+    el.classList.add('fx-seg');
+    el.setAttribute('role', 'radiogroup');
+    el.setAttribute('aria-label', 'Detection accuracy');
+
+    var buttons = QUALITIES.map(function (q) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.quality = q.id;
+      b.textContent = q.label;
+      b.title = q.hint;
+      b.setAttribute('role', 'radio');
+      b.setAttribute('aria-checked', 'false');
+      el.appendChild(b);
+      return b;
+    });
+
+    function sync(q) {
+      q = normalizeQuality(q === undefined ? readQuality() : q);
+      buttons.forEach(function (b) {
+        var on = b.dataset.quality === q;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-checked', on ? 'true' : 'false');
+        b.tabIndex = on ? 0 : -1;
+      });
+    }
+
+    buttons.forEach(function (b) {
+      b.addEventListener('click', function () {
+        var q = b.dataset.quality;
+        sync(q);
+        if (opts.onChange) opts.onChange(q);
+        else setQuality(q);
+      });
+    });
+
+    sync();
+    return { sync: sync, element: el, buttons: buttons };
+  }
+
+  // --- the low-light toggle -------------------------------------------------
+
+  function renderLightAdapt(el, opts) {
+    if (!el) return null;
+    opts = opts || {};
+    el.innerHTML = '';
+
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'toggle-btn';
+    btn.setAttribute('role', 'switch');
+    // The id is what the row's <label for=...> points at, and the aria-label is
+    // the fallback for a caller that renders no label of its own.
+    if (opts.id) btn.id = opts.id;
+    btn.setAttribute('aria-label', opts.label || 'Adapt the detector to low light');
+    if (opts.title) btn.title = opts.title;
+
+    function sync(on) {
+      on = (on === undefined) ? readLightAdapt() : !!on;
+      btn.textContent = on ? 'ON' : 'OFF';
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-checked', on ? 'true' : 'false');
+      return on;
+    }
+
+    btn.addEventListener('click', function () {
+      var on = !(btn.getAttribute('aria-checked') === 'true');
+      sync(on);
+      if (opts.onChange) opts.onChange(on);
+      else setLightAdapt(on);
+    });
+
+    el.appendChild(btn);
+    sync();
+    return { sync: sync, element: el, button: btn };
+  }
+
   return {
     STORAGE_KEY: STORAGE_KEY,
     STRENGTH_KEY: STRENGTH_KEY,
     STRENGTH_DEFAULT: STRENGTH_DEFAULT,
+    SHARPNESS_KEY: SHARPNESS_KEY,
+    SHARPNESS_DEFAULT: SHARPNESS_DEFAULT,
+    QUALITY_KEY: QUALITY_KEY,
+    QUALITY_DEFAULT: QUALITY_DEFAULT,
+    QUALITIES: QUALITIES,
+    LIGHT_ADAPT_KEY: LIGHT_ADAPT_KEY,
     PRESETS: PRESETS,
     SEG_LONG: SEG_LONG,
     segSizeFor: segSizeFor,
@@ -1732,6 +2209,19 @@ var VideoEffects = (function () {
     _gaussianHalfKernel: gaussianHalfKernel,
     // Test hook: the per-iteration strides, and the geometry they come from.
     _blurPlan: blurPlan,
+    // Test hooks: the edge profile (pinned at its midpoint against the tuned
+    // constants), the segmentation ladders, and the low-light response curve.
+    _edgeProfile: edgeProfile,
+    _segHzFor: segHzFor,
+    _lightPlan: lightPlan,
+    _lightConfig: {
+      target: LIGHT_TARGET, maxGain: LIGHT_GAIN_MAX,
+      sampleMs: LIGHT_SAMPLE_MS, smooth: LIGHT_SMOOTH
+    },
+    _edgeConfig: {
+      dilate: MASK_DILATE, feather: MASK_FEATHER,
+      lo: MASK_EDGE_LO, hi: MASK_EDGE_HI, def: SHARPNESS_DEFAULT
+    },
     _blurConfig: {
       long: BLUR_LONG, sigma: BLUR_SIGMA, maxPasses: BLUR_PASSES_MAX,
       min: STRENGTH_MIN, max: STRENGTH_MAX, def: STRENGTH_DEFAULT
@@ -1744,6 +2234,23 @@ var VideoEffects = (function () {
     sliderFromStrength: sliderFromStrength,
     strengthLabel: strengthLabel,
     renderStrength: renderStrength,
+    readSharpness: readSharpness,
+    writeSharpness: writeSharpness,
+    setSharpness: setSharpness,
+    sharpnessFromSlider: sharpnessFromSlider,
+    sliderFromSharpness: sliderFromSharpness,
+    sharpnessLabel: sharpnessLabel,
+    renderSharpness: renderSharpness,
+    readQuality: readQuality,
+    writeQuality: writeQuality,
+    setQuality: setQuality,
+    normalizeQuality: normalizeQuality,
+    qualityLabel: qualityLabel,
+    renderQuality: renderQuality,
+    readLightAdapt: readLightAdapt,
+    writeLightAdapt: writeLightAdapt,
+    setLightAdapt: setLightAdapt,
+    renderLightAdapt: renderLightAdapt,
     cancelLoad: cancelLoad,
     isLoading: isLoading,
     isLoaded: isLoaded,

@@ -210,6 +210,78 @@ silhouette to about 2 inside it. With `MASK_DILATE = 3` in front, that band
 sits wholly outside the real subject: a soft outline, never a bite out of an
 ear. At 720p the band works out around 20 px.
 
+### …and both of them are the middle of a slider
+
+Those numbers are tuned, not universal. A plain wall forgives a crisp edge; hair,
+glasses and a cluttered bookshelf do not, and people disagree about which
+failure they would rather look at. So `MASK_FEATHER`, the composite's window and
+`MASK_DILATE` are what **`edge-sharpness` 0.5** produces, and the preference
+moves all three together through `edgeProfile()` — which exists precisely
+because moving one without the others is the mistake the section above is about.
+
+Sharper narrows the gradient and the window that maps it. Softer widens both —
+*and dilates further*, because a wider soft band still has to sit outside the
+real subject.
+
+All three are uniforms of passes that already run, so dragging the slider
+mid-call re-cuts the mask on the next inference and swaps no track. A test reads
+the ramp back off the GPU at both ends of the travel; another pins the midpoint
+against the constants above, so a retune cannot silently reach everyone who
+never opened the setting.
+
+### Accuracy is the inference *rate*, not the mask's size
+
+The tempting knob — make the seg canvas bigger — buys nothing. `ImageSegmenter`
+resizes whatever you hand it to the model's own 256-wide input, so a larger
+canvas returns a larger readback of the same information (see the section
+above). What actually improves the cut-out is running it **more often**: the
+mask lags the frame by one segmentation interval, so 24 Hz sees ~40 ms of lag
+where 10 Hz sees 100, and the temporal blend — which is per inference — smooths
+over less.
+
+So **`detection-quality`** picks a rate ladder rather than a resolution:
+
+| | desktop | mobile |
+|---|---|---|
+| `battery` | 10 → 6 Hz | 6 Hz |
+| `balanced` (default) | 15 → 10 → 6 Hz | 10 → 6 Hz |
+| `high` | 24 → 15 → 10 → 6 Hz | 15 → 10 → 6 Hz |
+
+Each row is a full ladder: the first rate is where the device starts, and the
+load measurement below walks down the rest. Every ladder ends at 6 Hz, because
+below that the effect is worse than not having it and giving up is the right
+answer instead. Changing the setting restarts at the top of the new ladder —
+the rungs differ between ladders, and a device that needs stepping down will be
+stepped down again within one measurement window anyway.
+
+### Low light is fixed before inference, not after
+
+The selfie model is trained on ordinary indoor light and fails in the dark in
+the way that hurts most: confidence collapses toward the middle of its range,
+the edge goes soft and noisy, and the temporal blend turns that noise into a
+crawling outline. No downstream filter recovers what the model never saw.
+
+So with **`light-adapt`** on (the default), the pipeline measures the frame a
+couple of times a second, and when it is dim it brightens *the segmenter's own
+downscaled copy* through a canvas `filter` — `brightness()` plus a small
+`contrast()` that rides along with it, since brightening lifts the noise floor
+too. The gain is eased in at 25% per sample, because a gain that jumps when you
+lean forward makes the mask breathe.
+
+Three things it deliberately does not do:
+
+* **It never touches the published picture.** Only the private 256-wide copy is
+  brightened. A dark room stays dark on the wire — pinned by a test that reads
+  the composited canvas while the gain is at full stretch.
+* **It never darkens.** Gain is clamped to `[1, 2.6]`, and gain 1 sets no
+  filter at all, so a well-lit scene costs exactly nothing.
+* **It measures the centre, not the frame.** That difference is the whole of
+  whether this helps or hurts in the classic failure case: a window behind you
+  drags the frame's average up while leaving your face the darkest thing in it,
+  and a full-frame average would then darken the one region the model needs.
+
+Where `ctx.filter` does not exist (older WebKit), the frame is left alone.
+
 ### The blend's memory is its own buffer, and that is not optional
 
 Three things run over the mask on every inference, in order: the temporal
@@ -319,8 +391,9 @@ is worse than no effect at all. The pipeline measures its achieved frame rate
 over rolling five-second windows and, when it falls below 60% of the camera's
 rate:
 
-1. steps segmentation down — 15 → 10 → 6 Hz on desktop, 10 → 6 Hz on mobile —
-   since that is where nearly all the cost is; then
+1. steps segmentation down the ladder the `detection-quality` preference chose
+   (by default 15 → 10 → 6 Hz on desktop, 10 → 6 Hz on mobile), since that is
+   where nearly all the cost is; then
 2. having run out of things to trade, gives up: the raw camera goes back on the
    wire, the preference is set to `off`, and the user is told once.
 
@@ -447,18 +520,20 @@ padding the ring is sliced off along the top and bottom.
 
 The same row appears in Settings → Video, rendered by the same
 `VideoEffects.renderPicker()` so there is one definition rather than three
-drifting copies. The strength slider sits directly beneath it in the same
-card, and follows the same rule via `VideoEffects.renderStrength()`. In the desktop preferences window (`settings.html`) the picker
-is write-only: that window has no module system and therefore no capture
-pipeline, so it writes `localStorage['video-background']` and the main window's
-`storage` listener does the work — the same bridge the noise-suppression and
-microphone-device selectors use.
+drifting copies. Four controls sit beneath it in the same card and follow the
+same rule — `renderStrength()` and `renderSharpness()` (one slider builder,
+two sets of arithmetic), `renderQuality()` and `renderLightAdapt()`. In the
+desktop preferences window (`settings.html`) all five are write-only: that
+window has no module system and therefore no capture pipeline, so it writes the
+preference and the main window's `storage` listener applies it to the running
+processor — the same bridge the noise-suppression and microphone-device
+selectors use.
 
 ## Key files
 
 | File | What it holds |
 |---|---|
-| `src/video-effects.js` | The whole pipeline, the shaders (generated from `gaussianHalfKernel`), the mode storage, the picker |
+| `src/video-effects.js` | The whole pipeline, the shaders (generated from `gaussianHalfKernel`), the mode/strength/sharpness/accuracy/low-light storage, the picker and the four controls under it |
 | `src/main.js` | `maybeApplyVideoEffects()`, `applyVideoBackground()`, `swapLocalVideoTrack()`, the unwrap in `stopStreamTracks()`, the effects branches in `flipCamera()` and `setLocalCameraSuspended()`, the tile button in `_buildVideoTile()`, and `positionVideoBackgroundPopover()` / `renderVideoBackgroundProgress()` |
 | `resources/make-backgrounds.py` | Generates the four preset images |
 | `tests/e2e/unit-video-effects.spec.js` | Coverage, with inference stubbed via `window.__voxalSegStub` |
