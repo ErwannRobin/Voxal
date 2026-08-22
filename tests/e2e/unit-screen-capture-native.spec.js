@@ -207,7 +207,8 @@ test.describe('deciding whether the app can share a screen at all', () => {
       console.warn = orig;
       return seen;
     });
-    expect(lines.join('\n')).toMatch(/plugin missing/);
+    expect(lines.join('\n')).toMatch(/ScreenCapture plugin not registered/);
+    expect(lines.join('\n')).toMatch(/Present: \(none\)/);
   });
 
   // WebCodecs is the other half of the requirement: iOS shipped VideoDecoder in

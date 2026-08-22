@@ -9998,12 +9998,22 @@ async function probeNativeScreenCapture() {
   // indistinguishable between an old OS, an older native binary, and an
   // unprovisioned App Group — which costs a whole build cycle to tell apart.
   if (typeof window.VideoDecoder !== 'function') {
-    devLog('[ScreenCapture] no: this WebView has no WebCodecs VideoDecoder (needs iOS 16.4+)', 'warn');
+    // Carry the UA: the usual cause is simply an OS below the 16.4 WebCodecs
+    // floor, and that is the difference between "update the phone" and "this
+    // whole approach cannot work in a WebView".
+    devLog('[ScreenCapture] no: no WebCodecs VideoDecoder here (needs iOS 16.4+) — '
+      + (navigator.userAgent || 'unknown UA'), 'warn');
     return false;
   }
   var plugin = nativeScreenPlugin();
   if (!plugin) {
-    devLog('[ScreenCapture] no: ScreenCapture plugin missing — older native binary, or not registered', 'warn');
+    // Name the plugins that DID register. If the app's other custom plugins are
+    // absent too, native plugin discovery is broken for the whole project and
+    // this one is not special; if they are present, only this one failed.
+    var registered = [];
+    try { registered = Object.keys((window.Capacitor && window.Capacitor.Plugins) || {}); } catch (_) {}
+    devLog('[ScreenCapture] no: ScreenCapture plugin not registered. Present: '
+      + (registered.join(', ') || '(none)'), 'warn');
     return false;
   }
   try {
