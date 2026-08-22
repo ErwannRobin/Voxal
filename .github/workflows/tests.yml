@@ -97,17 +97,17 @@ jobs:
   # and it is deliberately absent from `all-tests-green`'s `needs:` below.
   #
   # Everything lands in the run summary; the HTML reports are uploaded as
-  # artifacts. On a push to main the README badge is refreshed from the same
-  # number — the only thing this job writes back, and it goes through a pull
-  # request like every other change to main.
+  # artifacts. The job writes nothing back to the repository — it once pushed a
+  # README badge branch and opened a PR for it, which needed a token this
+  # workflow cannot have (see KNOWLEDGE/learning.md) and put a red X on an
+  # explicitly non-blocking check the one time it fired. The number is in the
+  # run summary of every run, which is where anyone asking the question already
+  # is.
   coverage:
     name: Coverage (non-blocking)
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 30
-    permissions:
-      contents: write # push the badge branch
-      pull-requests: write # open the badge PR
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -191,50 +191,6 @@ jobs:
             src-tauri/target/llvm-cov/html/
           retention-days: 14
           if-no-files-found: warn
-
-      # Only on main, and only when the number actually moved — a no-op commit
-      # on every push would bury the history. `[skip ci]` stops it re-triggering
-      # this workflow.
-      - name: Refresh the README badge
-        id: badge
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: node scripts/coverage-report.mjs --write-badge > /dev/null
-
-      # `main`'s ruleset requires every change to arrive by pull request, so the
-      # badge cannot be pushed straight to it. Park it on one stable branch and
-      # open a PR instead; the branch is force-updated, so a later bump refreshes
-      # that same PR rather than stacking a new one.
-      #
-      # This does not loop: the refresh step above only fires on a push to main,
-      # so neither the push to this branch nor the PR it opens re-enters here.
-      # No `[skip ci]` for the same reason it would hurt — `All tests green` is a
-      # required check, and a badge PR that skipped CI could never be merged.
-      - name: Open a PR for the badge
-        if: steps.badge.outputs.badge == 'updated'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PCT: ${{ steps.badge.outputs.pct }}
-        run: |
-          branch=chore/coverage-badge
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$branch"
-          git add README.md
-          git commit -m "chore(coverage): main.js at ${PCT}%"
-          git push --force origin "$branch"
-          open=$(gh pr list --head "$branch" --state open --json number --jq '.[].number')
-          if [ -n "$open" ]; then
-            echo "Refreshed the badge on existing PR #${open}."
-          else
-            gh pr create --base main --head "$branch" \
-              --title "chore(coverage): refresh the main.js coverage badge" \
-              --body "\`main.js\` line coverage is now **${PCT} %**, which rounds to a
-          different tenth than the badge currently shows.
-
-          Opened automatically by the \`coverage\` job in \`.github/workflows/tests.yml\`
-          after a push to \`main\`. README-only; the number comes from the same
-          monocart report the run summary is built from."
-          fi
 
   # Single aggregate check that summarises every gating job above. Branch
   # protection on `main` requires exactly this one check ("All tests green"),
