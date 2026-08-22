@@ -60,16 +60,27 @@ Capture is capped to 1280 px on the long edge, 24 fps, and 800 kbps per
 listener (`screenMaxBitrate()`); resolution is never scaled down, because a
 screen that stays sharp at fewer frames is readable and a smaller one is not.
 
-> **iOS screen sharing needs an App Group, and therefore a paid membership.**
-> The `VoxalBroadcast` extension and the app must share
-> `group.com.erwann.voxal.app`. The extension target carries its own
-> `CODE_SIGN_ENTITLEMENTS`, but the **App target's is still unset** (see the
-> note above about personal teams), so until you set
+> **iOS screen sharing needs the App Group wired up.** The `VoxalBroadcast`
+> extension and the app must share `group.com.erwann.voxal.app`. The extension
+> target carries its own `CODE_SIGN_ENTITLEMENTS`, but the **App target's is
+> still unset**, so until you set
 > `CODE_SIGN_ENTITLEMENTS = App/App.entitlements` on the App target,
 > `containerURL(forSecurityApplicationGroupIdentifier:)` returns nil,
-> `canCapture()` reports false and the Screen button simply never appears. That
-> is deliberate: wiring the entitlements file also turns on PushToTalk and
-> Associated Domains, which a free personal team cannot sign.
+> `canCapture()` reports false and the Screen button simply never appears.
+>
+> This is a **signing** requirement, not a distribution one:
+> `CODE_SIGN_ENTITLEMENTS` applies to every build, so a development build run
+> on a device from Xcode is enough to test it. Nothing here needs TestFlight,
+> App Store review, or a release.
+>
+> It was left unset because `App/App.entitlements` also carries
+> `com.apple.developer.push-to-talk` and Associated Domains, which a free
+> personal team cannot sign (see the note above) — so wiring the file as it
+> stands breaks signing on a personal team. Apple lists **App groups** itself
+> as available to free accounts, so if you are still on a personal team and
+> want to try screen sharing without enrolling, give the App target its own
+> entitlements file containing only the app-group key rather than turning on
+> the whole file. On a paid membership, just point it at `App.entitlements`.
 >
 > It also needs **iOS 16.4+**, the release where WebKit shipped the WebCodecs
 > `VideoDecoder` the frames are decoded with.
