@@ -17,7 +17,7 @@ import Capacitor
 ///
 /// **Add every new app-target plugin here**, or it will silently not exist.
 class VoxalViewController: CAPBridgeViewController {
-    override open func capacitorDidLoad() {
+    override func capacitorDidLoad() {
         bridge?.registerPluginInstance(PTTPlugin())
         bridge?.registerPluginInstance(AudioRoutePlugin())
         bridge?.registerPluginInstance(ScreenCapturePlugin())
