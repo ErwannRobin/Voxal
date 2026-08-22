@@ -18,6 +18,10 @@ export async function addCoverage(page) {
   } catch {
     return; // page already closed
   }
+  // A test that never loaded our scripts (or whose page was replaced) stops
+  // with an empty list. monocart rejects `[]` as malformed and logs an error,
+  // so drop it here rather than let the run print a false alarm.
+  if (!coverage?.length) return;
   const { CoverageReport } = await import('monocart-coverage-reports');
   const { coverageOptions } = await import('./coverage-options.js');
   await new CoverageReport(coverageOptions).add(coverage);
