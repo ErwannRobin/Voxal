@@ -19,6 +19,7 @@
 		A1A1A1A10000000000000002 /* PTTPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A1A1A10000000000000001 /* PTTPlugin.swift */; };
 		A1A1A1A10000000000000004 /* AudioRoutePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A1A1A10000000000000003 /* AudioRoutePlugin.swift */; };
 		A1A1A1A20000000000000002 /* ScreenCapturePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A1A1A20000000000000001 /* ScreenCapturePlugin.swift */; };
+		A1A1A1A20000000000000019 /* VoxalViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A1A1A20000000000000018 /* VoxalViewController.swift */; };
 		A1A1A1A20000000000000004 /* BroadcastFrameChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A1A1A20000000000000003 /* BroadcastFrameChannel.swift */; };
 		A1A1A1A20000000000000006 /* SampleHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A1A1A20000000000000005 /* SampleHandler.swift */; };
 		A1A1A1A20000000000000008 /* BroadcastFrameChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A1A1A20000000000000003 /* BroadcastFrameChannel.swift */; };
@@ -40,6 +41,7 @@
 		A1A1A1A10000000000000001 /* PTTPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PTTPlugin.swift; sourceTree = "<group>"; };
 		A1A1A1A10000000000000003 /* AudioRoutePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRoutePlugin.swift; sourceTree = "<group>"; };
 		A1A1A1A20000000000000001 /* ScreenCapturePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenCapturePlugin.swift; sourceTree = "<group>"; };
+		A1A1A1A20000000000000018 /* VoxalViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoxalViewController.swift; sourceTree = "<group>"; };
 		A1A1A1A20000000000000017 /* AppGroup.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AppGroup.entitlements; sourceTree = "<group>"; };
 		A1A1A1A20000000000000003 /* BroadcastFrameChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BroadcastFrameChannel.swift; sourceTree = "<group>"; };
 		A1A1A1A20000000000000005 /* SampleHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
@@ -109,6 +111,7 @@
 				A1A1A1A10000000000000001 /* PTTPlugin.swift */,
 				A1A1A1A10000000000000003 /* AudioRoutePlugin.swift */,
 				A1A1A1A20000000000000001 /* ScreenCapturePlugin.swift */,
+				A1A1A1A20000000000000018 /* VoxalViewController.swift */,
 				A1A1A1A20000000000000017 /* AppGroup.entitlements */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
@@ -257,6 +260,7 @@
 				A1A1A1A10000000000000002 /* PTTPlugin.swift in Sources */,
 				A1A1A1A10000000000000004 /* AudioRoutePlugin.swift in Sources */,
 				A1A1A1A20000000000000002 /* ScreenCapturePlugin.swift in Sources */,
+				A1A1A1A20000000000000019 /* VoxalViewController.swift in Sources */,
 				A1A1A1A20000000000000004 /* BroadcastFrameChannel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

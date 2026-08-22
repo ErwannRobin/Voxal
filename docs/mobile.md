@@ -39,7 +39,11 @@ make cap-android
 > for why, and for the one-line change that turns them on once you enrol.
 > The PTT plugin degrades gracefully to the in-app PTT fallback. These paths are
 > implemented and compile clean but are **unverified on a real device** pending
-> enrollment. The `voxal://` custom-scheme deep links work regardless.
+> enrollment. Note that until `VoxalViewController` was added, no app-target
+> Swift plugin registered with the bridge at all (see
+> `KNOWLEDGE/learning.md` → "An app-target Swift plugin does NOT auto-register
+> on iOS"), so PTT could not have worked on device regardless of entitlements —
+> worth re-testing now that it does register. The `voxal://` custom-scheme deep links work regardless.
 
 ### Screen sharing
 

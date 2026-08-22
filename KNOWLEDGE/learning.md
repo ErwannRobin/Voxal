@@ -923,6 +923,24 @@ seems too sharp".
   extension in the file — the App Store rejects an extension whose version does
   not match its host app, and this keeps them in lockstep for free.
 
+- **An app-target Swift plugin does NOT auto-register on iOS, and fails
+  completely silently.** Capacitor 6+ builds its iOS plugin registry from
+  `packageClassList` in the generated `ios/App/App/capacitor.config.json`, and
+  that list only ever contains plugins installed as **npm packages** — here just
+  `AppPlugin`, `HapticsPlugin`, `StatusBarPlugin`, `CapacitorUpdaterPlugin`.
+  Every plugin Voxal wrote itself lives in the App target, so none of them
+  appeared, and `window.Capacitor.Plugins.<name>` was `undefined` in JS with
+  nothing logged natively to say why. This had been true of `PTTPlugin` and
+  `AudioRoutePlugin` since they were written — which is very likely the real
+  reason iOS Push-to-Talk was recorded as "compiles clean but unverified on a
+  real device". The fix is a `CAPBridgeViewController` subclass
+  (`VoxalViewController`) overriding `capacitorDidLoad()` to call
+  `bridge?.registerPluginInstance(...)` for each one, with `Main.storyboard`
+  pointing at it. **Add every new app-target plugin to that override**, or it
+  silently will not exist. Note this is a *separate* requirement from
+  registering the `.swift` file in `project.pbxproj` (below): that gets it
+  compiled, this gets it reachable, and missing either produces the same
+  `undefined`.
 - **Entitlements are granted per FILE, not per key — so what you bundle
   together decides what you can sign.** `App.entitlements` carried
   PushToTalk, Associated Domains *and* the App Group the screen-share
