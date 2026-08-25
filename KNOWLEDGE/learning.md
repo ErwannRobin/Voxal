@@ -848,3 +848,150 @@ seems too sharp".
   looks correct on inference 1 and wrong on inference 20. The regression test
   samples the mask edge early and late and asserts it has not moved; the
   geometry assertions alone pass on the broken code while the drift is small.
+
+## Screen sharing on mobile
+
+- **No mobile browser or WebView implements `getDisplayMedia` — including the
+  one you control.** WebKit has never shipped it, so iOS Safari and WKWebView
+  are out, and Chromium *deliberately hides* it on Android and in Android
+  WebView so that JS feature detection returns false rather than a call that
+  fails. Being the app embedding the WebView does not help; there is no flag.
+  The only route is native capture plus a way to get frames into the page.
+- **The seam is tiny, and that is the whole reason this was tractable.**
+  `startScreenShare()` never had a platform guard — only a `getDisplayMedia`
+  feature test — and `publishLocalTrack('screen', stream)` takes any
+  `MediaStream`. So the mesh, the SFU, `screen-offer`/`screen-stop`, the stage
+  focus tile and `contentHint: 'detail'` all worked unchanged the moment a
+  stream existed. Anything that "cannot be done on mobile" in this codebase is
+  worth re-checking for the same shape: one boolean and one capture call.
+- **Ship encoded H.264, not frames.** Raw or JPEG frames over the Capacitor
+  bridge cost ~1.6 MB/s of base64 at 720p; native H.264 plus a WebCodecs
+  `VideoDecoder` costs ~40 KB/s for the same picture. The double transcode
+  (native encode → WebCodecs decode → WebRTC re-encode) is real but hardware on
+  both ends.
+- **Annex-B, not AVCC.** `VideoDecoder.configure()` expects length-prefixed
+  AVCC *only* when given a `description`, and Annex-B without one. Annex-B is
+  the better choice here because SPS/PPS ride inline ahead of every IDR: no
+  parameter-set plumbing, and a decoder rebuilt mid-share (a rotation) resyncs
+  by itself on the next keyframe. Android's `MediaCodec` already emits Annex-B;
+  VideoToolbox emits AVCC with the parameter sets held separately, so the iOS
+  extension converts before sending.
+- **`VideoFrame.close()` is not optional.** Each frame holds a GPU buffer and a
+  handful of un-closed ones stalls the decoder within seconds. Close it in the
+  `output` callback, immediately after `drawImage`.
+- **`track.stop()` does NOT fire `ended`.** The spec only dispatches `ended`
+  when the *source* ends by itself, which is why the browser's own "Stop
+  sharing" button raises it and a programmatic stop does not. To route a native
+  stop through the same teardown as the web picker, dispatch the event
+  explicitly: `track.stop(); track.dispatchEvent(new Event('ended'))`. Missing
+  this leaves the share live with the capture already dead.
+- **`| 0` on a microsecond timestamp is a time bomb.** It truncates to int32, so
+  presentation times go negative about 36 minutes into a share. WebCodecs
+  timestamps are int64 in IDL and JS numbers hold them fine — just don't coerce.
+- **Android 14+ ordering is not negotiable, and getting it wrong kills the app.**
+  Consent Intent first, then `startForeground(..., FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)`,
+  then `getMediaProjection()`, then register a `MediaProjection.Callback`
+  (mandatory before `createVirtualDisplay()` on API 34+ or it throws
+  `IllegalStateException`), then create the display. Three further rules: the
+  consent Intent is **single-use**, one `MediaProjection` permits exactly **one**
+  virtual display, and every session needs fresh consent — so a re-share always
+  means a new prompt, never a cached projection.
+- **Android 15 QPR1+ auto-stops projection when the device locks**, and adds a
+  status-bar chip that stops it too. Both arrive as `MediaProjection.Callback.onStop()`,
+  which is the only signal you get — there is no separate "why".
+- **`sockaddr_un.sun_path` is 104 bytes on Darwin, and an App Group container
+  URL spends ~82 of them.** `/private/var/mobile/Containers/Shared/AppGroup/<uuid>/`
+  leaves barely 20 characters, so the extension↔app socket has to sit at the
+  container root under a very short name (`vx.sock`). Nesting it in a
+  subdirectory silently fails to bind.
+- **A Broadcast Upload Extension has a hard 50 MB memory cap**, which is why the
+  encode happens *inside* the extension rather than shipping `CVPixelBuffer`s to
+  the app: hardware VideoToolbox keeps the working set to a couple of frames.
+  Set `SO_NOSIGPIPE` on the socket, or a reader that goes away kills the
+  extension with a signal instead of a failed write.
+- **A new Xcode target has to be built by hand here.** `project.pbxproj` had
+  exactly one target, so the extension needed a `PBXNativeTarget`
+  (`com.apple.product-type.app-extension`), its own three build phases and
+  `XCConfigurationList`, a `PBXTargetDependency` + `PBXContainerItemProxy`, and
+  a `PBXCopyFilesBuildPhase` on App with **`dstSubfolderSpec = 13`** (PlugIns)
+  to embed it. The same rule as for plugin files applies to all of it: existing
+  on disk is not enough. A quick way to check the result without Xcode is to
+  parse the file as an OpenStep plist and assert every 24-hex reference
+  resolves.
+- **`make release` rewrites `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION`
+  globally across `project.pbxproj`**, which is exactly what you want with an
+  extension in the file — the App Store rejects an extension whose version does
+  not match its host app, and this keeps them in lockstep for free.
+
+- **An app-target Swift plugin does NOT auto-register on iOS, and fails
+  completely silently.** Capacitor 6+ builds its iOS plugin registry from
+  `packageClassList` in the generated `ios/App/App/capacitor.config.json`, and
+  that list only ever contains plugins installed as **npm packages** — here just
+  `AppPlugin`, `HapticsPlugin`, `StatusBarPlugin`, `CapacitorUpdaterPlugin`.
+  Every plugin Voxal wrote itself lives in the App target, so none of them
+  appeared, and `window.Capacitor.Plugins.<name>` was `undefined` in JS with
+  nothing logged natively to say why. This had been true of `PTTPlugin` and
+  `AudioRoutePlugin` since they were written — which is very likely the real
+  reason iOS Push-to-Talk was recorded as "compiles clean but unverified on a
+  real device". The fix is a `CAPBridgeViewController` subclass
+  (`VoxalViewController`) overriding `capacitorDidLoad()` to call
+  `bridge?.registerPluginInstance(...)` for each one, with `Main.storyboard`
+  pointing at it. **Add every new app-target plugin to that override**, or it
+  silently will not exist. Note this is a *separate* requirement from
+  registering the `.swift` file in `project.pbxproj` (below): that gets it
+  compiled, this gets it reachable, and missing either produces the same
+  `undefined`.
+- **Entitlements are granted per FILE, not per key — so what you bundle
+  together decides what you can sign.** `App.entitlements` carried
+  PushToTalk, Associated Domains *and* the App Group the screen-share
+  extension needs. A free personal team cannot sign the first two, and one
+  unsignable key fails the whole file, which made the App Group look like it
+  needed a paid membership when Apple lists **App groups** as available to
+  free accounts. Splitting the one capability into its own
+  `App/AppGroup.entitlements` and pointing `CODE_SIGN_ENTITLEMENTS` there is
+  what makes the feature testable without enrolling. Generalise it: when a
+  capability appears to require a paid account, check whether it is genuinely
+  gated or merely sharing a file with something that is.
+- **`CODE_SIGN_ENTITLEMENTS` is a signing setting, not a distribution one.** It
+  applies to every build including a debug build on a device, so an entitlement
+  never needs TestFlight or App Store review to *work* — only to reach other
+  people. Easy to conflate with the separate, real constraint that native
+  changes cannot ship over Capgo OTA.
+
+- **Backpressure is not an error, and treating it as one killed the share.** The
+  broadcast extension wrote frames to the app's socket and called
+  `finishBroadcastWithError` on any failed write. Backgrounding the app stops it
+  draining that socket, the send buffer fills, the write fails — and the whole
+  broadcast ended, which is precisely the situation the feature exists to
+  survive. Live video wants the newest frame, not a queue: the socket is now
+  non-blocking, `EAGAIN` means "drop the backlog and carry on", and the
+  broadcast only gives up after a long stall with nothing delivered. Two details
+  that make it correct rather than merely lenient: frames are length-prefixed,
+  so the queue holds **whole** frames and only the head may be partly written —
+  abandoning a half-written frame desynchronises the reader forever; and after
+  dropping a backlog the next frame must be forced to an IDR
+  (`kVTEncodeFrameOptionKey_ForceKeyFrame`), or the decoder renders garbage
+  until the encoder's own 2 s keyframe comes round.
+- **A self-view of a full-screen capture is a feedback loop.** On a phone both
+  MediaProjection and ReplayKit capture the whole display with no window picker,
+  so a "your screen" tile on the sharing device is inside its own source and
+  renders itself rendering itself. `selfScreenTileWouldRecurse()` suppresses
+  just that one local tile; what is published to everyone else is unchanged.
+  Desktop keeps its self-view deliberately — there the user picks a window.
+- **The same "any failure is fatal" bug existed on BOTH ends of the socket, and
+  fixing one hid the other.** The extension ended the broadcast on a failed
+  `write`; the app ended it on `read() <= 0`. Only `n == 0` is an EOF — `n < 0`
+  with `EAGAIN`/`EWOULDBLOCK` (nothing left to read) or `EINTR` (interrupted
+  syscall) is routine, and backgrounding-then-resuming produces both. Whenever
+  a raw socket is used, check `errno` before concluding the peer is gone, and
+  drain in a loop rather than assuming one wakeup is one read.
+- **A stop reason of "user" for every teardown disguised the bug for a whole
+  round.** The device log read `native capture stopped: user`, which looks like
+  the person pressed Stop, so the real cause was invisible. Failure paths must
+  report what actually happened; a plausible-looking wrong reason costs more
+  than no reason at all.
+- **Entitlements and `UIBackgroundModes` are not gated on App Store
+  distribution.** A development build has exactly the same runtime capabilities;
+  the store affects who can install it, never whether a capability works. When a
+  background feature misbehaves in a dev build, the cause is the code, not the
+  build channel.

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The subset of App.entitlements that a free personal team can sign.
+	     
+	     Entitlements are granted per FILE, not per key: point
+	     CODE_SIGN_ENTITLEMENTS at App.entitlements on a personal team and
+	     signing fails on com.apple.developer.push-to-talk, taking the App
+	     Group down with it even though the App Group itself is fine. So the
+	     one capability screen sharing needs lives here on its own.
+
+	     This is what the App target is wired to today. On a paid membership,
+	     switch CODE_SIGN_ENTITLEMENTS to App/App.entitlements instead — it
+	     carries this same App Group plus PushToTalk and Associated Domains.
+	     Keep the group identifier below in step with VoxalBroadcast's copy and
+	     with BroadcastFrameChannel.appGroup, or the extension and the app end
+	     up looking in two different containers. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.erwann.voxal.app</string>
+	</array>
+</dict>
+</plist>
