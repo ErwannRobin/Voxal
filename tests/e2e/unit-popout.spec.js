@@ -107,6 +107,25 @@ test.describe('pop-out button stacking', () => {
   });
 });
 
+test.describe('watchPopoutWindow — close detection', () => {
+  test('emits popout-closed to the parent when window.closed flips true', async ({ page }) => {
+    const got = await page.evaluate(() => new Promise((resolve) => {
+      // iframeEmit only posts when embedded; window.parent === window here, so
+      // the emitted message lands back on this window's message listener.
+      _isIframe = true;
+      const fakeWin = { closed: false };
+      window.addEventListener('message', (e) => {
+        if (e.data && e.data.source === 'voxal' && e.data.type === 'popout-closed') {
+          resolve({ type: e.data.type, url: e.data.url });
+        }
+      });
+      watchPopoutWindow(fakeWin, 'https://web.voxal.app/?room=x');
+      setTimeout(() => { fakeWin.closed = true; }, 100);
+    }));
+    expect(got).toEqual({ type: 'popout-closed', url: 'https://web.voxal.app/?room=x' });
+  });
+});
+
 test.describe('applyPopoutIdentityFromUrl — ?name= / ?color= inheritance', () => {
   test('a manual name becomes the session pseudo (runs on load)', async ({ page }) => {
     await page.goto('/?name=Popped%20Out');

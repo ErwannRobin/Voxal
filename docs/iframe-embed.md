@@ -150,6 +150,7 @@ window.addEventListener('message', (e) => {
 | `config-applied` | `iceServers: number`                                            | Acknowledges a `config` command — number of ICE servers accepted |
 | `popout`       | `url: string`                                                     | User popped the session out to a standalone window; the embed then leaves the room (a `left` event follows). |
 | `popout-blocked` | `url: string`                                                   | The browser blocked the pop-out window (e.g. `sandbox` without `allow-popups`); the embed **keeps** its session. |
+| `popout-closed` | `url: string`                                                    | The popped-out window was closed. Detected by the iframe polling `window.closed` (~1s); the parent can't watch it directly. Use it to re-show your embed / offer to rejoin. |
 | `error`        | `message: string`                                                 | Microphone denied, PeerJS error, etc.         |
 
 ---
@@ -210,6 +211,7 @@ The button only appears in **tiny** mode (≥ 200 px wide) — never in compact/
 
 1. Voxal opens a standalone window on the same room, carrying the user's display name (and color, for auto-assigned names) so the identity is preserved. It also passes `forceWeb=1` so the new window joins in-browser immediately.
 2. The embed emits `{ source:'voxal', type:'popout', url }` and **leaves the room** — WebRTC sessions can't be transferred between windows, so there's a brief reconnect in the new window.
+3. When the user later closes that window, the embed emits `{ source:'voxal', type:'popout-closed', url }`. Your page can't detect this itself (the window handle belongs to the iframe, not you), so listen for this event — e.g. to un-hide your embed or prompt the user to rejoin.
 
 > **`window.open` needs a user gesture and pop-ups allowed.** If your iframe uses `sandbox`, include `allow-popups` (and `allow-popups-to-escape-sandbox`), otherwise the browser blocks the window: Voxal keeps the current session and emits `{ type:'popout-blocked', url }` so you can react (e.g. surface your own "open in new tab" link).
 
