@@ -26,7 +26,12 @@ fn parse_presence_response_text(text: &str) -> Result<serde_json::Value, String>
         return Ok(serde_json::Value::Null);
     }
     serde_json::from_str(trimmed).map_err(|_| {
-        let preview = &trimmed[..trimmed.len().min(120)];
+        // Truncate by CHARACTERS, not bytes: slicing a &str at a byte index that
+        // lands mid-character panics, and the bodies that reach here are exactly
+        // the ones likely to be non-ASCII — a proxy or gateway error page in the
+        // user's own language. A panic in a #[tauri::command] takes the IPC call
+        // down instead of returning this error.
+        let preview: String = trimmed.chars().take(120).collect();
         format!("Non-JSON response: {}", preview)
     })
 }
@@ -383,6 +388,24 @@ mod tests {
         let err = parse_presence_response_text(&body).unwrap_err();
         let preview = err.trim_start_matches("Non-JSON response: ");
         assert_eq!(preview.chars().count(), 120);
+    }
+
+    #[test]
+    fn parse_presence_response_truncates_multibyte_body_without_panicking() {
+        // Regression: the preview used to be a byte slice, so a non-ASCII error
+        // page — a gateway's own translated one, say — cut mid-character and
+        // panicked, taking the whole IPC call down instead of returning Err.
+        let body = format!("a{}", "€".repeat(200));
+        let err = parse_presence_response_text(&body).unwrap_err();
+        let preview = err.trim_start_matches("Non-JSON response: ");
+        assert_eq!(preview.chars().count(), 120);
+        assert!(preview.starts_with("a€"));
+    }
+
+    #[test]
+    fn parse_presence_response_keeps_a_short_non_json_body_whole() {
+        let err = parse_presence_response_text("  Bad Gateway  ").unwrap_err();
+        assert_eq!(err, "Non-JSON response: Bad Gateway");
     }
 
     #[test]

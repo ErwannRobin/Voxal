@@ -2,6 +2,7 @@
 // deps, no network — mirrors api/_turn.test.js's shape.
 import test from 'node:test';
 import assert from 'node:assert';
+import crypto from 'node:crypto';
 
 import {
   signCapability,
@@ -85,6 +86,16 @@ test('verifyCapability rejects malformed tokens', () => {
   assert.equal(verifyCapability(SECRET, 'a.', TUPLE, 0).error, 'malformed');
   assert.equal(verifyCapability(SECRET, '.b', TUPLE, 0).error, 'malformed');
   assert.equal(verifyCapability(SECRET, undefined, TUPLE, 0).error, 'malformed');
+});
+
+test('verifyCapability rejects a correctly signed token whose payload is not JSON', () => {
+  // The signature check passes and the payload still cannot be read. Reaching
+  // the field comparison with a non-object payload is how a "valid" token with
+  // no tuple at all would slip through, so it has to be rejected here.
+  const payloadB64 = Buffer.from('not json at all').toString('base64url');
+  const sig = crypto.createHmac('sha256', SECRET).update(payloadB64).digest('base64url');
+
+  assert.equal(verifyCapability(SECRET, `${payloadB64}.${sig}`, TUPLE, 0).error, 'malformed');
 });
 
 test('validateMintRequest accepts a well-formed body', () => {

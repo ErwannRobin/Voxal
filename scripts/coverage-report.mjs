@@ -43,16 +43,44 @@ const README = path.join(ROOT, 'README.md');
 const BADGE_START = '<!-- coverage-badge -->';
 const BADGE_END = '<!-- /coverage-badge -->';
 
-/** Line coverage across every file in an lcov report, as a percentage. */
+/**
+ * Line coverage across every file in an lcov report, as a percentage.
+ *
+ * lcov allows a file to appear under more than one SF record, and node:test
+ * writes one per module instance — a handler imported twice (which is how the
+ * api/ tests get a handler back with its module-scope cache and rate limiter
+ * empty) shows up once per import. Summing the per-record LF/LH totals would
+ * then count that file's lines several times over and average its coverage
+ * instead of unioning it, reporting a file every line of which is covered
+ * somewhere as only partly covered. So merge the DA records per file first: a
+ * line counts as hit if any record hit it.
+ */
 function lcovLinePct(file) {
   if (!fs.existsSync(file)) return null;
+  const files = new Map(); // source path → Map(line → hit)
+  let current = null;
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    if (line.startsWith('SF:')) {
+      const path = line.slice(3).trim();
+      if (!files.has(path)) files.set(path, new Map());
+      current = files.get(path);
+    } else if (line.startsWith('DA:') && current) {
+      const [no, count] = line.slice(3).split(',');
+      const n = Number(no);
+      if (!Number.isFinite(n)) continue;
+      current.set(n, (current.get(n) || 0) + (Number(count) || 0));
+    } else if (line.startsWith('end_of_record')) {
+      current = null;
+    }
+  }
+
   let found = 0;
   let hit = 0;
-  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-    // LF/LH are the per-file totals lcov already computed; summing them avoids
-    // double-counting a line listed under two records.
-    if (line.startsWith('LF:')) found += Number(line.slice(3)) || 0;
-    else if (line.startsWith('LH:')) hit += Number(line.slice(3)) || 0;
+  for (const lines of files.values()) {
+    for (const count of lines.values()) {
+      found++;
+      if (count > 0) hit++;
+    }
   }
   if (!found) return null;
   return { pct: round2((hit / found) * 100), covered: hit, total: found };
