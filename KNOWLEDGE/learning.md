@@ -557,12 +557,64 @@ much they unlocked:
   roster and the Start-first invite screen; a same-origin child iframe is the
   only way into the `postMessage` command handler.
 
-What stays out of reach, and is not worth contorting the code for:
-`IS_TAURI_DESKTOP` / `IS_NATIVE_MOBILE` branches (the pop-out `WebviewWindow`
-plumbing, the native audio-route plugin, the global-shortcut re-registration)
-and `IS_MOBILE_DEVICE` ones (`cameraFlipAvailable`, the mobile capture caps).
-A desktop Chromium answers `false` to all of them at load, so the tests assert
-the desktop behaviour and say so, rather than faking a platform.
+**Correction to what that last point implied.** `IS_TAURI_DESKTOP`,
+`IS_NATIVE_MOBILE` and `IS_MOBILE_DEVICE` are frozen at load too — which makes
+them settable by exactly the same trick, and taking that seriously moved
+coverage from 80% to ~84%. `page.addInitScript` runs *before* `main.js`, so a
+fake `window.__TAURI__` / `window.Capacitor` / `navigator.userAgent` installed
+there is what those consts read. Unlike `window.Peer` there is no vendored
+script to overwrite them afterwards, so here `addInitScript` is right and
+`page.evaluate` after `goto` is too late. A fake bridge of ~40 lines — an event
+bus with `listen`/`once`/`emit`, and a `WebviewWindow` class that records its
+options and its `once` handlers — makes the whole desktop half of `main.js`
+testable: the pop-out loopback, the preferences/about/dev-log windows, the
+global PTT shortcut, `tauriFetch`, and Voxal Connect's system-browser hand-off.
+See `tests/e2e/unit-tauri-desktop.spec.js` and `unit-video-popout.spec.js`.
+
+What the fake genuinely cannot prove is that *Tauri* delivers those events and
+opens those windows — only that `main.js` reacts correctly when it does. That
+half needs `tauri-driver`.
+
+Four more traps found doing it:
+
+- **A `let`/`const` at the top level of a classic script is NOT on `window`.**
+  `connections`, `audioTrack`, `freeHandMode`, `myPseudo` are `let`, so
+  `window.audioTrack = …` inside `page.evaluate` creates an unrelated property
+  and the code under test never sees it. Use the bare identifier
+  (`audioTrack = …`) — assignment reaches the real global lexical binding.
+  `var`s and `function` declarations *are* on `window`, which is why the same
+  file can use `window.becomeHost()` and bare `connections` in one breath.
+- **`addEventListener('click', someFn)` captures the function object.**
+  Reassigning `window.someFn` afterwards does not redirect the listener, so a
+  spy installed after load never fires. Assert the effect instead of
+  intercepting the call.
+- **`window.location.assign` cannot be stubbed in a real browser**, which is
+  why `buildConnectUrl()` is split out. To test the navigation itself, point
+  the target at the test origin (`localStorage['voxal-connect-url'] =
+  location.origin`) and let it really happen — `sessionStorage` survives, so
+  the marker written before the redirect is readable on the other side.
+- **This sandbox never finishes ICE gathering** (no UDP), so any code that
+  awaits end-of-candidates hangs until the test times out. Dispatching a bare
+  `new Event('icecandidate')` at the peer connection resolves the wait exactly
+  as a real gathering completion does — `event.candidate` is `undefined`, which
+  is what the `if (!ev.candidate)` check reads. Harmless where gathering does
+  complete.
+
+And two on the `api/` side:
+
+- **A serverless handler's module scope is its cache, so give each test its
+  own.** `api/ice-servers.js` keeps its credential cache and rate-limit map in
+  module scope on purpose (that is what makes request volume free). Rather than
+  exporting a test-only reset, `await import('./ice-servers.js?fresh=N')` gives
+  a handler with both empty — ESM caches per specifier, and the query string
+  makes each one a different specifier.
+- **`node --test --experimental-test-coverage` then emits one lcov `SF` record
+  per module instance.** Summing per-record `LF`/`LH` counts that file several
+  times over and averages its coverage instead of unioning it, so a file every
+  line of which is covered somewhere reads as partly covered — `api/` showed
+  83% when it was really 99.7%. `scripts/coverage-report.mjs` now merges the
+  `DA` records per file first. lcov allows repeated `SF` records; consumers are
+  expected to merge them.
 
 ## Camera background effects — the five things that bit
 
