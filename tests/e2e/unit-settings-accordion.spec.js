@@ -42,6 +42,25 @@ function toggleIds(page) {
 }
 
 const clickToggle = (page, id) => page.click(`#${id} > .settings-card-toggle`);
+
+/**
+ * Wait for the layout to actually change after a resize.
+ *
+ * The switch runs off a matchMedia 'change' listener, which fires a beat after
+ * setViewportSize() returns — reading the cards straight away is a race that
+ * only shows up under a loaded machine. `modal-sidebar-visible` is set by the
+ * same function that rearranges the cards, so it is the honest signal.
+ */
+const layoutSettled = (page, wide) =>
+  page.waitForFunction(
+    (wide) => document.body.classList.contains('modal-sidebar-visible') === wide,
+    wide);
+
+async function resizeTo(page, size) {
+  await page.setViewportSize(size);
+  await layoutSettled(page, size === WIDE);
+}
+
 const activeNavTarget = (page) =>
   page.evaluate(() => {
     const btn = document.querySelector('#modal-settings-sidebar .prefs-nav-btn.active');
@@ -173,7 +192,7 @@ test.describe('resizing between the two layouts', () => {
     const chosen = ids[1];
     await clickToggle(page, chosen);
 
-    await page.setViewportSize(WIDE);
+    await resizeTo(page, WIDE);
     const states = await cardStates(page);
 
     expect(await activeNavTarget(page)).toBe(chosen);
@@ -190,7 +209,7 @@ test.describe('resizing between the two layouts', () => {
     await page.click('#btn-open-settings');
     await page.click('#modal-settings-sidebar .prefs-nav-btn[data-target="settings-system"]');
 
-    await page.setViewportSize(NARROW);
+    await resizeTo(page, NARROW);
     const states = await cardStates(page);
     const ids = await toggleIds(page);
 
@@ -210,11 +229,11 @@ test.describe('resizing between the two layouts', () => {
       d.dispatchEvent(new Event('toggle'));
     });
 
-    await page.setViewportSize(WIDE);
+    await resizeTo(page, WIDE);
     expect(await activeNavTarget(page)).toBe('settings-advanced');
     expect(await page.evaluate(() => document.getElementById('turn-details').open)).toBe(true);
 
-    await page.setViewportSize(NARROW);
+    await resizeTo(page, NARROW);
     expect(await page.evaluate(() => document.getElementById('turn-details').open)).toBe(true);
     const states = await cardStates(page);
     const ids = await toggleIds(page);
