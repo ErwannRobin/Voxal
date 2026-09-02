@@ -6,29 +6,38 @@ Things to implement or investigate, ordered roughly by priority.
 
 ## 🧪 What is still untested in `main.js`
 
-**Status:** the E2E `unit` project now covers >80% of `main.js` (see
-`make coverage-e2e`). The remainder is deliberate, and splits three ways:
+**Status:** the E2E `unit` project covers ~84% of `main.js`'s lines (see
+`make coverage-e2e`, and the README badge). The remainder splits three ways:
 
-- **Platform branches a desktop Chromium can never take.** `IS_TAURI_DESKTOP`
-  (`popOutVideoViewer`/`popOutScreenViewer`'s `WebviewWindow` + loopback
-  plumbing, the preferences/about/dev-log windows, the global-shortcut
-  re-registration, `presence_fetch` via `tauriFetch`), `IS_NATIVE_MOBILE`
-  (the Capacitor audio-route plugin, PushToTalk listeners) and
-  `IS_MOBILE_DEVICE` (`cameraFlipAvailable`, the mobile capture caps). These
-  need a device or a real bundle, not a cleverer test.
+- **Platform branches, most of which turned out to be reachable after all.**
+  A fake `window.__TAURI__` installed with `page.addInitScript` — i.e. *before*
+  `main.js` runs, since `IS_TAURI_DESKTOP` is a load-time const — takes the
+  desktop path for real: `tests/e2e/unit-video-popout.spec.js`,
+  `unit-tauri-desktop.spec.js`, `unit-devlog-window.spec.js` and
+  `unit-connect-account.spec.js` cover the `WebviewWindow` plumbing, the
+  loopback signalling, the preferences/about/dev-log windows, the global PTT
+  shortcut and `tauriFetch`. The same trick works for `window.Capacitor` and
+  for `navigator.userAgent` (`cameraFlipAvailable`). What is genuinely left is
+  what the fake cannot stand in for: the Capacitor audio-route and PushToTalk
+  native plugins, and the mobile capture caps.
 - **RNNoise's success path.** `initRNNoise()` is covered only through its
   failure branch: the worklet needs `assets/rnnoise.wasm` plus a 48 kHz
   AudioWorklet, which the container's headless audio stack will not sustain.
   `tests/e2e/unit-rnnoise-worklet.spec.js` loads the real processor file
   separately; the two together are as close as this environment gets.
 - **The SFU's happy path.** Minting, publishing and subscribing are covered
-  against stubbed endpoints (`tests/e2e/unit-video-routing.spec.js`), but no
-  test talks to Cloudflare Realtime, so `sfuNegotiate`/`sfuRenegotiate`'s real
-  responses are never exercised.
+  against stubbed endpoints (`tests/e2e/unit-video-routing.spec.js`), and the
+  two failure ladders in `unit-sfu-resilience.spec.js`, but no test talks to
+  Cloudflare Realtime, so `sfuNegotiate`/`sfuRenegotiate`'s real responses are
+  never exercised.
+
+The `api/` handlers are at 100% line coverage (`make coverage-api`): every
+endpoint has handler-level tests that stub `fetch` and assert on the outbound
+Cloudflare request, not just on its pure helpers.
 
 Worth doing if the number needs to go higher: a `mesh`-style project for the
-Tauri build, driven by `tauri-driver`. Nothing above is reachable from the
-`unit` project as it stands.
+Tauri build, driven by `tauri-driver`, for the parts a faked bridge cannot
+prove — that Tauri really does deliver these events and open these windows.
 
 ---
 
