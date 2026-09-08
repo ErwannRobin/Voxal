@@ -43,6 +43,7 @@ All Voxal-originated events carry `source: 'voxal'` so they are trivial to filte
 | `hideHeader`, `noHeader` | `1`, `true`, `yes` | Hides room header (iframe only) |
 | `forceWeb`, `webOnly`, `web` | `1`, `true`, `yes` | Skip native-app redirection and stay on web |
 | `popout`, `allowPopout`, `canPopout` | `1`, `true`, `yes` | Show a **pop-out** button that detaches the session into a standalone `web.voxal.app` window (see [Pop out](#5--pop-out-to-a-standalone-window)). Tiny embeds only. |
+| `video`, `camera`, `cam`, `autoVideo` | `1`, `true`, `yes`, `on` | Join with the **camera already sharing and the microphone open** (hands-free), the way a video-conference link behaves, instead of the push-to-talk default. Honoured once, on the first join of that page load. Needs `allow="camera; microphone"` on the iframe. |
 | `parentOrigin` | absolute `https://...` origin | Locks the bridge to your origin: outbound events are sent only to it, **and inbound commands from any other origin are rejected** (see [Security](#security)). Strongly recommended. |
 
 > `name` and `color` are also read from the URL, but you don't set these — Voxal adds them itself when opening a [pop-out window](#5--pop-out-to-a-standalone-window) to carry the user's identity across.
