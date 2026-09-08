@@ -48,6 +48,8 @@ All Voxal-originated events carry `source: 'voxal'` so they are trivial to filte
 
 > `name` and `color` are also read from the URL, but you don't set these — Voxal adds them itself when opening a [pop-out window](#5--pop-out-to-a-standalone-window) to carry the user's identity across.
 
+> Voxal also **adds `video=1` itself** to the invite link ("Copy invite link" / "Share invite") and to the pop-out URL while your camera is live, so the room is handed on as it is actually being used. An audio-only room hands out an audio-only link.
+
 ### Embedding modes by width
 
 The tiny embed adapts to the iframe's rendered width via a `ResizeObserver`. Size the iframe to pick a mode — no extra parameter needed:

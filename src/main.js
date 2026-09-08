@@ -2436,10 +2436,20 @@ function roomInviteBaseUrl() {
   return VOXAL_WEB_URL + '/';
 }
 
+// Should a link we hand out ask the far side to join with its camera on?
+// It mirrors how this room is actually being used rather than how this window
+// was opened: your camera is live, so the invite opens the same way. An
+// audio-only room hands out an audio-only link — an invite must never switch on
+// someone else's camera just because the sender once passed ?video=1.
+function inviteWantsVideo() {
+  return !!localVideoActive;
+}
+
 function roomInviteUrl(roomId) {
   if (!roomId) return '';
   var url = new URL(roomInviteBaseUrl());
   url.searchParams.set('room', roomId);
+  if (inviteWantsVideo()) url.searchParams.set('video', '1');
   return url.toString();
 }
 
@@ -2457,6 +2467,8 @@ function tinyPopoutUrl() {
   // Join straight away in this browser window instead of prompting to open the
   // native app (the whole point of popping out is to stay on the web).
   url.searchParams.set('forceWeb', '1');
+  // A pop-out is the same session continued, so a live camera has to survive it.
+  if (inviteWantsVideo()) url.searchParams.set('video', '1');
   var profile = selfPseudoProfile();
   var name = profile.pseudo;
   if (name && name !== 'You') {
@@ -5918,13 +5930,15 @@ function updatePeerList() {
     nudgeText.textContent = 'Share your invite link to invite others';
     nudge.appendChild(nudgeText);
 
-    var inviteUrl = roomInviteUrl(roomDisplayCode() || roomCode);
+    // Built on click, not at render: the link now carries the camera's state,
+    // and starting a camera does not re-render the roster.
+    var inviteUrl = function() { return roomInviteUrl(roomDisplayCode() || roomCode); };
     if (navigator.share && IS_NATIVE_MOBILE) {
       var shareBtn = document.createElement('button');
       shareBtn.className = 'btn btn-secondary btn-sm';
       shareBtn.textContent = 'Share invite';
       shareBtn.addEventListener('click', function() {
-        shareInviteLink(inviteUrl);
+        shareInviteLink(inviteUrl());
       });
       nudge.appendChild(shareBtn);
     } else {
@@ -5932,7 +5946,8 @@ function updatePeerList() {
       nudgeBtn.className = 'btn btn-secondary btn-sm';
       nudgeBtn.textContent = 'Copy invite link';
       nudgeBtn.addEventListener('click', function() {
-        if (inviteUrl) copyTextToClipboard(inviteUrl, 'Invite link copied!');
+        var url = inviteUrl();
+        if (url) copyTextToClipboard(url, 'Invite link copied!');
       });
       nudge.appendChild(nudgeBtn);
     }

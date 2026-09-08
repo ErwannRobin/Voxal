@@ -581,9 +581,14 @@ branches, so an already-running desktop/mobile app honours the link too.
 
 Covered by `tests/e2e/unit-auto-video.spec.js` (10 cases).
 
+The invite link propagates it: `roomInviteUrl()` appends `video=1` while
+`localVideoActive` — so "Copy invite link" / "Share invite" hands the room on as
+it is actually being used, and an audio-only room still hands out an audio-only
+link. `tinyPopoutUrl()` does the same, so a pop-out keeps the camera it was
+sharing. The rule is deliberately the *camera's* state and not `AUTO_VIDEO_JOIN`:
+a link must describe the room, not how the sender's window happened to be opened.
+
 **Not done — deliberately out of scope:**
-- **Propagating the flag into invite links.** "Copy link" from inside a room
-  still produces a plain `?room=…`; whoever builds the link decides.
 - **A matching `?screen=1`.** Screen capture needs a user gesture in every
   browser, so it cannot be auto-started the way the camera can.
 

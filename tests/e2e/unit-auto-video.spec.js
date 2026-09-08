@@ -194,3 +194,55 @@ test.describe('deep links', () => {
     expect(armed).toBe(false);
   });
 });
+
+test.describe('handing the parameter on in an invite', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await seedRoom(page, { selfId: 'host', isHost: true, roomCode: 'myroom', myPseudo: 'Alice', connections: [] });
+  });
+
+  test('an audio-only room hands out an audio-only link', async ({ page }) => {
+    const url = new URL(await page.evaluate(() => roomInviteUrl('myroom')));
+    expect(url.searchParams.get('room')).toBe('myroom');
+    // Never switch on a stranger's camera by default.
+    expect(url.searchParams.get('video')).toBeNull();
+  });
+
+  test('a live camera makes the invite a video invite', async ({ page }) => {
+    const url = new URL(await page.evaluate(() => {
+      localVideoActive = true;
+      return roomInviteUrl('myroom');
+    }));
+    expect(url.searchParams.get('room')).toBe('myroom');
+    expect(url.searchParams.get('video')).toBe('1');
+  });
+
+  test('the link follows the camera, not how this window was opened', async ({ page }) => {
+    // Opened with ?video=1 but the camera is off now — an invite must describe
+    // the room as it is, not as this window was launched.
+    await page.goto('/?video=1');
+    await seedRoom(page, { selfId: 'host', isHost: true, roomCode: 'myroom', connections: [] });
+    const url = new URL(await page.evaluate(() => roomInviteUrl('myroom')));
+    expect(url.searchParams.get('video')).toBeNull();
+  });
+
+  test('the pop-out keeps the camera it was sharing', async ({ page }) => {
+    const off = new URL(await page.evaluate(() => tinyPopoutUrl()));
+    const on = new URL(await page.evaluate(() => {
+      localVideoActive = true;
+      return tinyPopoutUrl();
+    }));
+    expect(off.searchParams.get('video')).toBeNull();
+    expect(on.searchParams.get('video')).toBe('1');
+    // The rest of the pop-out contract is untouched.
+    expect(on.searchParams.get('forceWeb')).toBe('1');
+    expect(on.searchParams.get('room')).toBe('myroom');
+  });
+
+  test('an invite with no room is still empty', async ({ page }) => {
+    expect(await page.evaluate(() => {
+      localVideoActive = true;
+      return roomInviteUrl('');
+    })).toBe('');
+  });
+});
