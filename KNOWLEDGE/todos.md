@@ -560,6 +560,38 @@ stays dark until a build carrying the permission ships. Exit criteria: bump
   to start on one of the two drag handles; a swipe from anywhere on the stage
   would be nicer but competes with the tile's click-to-pin.
 
+## 🔗 `?video=1` — a conference-style invite link (shipped)
+
+**Status:** ✅ Implemented. `?video=1` (aliases `camera` / `cam` / `autoVideo`,
+values `1` / `true` / `yes` / `on`) makes the room open the way a
+video-conference link does: hands-free audio latched and the camera already
+sharing, instead of the push-to-talk default.
+
+`AUTO_VIDEO_JOIN` is read at load from `window.location.search`;
+`autoStartVideoOnJoin()` runs from both join paths (`createRoom`'s `peer.on('open')`
+and `finishJoin`), right after `autoAcquireMicOnJoin()`. It is **one-shot per page
+load** — leaving and re-joining from the same page is an ordinary join, so the
+parameter can never keep switching a camera back on for a user who turned it off.
+It turns `videoModeEnabled` on in memory only (never `VIDEO_MODE_KEY`), and a
+denied camera still leaves the room with an open microphone.
+
+Web hands the flag on to the native app (`voxal://join?room=…&video=1`), and
+`handleDeepLink()` re-arms it on both the custom-scheme and Universal-Link
+branches, so an already-running desktop/mobile app honours the link too.
+
+Covered by `tests/e2e/unit-auto-video.spec.js` (10 cases).
+
+The invite link propagates it: `roomInviteUrl()` appends `video=1` while
+`localVideoActive` — so "Copy invite link" / "Share invite" hands the room on as
+it is actually being used, and an audio-only room still hands out an audio-only
+link. `tinyPopoutUrl()` does the same, so a pop-out keeps the camera it was
+sharing. The rule is deliberately the *camera's* state and not `AUTO_VIDEO_JOIN`:
+a link must describe the room, not how the sender's window happened to be opened.
+
+**Not done — deliberately out of scope:**
+- **A matching `?screen=1`.** Screen capture needs a user gesture in every
+  browser, so it cannot be auto-started the way the camera can.
+
 ---
 
 _Add new items above this line._

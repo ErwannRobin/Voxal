@@ -900,3 +900,28 @@ seems too sharp".
   looks correct on inference 1 and wrong on inference 20. The regression test
   samples the mask edge early and late and asserts it has not moved; the
   geometry assertions alone pass on the broken code while the drift is small.
+
+---
+
+## Join-time media
+
+- **`setFreeHand(true)` before the microphone exists silently loses the state.**
+  It enables the *track* (`if (audioTrack) audioTrack.enabled = active`), and at
+  join time there is no track yet — the device is still starting behind
+  `_micAcquirePromise`. `acquireMicForRoom()` then landed on
+  `audioTrack.enabled = false` unconditionally, so the room showed "● Live" over
+  a muted microphone. It now lands on `freeHandMode`. Anything that latches
+  hands-free before or during a join (the `?video=1` auto-start does exactly
+  this) depends on that.
+
+- **A URL parameter must not write a Settings key.** `?video=1` needs the
+  Camera/Screen controls on, so it sets `videoModeEnabled` in memory — never
+  `VIDEO_MODE_KEY`. `resetVideoState()` re-reads the key on leave, so the user's
+  stored choice comes back by itself. Writing the key instead would silently
+  change a preference for every later, parameter-free visit.
+
+- **A `?room=…` page never finishes loading under Playwright's `goto`.** The
+  invite bootstrap hands off to `voxal://join?room=…` via a hidden link click,
+  and the navigation to a custom scheme leaves the `load` event pending, so
+  `page.goto('/?room=abc')` times out. Tests that only need a query string
+  should pick one that is not `room` (or pass `forceWeb=1`).

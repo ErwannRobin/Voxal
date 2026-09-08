@@ -293,6 +293,30 @@ var FORCE_WEB_JOIN = (function() {
     return false;
   }
 })();
+// Opt-in: ?video=1 (aliases: camera / cam / autoVideo) makes the room open the
+// way a video-conference link does — camera live and hands-free audio on — instead
+// of the push-to-talk default. Honoured once, on the first join of this page load.
+function parseAutoVideoFlag(params) {
+  try {
+    var raw = (
+      params.get('video') ||
+      params.get('camera') ||
+      params.get('cam') ||
+      params.get('autoVideo') ||
+      ''
+    ).toLowerCase();
+    return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+  } catch (_) {
+    return false;
+  }
+}
+var AUTO_VIDEO_JOIN = (function() {
+  try {
+    return parseAutoVideoFlag(new URLSearchParams(window.location.search || ''));
+  } catch (_) {
+    return false;
+  }
+})();
 // Opt-in: embedders enable the "pop out to a standalone window" affordance by
 // adding ?popout=1 (aliases: allowPopout / canPopout) to the iframe src.
 var ALLOW_POPOUT = (function() {
@@ -385,6 +409,9 @@ function handleDeepLink(urlStr) {
       }
       const roomId = url.searchParams.get('room');
       if (roomId) {
+        // The app was already running, so ?video=1 never reached AUTO_VIDEO_JOIN
+        // (that reads index.html's own query string). Arm it for this join.
+        if (parseAutoVideoFlag(url.searchParams)) _autoVideoJoinPending = true;
         if (_audioCtx.state === 'suspended') _audioCtx.resume();
         var doJoinUL = function() {
           var joinFn = !UUID_RE.test(roomId) ? joinOrCreateByChannelName : joinRoom;
@@ -402,6 +429,7 @@ function handleDeepLink(urlStr) {
       // voxal://join?room=<peerId or lobbyId>
       const roomId = url.searchParams.get('room');
       if (!roomId) return;
+      if (parseAutoVideoFlag(url.searchParams)) _autoVideoJoinPending = true;
       if (_audioCtx.state === 'suspended') _audioCtx.resume();
       var doJoin = function() {
         var joinFn = !UUID_RE.test(roomId) ? joinOrCreateByChannelName : joinRoom;
@@ -2408,10 +2436,20 @@ function roomInviteBaseUrl() {
   return VOXAL_WEB_URL + '/';
 }
 
+// Should a link we hand out ask the far side to join with its camera on?
+// It mirrors how this room is actually being used rather than how this window
+// was opened: your camera is live, so the invite opens the same way. An
+// audio-only room hands out an audio-only link — an invite must never switch on
+// someone else's camera just because the sender once passed ?video=1.
+function inviteWantsVideo() {
+  return !!localVideoActive;
+}
+
 function roomInviteUrl(roomId) {
   if (!roomId) return '';
   var url = new URL(roomInviteBaseUrl());
   url.searchParams.set('room', roomId);
+  if (inviteWantsVideo()) url.searchParams.set('video', '1');
   return url.toString();
 }
 
@@ -2429,6 +2467,8 @@ function tinyPopoutUrl() {
   // Join straight away in this browser window instead of prompting to open the
   // native app (the whole point of popping out is to stay on the web).
   url.searchParams.set('forceWeb', '1');
+  // A pop-out is the same session continued, so a live camera has to survive it.
+  if (inviteWantsVideo()) url.searchParams.set('video', '1');
   var profile = selfPseudoProfile();
   var name = profile.pseudo;
   if (name && name !== 'You') {
@@ -2804,7 +2844,8 @@ function _tryNativeAppThenJoin(roomId) {
 
   // Trigger the custom scheme via a hidden link (avoids page-navigation errors)
   var a = document.createElement('a');
-  a.href = 'voxal://join?room=' + encodeURIComponent(roomId);
+  a.href = 'voxal://join?room=' + encodeURIComponent(roomId) +
+           (AUTO_VIDEO_JOIN ? '&video=1' : '');
   a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
@@ -5889,13 +5930,15 @@ function updatePeerList() {
     nudgeText.textContent = 'Share your invite link to invite others';
     nudge.appendChild(nudgeText);
 
-    var inviteUrl = roomInviteUrl(roomDisplayCode() || roomCode);
+    // Built on click, not at render: the link now carries the camera's state,
+    // and starting a camera does not re-render the roster.
+    var inviteUrl = function() { return roomInviteUrl(roomDisplayCode() || roomCode); };
     if (navigator.share && IS_NATIVE_MOBILE) {
       var shareBtn = document.createElement('button');
       shareBtn.className = 'btn btn-secondary btn-sm';
       shareBtn.textContent = 'Share invite';
       shareBtn.addEventListener('click', function() {
-        shareInviteLink(inviteUrl);
+        shareInviteLink(inviteUrl());
       });
       nudge.appendChild(shareBtn);
     } else {
@@ -5903,7 +5946,8 @@ function updatePeerList() {
       nudgeBtn.className = 'btn btn-secondary btn-sm';
       nudgeBtn.textContent = 'Copy invite link';
       nudgeBtn.addEventListener('click', function() {
-        if (inviteUrl) copyTextToClipboard(inviteUrl, 'Invite link copied!');
+        var url = inviteUrl();
+        if (url) copyTextToClipboard(url, 'Invite link copied!');
       });
       nudge.appendChild(nudgeBtn);
     }
@@ -7834,7 +7878,10 @@ function acquireMicForRoom(reason) {
     }
     stream = micStream;
     audioTrack = stream.getAudioTracks()[0];
-    if (audioTrack) audioTrack.enabled = false;
+    // Hands-free can be switched on while the device is still starting — the
+    // ?video=1 join does exactly that. setFreeHand() had no track to enable, so
+    // landing on `false` here would leave the mic muted under a "Live" readout.
+    if (audioTrack) audioTrack.enabled = freeHandMode;
     connectOutgoingAudioToPeers();
     try { watchMicTrackEnded(stream); } catch (e) { console.warn('[mic-swap] watchdog:', e.message); }
     return true;
@@ -7903,6 +7950,49 @@ function autoAcquireMicOnJoin() {
     if (!eager || !inRoom || stream || _micAcquirePromise) return;
     acquireMicForRoom('join');
   });
+}
+
+// ?video=1 — enter the room with the camera already sharing and the mic open,
+// so an invite link behaves like a video-conference link rather than a
+// push-to-talk one. Called from both join paths, right after the mic.
+//
+// One-shot per page load: it is consumed on the first join, so leaving and
+// re-joining from the same page is an ordinary join. Otherwise the parameter
+// would keep switching the camera back on for a user who turned it off.
+var _autoVideoJoinPending = AUTO_VIDEO_JOIN;
+
+function autoStartVideoOnJoin() {
+  if (!_autoVideoJoinPending) return;
+  _autoVideoJoinPending = false;
+  if (!inRoom || localVideoActive) return;
+
+  // The room's Camera / Screen controls may be switched off (a stored
+  // preference). Turn them on for this session only — a URL parameter must not
+  // rewrite what the user chose in Settings, so VIDEO_MODE_KEY is left alone.
+  if (!videoModeEnabled) {
+    videoModeEnabled = true;
+    updateVideoStage();
+    updateVideoModeUI();
+  }
+
+  // Hands-free first, not as a side effect of startVideoShare(): if the camera
+  // is denied the user still lands in a room with an open microphone, which is
+  // the half of "conference behaviour" that does not need a permission.
+  if (!freeHandMode) setFreeHand(true);
+  // A tiny embed deliberately skips the join-time mic acquire (an iframe the
+  // user never touched must not throw a prompt at them). ?video=1 is an
+  // explicit opt-in that is about to prompt for the camera anyway, so without
+  // this the embed would sit in hands-free mode with no microphone at all.
+  if (!stream && !_micAcquirePromise) acquireMicForRoom('join');
+
+  // Fire and forget, like the mic: a camera that will not start must not take
+  // the join down with it. startVideoShare() already toasts a denied camera.
+  var started = startVideoShare();
+  if (started && typeof started.catch === 'function') {
+    started.catch(function(e) {
+      devLog('[Video] Auto-start failed: ' + (e && e.message ? e.message : String(e)), 'warn');
+    });
+  }
 }
 
 function setTalking(active) {
@@ -12232,6 +12322,7 @@ async function createRoom(onJoined) {
       if (onJoined) onJoined(id);
 
       autoAcquireMicOnJoin();
+      autoStartVideoOnJoin();
 
       settle(resolve, id);
     });
@@ -12672,6 +12763,7 @@ function finishJoin(targetHostId, hostData) {
   iframeEmit({ type: 'joined', roomCode: targetHostId, peerId: peer.id });
 
   autoAcquireMicOnJoin();
+  autoStartVideoOnJoin();
 }
 
 // --- Presence UI ------------------------------------------------------------
