@@ -438,8 +438,8 @@ test.describe('the roster keeps a camera icon for everyone with a camera', () =>
     });
     // Camera off: the footer button is what turns it on, not this row.
     expect(await page.locator('#peer-item-self .peer-cam-btn').count()).toBe(0);
-    // Camera on, on a surface with no stage at all (Tauri has neither is-web
-    // nor is-native and keeps its pop-out window): still no self-view to hide.
+    // Camera on, on a surface with no stage at all (neither platform class, so
+    // no layout regime can render one): still no self-view to hide.
     await page.evaluate(() => {
       document.documentElement.classList.remove('is-web');
       localVideoActive = true;
