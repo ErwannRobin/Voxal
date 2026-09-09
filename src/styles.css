@@ -316,12 +316,20 @@ body {
 }
 
 /* Leaving is the one thing in this header you cannot undo, so it does not sit
-   flush against the row of room-code controls. */
+   flush against the row of room-code controls. On desktop that gap is enough on
+   its own — the visible rule only earns its place on a narrow screen, where the
+   controls are packed tight. */
 .room-actions-spacer {
   width: 1px;
   height: 20px;
   margin: 0 10px 0 4px;
-  background: var(--border);
+  background: none;
+}
+
+@media (max-width: 640px) {
+  .room-actions-spacer {
+    background: var(--border);
+  }
 }
 
 .copy-toast {
