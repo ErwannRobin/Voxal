@@ -25,6 +25,7 @@ make coverage-summary # one markdown table over whatever has been measured
 make build-debug  # macOS debug bundle — registers voxal:// URL scheme
 make build        # Release build
 make seg-assets   # Stage the background-effects WASM runtime into src/assets/seg/
+make emoji-data   # Regenerate src/emoji-data.js (chat's emoji catalog) from Unicode
 make cap-sync     # Sync src/ assets to ios/ and android/ after any src/ change
 make cap-ios      # Open Xcode
 make cap-android  # Open Android Studio
@@ -160,6 +161,9 @@ off↔on at all. See `docs/video-effects.md`.
 | `edge-sharpness` | `VideoEffects.SHARPNESS_KEY` | How hard the cut-out's edge is, `0`–`1` (default `0.5`, stored as an absence). Settings → Video → Edge sharpness. One preference drives the feather, the smoothstep window and the dilate together via `_edgeProfile()` — moving one without the others is a hard edge with a wasted uniform. Applied live by `Processor.applyEdge()`; uniforms only, so no track swap |
 | `detection-quality` | `VideoEffects.QUALITY_KEY` | `battery` / `balanced` (default, stored as an absence) / `high` — the segmentation-rate ladder, i.e. how often you are picked out of the frame again. Settings → Video → Detection accuracy. The adaptive step-down under load still applies on every rung. Applied live by `Processor.applyQuality()` |
 | `light-adapt` | `VideoEffects.LIGHT_ADAPT_KEY` | Absent (on) / `off` — brighten the segmenter's own downscaled copy of the frame in a dim or backlit room, never the published picture. Settings → Video → Adapt to low light. Applied live by `Processor.applyLightAdapt()` |
+| `chat-log` | `CHAT_LOG_KEY` | The room's chat transcript: `{roomCode, savedAt, messages}`, capped at `CHAT_LOG_MAX` (200) and sharing the rejoin snapshot's `REJOIN_TTL_MS`. Restored by `loadChatLog(code)` only when `roomCode` matches the room being joined, and cleared wherever `clearRejoinSnapshot()` is |
+| `chat-width` | `CHAT_WIDTH_KEY` | Width of the chat drawer in px, set by dragging its separator (`#chat-resizer`). Clamped to `CHAT_WIDTH_MIN`–`CHAT_WIDTH_MAX` and to 90% of the window on read, so a narrower window never leaves the drawer hanging off |
+| `emoji-recent` | `EMOJI_RECENT_KEY` | The emoji picker's Recent row, most recent first, capped at `EMOJI_RECENT_MAX`. Seeded from `CHAT_REACTIONS` rather than starting empty |
 | `self-video-corner` | `SELF_VIDEO_CORNER_KEY` | Which corner of the video stage the minimized self-view badge was dragged to: `tl` / `tr` / `bl` / `br` |
 | `room-active` | `ROOM_ACTIVE_KEY` | Transient. Main window → preferences window: a call is live, so `settings.html` must not run its `getUserMedia` device-label probe (it would kill the call). Cleared on leave and on load |
 | `echo-test-request` | `ECHO_BRIDGE_REQUEST_KEY` | Transient. Desktop preferences window → main window: `{action:'start'\|'stop', at}` (see below) |
@@ -192,7 +196,11 @@ script both documents load with `<script src>`, the way `version.js` already is 
 **not** hand-duplicated into `settings.html`. `net-usage.js` holds the usage
 constants, `formatBitrate()` and the chart renderers; `video-effects.js` holds
 the camera background pipeline, its mode and strength storage, and the two
-controls both documents render (`renderPicker()`, `renderStrength()`). Two constraints: such a script must load *before* `main.js`
+controls both documents render (`renderPicker()`, `renderStrength()`).
+`emoji-data.js` is the same *kind* of file but only `index.html` loads it —
+`settings.html` has no chat. It is **generated** (`make emoji-data`, from
+Unicode's `emoji-test.txt`) and declares exactly one global, `EMOJI_GROUPS`;
+everything that reads it lives in `main.js`. Two constraints: such a script must load *before* `main.js`
 (which uses its constants), and a `const`/`let` declared there must not also be
 declared in `main.js` — classic scripts share one global lexical scope, so a
 duplicate declaration is a load-time `SyntaxError`. That is why the background

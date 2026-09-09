@@ -604,8 +604,24 @@ mirrored to `localStorage` under `chat-log` with the rejoin snapshot's key and
 TTL, and capped at 200 messages. Covered by `tests/e2e/unit-chat.spec.js` (30
 cases) and four `@mesh` tests.
 
+The transcript is dense on purpose: the name and its message are one line, a
+run from one person is named once, and the timestamp lives in a hover strip
+rather than on every row — the stamp for a stretch of conversation is carried by
+a separator, inserted on a day change or a gap over `CHAT_BREAK_MS`.
+
+The emoji picker offers all 1914 of them, from `src/emoji-data.js` — generated
+from Unicode's own `emoji-test.txt` by `make emoji-data`, with the skin-tone
+variants dropped. It serves both the composer and reactions, and a reaction may
+be any emoji in that catalog rather than one of six.
+
+The drawer's width is dragged on its own separator and remembered in
+`chat-width`.
+
 Deliberately left for later:
 
+- **Skin-tone variants.** Dropping them is what keeps the catalog at 43 KB. A
+  tone picker would need the modifier sequences back plus a stored preference,
+  and a reaction's identity would stop being a single string.
 - **File and image sharing.** Chunking over the DataConnection with backpressure,
   progress UI and a size cap is its own feature, not a bigger text box.
 - **Read receipts.** Would need a per-peer ack for every message; the room is

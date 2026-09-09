@@ -952,6 +952,16 @@ seems too sharp".
   (`talking`, `peer-renamed`) exclude the sender because they are state the
   sender already has; a log is not.
 
+- **A one-row `<textarea>` paints a scrollbar down an empty box.** Its
+  `scrollHeight` includes its own padding, so it reports itself overflowing by a
+  pixel or two and `overflow-y: auto` believes it. The auto-grow toggles
+  `overflow-y` between `hidden` and `auto` instead of leaving it on `auto`.
+
+- **The separating space between a name and its message belongs in the DOM, not
+  in a `::after`.** Generated content is invisible to `textContent` and to a
+  copy-paste of the transcript, and it does not disappear when the name it
+  follows is visually hidden on a grouped row.
+
 - **The host must stamp the sender id AND enforce the id's prefix.** Rewriting
   `peerId` to the connection's own id is the obvious half — it stops a peer
   posting under someone else's name. The other half is less obvious: message ids

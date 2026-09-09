@@ -669,6 +669,11 @@
            which would slam this shut on desktop. Direct child of #screen-room
            so it stacks against the other panels. -->
       <div id="room-chat-panel" class="room-chat-panel" role="region" aria-label="Chat">
+        <!-- The separator between the room and the drawer. Dragging it resizes
+             the drawer; the width is remembered. -->
+        <div id="chat-resizer" class="chat-resizer" role="separator"
+             aria-orientation="vertical" aria-label="Resize chat" tabindex="0"
+             title="Drag to resize · double-click to reset"></div>
         <div class="room-chat-header">
           <span class="room-chat-title">Chat</span>
           <button id="btn-chat-close" class="btn-icon" type="button" title="Close chat" aria-label="Close chat">&#10005;</button>
@@ -676,9 +681,22 @@
         <div id="chat-messages" class="chat-messages" role="log" aria-live="polite" aria-relevant="additions"></div>
         <p id="chat-typing" class="chat-typing hidden" aria-live="polite"></p>
         <div class="room-chat-composer">
+          <button id="btn-emoji" class="chat-emoji-btn" type="button" title="Emoji"
+                  aria-label="Insert emoji" aria-haspopup="dialog" aria-expanded="false">&#9786;</button>
           <textarea id="chat-input" class="chat-input" rows="1" maxlength="2000"
                     placeholder="Message the room…" aria-label="Message"></textarea>
           <button id="btn-chat-send" class="btn btn-primary btn-sm chat-send" type="button">Send</button>
+        </div>
+
+        <!-- One picker serves both jobs: inserting into the composer and
+             reacting to a message. It docks above the composer rather than
+             anchoring to whatever opened it — the drawer is too narrow for a
+             floating popover to land anywhere useful. -->
+        <div id="emoji-picker" class="emoji-picker hidden" role="dialog" aria-label="Pick an emoji">
+          <input id="emoji-search" class="emoji-search" type="search" autocomplete="off"
+                 placeholder="Search emoji…" aria-label="Search emoji" />
+          <div id="emoji-tabs" class="emoji-tabs" role="tablist" aria-label="Emoji categories"></div>
+          <div id="emoji-grid" class="emoji-grid"></div>
         </div>
       </div>
 
@@ -837,6 +855,9 @@
          video-effects.js's VideoEffects.STORAGE_KEY. -->
     <script src="net-usage.js"></script>
     <script src="video-effects.js"></script>
+    <!-- The emoji picker's dataset (generated; see scripts/gen-emoji-data.mjs).
+         Only index.html needs it — settings.html has no chat. -->
+    <script src="emoji-data.js"></script>
     <script src="main.js"></script>
   </body>
 </html>

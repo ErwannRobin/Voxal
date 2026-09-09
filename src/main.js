@@ -193,7 +193,25 @@ const CHAT_ID_MAX    = 128;         // a message id is <peerId>:<n>; anything lo
 const CHAT_TYPING_TTL_MS      = 4000; // a typing flag expires on its own
 const CHAT_TYPING_THROTTLE_MS = 2000; // at most one 'still typing' per this
 const CHAT_TYPING_IDLE_MS     = 3000; // stop claiming to type after this much silence
+// Consecutive messages from one person inside this window are one block: the
+// name is printed once. A gap longer than the second gets a time separator, so
+// the reader can see the conversation paused without a stamp on every line.
+const CHAT_GROUP_MS  = 5 * 60 * 1000;
+const CHAT_BREAK_MS  = 15 * 60 * 1000;
+// The reaction row a fresh install starts with. Not a whitelist — any emoji in
+// the vendored catalog can be sent (see isChatEmoji); these are only what the
+// picker offers before you have picked anything.
 const CHAT_REACTIONS = ['\u{1F44D}', '\u2764\uFE0F', '\u{1F602}', '\u{1F389}', '\u{1F914}', '\u{1F440}'];
+const EMOJI_RECENT_KEY = 'emoji-recent';
+const EMOJI_RECENT_MAX = 24;
+const CHAT_INPUT_MAX_HEIGHT = 120;  // px the composer grows to before it scrolls
+const EMOJI_SEARCH_MAX = 240;   // matches rendered per query; a grid nobody scrolls to the end of
+// The chat drawer's width, dragged on its own separator. Clamped so it can
+// neither vanish nor swallow the room behind it.
+const CHAT_WIDTH_KEY     = 'chat-width';
+const CHAT_WIDTH_DEFAULT = 360;
+const CHAT_WIDTH_MIN     = 280;
+const CHAT_WIDTH_MAX     = 720;
 var   _rejoinDismissed          = false;
 const RECENT_ROOMS_KEY          = 'recent-rooms';
 const RECENT_ROOMS_MAX          = 5;
@@ -3251,12 +3269,33 @@ function appendChatMessage(raw, opts) {
   return true;
 }
 
+// Any emoji in the vendored catalog may be a reaction, and nothing else may:
+// checking membership of a known set rather than a pattern means a reaction can
+// never be a sentence, a control character or markup, whatever a peer sends.
+// A peer running a newer Unicode than ours has its unknown emoji dropped, which
+// is the safe direction to fail in.
+var _emojiSet = null;
+
+function isChatEmoji(ch) {
+  if (typeof ch !== 'string' || !ch || ch.length > 32) return false;
+  if (!_emojiSet) {
+    _emojiSet = new Set();
+    emojiCatalog().forEach(function(group) {
+      group.items.forEach(function(item) { _emojiSet.add(item[0]); });
+    });
+  }
+  // No catalog (a page that did not load emoji-data.js): fall back to the seed
+  // set rather than refusing every reaction.
+  if (!_emojiSet.size) return CHAT_REACTIONS.indexOf(ch) !== -1;
+  return _emojiSet.has(ch);
+}
+
 // Toggle, not set: the same peer sending the same emoji twice takes it back. A
 // reaction for a message we no longer hold (trimmed, or never received) is
 // dropped — there is nothing to attach it to.
 function applyChatReaction(msgId, emoji, peerId) {
   if (!peerId || typeof msgId !== 'string') return false;
-  if (CHAT_REACTIONS.indexOf(emoji) === -1) return false;
+  if (!isChatEmoji(emoji)) return false;
   var m = null;
   for (var i = chatLog.length - 1; i >= 0; i--) { if (chatLog[i].id === msgId) { m = chatLog[i]; break; } }
   if (!m) return false;
@@ -3384,7 +3423,7 @@ function sendChatMessage(text) {
 }
 
 function sendChatReaction(msgId, emoji) {
-  if (!inRoom || !peer || CHAT_REACTIONS.indexOf(emoji) === -1) return false;
+  if (!inRoom || !peer || !isChatEmoji(emoji)) return false;
   if (isHost) fanOutChatReaction(peer.id, msgId, emoji);
   else _sendToHostData({ type: 'chat-react', msgId: msgId, emoji: emoji });
   return true;
@@ -3432,7 +3471,7 @@ function fanOutChatMessage(senderId, id, text) {
 
 function fanOutChatReaction(senderId, msgId, emoji) {
   if (!isHost) return;
-  if (typeof msgId !== 'string' || CHAT_REACTIONS.indexOf(emoji) === -1) return;
+  if (typeof msgId !== 'string' || !isChatEmoji(emoji)) return;
   var out = { type: 'chat-react', msgId: msgId, emoji: emoji, peerId: senderId };
   connections.forEach(function(c) { if (c.data) sendDataIfOpen(c.data, out); });
   if (applyChatReaction(msgId, emoji, senderId)) { renderChat(); saveChatLog(); }
@@ -3497,32 +3536,40 @@ function renderChatText(target, text) {
   if (last < text.length) target.appendChild(document.createTextNode(text.slice(last)));
 }
 
-function renderChatMessage(m, pending) {
+// One row is one line: name then text, with everything periodic (the time, the
+// react button) pulled out of the flow into a hover strip. A transcript read
+// down a 360px column is mostly whitespace otherwise.
+function renderChatMessage(m, opts) {
+  var pending = !!(opts && opts.pending);
+  var grouped = !!(opts && opts.grouped);
   var mine = !!(peer && m.peerId === peer.id);
   var row = document.createElement('div');
-  row.className = 'chat-msg' + (mine ? ' chat-msg-self' : '') + (pending ? ' chat-msg-pending' : '');
+  row.className = 'chat-msg'
+    + (mine ? ' chat-msg-self' : '')
+    + (pending ? ' chat-msg-pending' : '')
+    + (grouped ? ' chat-msg-grouped' : '');
   row.dataset.msgId = m.id;
 
-  var head = document.createElement('div');
-  head.className = 'chat-msg-head';
+  var line = document.createElement('div');
+  line.className = 'chat-msg-line';
+  // A run of messages from one person names them once. The name is still in the
+  // DOM for a screen reader on every row — it is only hidden visually.
   var author = document.createElement('span');
-  author.className = 'chat-msg-author';
-  author.textContent = chatAuthorName(m.peerId);
+  author.className = 'chat-msg-author' + (grouped ? ' chat-msg-author-repeat' : '');
+  // The separating space belongs INSIDE the span, not to a ::after: it has to
+  // disappear with the name on a grouped row, and it has to survive a
+  // copy-paste of the transcript, which a generated one would not.
+  author.textContent = chatAuthorName(m.peerId) + ' ';
   var color = chatAuthorColor(m.peerId);
   if (color) author.style.color = color;
-  head.appendChild(author);
-  var time = document.createElement('time');
-  time.className = 'chat-msg-time';
-  time.textContent = pending ? 'sending…' : chatTimeLabel(m.at);
-  head.appendChild(time);
-  row.appendChild(head);
-
-  var body = document.createElement('div');
+  line.appendChild(author);
+  var body = document.createElement('span');
   body.className = 'chat-msg-body';
   renderChatText(body, m.text);
-  row.appendChild(body);
+  line.appendChild(body);
+  row.appendChild(line);
 
-  if (!pending) {
+  if (m.reactions.size) {
     var foot = document.createElement('div');
     foot.className = 'chat-msg-foot';
     m.reactions.forEach(function(peers, emoji) {
@@ -3535,6 +3582,19 @@ function renderChatMessage(m, pending) {
       chip.title = Array.from(peers).map(chatAuthorName).join(', ');
       foot.appendChild(chip);
     });
+    row.appendChild(foot);
+  }
+
+  // The hover strip. Absolute, so neither the stamp nor the button costs a line
+  // of height or a column of width while you are just reading.
+  var tools = document.createElement('div');
+  tools.className = 'chat-msg-tools';
+  var time = document.createElement('time');
+  time.className = 'chat-msg-time';
+  time.textContent = pending ? 'sending…' : chatTimeLabel(m.at);
+  time.title = pending ? 'Not acknowledged by the host yet' : chatFullTimeLabel(m.at);
+  tools.appendChild(time);
+  if (!pending) {
     var add = document.createElement('button');
     add.type = 'button';
     add.className = 'chat-react-open';
@@ -3542,26 +3602,45 @@ function renderChatMessage(m, pending) {
     add.title = 'React';
     add.setAttribute('aria-label', 'React to this message');
     add.textContent = '☺';
-    foot.appendChild(add);
-    row.appendChild(foot);
+    tools.appendChild(add);
   }
+  row.appendChild(tools);
   return row;
 }
 
-function renderChatPicker(msgId) {
-  var picker = document.createElement('div');
-  picker.className = 'chat-react-picker';
-  picker.dataset.msgId = msgId;
-  CHAT_REACTIONS.forEach(function(emoji) {
-    var b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'chat-reaction chat-react-opt';
-    b.dataset.emoji = emoji;
-    b.dataset.msgId = msgId;
-    b.textContent = emoji;
-    picker.appendChild(b);
-  });
-  return picker;
+// A separator carries the stamp for everything under it, which is what lets the
+// messages themselves go unstamped.
+function renderChatBreak(at) {
+  var el = document.createElement('div');
+  el.className = 'chat-break';
+  var label = document.createElement('span');
+  label.textContent = chatBreakLabel(at);
+  el.appendChild(label);
+  return el;
+}
+
+function chatSameDay(a, b) {
+  var da = new Date(a);
+  var db = new Date(b);
+  return da.getFullYear() === db.getFullYear()
+    && da.getMonth() === db.getMonth()
+    && da.getDate() === db.getDate();
+}
+
+function chatBreakLabel(at) {
+  var now = Date.now();
+  var time = chatTimeLabel(at);
+  if (chatSameDay(at, now)) return time;
+  if (chatSameDay(at, now - 86400000)) return 'Yesterday ' + time;
+  try {
+    var opts = { day: 'numeric', month: 'short' };
+    if (!chatSameDay(at, now) && new Date(at).getFullYear() !== new Date(now).getFullYear()) opts.year = 'numeric';
+    return new Date(at).toLocaleDateString([], opts) + ' ' + time;
+  } catch (_) { return time; }
+}
+
+function chatFullTimeLabel(at) {
+  try { return new Date(at).toLocaleString(); } catch (_) { return ''; }
 }
 
 // Stay pinned to the newest message unless the reader has scrolled up to read
@@ -3574,6 +3653,7 @@ function renderChat() {
   var list = document.getElementById('chat-messages');
   if (!list) return;
   var stick = chatStuckToBottom(list);
+  closeEmojiPicker();          // its anchor row is about to be replaced
   list.innerHTML = '';
   if (!chatLog.length && !_chatPending.size) {
     var empty = document.createElement('p');
@@ -3581,11 +3661,20 @@ function renderChat() {
     empty.textContent = 'No messages yet.';
     list.appendChild(empty);
   }
-  chatLog.forEach(function(m) { list.appendChild(renderChatMessage(m, false)); });
+  var prev = null;
+  chatLog.forEach(function(m) {
+    var broke = !prev || !chatSameDay(prev.at, m.at) || (m.at - prev.at) > CHAT_BREAK_MS;
+    if (broke) list.appendChild(renderChatBreak(m.at));
+    var grouped = !broke && !!prev && prev.peerId === m.peerId && (m.at - prev.at) <= CHAT_GROUP_MS;
+    list.appendChild(renderChatMessage(m, { grouped: grouped }));
+    prev = m;
+  });
   _chatPending.forEach(function(p) {
-    list.appendChild(renderChatMessage({
-      id: p.id, peerId: peer ? peer.id : '', text: p.text, at: Date.now(), reactions: new Map()
-    }, true));
+    var at = Date.now();
+    var grouped = !!prev && !!peer && prev.peerId === peer.id && (at - prev.at) <= CHAT_GROUP_MS;
+    var draft = { id: p.id, peerId: peer ? peer.id : '', text: p.text, at: at, reactions: new Map() };
+    list.appendChild(renderChatMessage(draft, { pending: true, grouped: grouped }));
+    prev = draft;
   });
   if (stick) list.scrollTop = list.scrollHeight;
   renderChatTyping();
@@ -3640,6 +3729,7 @@ function toggleChatPanel(open) {
     if (input) setTimeout(function() { try { input.focus(); } catch (_) {} }, 60);
   } else {
     sendChatTyping(false);
+    closeEmojiPicker();
   }
   updateChatUnreadBadge();
 }
@@ -3653,9 +3743,278 @@ function submitChatInput() {
   }
 }
 
+// The composer is one line until it needs more. `overflow-y` is toggled rather
+// than left on `auto`: a one-row textarea whose scrollHeight includes its own
+// padding reports itself overflowing by a pixel or two, and every engine then
+// paints a permanent scrollbar down an empty box.
 function autoGrowChatInput(input) {
   input.style.height = 'auto';
-  input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+  var wanted = input.scrollHeight;
+  var capped = Math.min(wanted, CHAT_INPUT_MAX_HEIGHT);
+  input.style.height = capped + 'px';
+  input.style.overflowY = wanted > CHAT_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
+}
+
+// --- Chat: the emoji picker --------------------------------------------------
+//
+// One picker for both jobs — inserting into the composer, and reacting to a
+// message — because they differ only in what happens to the emoji you pick. It
+// docks above the composer instead of anchoring to whatever opened it: the
+// drawer is 280–720px wide, and there is nowhere for a floating popover to land
+// that is not on top of the thing you are reacting to.
+
+var _emojiCatalog = null;
+var _emojiTarget  = null;   // { mode:'compose' } | { mode:'react', msgId }
+var _emojiGroup   = 'recent';
+
+// Parsed once, from the vendored dataset. Each group's `data` is one string of
+// "<emoji> <name>" lines, so this is a split, not a JSON parse.
+function emojiCatalog() {
+  if (_emojiCatalog) return _emojiCatalog;
+  var groups = (typeof window !== 'undefined' && window.EMOJI_GROUPS) || [];
+  _emojiCatalog = groups.map(function(g) {
+    return {
+      name: g.name,
+      icon: g.icon,
+      items: String(g.data || '').split('\n').filter(Boolean).map(function(line) {
+        var sp = line.indexOf(' ');
+        var name = line.slice(sp + 1);
+        // [emoji, display name, folded name] — folded once here rather than on
+        // every keystroke of a search over nineteen hundred entries.
+        return [line.slice(0, sp), name, name.toLowerCase()];
+      })
+    };
+  });
+  return _emojiCatalog;
+}
+
+function emojiNameOf(ch) {
+  var found = '';
+  emojiCatalog().some(function(g) {
+    return g.items.some(function(it) {
+      if (it[0] !== ch) return false;
+      found = it[1];
+      return true;
+    });
+  });
+  return found;
+}
+
+// Recents are what makes a 1900-emoji grid usable, so they are seeded with the
+// reaction row rather than starting empty.
+function readRecentEmoji() {
+  var stored = [];
+  try {
+    var raw = localStorage.getItem(EMOJI_RECENT_KEY);
+    if (raw) stored = JSON.parse(raw);
+  } catch (_) {}
+  if (!Array.isArray(stored)) stored = [];
+  var out = stored.filter(isChatEmoji);
+  CHAT_REACTIONS.forEach(function(ch) {
+    if (out.length < EMOJI_RECENT_MAX && out.indexOf(ch) === -1) out.push(ch);
+  });
+  return out.slice(0, EMOJI_RECENT_MAX);
+}
+
+function noteRecentEmoji(ch) {
+  if (!isChatEmoji(ch)) return;
+  var list = readRecentEmoji().filter(function(x) { return x !== ch; });
+  list.unshift(ch);
+  try { localStorage.setItem(EMOJI_RECENT_KEY, JSON.stringify(list.slice(0, EMOJI_RECENT_MAX))); } catch (_) {}
+}
+
+function emojiPickerOpen() {
+  var el = document.getElementById('emoji-picker');
+  return !!el && !el.classList.contains('hidden');
+}
+
+function openEmojiPicker(target) {
+  var el = document.getElementById('emoji-picker');
+  if (!el) return;
+  _emojiTarget = target;
+  el.classList.remove('hidden');
+  el.dataset.mode = target.mode;
+  var search = document.getElementById('emoji-search');
+  if (search) { search.value = ''; }
+  renderEmojiTabs();
+  renderEmojiGrid('');
+  var btn = document.getElementById('btn-emoji');
+  if (btn) btn.setAttribute('aria-expanded', String(target.mode === 'compose'));
+  if (search) setTimeout(function() { try { search.focus(); } catch (_) {} }, 40);
+}
+
+function closeEmojiPicker() {
+  var el = document.getElementById('emoji-picker');
+  if (!el || el.classList.contains('hidden')) return;
+  el.classList.add('hidden');
+  _emojiTarget = null;
+  var btn = document.getElementById('btn-emoji');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+
+function renderEmojiTabs() {
+  var tabs = document.getElementById('emoji-tabs');
+  if (!tabs) return;
+  tabs.innerHTML = '';
+  var entries = [{ key: 'recent', icon: '\u{1F553}', name: 'Recent' }].concat(
+    emojiCatalog().map(function(g, i) { return { key: String(i), icon: g.icon, name: g.name }; })
+  );
+  entries.forEach(function(entry) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'emoji-tab' + (entry.key === _emojiGroup ? ' emoji-tab-active' : '');
+    b.dataset.group = entry.key;
+    b.textContent = entry.icon;
+    b.title = entry.name;
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-selected', String(entry.key === _emojiGroup));
+    b.setAttribute('aria-label', entry.name);
+    tabs.appendChild(b);
+  });
+}
+
+// A search spans every group; without one only the selected group is built, so
+// the grid is a few hundred buttons rather than nineteen hundred.
+function emojiMatches(query) {
+  var q = String(query || '').trim().toLowerCase();
+  if (!q) {
+    if (_emojiGroup === 'recent') {
+      return readRecentEmoji().map(function(ch) { return [ch, emojiNameOf(ch) || '', '']; });
+    }
+    var group = emojiCatalog()[Number(_emojiGroup)];
+    return group ? group.items : [];
+  }
+  var out = [];
+  emojiCatalog().some(function(g) {
+    return g.items.some(function(it) {
+      if (it[2].indexOf(q) !== -1 || it[0] === q) out.push(it);
+      return out.length >= EMOJI_SEARCH_MAX;
+    });
+  });
+  return out;
+}
+
+function renderEmojiGrid(query) {
+  var grid = document.getElementById('emoji-grid');
+  if (!grid) return;
+  var items = emojiMatches(query);
+  grid.innerHTML = '';
+  if (!items.length) {
+    var none = document.createElement('p');
+    none.className = 'emoji-none';
+    none.textContent = 'No emoji match that.';
+    grid.appendChild(none);
+    return;
+  }
+  var frag = document.createDocumentFragment();
+  items.forEach(function(it) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'emoji-cell';
+    b.dataset.emoji = it[0];
+    b.textContent = it[0];
+    b.title = it[1];
+    b.setAttribute('aria-label', it[1]);
+    frag.appendChild(b);
+  });
+  grid.appendChild(frag);
+  grid.scrollTop = 0;
+}
+
+function chooseEmoji(ch) {
+  if (!isChatEmoji(ch) || !_emojiTarget) return;
+  noteRecentEmoji(ch);
+  if (_emojiTarget.mode === 'react') {
+    sendChatReaction(_emojiTarget.msgId, ch);
+    closeEmojiPicker();
+    return;
+  }
+  insertIntoComposer(ch);
+  closeEmojiPicker();
+}
+
+// Insert at the caret, not at the end: an emoji picked mid-sentence belongs
+// where the sentence was.
+function insertIntoComposer(text) {
+  var input = document.getElementById('chat-input');
+  if (!input) return;
+  var start = input.selectionStart;
+  var end = input.selectionEnd;
+  if (typeof start !== 'number' || typeof end !== 'number') {
+    input.value += text;
+  } else {
+    input.value = input.value.slice(0, start) + text + input.value.slice(end);
+    var caret = start + text.length;
+    try { input.setSelectionRange(caret, caret); } catch (_) {}
+  }
+  autoGrowChatInput(input);
+  try { input.focus(); } catch (_) {}
+  sendChatTyping(true);
+}
+
+// --- Chat: the drawer's own width --------------------------------------------
+//
+// The separator is the panel's left edge. Width is a CSS variable so the drag
+// costs one custom-property write per frame rather than a re-layout of the
+// room behind it, and it is only persisted on release.
+
+var _chatResizeDrag = null;
+
+function readChatWidth() {
+  var stored = parseInt(localStorage.getItem(CHAT_WIDTH_KEY), 10);
+  return clampChatWidth(isNaN(stored) ? CHAT_WIDTH_DEFAULT : stored);
+}
+
+function clampChatWidth(px) {
+  var max = Math.min(CHAT_WIDTH_MAX, Math.max(CHAT_WIDTH_MIN, Math.round(window.innerWidth * 0.9)));
+  return Math.max(CHAT_WIDTH_MIN, Math.min(max, Math.round(px)));
+}
+
+function applyChatWidth(px) {
+  document.documentElement.style.setProperty('--chat-width', clampChatWidth(px) + 'px');
+}
+
+function saveChatWidth(px) {
+  try { localStorage.setItem(CHAT_WIDTH_KEY, String(clampChatWidth(px))); } catch (_) {}
+}
+
+function _chatResizePointerDown(e) {
+  if (_chatResizeDrag || (e.button !== undefined && e.button !== 0)) return;
+  var panel = document.getElementById('room-chat-panel');
+  if (!panel) return;
+  _chatResizeDrag = { pointerId: e.pointerId, width: panel.getBoundingClientRect().width };
+  // On the window: the pointer routinely leaves a 6px grip mid-drag, and a lost
+  // pointerup would strand the drawer at whatever width the cursor was over.
+  window.addEventListener('pointermove', _onChatResizePointerMove);
+  window.addEventListener('pointerup', _onChatResizePointerUp);
+  window.addEventListener('pointercancel', _onChatResizePointerUp);
+  document.body.classList.add('chat-resizing');
+  e.preventDefault();
+}
+
+function _onChatResizePointerMove(e) {
+  var d = _chatResizeDrag;
+  if (!d || (e.pointerId !== undefined && e.pointerId !== d.pointerId)) return;
+  d.width = window.innerWidth - e.clientX;
+  applyChatWidth(d.width);
+}
+
+function _onChatResizePointerUp(e) {
+  var d = _chatResizeDrag;
+  if (!d || (e && e.pointerId !== undefined && e.pointerId !== d.pointerId)) return;
+  window.removeEventListener('pointermove', _onChatResizePointerMove);
+  window.removeEventListener('pointerup', _onChatResizePointerUp);
+  window.removeEventListener('pointercancel', _onChatResizePointerUp);
+  _chatResizeDrag = null;
+  document.body.classList.remove('chat-resizing');
+  saveChatWidth(d.width);
+}
+
+function nudgeChatWidth(delta) {
+  var panel = document.getElementById('room-chat-panel');
+  var width = clampChatWidth((panel ? panel.getBoundingClientRect().width : readChatWidth()) + delta);
+  applyChatWidth(width);
+  saveChatWidth(width);
 }
 
 function initChatUI() {
@@ -3663,6 +4022,8 @@ function initChatUI() {
   var list  = document.getElementById('chat-messages');
   if (!input || !list || input._voxalChatWired) return;
   input._voxalChatWired = true;
+
+  applyChatWidth(readChatWidth());
 
   var btn = document.getElementById('btn-chat');
   if (btn) btn.addEventListener('click', function() { toggleChatPanel(); });
@@ -3681,35 +4042,81 @@ function initChatUI() {
     if (input.value.trim()) sendChatTyping(true); else sendChatTyping(false);
   });
   input.addEventListener('blur', function() { sendChatTyping(false); });
+  autoGrowChatInput(input);
 
   // Reactions are delegated: the list is re-rendered whole on every change.
   list.addEventListener('click', function(e) {
-    var opt = e.target.closest('.chat-react-opt');
-    if (opt) {
-      sendChatReaction(opt.dataset.msgId, opt.dataset.emoji);
-      closeChatPickers();
-      return;
-    }
     var chip = e.target.closest('.chat-reaction');
-    if (chip && !chip.classList.contains('chat-react-opt')) {
-      sendChatReaction(chip.dataset.msgId, chip.dataset.emoji);
-      return;
-    }
+    if (chip) { sendChatReaction(chip.dataset.msgId, chip.dataset.emoji); return; }
     var open = e.target.closest('.chat-react-open');
     if (open) {
-      var row = open.closest('.chat-msg');
-      var existing = row && row.querySelector('.chat-react-picker');
-      closeChatPickers();
-      if (row && !existing) row.appendChild(renderChatPicker(open.dataset.msgId));
+      var already = emojiPickerOpen() && _emojiTarget && _emojiTarget.msgId === open.dataset.msgId;
+      if (already) closeEmojiPicker();
+      else openEmojiPicker({ mode: 'react', msgId: open.dataset.msgId });
     }
   });
 
+  var emojiBtn = document.getElementById('btn-emoji');
+  if (emojiBtn) {
+    emojiBtn.addEventListener('click', function() {
+      if (emojiPickerOpen() && _emojiTarget && _emojiTarget.mode === 'compose') closeEmojiPicker();
+      else openEmojiPicker({ mode: 'compose' });
+    });
+  }
+
+  var picker = document.getElementById('emoji-picker');
+  var search = document.getElementById('emoji-search');
+  var tabs   = document.getElementById('emoji-tabs');
+  var grid   = document.getElementById('emoji-grid');
+  if (search) {
+    search.addEventListener('input', function() { renderEmojiGrid(search.value); });
+    search.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') { e.stopPropagation(); closeEmojiPicker(); }
+    });
+  }
+  if (tabs) {
+    tabs.addEventListener('click', function(e) {
+      var tab = e.target.closest('.emoji-tab');
+      if (!tab) return;
+      _emojiGroup = tab.dataset.group;
+      if (search) search.value = '';
+      renderEmojiTabs();
+      renderEmojiGrid('');
+    });
+  }
+  if (grid) {
+    grid.addEventListener('click', function(e) {
+      var cell = e.target.closest('.emoji-cell');
+      if (cell) chooseEmoji(cell.dataset.emoji);
+    });
+  }
+  // A click anywhere else dismisses it — but not the click that opened it.
+  document.addEventListener('pointerdown', function(e) {
+    if (!emojiPickerOpen()) return;
+    if (picker && picker.contains(e.target)) return;
+    if (e.target.closest('#btn-emoji, .chat-react-open')) return;
+    closeEmojiPicker();
+  });
+
+  var resizer = document.getElementById('chat-resizer');
+  if (resizer) {
+    resizer.addEventListener('pointerdown', _chatResizePointerDown);
+    resizer.addEventListener('dblclick', function() {
+      applyChatWidth(CHAT_WIDTH_DEFAULT);
+      saveChatWidth(CHAT_WIDTH_DEFAULT);
+    });
+    // Keyboard parity: it is a real separator, so it has to be steerable.
+    resizer.addEventListener('keydown', function(e) {
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); nudgeChatWidth(24); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); nudgeChatWidth(-24); }
+    });
+  }
+  // A window that shrank below the stored width must not leave the drawer
+  // hanging off the side.
+  window.addEventListener('resize', function() { applyChatWidth(readChatWidth()); });
+
   renderChat();
   updateChatUnreadBadge();
-}
-
-function closeChatPickers() {
-  document.querySelectorAll('.chat-react-picker').forEach(function(p) { p.remove(); });
 }
 
 function rejoinCandidates(snapshot) {

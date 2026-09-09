@@ -408,6 +408,291 @@ test.describe('sending', () => {
   });
 });
 
+test.describe('the transcript on screen', () => {
+  const seed = (page) => seedRoom(page, {
+    selfId: 'me', isHost: false, roomCode: 'the-host', myPseudo: 'Me',
+    connections: [{ id: 'the-host', pseudo: 'Host' }, { id: 'other', pseudo: 'Alice' }],
+  });
+
+  test('a name and its message are one line, and the stamp is out of the flow', async ({ page }) => {
+    await seed(page);
+    const seen = await page.evaluate(() => {
+      resetChatState();
+      appendChatMessage({ id: 'other:1', peerId: 'other', text: 'hi', at: Date.now() }, { quiet: true });
+      renderChat();
+      const row = document.querySelector('#chat-messages .chat-msg');
+      return {
+        line: row.querySelector('.chat-msg-line').textContent,
+        // The stamp lives in the hover strip, not in the line it would otherwise
+        // cost a row of height for.
+        timeInLine: !!row.querySelector('.chat-msg-line time'),
+        timeInTools: !!row.querySelector('.chat-msg-tools time'),
+      };
+    });
+    expect(seen.line).toBe('Alice hi');
+    expect(seen.timeInLine).toBe(false);
+    expect(seen.timeInTools).toBe(true);
+  });
+
+  test('a run from one person names them once', async ({ page }) => {
+    await seed(page);
+    const seen = await page.evaluate(() => {
+      resetChatState();
+      const now = Date.now();
+      appendChatMessage({ id: 'other:1', peerId: 'other', text: 'one', at: now - 1000 }, { quiet: true });
+      appendChatMessage({ id: 'other:2', peerId: 'other', text: 'two', at: now }, { quiet: true });
+      appendChatMessage({ id: 'the-host:1', peerId: 'the-host', text: 'three', at: now }, { quiet: true });
+      renderChat();
+      return Array.from(document.querySelectorAll('#chat-messages .chat-msg')).map((row) => ({
+        text: row.querySelector('.chat-msg-body').textContent,
+        // Still in the DOM for a screen reader; only the repetition is hidden.
+        repeat: row.querySelector('.chat-msg-author').classList.contains('chat-msg-author-repeat'),
+      }));
+    });
+    expect(seen).toEqual([
+      { text: 'one', repeat: false },
+      { text: 'two', repeat: true },
+      { text: 'three', repeat: false },
+    ]);
+  });
+
+  test('a long pause and a new day each get a separator', async ({ page }) => {
+    await seed(page);
+    const labels = await page.evaluate(() => {
+      resetChatState();
+      const now = Date.now();
+      appendChatMessage({ id: 'other:1', peerId: 'other', text: 'yesterday', at: now - 26 * 3600 * 1000 }, { quiet: true });
+      appendChatMessage({ id: 'other:2', peerId: 'other', text: 'after a pause', at: now - CHAT_BREAK_MS - 1000 }, { quiet: true });
+      appendChatMessage({ id: 'other:3', peerId: 'other', text: 'right after', at: now }, { quiet: true });
+      appendChatMessage({ id: 'other:4', peerId: 'other', text: 'and again', at: now + 1000 }, { quiet: true });
+      renderChat();
+      return Array.from(document.querySelectorAll('#chat-messages .chat-break')).map((b) => b.textContent);
+    });
+    // One to open the transcript, one for the day change, one for the pause —
+    // and none for the message that followed straight on.
+    expect(labels).toHaveLength(3);
+    expect(labels[0]).toContain('Yesterday');
+  });
+
+  test('a reaction row only exists once there is a reaction', async ({ page }) => {
+    await seed(page);
+    const seen = await page.evaluate(() => {
+      resetChatState();
+      appendChatMessage({ id: 'other:1', peerId: 'other', text: 'hi', at: Date.now() }, { quiet: true });
+      renderChat();
+      const before = !!document.querySelector('#chat-messages .chat-msg-foot');
+      applyChatReaction('other:1', CHAT_REACTIONS[0], 'p1');
+      renderChat();
+      return { before, after: !!document.querySelector('#chat-messages .chat-msg-foot') };
+    });
+    expect(seen).toEqual({ before: false, after: true });
+  });
+});
+
+test.describe('the composer', () => {
+  test.beforeEach(async ({ page }) => {
+    await seedRoom(page, {
+      selfId: 'me', isHost: false, roomCode: 'the-host',
+      connections: [{ id: 'the-host', pseudo: 'Host' }],
+    });
+    await page.evaluate(() => { showScreen('room'); resetChatState(); toggleChatPanel(true); });
+  });
+
+  test('an empty composer has no scrollbar, a long one does', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const input = document.getElementById('chat-input');
+      input.value = '';
+      autoGrowChatInput(input);
+      const empty = input.style.overflowY;
+      input.value = Array.from({ length: 40 }, (_, i) => 'line ' + i).join('\n');
+      autoGrowChatInput(input);
+      return { empty, full: input.style.overflowY, height: parseInt(input.style.height, 10) };
+    });
+    expect(seen.empty).toBe('hidden');
+    expect(seen.full).toBe('auto');
+    expect(seen.height).toBe(120);
+  });
+});
+
+test.describe('the emoji picker', () => {
+  const ROCKET = '\u{1F680}';
+
+  test.beforeEach(async ({ page }) => {
+    await seedRoom(page, {
+      selfId: 'me', isHost: false, roomCode: 'the-host',
+      connections: [{ id: 'the-host', pseudo: 'Host' }],
+    });
+    await page.evaluate(() => {
+      showScreen('room');
+      resetChatState();
+      localStorage.removeItem(EMOJI_RECENT_KEY);
+      toggleChatPanel(true);
+    });
+  });
+
+  test('the catalog loaded, and any emoji in it may be a reaction', async ({ page }) => {
+    const seen = await page.evaluate((rocket) => ({
+      groups: emojiCatalog().length,
+      total: emojiCatalog().reduce((n, g) => n + g.items.length, 0),
+      // Not one of the six seeds: the picker is an offer, not a whitelist.
+      rocket: isChatEmoji(rocket),
+      seed: isChatEmoji(CHAT_REACTIONS[0]),
+      markup: isChatEmoji('<script>'),
+      sentence: isChatEmoji(rocket + ' and some words'),
+      empty: isChatEmoji(''),
+    }), ROCKET);
+    expect(seen.groups).toBe(9);
+    expect(seen.total).toBeGreaterThan(1800);
+    expect(seen).toMatchObject({ rocket: true, seed: true, markup: false, sentence: false, empty: false });
+  });
+
+  test('search finds an emoji by its Unicode name', async ({ page }) => {
+    const first = await page.evaluate(() => {
+      openEmojiPicker({ mode: 'compose' });
+      renderEmojiGrid('rocket');
+      const cell = document.querySelector('#emoji-grid .emoji-cell');
+      return { emoji: cell && cell.dataset.emoji, label: cell && cell.title };
+    });
+    expect(first.emoji).toBe(ROCKET);
+    expect(first.label).toContain('rocket');
+  });
+
+  test('picking inserts at the caret, not at the end', async ({ page }) => {
+    const value = await page.evaluate((rocket) => {
+      const input = document.getElementById('chat-input');
+      input.value = 'ab';
+      input.focus();
+      input.setSelectionRange(1, 1);
+      openEmojiPicker({ mode: 'compose' });
+      chooseEmoji(rocket);
+      return input.value;
+    }, ROCKET);
+    expect(value).toBe('a' + ROCKET + 'b');
+  });
+
+  test('picking in react mode sends a reaction and closes', async ({ page }) => {
+    const seen = await page.evaluate((rocket) => {
+      appendChatMessage({ id: 'other:1', peerId: 'other', text: 'hi', at: Date.now() }, { quiet: true });
+      const sent = [];
+      connections.get('the-host').data.send = (m) => sent.push(m);
+      openEmojiPicker({ mode: 'react', msgId: 'other:1' });
+      chooseEmoji(rocket);
+      return { sent, open: emojiPickerOpen() };
+    }, ROCKET);
+    expect(seen.open).toBe(false);
+    expect(seen.sent).toEqual([{ type: 'chat-react', msgId: 'other:1', emoji: ROCKET }]);
+  });
+
+  test('a click outside dismisses the picker, but the button that opened it toggles', async ({ page }) => {
+    await page.evaluate(() => { document.getElementById('chat-messages').style.minHeight = '120px'; });
+    await page.click('#btn-emoji');
+    expect(await page.evaluate(() => emojiPickerOpen())).toBe(true);
+    // The same button again closes it rather than reopening.
+    await page.click('#btn-emoji');
+    expect(await page.evaluate(() => emojiPickerOpen())).toBe(false);
+
+    await page.click('#btn-emoji');
+    await page.click('#chat-messages');
+    expect(await page.evaluate(() => emojiPickerOpen())).toBe(false);
+  });
+
+  test('what you picked comes back at the top of Recent', async ({ page }) => {
+    const recent = await page.evaluate((rocket) => {
+      openEmojiPicker({ mode: 'compose' });
+      chooseEmoji(rocket);
+      return readRecentEmoji();
+    }, ROCKET);
+    expect(recent[0]).toBe(ROCKET);
+    // The seeds stay behind it rather than the list starting empty.
+    expect(recent).toContain('\u{1F44D}');
+  });
+});
+
+test.describe('the drawer\'s width', () => {
+  test.beforeEach(async ({ page }) => {
+    await seedRoom(page, {
+      selfId: 'me', isHost: false, roomCode: 'the-host',
+      connections: [{ id: 'the-host', pseudo: 'Host' }],
+    });
+    await page.evaluate(() => { showScreen('room'); toggleChatPanel(true); });
+  });
+
+  test('a stored width is applied, and an absurd one is clamped', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const read = (px) => { localStorage.setItem(CHAT_WIDTH_KEY, String(px)); return readChatWidth(); };
+      return {
+        normal: read(420),
+        tiny: read(10),
+        huge: read(99999),
+        junk: (localStorage.setItem(CHAT_WIDTH_KEY, 'wide'), readChatWidth()),
+        min: CHAT_WIDTH_MIN,
+        max: CHAT_WIDTH_MAX,
+        def: CHAT_WIDTH_DEFAULT,
+      };
+    });
+    expect(seen.normal).toBe(420);
+    expect(seen.tiny).toBe(seen.min);
+    expect(seen.huge).toBeLessThanOrEqual(seen.max);
+    expect(seen.junk).toBe(seen.def);
+  });
+
+  test('nudging the separator moves the drawer and remembers it', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      applyChatWidth(400);
+      saveChatWidth(400);
+      nudgeChatWidth(24);
+      return {
+        widened: document.getElementById('room-chat-panel').getBoundingClientRect().width,
+        stored: Number(localStorage.getItem(CHAT_WIDTH_KEY)),
+      };
+    });
+    expect(seen.widened).toBe(424);
+    expect(seen.stored).toBe(424);
+  });
+
+  test('dragging the separator resizes the drawer and persists on release', async ({ page }) => {
+    await page.setViewportSize({ width: 1100, height: 760 });
+    await page.evaluate(() => { applyChatWidth(360); saveChatWidth(360); });
+    const grip = page.locator('#chat-resizer');
+    const box = await grip.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    // Drag left: the drawer's left edge moves left, so the drawer gets wider.
+    await page.mouse.move(box.x + box.width / 2 - 120, box.y + box.height / 2, { steps: 6 });
+    const during = await page.evaluate(() => document.getElementById('room-chat-panel').getBoundingClientRect().width);
+    await page.mouse.up();
+    const after = await page.evaluate(() => ({
+      width: document.getElementById('room-chat-panel').getBoundingClientRect().width,
+      stored: Number(localStorage.getItem(CHAT_WIDTH_KEY)),
+      dragging: document.body.classList.contains('chat-resizing'),
+    }));
+    expect(during).toBeGreaterThan(400);
+    expect(after.width).toBe(during);
+    expect(after.stored).toBe(during);
+    expect(after.dragging).toBe(false);
+  });
+
+  test('double-clicking the separator puts it back', async ({ page }) => {
+    await page.evaluate(() => { applyChatWidth(600); saveChatWidth(600); });
+    await page.dblclick('#chat-resizer');
+    const seen = await page.evaluate(() => ({
+      width: document.getElementById('room-chat-panel').getBoundingClientRect().width,
+      def: CHAT_WIDTH_DEFAULT,
+    }));
+    expect(seen.width).toBe(seen.def);
+  });
+
+  test('a window narrower than the stored width does not leave the drawer hanging off', async ({ page }) => {
+    await page.evaluate(() => { applyChatWidth(700); saveChatWidth(700); });
+    await page.setViewportSize({ width: 700, height: 700 });
+    const width = await page.evaluate(() => {
+      applyChatWidth(readChatWidth());
+      return document.getElementById('room-chat-panel').getBoundingClientRect().width;
+    });
+    expect(width).toBeLessThanOrEqual(700);
+  });
+});
+
 test.describe('the panel', () => {
   test.beforeEach(async ({ page }) => {
     await seedRoom(page, {

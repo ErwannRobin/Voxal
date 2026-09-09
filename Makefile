@@ -2,7 +2,7 @@
         test-rust test-api test-e2e test-mesh coverage coverage-rust coverage-e2e \
         coverage-api coverage-summary coverage-badge \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
-        seg-assets
+        seg-assets emoji-data
 
 # Default target
 help:
@@ -108,6 +108,12 @@ gen-build-info:
 	@COMMIT=$$(git rev-parse --short HEAD); \
 	BUILD_DATE=$$(date -u +%FT%TZ); \
 	echo "window.VOXAL_COMMIT='$$COMMIT';window.VOXAL_WEB_BUILD_DATE='$$BUILD_DATE';" > src/build-info.js
+
+# Regenerates src/emoji-data.js (the chat picker's catalog) from Unicode's own
+# emoji-test.txt. Committed output — this is not part of any build; run it when
+# a new Unicode emoji release is worth picking up.
+emoji-data:
+	@node scripts/gen-emoji-data.mjs
 
 # Stages the ~12 MB MediaPipe vision runtime into src/assets/seg/. The copy
 # itself lives in seg-assets.sh so this target and the Vercel deploy
