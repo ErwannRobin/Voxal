@@ -315,6 +315,15 @@ body {
   gap: 2px;
 }
 
+/* Leaving is the one thing in this header you cannot undo, so it does not sit
+   flush against the row of room-code controls. */
+.room-actions-spacer {
+  width: 1px;
+  height: 20px;
+  margin: 0 10px 0 4px;
+  background: var(--border);
+}
+
 .copy-toast {
   position: fixed;
   bottom: max(calc(env(safe-area-inset-bottom) + 24px), 32px);
@@ -1556,6 +1565,11 @@ body.stage-panel-dragging #screen-room .room-chat-panel { transition: none; }
   -webkit-tap-highlight-color: transparent;
 }
 body.video-stage-immersive .stage-handle { display: flex; }
+/* The roster's and the header's handles belong to the phone stage — everywhere
+   else those panels are simply on screen. The chat's is the only way into the
+   chat, so it is there in every room, voice-only ones included. */
+body:not(.embed-tiny) .stage-handle-right { display: flex; }
+body.embed-tiny .stage-handle-right { display: none; }
 /* The panels are mutually exclusive, so while one is open the other's handle is
    just a control floating on top of it. Hide it until the panel is dismissed. */
 body.video-stage-immersive.stage-roster-open .stage-handle-top,
@@ -1616,8 +1630,11 @@ body.video-stage-immersive.stage-roster-open .stage-handle-left {
   transition: right 0.25s ease;
 }
 .stage-handle-right::before { width: 4px; height: 34px; }
-/* The same width the immersive drawer takes — the handle rides out on its edge,
-   so the two must not disagree. */
+/* An open drawer carries the handle out on its edge, so the offset has to be
+   the width that regime's panel actually takes — never a fourth number. */
+body.chat-open .stage-handle-right {
+  right: calc(min(var(--chat-width, 360px), 92vw) + max(env(safe-area-inset-right), 0px));
+}
 body.video-stage-immersive.chat-open .stage-handle-right {
   right: calc(min(360px, 88vw) + max(env(safe-area-inset-right), 0px));
 }
@@ -4284,8 +4301,7 @@ body.chat-open .room-chat-panel { transform: translateX(0); }
 /* The drawer lives inside #screen-room, so `display:none` on the inactive
    screen already hides it off-room despite the fixed positioning. It is gone
    entirely in the tiny embed — the same call the other room chrome makes. */
-body.embed-tiny .room-chat-panel,
-body.embed-tiny #btn-chat { display: none; }
+body.embed-tiny .room-chat-panel { display: none; }
 
 .room-chat-header {
   display: flex;
@@ -4453,8 +4469,7 @@ body.embed-tiny #btn-chat { display: none; }
 .chat-input:focus { outline: none; border-color: var(--accent); }
 .chat-send { flex-shrink: 0; }
 
-/* Unread count on the Chat button in the control row. */
-#btn-chat { position: relative; }
+/* Unread count on the handle that opens the chat. */
 .chat-unread {
   position: absolute;
   top: 2px;
@@ -4619,6 +4634,9 @@ body.video-stage-immersive .chat-resizer { display: none; }
   }
   /* Collapsed: the button still hides it, and the room takes the space back. */
   html.is-web body.chat-docked:not(.chat-open):not(.embed-tiny) #screen-room .room-chat-panel { display: none; }
+  html.is-web body.chat-docked.chat-open:not(.embed-tiny) .stage-handle-right {
+    right: calc(min(var(--chat-width, 360px), 38vw) + max(env(safe-area-inset-right), 0px));
+  }
 
   html.is-web body.chat-docked:not(.embed-tiny) #screen-room .room-chat-panel {
     grid-area: chat;
@@ -4687,7 +4705,6 @@ body.video-stage-immersive .chat-resizer { display: none; }
   .chat-peek-item { animation: none; }
 }
 
-/* The chat lives in the room header now, not among the call controls: it is a
-   piece of the interface, not something you do to the call. */
-.room-chat-btn { position: relative; }
-.room-chat-btn[aria-pressed="true"] { color: var(--accent); }
+/* The handle is the chat's only entry point, so it says whether the chat is
+   already open. */
+.stage-handle-right[aria-expanded="true"] { color: var(--accent); }

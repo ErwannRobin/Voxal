@@ -3721,8 +3721,8 @@ function updateChatUnreadBadge() {
     badge.textContent = label;
     badge.classList.toggle('hidden', _chatUnread === 0);
   });
-  var btn = document.getElementById('btn-chat');
-  if (btn) btn.setAttribute('aria-pressed', String(chatPanelOpen()));
+  var handle = document.getElementById('stage-handle-chat');
+  if (handle) handle.setAttribute('aria-pressed', String(chatPanelOpen()));
 }
 
 // --- Chat: the peek over the call --------------------------------------------
@@ -3804,10 +3804,8 @@ function toggleChatPanel(open) {
   var next = (open === undefined) ? !chatPanelOpen() : !!open;
   if (next) closeStagePanels();
   document.body.classList.toggle('chat-open', next);
-  ['btn-chat', 'stage-handle-chat'].forEach(function(id) {
-    var el = document.getElementById(id);
-    if (el) el.setAttribute('aria-expanded', String(next));
-  });
+  var handle = document.getElementById('stage-handle-chat');
+  if (handle) handle.setAttribute('aria-expanded', String(next));
   if (next) {
     _chatUnread = 0;
     clearChatPeek();
@@ -4113,8 +4111,6 @@ function initChatUI() {
 
   applyChatWidth(readChatWidth());
 
-  var btn = document.getElementById('btn-chat');
-  if (btn) btn.addEventListener('click', function() { toggleChatPanel(); });
   var close = document.getElementById('btn-chat-close');
   if (close) close.addEventListener('click', function() { toggleChatPanel(false); });
   var send = document.getElementById('btn-chat-send');

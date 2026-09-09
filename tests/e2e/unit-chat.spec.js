@@ -769,28 +769,38 @@ test.describe('the chat as a column of the room', () => {
     await page.evaluate(() => { showScreen('room'); resetChatState(); });
   });
 
-  test('the button lives in the room header, not among the call controls', async ({ page }) => {
-    const seen = await page.evaluate(() => ({
-      inHeader: !!document.querySelector('#screen-room .room-header #btn-chat'),
-      inControls: !!document.querySelector('#screen-room .room-controls #btn-chat'),
-      badgeInside: !!document.querySelector('#btn-chat #chat-unread'),
-    }));
-    expect(seen).toEqual({ inHeader: true, inControls: false, badgeInside: true });
+  test('the only way in is the edge handle, in a voice room as much as a video one', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const handle = document.getElementById('stage-handle-chat');
+      return {
+        // No button in the header and none among the call controls: the handle
+        // is on the right edge of every room, whether or not a camera is live.
+        inHeader: !!document.querySelector('#screen-room .room-header #btn-chat'),
+        inControls: !!document.querySelector('#screen-room .room-controls #btn-chat'),
+        onScreen: getComputedStyle(handle).display,
+        badgeInside: !!handle.querySelector('.chat-unread'),
+        // Leave is not the tail of the room-code controls.
+        leaveSpacer: !!document.querySelector('#screen-room .room-actions .room-actions-spacer'),
+      };
+    });
+    expect(seen).toEqual({
+      inHeader: false, inControls: false, onScreen: 'flex', badgeInside: true, leaveSpacer: true,
+    });
   });
 
-  test('the unread count rides on that button and clears when the chat opens', async ({ page }) => {
+  test('the unread count rides on that handle and clears when the chat opens', async ({ page }) => {
     await page.evaluate(() => toggleChatPanel(false));
     const shut = await page.evaluate(() => {
       handleHostMessage({ type: 'chat', id: 'other:1', peerId: 'other', text: 'one', at: Date.now() });
       handleHostMessage({ type: 'chat', id: 'other:2', peerId: 'other', text: 'two', at: Date.now() });
-      const badge = document.getElementById('chat-unread');
+      const badge = document.querySelector('#stage-handle-chat .chat-unread');
       return { text: badge.textContent, hidden: badge.classList.contains('hidden') };
     });
     expect(shut).toEqual({ text: '2', hidden: false });
 
     const opened = await page.evaluate(() => {
       toggleChatPanel(true);
-      const badge = document.getElementById('chat-unread');
+      const badge = document.querySelector('#stage-handle-chat .chat-unread');
       return { text: badge.textContent, hidden: badge.classList.contains('hidden') };
     });
     expect(opened).toEqual({ text: '0', hidden: true });

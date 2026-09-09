@@ -621,12 +621,13 @@ participants | stage | chat, the shape every video call has. Docking never opens
 it — while it is shut, a new message surfaces for a few seconds over the call
 (`#chat-peek`) and the count rides on the header's chat button.
 
-On the immersive phone stage there is no header to put a button in, so the three
-panels are reached from the edge each of them lives on: participants from the
-left, the conversation from the right (its handle wears the chat icon and the
-unread count), the room header from the top. The chat borrows `STAGE_PANELS`'
-drag gesture through `CHAT_DRAG_PANEL` without joining it — see
-[[chat-drawer-not-a-stage-panel]] in `learning.md`.
+The chat is reached from a handle on the right edge — the chat icon, the unread
+count, and a drag — in **every** room, voice-only ones included. There is no
+button for it in the header. On the immersive phone stage it is one of three
+edges: participants from the left, the conversation from the right, the room
+header from the top. The chat borrows `STAGE_PANELS`' drag gesture through
+`CHAT_DRAG_PANEL` without joining it — see [[chat-drawer-not-a-stage-panel]] in
+`learning.md`.
 
 Deliberately left for later:
 
