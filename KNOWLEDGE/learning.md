@@ -952,6 +952,13 @@ seems too sharp".
   (`talking`, `peer-renamed`) exclude the sender because they are state the
   sender already has; a log is not.
 
+- **Docking a panel decides where it goes, not whether it is open.** The first
+  version opened the chat by itself the moment a camera went live, since that is
+  when it becomes a column rather than a drawer. It handed a third of the stage
+  to a conversation nobody had started, and it moved the video tiles under three
+  existing layout tests. The unread badge and the peek exist precisely so the
+  chat can stay shut and still be findable.
+
 - **A one-row `<textarea>` paints a scrollbar down an empty box.** Its
   `scrollHeight` includes its own padding, so it reports itself overflowing by a
   pixel or two and `overflow-y: auto` believes it. The auto-grow toggles

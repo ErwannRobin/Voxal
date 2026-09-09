@@ -615,7 +615,11 @@ variants dropped. It serves both the composer and reactions, and a reaction may
 be any emoji in that catalog rather than one of six.
 
 The drawer's width is dragged on its own separator and remembered in
-`chat-width`.
+`chat-width`. On a wide screen with a live stage it stops being a drawer at all:
+`applyChatDock()` publishes `body.chat-docked` and the room becomes
+participants | stage | chat, the shape every video call has. Docking never opens
+it — while it is shut, a new message surfaces for a few seconds over the call
+(`#chat-peek`) and the count rides on the header's chat button.
 
 Deliberately left for later:
 

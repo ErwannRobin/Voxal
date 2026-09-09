@@ -414,7 +414,7 @@ test.describe('the transcript on screen', () => {
     connections: [{ id: 'the-host', pseudo: 'Host' }, { id: 'other', pseudo: 'Alice' }],
   });
 
-  test('a name and its message are one line, and the stamp is out of the flow', async ({ page }) => {
+  test('a name and its message are one line, with no stamp on the row', async ({ page }) => {
     await seed(page);
     const seen = await page.evaluate(() => {
       resetChatState();
@@ -423,15 +423,21 @@ test.describe('the transcript on screen', () => {
       const row = document.querySelector('#chat-messages .chat-msg');
       return {
         line: row.querySelector('.chat-msg-line').textContent,
-        // The stamp lives in the hover strip, not in the line it would otherwise
-        // cost a row of height for.
-        timeInLine: !!row.querySelector('.chat-msg-line time'),
-        timeInTools: !!row.querySelector('.chat-msg-tools time'),
+        // The separator above already says when this stretch happened; a stamp
+        // on every row is what made the column mostly chrome.
+        anyTime: !!row.querySelector('time'),
+        // It is still one hover away.
+        title: row.title,
+        react: !!row.querySelector('.chat-msg-tools .chat-react-open'),
+        // An icon, not an emoji — the button is not one of the things it offers.
+        reactIsIcon: !!row.querySelector('.chat-react-open svg'),
       };
     });
     expect(seen.line).toBe('Alice hi');
-    expect(seen.timeInLine).toBe(false);
-    expect(seen.timeInTools).toBe(true);
+    expect(seen.anyTime).toBe(false);
+    expect(seen.title).toBeTruthy();
+    expect(seen.react).toBe(true);
+    expect(seen.reactIsIcon).toBe(true);
   });
 
   test('a run from one person names them once', async ({ page }) => {
@@ -690,6 +696,157 @@ test.describe('the drawer\'s width', () => {
       return document.getElementById('room-chat-panel').getBoundingClientRect().width;
     });
     expect(width).toBeLessThanOrEqual(700);
+  });
+});
+
+test.describe('the peek over the call', () => {
+  test.beforeEach(async ({ page }) => {
+    await seedRoom(page, {
+      selfId: 'me', isHost: false, roomCode: 'the-host',
+      connections: [{ id: 'the-host', pseudo: 'Host' }, { id: 'other', pseudo: 'Alice' }],
+    });
+    await page.evaluate(() => { showScreen('room'); resetChatState(); toggleChatPanel(false); });
+  });
+
+  const peeks = (page) => page.evaluate(() =>
+    Array.from(document.querySelectorAll('#chat-peek .chat-peek-item')).map((el) => el.textContent));
+
+  test('a message arriving with the panel shut surfaces briefly', async ({ page }) => {
+    await page.evaluate(() => {
+      handleHostMessage({ type: 'chat', id: 'other:1', peerId: 'other', text: 'over here', at: Date.now() });
+    });
+    expect(await peeks(page)).toEqual(['Alice over here']);
+  });
+
+  test('nothing peeks while the panel is showing the same thing', async ({ page }) => {
+    await page.evaluate(() => {
+      toggleChatPanel(true);
+      handleHostMessage({ type: 'chat', id: 'other:1', peerId: 'other', text: 'seen', at: Date.now() });
+    });
+    expect(await peeks(page)).toEqual([]);
+  });
+
+  test('your own message never peeks', async ({ page }) => {
+    await page.evaluate(() => {
+      handleHostMessage({ type: 'chat', id: 'me:1', peerId: 'me', text: 'mine', at: Date.now() });
+    });
+    expect(await peeks(page)).toEqual([]);
+  });
+
+  test('it is a glance, not a second transcript', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      for (let i = 0; i < CHAT_PEEK_MAX + 3; i++) {
+        handleHostMessage({ type: 'chat', id: 'other:' + i, peerId: 'other', text: 'm' + i, at: Date.now() });
+      }
+      return {
+        count: document.querySelectorAll('#chat-peek .chat-peek-item').length,
+        max: CHAT_PEEK_MAX,
+        // The oldest fall off the top, so what is left is the newest.
+        last: document.querySelector('#chat-peek .chat-peek-item:last-child').textContent,
+      };
+    });
+    expect(seen.count).toBe(seen.max);
+    expect(seen.last).toBe('Alice m' + (seen.max + 2));
+  });
+
+  test('opening the chat takes the peek away with it', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      handleHostMessage({ type: 'chat', id: 'other:1', peerId: 'other', text: 'hi', at: Date.now() });
+      const before = document.querySelectorAll('#chat-peek .chat-peek-item').length;
+      toggleChatPanel(true);
+      return { before, after: document.querySelectorAll('#chat-peek .chat-peek-item').length };
+    });
+    expect(seen).toEqual({ before: 1, after: 0 });
+  });
+});
+
+test.describe('the chat as a column of the room', () => {
+  test.beforeEach(async ({ page }) => {
+    await seedRoom(page, {
+      selfId: 'me', isHost: false, roomCode: 'the-host',
+      connections: [{ id: 'the-host', pseudo: 'Host' }],
+    });
+    await page.evaluate(() => { showScreen('room'); resetChatState(); });
+  });
+
+  test('the button lives in the room header, not among the call controls', async ({ page }) => {
+    const seen = await page.evaluate(() => ({
+      inHeader: !!document.querySelector('#screen-room .room-header #btn-chat'),
+      inControls: !!document.querySelector('#screen-room .room-controls #btn-chat'),
+      badgeInside: !!document.querySelector('#btn-chat #chat-unread'),
+    }));
+    expect(seen).toEqual({ inHeader: true, inControls: false, badgeInside: true });
+  });
+
+  test('the unread count rides on that button and clears when the chat opens', async ({ page }) => {
+    await page.evaluate(() => toggleChatPanel(false));
+    const shut = await page.evaluate(() => {
+      handleHostMessage({ type: 'chat', id: 'other:1', peerId: 'other', text: 'one', at: Date.now() });
+      handleHostMessage({ type: 'chat', id: 'other:2', peerId: 'other', text: 'two', at: Date.now() });
+      const badge = document.getElementById('chat-unread');
+      return { text: badge.textContent, hidden: badge.classList.contains('hidden') };
+    });
+    expect(shut).toEqual({ text: '2', hidden: false });
+
+    const opened = await page.evaluate(() => {
+      toggleChatPanel(true);
+      const badge = document.getElementById('chat-unread');
+      return { text: badge.textContent, hidden: badge.classList.contains('hidden') };
+    });
+    expect(opened).toEqual({ text: '0', hidden: true });
+  });
+
+  test('a wide room with a live stage docks it beside the participants', async ({ page }) => {
+    await page.setViewportSize({ width: 1400, height: 800 });
+    const seen = await page.evaluate(() => {
+      // Stand in for a live camera: updateVideoStage() publishes this class, and
+      // applyChatDock() is what reads it.
+      document.body.classList.add('video-stage');
+      applyChatDock();
+      const shut = chatPanelOpen();
+      toggleChatPanel(true);
+      const panel = document.getElementById('room-chat-panel');
+      const roster = document.getElementById('room-peers-panel').getBoundingClientRect();
+      return {
+        docked: document.body.classList.contains('chat-docked'),
+        // Docking decides WHERE an open chat goes, never whether it is open: a
+        // call must not hand a third of the stage to a conversation nobody has
+        // started.
+        openedItself: shut,
+        // In the flow, not floating over the room…
+        transform: getComputedStyle(panel).transform,
+        position: getComputedStyle(panel).position,
+        // …on the far side of the room from the participants. (That the stage
+        // itself sits between them is unit-video-stage.spec.js's assertion; no
+        // camera is live here, so it has no box to measure.)
+        oppositeTheRoster: panel.getBoundingClientRect().left > roster.right,
+      };
+    });
+    expect(seen.docked).toBe(true);
+    expect(seen.openedItself).toBe(false);
+    expect(seen.oppositeTheRoster).toBe(true);
+    expect(seen.position).toBe('relative');
+    expect(seen.transform === 'none' || seen.transform === 'matrix(1, 0, 0, 1, 0, 0)').toBe(true);
+  });
+
+  test('a narrow room keeps it a drawer', async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 800 });
+    const docked = await page.evaluate(() => {
+      document.body.classList.add('video-stage');
+      applyChatDock();
+      return document.body.classList.contains('chat-docked');
+    });
+    expect(docked).toBe(false);
+  });
+
+  test('the phone stage never docks it — there is one column to have', async ({ page }) => {
+    await page.setViewportSize({ width: 1400, height: 800 });
+    const docked = await page.evaluate(() => {
+      document.body.classList.add('video-stage', 'video-stage-immersive');
+      applyChatDock();
+      return document.body.classList.contains('chat-docked');
+    });
+    expect(docked).toBe(false);
   });
 });
 

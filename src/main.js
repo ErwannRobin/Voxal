@@ -204,6 +204,13 @@ const CHAT_BREAK_MS  = 15 * 60 * 1000;
 const CHAT_REACTIONS = ['\u{1F44D}', '\u2764\uFE0F', '\u{1F602}', '\u{1F389}', '\u{1F914}', '\u{1F440}'];
 const EMOJI_RECENT_KEY = 'emoji-recent';
 const EMOJI_RECENT_MAX = 24;
+// How long a message lingers over the call before it fades, and how many can
+// stack there. A peek is a glance, not a second transcript.
+const CHAT_PEEK_MS  = 7000;
+const CHAT_PEEK_MAX = 3;
+// Below this the chat cannot be a column beside the stage without squeezing the
+// tiles into nothing, so it stays the drawer it is everywhere else.
+const CHAT_DOCK_MIN_WIDTH = 1100;
 const CHAT_INPUT_MAX_HEIGHT = 120;  // px the composer grows to before it scrolls
 const EMOJI_SEARCH_MAX = 240;   // matches rendered per query; a grid nobody scrolls to the end of
 // The chat drawer's width, dragged on its own separator. Clamped so it can
@@ -3265,6 +3272,7 @@ function appendChatMessage(raw, opts) {
   if (!(opts && opts.quiet) && !mine && !chatPanelOpen()) {
     _chatUnread++;
     playChatPing();
+    showChatPeek(m);
   }
   return true;
 }
@@ -3358,6 +3366,7 @@ function resetChatState() {
   _chatLastTypingSentAt = 0;
   if (_chatTypingIdleTimer) { clearTimeout(_chatTypingIdleTimer); _chatTypingIdleTimer = null; }
   stopChatTypingSweep();
+  clearChatPeek();
   renderChat();
   updateChatUnreadBadge();
 }
@@ -3503,6 +3512,14 @@ function chatTimeLabel(at) {
   } catch (_) { return ''; }
 }
 
+// Static, author-written markup — the only innerHTML the chat uses, and never
+// on anything that came off the wire.
+var ICON_ADD_REACTION = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<path d="M21.5 12a9.5 9.5 0 1 1-6.6-9.04"/>'
+  + '<path d="M8.2 14.4s1.3 1.6 3.8 1.6 3.8-1.6 3.8-1.6"/>'
+  + '<line x1="9" y1="10" x2="9.01" y2="10"/><line x1="15" y1="10" x2="15.01" y2="10"/>'
+  + '<line x1="19" y1="2" x2="19" y2="8"/><line x1="16" y1="5" x2="22" y2="5"/></svg>';
+
 // A chat body is the one string in this app that arrives verbatim from another
 // person, so it never goes near innerHTML. The only markup it can produce is an
 // <a> whose href we built and validated ourselves.
@@ -3585,26 +3602,28 @@ function renderChatMessage(m, opts) {
     row.appendChild(foot);
   }
 
-  // The hover strip. Absolute, so neither the stamp nor the button costs a line
-  // of height or a column of width while you are just reading.
-  var tools = document.createElement('div');
-  tools.className = 'chat-msg-tools';
-  var time = document.createElement('time');
-  time.className = 'chat-msg-time';
-  time.textContent = pending ? 'sending…' : chatTimeLabel(m.at);
-  time.title = pending ? 'Not acknowledged by the host yet' : chatFullTimeLabel(m.at);
-  tools.appendChild(time);
+  // No stamp on the row: the separator above it already says when this stretch
+  // of conversation happened, and repeating that per message is what made the
+  // column mostly chrome. The exact time stays one hover away.
+  row.title = pending ? 'Not acknowledged by the host yet' : chatFullTimeLabel(m.at);
+
+  // The hover strip. Absolute, so the button costs neither a line of height nor
+  // a column of width while you are just reading.
   if (!pending) {
+    var tools = document.createElement('div');
+    tools.className = 'chat-msg-tools';
     var add = document.createElement('button');
     add.type = 'button';
     add.className = 'chat-react-open';
     add.dataset.msgId = m.id;
     add.title = 'React';
     add.setAttribute('aria-label', 'React to this message');
-    add.textContent = '☺';
+    // An icon, not an emoji: a literal ☺ on the button reads as "insert this
+    // one" next to a row of emoji that do exactly that.
+    add.innerHTML = ICON_ADD_REACTION;
     tools.appendChild(add);
+    row.appendChild(tools);
   }
-  row.appendChild(tools);
   return row;
 }
 
@@ -3703,6 +3722,50 @@ function updateChatUnreadBadge() {
   if (btn) btn.setAttribute('aria-pressed', String(chatPanelOpen()));
 }
 
+// --- Chat: the peek over the call --------------------------------------------
+//
+// While the panel is not on screen, a new message surfaces briefly at the
+// bottom of the stage and then gets out of the way. It is a glance, not a
+// second transcript: three at most, and never while the panel is showing the
+// same thing.
+
+var _chatPeekTimers = new Set();
+
+function showChatPeek(m) {
+  var host = document.getElementById('chat-peek');
+  if (!host || !inRoom) return;
+  var el = document.createElement('div');
+  el.className = 'chat-peek-item';
+  var author = document.createElement('span');
+  author.className = 'chat-peek-author';
+  author.textContent = chatAuthorName(m.peerId) + ' ';
+  var color = chatAuthorColor(m.peerId);
+  if (color) author.style.color = color;
+  el.appendChild(author);
+  var body = document.createElement('span');
+  body.className = 'chat-peek-body';
+  renderChatText(body, m.text);
+  el.appendChild(body);
+  host.appendChild(el);
+  while (host.children.length > CHAT_PEEK_MAX) dropChatPeek(host.firstChild);
+  var timer = setTimeout(function() { dropChatPeek(el); }, CHAT_PEEK_MS);
+  _chatPeekTimers.add(timer);
+  el._voxalPeekTimer = timer;
+}
+
+function dropChatPeek(el) {
+  if (!el) return;
+  if (el._voxalPeekTimer) { clearTimeout(el._voxalPeekTimer); _chatPeekTimers.delete(el._voxalPeekTimer); }
+  el.remove();
+}
+
+function clearChatPeek() {
+  var host = document.getElementById('chat-peek');
+  _chatPeekTimers.forEach(function(t) { clearTimeout(t); });
+  _chatPeekTimers.clear();
+  if (host) host.innerHTML = '';
+}
+
 // --- Chat: the panel ---------------------------------------------------------
 //
 // The panel is a right-hand drawer in every layout regime, driven by one body
@@ -3715,6 +3778,25 @@ function chatPanelOpen() {
   return document.body.classList.contains('chat-open');
 }
 
+// Wide enough, and a stage to sit beside: the chat stops being a drawer over
+// the room and becomes the right-hand column of it, opposite the participants.
+// Decided here rather than in a media query for the same reason videoStageMode()
+// is — CSS would have to re-derive the is-web / tiny-embed reasoning and could
+// then disagree with the JS that decides whether a peek is a duplicate.
+function chatDocked() {
+  if (IS_TINY_EMBED || !inRoom) return false;
+  if (!document.body.classList.contains('video-stage')) return false;
+  if (document.body.classList.contains('video-stage-immersive')) return false;
+  return window.innerWidth >= CHAT_DOCK_MIN_WIDTH;
+}
+
+// Docking decides WHERE an open chat goes, never whether it is open: a call
+// must not silently hand a third of the stage to a conversation nobody has
+// started. The unread badge and the peek are what make it findable instead.
+function applyChatDock() {
+  document.body.classList.toggle('chat-docked', chatDocked());
+}
+
 function toggleChatPanel(open) {
   var next = (open === undefined) ? !chatPanelOpen() : !!open;
   if (next) closeStagePanels();
@@ -3723,6 +3805,7 @@ function toggleChatPanel(open) {
   if (btn) btn.setAttribute('aria-expanded', String(next));
   if (next) {
     _chatUnread = 0;
+    clearChatPeek();
     var list = document.getElementById('chat-messages');
     if (list) list.scrollTop = list.scrollHeight;
     var input = document.getElementById('chat-input');
@@ -4113,7 +4196,14 @@ function initChatUI() {
   }
   // A window that shrank below the stored width must not leave the drawer
   // hanging off the side.
-  window.addEventListener('resize', function() { applyChatWidth(readChatWidth()); });
+  window.addEventListener('resize', function() {
+    applyChatWidth(readChatWidth());
+    applyChatDock();
+  });
+
+  // A peek is a shortcut into the conversation it came from.
+  var peek = document.getElementById('chat-peek');
+  if (peek) peek.addEventListener('click', function() { toggleChatPanel(true); });
 
   renderChat();
   updateChatUnreadBadge();
@@ -9922,6 +10012,7 @@ function updateVideoStage() {
   // Both classes obey the same rule: set ONLY while a camera or screen is
   // genuinely live, so an audio-only room still renders byte-identically.
   document.body.classList.toggle('video-stage-immersive', active && mode === 'immersive');
+  applyChatDock();
   stage.classList.toggle('hidden', !active);
   // The screen must not sleep while you are watching someone — and must be
   // allowed to again the moment the stage stands down.

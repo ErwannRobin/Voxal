@@ -158,7 +158,7 @@ test.describe('room layout', () => {
     expect(style.maxWidth).toBe('none');
   });
 
-  test('the voice UI stays on screen, to the right of the stage', async ({ page }) => {
+  test('the voice UI stays on screen, to the left of the stage', async ({ page }) => {
     await enterRoom(page, {
       knownPeerIds: ['p1'],
       connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
@@ -167,8 +167,10 @@ test.describe('room layout', () => {
       const r = (s) => document.querySelector(s).getBoundingClientRect();
       return { stage: r('#video-stage'), roster: r('#room-peers-panel'), ptt: r('.room-bottom-bar') };
     });
-    expect(boxes.roster.left).toBeGreaterThan(boxes.stage.left);
-    expect(boxes.ptt.left).toBeGreaterThan(boxes.stage.left);
+    // Participants on the left, stage in the middle — and the chat on the right
+    // once it is opened. See the `chat-docked` block in styles.css.
+    expect(boxes.roster.left).toBeLessThan(boxes.stage.left);
+    expect(boxes.ptt.left).toBeLessThan(boxes.stage.left);
     // The PTT column sits below the roster in the same rail.
     expect(boxes.ptt.top).toBeGreaterThanOrEqual(boxes.roster.top);
   });

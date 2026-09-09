@@ -1350,7 +1350,7 @@ kbd {
 @media (min-width: 861px) {
   html.is-web body.video-stage:not(.embed-tiny) #screen-room.active {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 320px;   /* stage | voice rail */
+    grid-template-columns: 320px minmax(0, 1fr);   /* voice rail | stage */
     /* The consent banner gets a row of its own, exactly as in the landscape
        grid above. Sharing `header` with .room-header stacks the two in the same
        cell, and the banner's Accept/Decline then land on the room's own
@@ -1360,7 +1360,7 @@ kbd {
       "consent consent"
       "header  header"
       "warning warning"
-      "stage   rail";
+      "rail    stage";
     column-gap: 20px;
     align-items: stretch;
     /* Without this the grid stays trapped inside the centered 480px column
@@ -4311,8 +4311,7 @@ body.embed-tiny #btn-chat { display: none; }
   right: 0;
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 1px 4px 1px 8px;
+  padding: 2px 4px;
   border-radius: 999px;
   background: var(--bg-surface);
   opacity: 0;
@@ -4323,7 +4322,6 @@ body.embed-tiny #btn-chat { display: none; }
 .chat-msg:focus-within .chat-msg-tools { opacity: 1; pointer-events: auto; }
 /* No hover on a touch screen, so the strip is simply always there. */
 @media (hover: none) { .chat-msg-tools { opacity: 1; pointer-events: auto; } }
-.chat-msg-time { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 
 /* A separator carries the stamp for everything under it. That is what lets the
    messages themselves go unstamped. */
@@ -4356,13 +4354,13 @@ body.embed-tiny #btn-chat { display: none; }
 .chat-reaction-mine { border-color: var(--accent); color: var(--accent); }
 
 .chat-react-open {
+  display: flex;
+  align-items: center;
   border: none;
   background: none;
   color: var(--text-muted);
   border-radius: 999px;
-  padding: 0 4px;
-  font-size: 13px;
-  line-height: 1.4;
+  padding: 0 2px;
   cursor: pointer;
 }
 .chat-react-open:hover { color: var(--text); }
@@ -4378,6 +4376,9 @@ body.embed-tiny #btn-chat { display: none; }
 
 .chat-emoji-btn {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 32px;
   height: 34px;
   border: 1px solid var(--border);
@@ -4560,3 +4561,97 @@ body.video-stage-immersive .chat-resizer { display: none; }
   .room-chat-panel { width: min(var(--chat-width, 360px), 100vw); }
   .chat-resizer { display: none; }
 }
+
+/* ── Chat: docked as the room's right-hand column ─────────────────
+   Wide enough, with a stage to sit beside, the chat stops being a drawer over
+   the room and becomes part of it: participants on the left, stage in the
+   middle, conversation on the right — the shape every video call has.
+
+   `body.chat-docked` is published by applyChatDock(), not re-derived here, for
+   the same reason `body.video-stage` is: a media query would have to repeat the
+   is-web / tiny-embed reasoning and could then disagree with the JS that decides
+   whether a message still needs to peek. */
+
+@media (min-width: 1100px) {
+  html.is-web body.video-stage.chat-docked.chat-open:not(.embed-tiny) #screen-room.active {
+    grid-template-columns: 320px minmax(0, 1fr) min(var(--chat-width, 360px), 38vw);
+    grid-template-areas:
+      "consent consent consent"
+      "header  header  header"
+      "warning warning warning"
+      "rail    stage   chat";
+  }
+  /* Collapsed: the button still hides it, and the room takes the space back. */
+  html.is-web body.chat-docked:not(.chat-open):not(.embed-tiny) #screen-room .room-chat-panel { display: none; }
+
+  html.is-web body.chat-docked:not(.embed-tiny) #screen-room .room-chat-panel {
+    grid-area: chat;
+    /* Back into the flow: no transform, no fixed positioning, and the grid
+       column — not the element — owns the width the separator sets. */
+    position: relative;
+    inset: auto;
+    width: auto;
+    transform: none;
+    transition: none;
+    padding: 0 0 0 14px;
+    background: none;
+  }
+  /* The stage keeps the left rail on its left; the roster and the talk button
+     stay stacked in it exactly as they were, on the other side. */
+  html.is-web body.chat-docked:not(.embed-tiny) #screen-room .room-peers-panel { grid-area: rail; }
+  html.is-web body.chat-docked:not(.embed-tiny) #screen-room .room-bottom-bar { grid-area: rail; }
+}
+
+/* ── Chat: the peek over the call ─────────────────────────────────
+   The newest messages, briefly, while the panel is not on screen. Centred low
+   over the room rather than pinned to a corner: it is meant to be read on the
+   way past, not parked on. */
+
+.chat-peek {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--stage-inset-bottom, 200px) + 12px);
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  width: min(520px, 80%);
+  pointer-events: none;
+}
+.chat-peek:empty { display: none; }
+/* Clicking one is a shortcut into the conversation, so the items take pointer
+   events back that the container gave away. */
+.chat-peek-item {
+  pointer-events: auto;
+  padding: 7px 11px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  /* Two lines is a glance; the rest is what the panel is for. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  animation: chat-peek-in 0.18s ease;
+}
+.chat-peek-author { font-weight: 600; }
+.chat-peek-body a { color: var(--accent); }
+@keyframes chat-peek-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-peek-item { animation: none; }
+}
+
+/* The chat lives in the room header now, not among the call controls: it is a
+   piece of the interface, not something you do to the call. */
+.room-chat-btn { position: relative; }
+.room-chat-btn[aria-pressed="true"] { color: var(--accent); }
