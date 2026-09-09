@@ -3712,12 +3712,15 @@ function renderChatTyping() {
   el.classList.remove('hidden');
 }
 
+// The count appears on every way in that is currently on screen: the header
+// button on a desktop, the edge handle on a phone (where the header itself has
+// slid away).
 function updateChatUnreadBadge() {
-  var badge = document.getElementById('chat-unread');
-  if (badge) {
-    badge.textContent = _chatUnread > 99 ? '99+' : String(_chatUnread);
+  var label = _chatUnread > 99 ? '99+' : String(_chatUnread);
+  document.querySelectorAll('.chat-unread').forEach(function(badge) {
+    badge.textContent = label;
     badge.classList.toggle('hidden', _chatUnread === 0);
-  }
+  });
   var btn = document.getElementById('btn-chat');
   if (btn) btn.setAttribute('aria-pressed', String(chatPanelOpen()));
 }
@@ -3801,8 +3804,10 @@ function toggleChatPanel(open) {
   var next = (open === undefined) ? !chatPanelOpen() : !!open;
   if (next) closeStagePanels();
   document.body.classList.toggle('chat-open', next);
-  var btn = document.getElementById('btn-chat');
-  if (btn) btn.setAttribute('aria-expanded', String(next));
+  ['btn-chat', 'stage-handle-chat'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.setAttribute('aria-expanded', String(next));
+  });
   if (next) {
     _chatUnread = 0;
     clearChatPeek();
@@ -10116,12 +10121,38 @@ function releaseStageWakeLock() {
 // `sign` is the direction of the GESTURE that opens the panel, not the direction
 // of the transform that hides it — they are opposites, and conflating them is
 // how the drag ends up refusing to open. The header hides upward and is opened
-// by pulling DOWN (+y); the roster hides to the right and is opened by pulling
-// LEFT (-x).
+// by pulling DOWN (+y); the roster lives off the LEFT edge and is opened by
+// pulling right (+x); the chat lives off the right and is opened by pulling
+// left (-x). Each handle sits on the edge its panel comes from, so the gesture
+// and the panel agree.
 var STAGE_PANELS = {
   header: { cls: 'stage-header-open', panel: '.room-header', handle: 'stage-handle-header', axis: 'y', sign: 1 },
-  roster: { cls: 'stage-roster-open', panel: '.room-peers-panel', handle: 'stage-handle-roster', axis: 'x', sign: -1 }
+  roster: { cls: 'stage-roster-open', panel: '.room-peers-panel', handle: 'stage-handle-roster', axis: 'x', sign: 1 }
 };
+
+// The chat drags exactly like a stage panel, and on a phone it is one of the
+// three things reachable from an edge — but it is deliberately NOT in
+// STAGE_PANELS: those are closed wholesale by applyVideoStageMode() on every
+// relayout that is not the immersive stage, which would slam the chat shut on
+// desktop. It borrows the gesture and the mutual exclusion, nothing else.
+var CHAT_DRAG_PANEL = {
+  cls: 'chat-open', panel: '.room-chat-panel', handle: 'stage-handle-chat', axis: 'x', sign: -1
+};
+
+var DRAGGABLE_PANELS = ['header', 'roster', 'chat'];
+
+function panelSpec(which) {
+  return which === 'chat' ? CHAT_DRAG_PANEL : STAGE_PANELS[which];
+}
+
+function panelIsOpen(which) {
+  return which === 'chat' ? chatPanelOpen() : stagePanelOpen(which);
+}
+
+function setPanelOpen(which, open) {
+  if (which === 'chat') toggleChatPanel(open);
+  else setStagePanel(which, open);
+}
 
 // A drag has to travel this fraction of the panel before release counts as a
 // change of state; anything shorter snaps back, and a tap toggles.
@@ -10181,7 +10212,7 @@ function relayoutVideoStage() {
 var _stagePanelDrag = null;
 
 function _stagePanelPointerDown(which, e) {
-  var spec = STAGE_PANELS[which];
+  var spec = panelSpec(which);
   if (!spec || _stagePanelDrag || (e.button !== undefined && e.button !== 0)) return;
   var panel = document.querySelector('#screen-room ' + spec.panel);
   if (!panel) return;
@@ -10193,7 +10224,7 @@ function _stagePanelPointerDown(which, e) {
     startX: e.clientX,
     startY: e.clientY,
     moved: false,
-    wasOpen: stagePanelOpen(which),
+    wasOpen: panelIsOpen(which),
     size: spec.axis === 'y' ? box.height : box.width,
     panel: panel
   };
@@ -10240,12 +10271,12 @@ function _onStagePanelPointerUp(e) {
   if (!d.moved) open = !d.wasOpen;
   else if (d.wasOpen) open = d.progress > (1 - STAGE_PANEL_COMMIT);
   else open = d.progress > STAGE_PANEL_COMMIT;
-  setStagePanel(d.which, open);
+  setPanelOpen(d.which, open);
 }
 
 function initStagePanelHandles() {
-  Object.keys(STAGE_PANELS).forEach(function(which) {
-    var el = document.getElementById(STAGE_PANELS[which].handle);
+  DRAGGABLE_PANELS.forEach(function(which) {
+    var el = document.getElementById(panelSpec(which).handle);
     if (!el || el._voxalHandleWired) return;
     el._voxalHandleWired = true;
     el.addEventListener('pointerdown', function(e) { _stagePanelPointerDown(which, e); });
@@ -10253,7 +10284,7 @@ function initStagePanelHandles() {
     el.addEventListener('keydown', function(e) {
       if (e.key !== 'Enter' && e.key !== ' ') return;
       e.preventDefault();
-      setStagePanel(which, !stagePanelOpen(which));
+      setPanelOpen(which, !panelIsOpen(which));
     });
   });
   var scrim = document.getElementById('stage-panel-scrim');

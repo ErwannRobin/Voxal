@@ -952,6 +952,18 @@ seems too sharp".
   (`talking`, `peer-renamed`) exclude the sender because they are state the
   sender already has; a log is not.
 
+- **A handle belongs on the edge its panel comes from.** The roster used to
+  slide in from the right, which was fine while it was the only side panel. With
+  a chat on the right too, `sign` (the direction of the GESTURE that opens it)
+  and the transform that hides it both had to flip for the roster — those are
+  opposites, and getting one without the other is a panel that refuses to open.
+
+- **Deleting a panel means auditing what used to hide for it.** While the chat
+  was opened from a button, a rule hid the roster's right-edge handle whenever
+  the drawer covered it. Once that handle became the chat's own, the same rule
+  hid the thing you had just grabbed — and the symptom was Playwright timing out
+  on "element is not visible" after a click that had already worked.
+
 - **Docking a panel decides where it goes, not whether it is open.** The first
   version opened the chat by itself the moment a camera went live, since that is
   when it becomes a column rather than a drawer. It handed a third of the stage

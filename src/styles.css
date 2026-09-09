@@ -1508,15 +1508,16 @@ body.video-stage-immersive #screen-room .room-peers-panel {
   position: fixed;
   top: 0;
   bottom: 0;
-  right: 0;
+  left: 0;
+  right: auto;
   z-index: 40;
   width: min(300px, 82vw);
-  padding: max(calc(env(safe-area-inset-top) + 14px), 14px)
-           max(calc(env(safe-area-inset-right) + 14px), 14px)
-           max(calc(env(safe-area-inset-bottom) + 14px), 14px) 14px;
+  padding: max(calc(env(safe-area-inset-top) + 14px), 14px) 14px
+           max(calc(env(safe-area-inset-bottom) + 14px), 14px)
+           max(calc(env(safe-area-inset-left) + 14px), 14px);
   background: var(--bg-surface);
-  border-left: 1px solid var(--border);
-  transform: translateX(100%);
+  border-right: 1px solid var(--border);
+  transform: translateX(-100%);
   transition: transform 0.25s ease;
 }
 body.video-stage-immersive.stage-roster-open #screen-room .room-peers-panel {
@@ -1536,7 +1537,8 @@ body.video-stage-immersive #screen-room .peers-list {
 /* While a panel is being dragged it follows the finger, so the transition must
    not fight the per-frame inline transform. */
 body.stage-panel-dragging #screen-room .room-header,
-body.stage-panel-dragging #screen-room .room-peers-panel { transition: none; }
+body.stage-panel-dragging #screen-room .room-peers-panel,
+body.stage-panel-dragging #screen-room .room-chat-panel { transition: none; }
 
 /* The drag handles. Small, always reachable, and the only chrome that sits on
    the video permanently besides the talk button. */
@@ -1557,6 +1559,10 @@ body.video-stage-immersive .stage-handle { display: flex; }
 /* The panels are mutually exclusive, so while one is open the other's handle is
    just a control floating on top of it. Hide it until the panel is dismissed. */
 body.video-stage-immersive.stage-roster-open .stage-handle-top,
+body.video-stage-immersive.stage-roster-open .stage-handle-right,
+body.video-stage-immersive.chat-open .stage-handle-top,
+body.video-stage-immersive.chat-open .stage-handle-left,
+body.video-stage-immersive.stage-header-open .stage-handle-left,
 body.video-stage-immersive.stage-header-open .stage-handle-right { display: none; }
 .stage-handle::before {
   content: '';
@@ -1582,19 +1588,49 @@ body.video-stage-immersive.stage-header-open .stage-handle-top {
   top: calc(var(--stage-header-height, 56px) + max(env(safe-area-inset-top), 0px));
 }
 
-/* Right-centre: pulls the participant list in. */
+/* Left-centre: pulls the participant list in. */
+.stage-handle-left {
+  left: max(env(safe-area-inset-left), 0px);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 72px;
+  border-radius: 0 12px 12px 0;
+  transition: left 0.25s ease;
+}
+.stage-handle-left::before { width: 4px; height: 34px; }
+body.video-stage-immersive.stage-roster-open .stage-handle-left {
+  left: calc(min(300px, 82vw) + max(env(safe-area-inset-left), 0px));
+}
+
+/* Right-centre: pulls the conversation in. This one wears the chat icon rather
+   than a grab pill — on a phone the room header has slid away, so the handle is
+   the only place the unread count can live. */
 .stage-handle-right {
   right: max(env(safe-area-inset-right), 0px);
   top: 50%;
   transform: translateY(-50%);
-  width: 22px;
+  width: 30px;
   height: 72px;
   border-radius: 12px 0 0 12px;
   transition: right 0.25s ease;
 }
 .stage-handle-right::before { width: 4px; height: 34px; }
-body.video-stage-immersive.stage-roster-open .stage-handle-right {
-  right: calc(min(300px, 82vw) + max(env(safe-area-inset-right), 0px));
+/* The same width the immersive drawer takes — the handle rides out on its edge,
+   so the two must not disagree. */
+body.video-stage-immersive.chat-open .stage-handle-right {
+  right: calc(min(360px, 88vw) + max(env(safe-area-inset-right), 0px));
+}
+
+/* An icon handle draws its own content, so it must not also draw the pill. */
+.stage-handle-icon { color: rgba(255, 255, 255, 0.85); }
+.stage-handle-icon::before { display: none; }
+.stage-handle-icon .chat-unread {
+  top: 6px;
+  right: 3px;
+  min-width: 14px;
+  font-size: 9px;
+  line-height: 14px;
 }
 
 /* A scrim behind an open panel, so a tap outside dismisses it and the video
@@ -4549,9 +4585,9 @@ body.chat-resizing .room-chat-panel { transition: none; }
 /* On a phone the drawer covers the stage, so it gets the same scrim the roster
    and header get — a tap outside dismisses it. */
 body.video-stage-immersive.chat-open .stage-panel-scrim { display: block; }
-/* …and the roster's grab handle must not float on top of it. */
-body.video-stage-immersive.chat-open .stage-handle-right,
-body.video-stage-immersive.chat-open .stage-handle-top { display: none; }
+/* Which handles it hides is settled where the handles are declared: the right
+   one IS the chat's, and it rides out on the drawer's edge rather than
+   disappearing under it. */
 
 /* A phone has no spare width to trade, so the drawer takes what it can and the
    separator stops being a control. */
