@@ -54,11 +54,15 @@ For a detailed breakdown of election, retries, settle windows, and split-brain s
 | `room-published` | host → all | `{ roomId, secret? }` |
 | `video-offer` | peer → host (relay) | `{ peerId, topology: 'p2p'\|'sfu', providerRef? }` — see [Video routing](video-routing.md) |
 | `video-stop` | peer → host (relay) | `{ peerId }` |
+| `chat` | peer → host → **all, sender included** | in `{ id, text }`; out `{ id, peerId, text, at }` — the host stamps the sender and the time; the echo back to the sender is its ack |
+| `chat-history` | host → joiner | `{ messages }` — the transcript so far, served from the host's own replica |
+| `chat-react` | peer → host (relay) | `{ msgId, emoji, peerId }` — toggles that peer's reaction |
+| `chat-typing` | peer → host (relay to others) | `{ peerId, active }` — transient, never stored |
 
 ## Protocol versioning & updates
 
 The `hello` and `peer-list` messages carry a `protocolVersion` (integer, bump on
-wire-protocol changes — currently `1`) and `appVersion` (display string). Peers
+wire-protocol changes — currently `2`, bumped when chat was added) and `appVersion` (display string). Peers
 record each other's versions and warn on skew; if any peer is on a *newer*
 protocol, the client shows a one-time "refresh to update" hint.
 

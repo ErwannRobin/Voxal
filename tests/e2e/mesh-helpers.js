@@ -171,3 +171,32 @@ export function rosterCount(page) {
 export function rosterText(page) {
   return page.locator('#peers-list').innerText();
 }
+
+/** Send a chat message as this peer, through the real data channel. */
+export function sendChat(page, text) {
+  return page.evaluate((t) => window.sendChatMessage(t), text);
+}
+
+/** The ids currently in this peer's transcript, in order. */
+export function chatIds(page) {
+  return page.evaluate(() => chatLog.map((m) => m.id));
+}
+
+/** Rendered transcript text, for asserting a message reached the other side. */
+export function chatText(page) {
+  return page.locator('#chat-messages').innerText();
+}
+
+/** Rendered "x is typing…" line, or '' when nobody is. */
+export function chatTypingText(page) {
+  return page.locator('#chat-typing').innerText();
+}
+
+/** The reaction chips on one message, as "<emoji> <count>" strings. */
+export function chatReactions(page, msgId) {
+  return page.evaluate((id) => {
+    const m = chatLog.find((x) => x.id === id);
+    if (!m) return null;
+    return Array.from(m.reactions.entries()).map(([emoji, peers]) => emoji + ' ' + peers.size);
+  }, msgId);
+}

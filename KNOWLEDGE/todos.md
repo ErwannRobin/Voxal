@@ -594,4 +594,58 @@ a link must describe the room, not how the sender's window happened to be opened
 
 ---
 
+## 💬 In-room text chat
+
+Shipped: a right-hand drawer with plain text + autolinked URLs, typing
+indicators, six emoji reactions, an unread badge and a ping. Four message types
+on the existing star signaling (`chat`, `chat-history`, `chat-react`,
+`chat-typing`), `PROTOCOL_VERSION` bumped to 2. The transcript is in memory,
+mirrored to `localStorage` under `chat-log` with the rejoin snapshot's key and
+TTL, and capped at 200 messages. Covered by `tests/e2e/unit-chat.spec.js` (30
+cases) and four `@mesh` tests.
+
+The transcript is dense on purpose: the name and its message are one line, a
+run from one person is named once, and the timestamp lives in a hover strip
+rather than on every row — the stamp for a stretch of conversation is carried by
+a separator, inserted on a day change or a gap over `CHAT_BREAK_MS`.
+
+The emoji picker offers all 1914 of them, from `src/emoji-data.js` — generated
+from Unicode's own `emoji-test.txt` by `make emoji-data`, with the skin-tone
+variants dropped. It serves both the composer and reactions, and a reaction may
+be any emoji in that catalog rather than one of six.
+
+The drawer's width is dragged on its own separator and remembered in
+`chat-width`. On a wide screen with a live stage it stops being a drawer at all:
+`applyChatDock()` publishes `body.chat-docked` and the room becomes
+participants | stage | chat, the shape every video call has. Docking never opens
+it — while it is shut, a new message surfaces for a few seconds over the call
+(`#chat-peek`) and the count rides on the header's chat button.
+
+The chat is reached from a handle on the right edge — the chat icon, the unread
+count, and a drag — in **every** room, voice-only ones included. There is no
+button for it in the header. On the immersive phone stage it is one of three
+edges: participants from the left, the conversation from the right, the room
+header from the top. The chat borrows `STAGE_PANELS`' drag gesture through
+`CHAT_DRAG_PANEL` without joining it — see [[chat-drawer-not-a-stage-panel]] in
+`learning.md`.
+
+Deliberately left for later:
+
+- **Skin-tone variants.** Dropping them is what keeps the catalog at 43 KB. A
+  tone picker would need the modifier sequences back plus a stored preference,
+  and a reaction's identity would stop being a single string.
+- **File and image sharing.** Chunking over the DataConnection with backpressure,
+  progress UI and a size cap is its own feature, not a bigger text box.
+- **Read receipts.** Would need a per-peer ack for every message; the room is
+  small enough that "who is in the room" already answers most of it.
+- **A message that outlives the room.** The transcript dies with the rejoin
+  snapshot on purpose — chat is a room feature, not a message store. Async text
+  between contacts is `docs/ring-a-friend.md`'s problem, and has a completely
+  different delivery model.
+- **Chat while the app is backgrounded on mobile.** The ping is a WebAudio cue,
+  so it needs the page alive. A real notification needs the same FCM/APNs work
+  ring-a-friend is waiting on.
+
+---
+
 _Add new items above this line._

@@ -256,7 +256,7 @@ test.describe('sliding panels', () => {
     await withVideo(page);
     expect(await onScreen(page, '#screen-room .room-header')).toBe(false);
     expect(await onScreen(page, '#screen-room .room-peers-panel')).toBe(false);
-    for (const id of ['#stage-handle-header', '#stage-handle-roster']) {
+    for (const id of ['#stage-handle-header', '#stage-handle-roster', '#stage-handle-chat']) {
       expect(await page.evaluate((s) =>
         getComputedStyle(document.querySelector(s)).display, id)).toBe('flex');
     }
@@ -283,7 +283,7 @@ test.describe('sliding panels', () => {
     await expect.poll(() => onScreen(page, '#screen-room .room-header')).toBe(false);
   });
 
-  test('the roster handle slides the participant list in from the right', async ({ page }) => {
+  test('the roster handle slides the participant list in from the left', async ({ page }) => {
     await withVideo(page);
     await page.locator('#stage-handle-roster').click();
     await expect.poll(() => onScreen(page, '#screen-room .room-peers-panel')).toBe(true);
@@ -295,6 +295,56 @@ test.describe('sliding panels', () => {
     const tileAfter = await page.evaluate(() =>
       document.querySelector('#video-stage-grid .video-tile').getBoundingClientRect().toJSON());
     expect(Math.round(tileAfter.height)).toBe(Math.round(tileBefore.height));
+  });
+
+  test('each panel comes from the edge its own handle sits on', async ({ page }) => {
+    await withVideo(page);
+    const sides = await page.evaluate(() => {
+      const r = (s) => document.querySelector(s).getBoundingClientRect();
+      return {
+        rosterHandle: r('#stage-handle-roster').left,
+        chatHandle: r('#stage-handle-chat').left,
+        mid: window.innerWidth / 2,
+        chatHandleShown: getComputedStyle(document.getElementById('stage-handle-chat')).display,
+      };
+    });
+    // Participants on the left edge, the conversation on the right.
+    expect(sides.rosterHandle).toBeLessThan(sides.mid);
+    expect(sides.chatHandle).toBeGreaterThan(sides.mid);
+    expect(sides.chatHandleShown).toBe('flex');
+  });
+
+  test('the chat handle pulls the conversation in from the right', async ({ page }) => {
+    await withVideo(page);
+    await page.locator('#stage-handle-chat').click();
+    await expect.poll(() => onScreen(page, '#screen-room .room-chat-panel')).toBe(true);
+    expect(await page.locator('#stage-handle-chat').getAttribute('aria-expanded')).toBe('true');
+
+    await page.locator('#stage-handle-chat').click();
+    await expect.poll(() => onScreen(page, '#screen-room .room-chat-panel')).toBe(false);
+  });
+
+  // Three edges, one phone: any of them opening puts the others away.
+  test('the chat and the roster are alternatives', async ({ page }) => {
+    await withVideo(page);
+    await page.evaluate(() => setStagePanel('roster', true));
+    await page.evaluate(() => toggleChatPanel(true));
+    expect(await page.evaluate(() => stagePanelOpen('roster'))).toBe(false);
+
+    await page.evaluate(() => setStagePanel('roster', true));
+    expect(await page.evaluate(() => chatPanelOpen())).toBe(false);
+  });
+
+  test('the unread count rides on the handle, where the header cannot', async ({ page }) => {
+    await withVideo(page);
+    const seen = await page.evaluate(() => {
+      toggleChatPanel(false);
+      appendChatMessage({ id: 'p1:1', peerId: 'p1', text: 'over here', at: Date.now() });
+      updateChatUnreadBadge();
+      const badge = document.querySelector('#stage-handle-chat .chat-unread');
+      return { text: badge.textContent, hidden: badge.classList.contains('hidden') };
+    });
+    expect(seen).toEqual({ text: '1', hidden: false });
   });
 
   // They are alternatives — two panels open at once on a phone would overlap.

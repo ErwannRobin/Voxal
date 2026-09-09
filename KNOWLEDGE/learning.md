@@ -925,3 +925,65 @@ seems too sharp".
   and the navigation to a custom scheme leaves the `load` event pending, so
   `page.goto('/?room=abc')` times out. Tests that only need a query string
   should pick one that is not `room` (or pass `forceWeb=1`).
+
+
+---
+
+## In-room chat
+
+- **A persistent drawer must not be a `STAGE_PANELS` entry.** `STAGE_PANELS`
+  (the header and roster slide-ins) is torn down by `applyVideoStageMode()`'s
+  `closeStagePanels()` on *every* relayout that is not the immersive phone
+  stage — the chat drawer registered there would slam shut on desktop the moment
+  anyone's camera state changed. The drawer therefore has its own body class
+  (`chat-open`) and only borrows the mutual exclusion, in `setStagePanel()`.
+
+- **Push-to-talk owns Space, so a text field has to take the keyboard back.**
+  `shouldIgnorePTTShortcuts()` used to check `editingSelfPseudo` alone; with a
+  composer in the room, typing a space started transmitting and Enter toggled
+  hands-free. It now bails on any focused `INPUT`/`TEXTAREA`/`contenteditable`.
+  Anything that adds a text field to the room screen depends on that.
+
+- **Fanning a relay out to *everyone* — the sender included — buys two things at
+  once.** The echo back to the sender is a free ack (it is what clears
+  `_chatPending`), and it leaves every peer holding a full replica of the
+  transcript, so host migration needs no transfer at all: whoever is promoted
+  serves the joiner backfill out of its own log. The existing relays
+  (`talking`, `peer-renamed`) exclude the sender because they are state the
+  sender already has; a log is not.
+
+- **A handle belongs on the edge its panel comes from.** The roster used to
+  slide in from the right, which was fine while it was the only side panel. With
+  a chat on the right too, `sign` (the direction of the GESTURE that opens it)
+  and the transform that hides it both had to flip for the roster — those are
+  opposites, and getting one without the other is a panel that refuses to open.
+
+- **Deleting a panel means auditing what used to hide for it.** While the chat
+  was opened from a button, a rule hid the roster's right-edge handle whenever
+  the drawer covered it. Once that handle became the chat's own, the same rule
+  hid the thing you had just grabbed — and the symptom was Playwright timing out
+  on "element is not visible" after a click that had already worked.
+
+- **Docking a panel decides where it goes, not whether it is open.** The first
+  version opened the chat by itself the moment a camera went live, since that is
+  when it becomes a column rather than a drawer. It handed a third of the stage
+  to a conversation nobody had started, and it moved the video tiles under three
+  existing layout tests. The unread badge and the peek exist precisely so the
+  chat can stay shut and still be findable.
+
+- **A one-row `<textarea>` paints a scrollbar down an empty box.** Its
+  `scrollHeight` includes its own padding, so it reports itself overflowing by a
+  pixel or two and `overflow-y: auto` believes it. The auto-grow toggles
+  `overflow-y` between `hidden` and `auto` instead of leaving it on `auto`.
+
+- **The separating space between a name and its message belongs in the DOM, not
+  in a `::after`.** Generated content is invisible to `textContent` and to a
+  copy-paste of the transcript, and it does not disappear when the name it
+  follows is visually hidden on a grouped row.
+
+- **The host must stamp the sender id AND enforce the id's prefix.** Rewriting
+  `peerId` to the connection's own id is the obvious half — it stops a peer
+  posting under someone else's name. The other half is less obvious: message ids
+  are minted by senders and receivers dedupe on them, so without requiring the
+  `<senderId>:` prefix a peer could mint the id another peer is *about* to use
+  and have that future message silently swallowed everywhere.

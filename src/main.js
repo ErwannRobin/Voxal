@@ -53,6 +53,11 @@
  *   log-entries          { peerId, entries,     target -> host (relayed to requester); dev only
  *                          from }
  *   log-session-end      { peerId, reason, from } target -> host (relayed to requester); dev only
+ *   chat         { id, text }                   peer -> host; host stamps the sender and fans out
+ *   chat         { id, peerId, text, at }       host -> ALL, the sender included (the echo is its ack)
+ *   chat-history { messages:[...] }             host -> joiner (reply to hello) — the transcript so far
+ *   chat-react   { msgId, emoji }               peer -> host; relayed to all as { msgId, emoji, peerId }
+ *   chat-typing  { active }                     peer -> host; relayed to all others as { peerId, active }
  *
  * Dev-mode debugging: the host advertises `debugMode` in every peer-list and
  * heartbeat. When on, a device-info "i" button appears next to each roster name.
@@ -82,7 +87,7 @@
 // app releases can share the same protocol version. Used for skew detection, not
 // (yet) to gate behavior — keep protocol changes additive/tolerant so mixed
 // rooms keep working.
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 
 const METERED_APP_STORE_KEY    = 'metered-app-name';
 const METERED_API_STORE_KEY    = 'metered-api-key';
@@ -179,6 +184,41 @@ const VIDEO_MODE_KEY            = 'video-mode-enabled';
 const SELF_VIDEO_CORNER_KEY     = 'self-video-corner'; // corner the minimized self-view badge was dragged to
 const REJOIN_SNAPSHOT_KEY       = 'rejoin-snapshot';
 const REJOIN_TTL_MS             = 30 * 60 * 1000; // 30 minutes
+
+// --- Chat --------------------------------------------------------------------
+const CHAT_LOG_KEY   = 'chat-log';  // { roomCode, savedAt, messages:[...] } — same lifetime as the rejoin snapshot
+const CHAT_LOG_MAX   = 200;         // messages kept in memory and on disk
+const CHAT_TEXT_MAX  = 2000;        // characters accepted, on send AND on relay
+const CHAT_ID_MAX    = 128;         // a message id is <peerId>:<n>; anything longer is not ours
+const CHAT_TYPING_TTL_MS      = 4000; // a typing flag expires on its own
+const CHAT_TYPING_THROTTLE_MS = 2000; // at most one 'still typing' per this
+const CHAT_TYPING_IDLE_MS     = 3000; // stop claiming to type after this much silence
+// Consecutive messages from one person inside this window are one block: the
+// name is printed once. A gap longer than the second gets a time separator, so
+// the reader can see the conversation paused without a stamp on every line.
+const CHAT_GROUP_MS  = 5 * 60 * 1000;
+const CHAT_BREAK_MS  = 15 * 60 * 1000;
+// The reaction row a fresh install starts with. Not a whitelist — any emoji in
+// the vendored catalog can be sent (see isChatEmoji); these are only what the
+// picker offers before you have picked anything.
+const CHAT_REACTIONS = ['\u{1F44D}', '\u2764\uFE0F', '\u{1F602}', '\u{1F389}', '\u{1F914}', '\u{1F440}'];
+const EMOJI_RECENT_KEY = 'emoji-recent';
+const EMOJI_RECENT_MAX = 24;
+// How long a message lingers over the call before it fades, and how many can
+// stack there. A peek is a glance, not a second transcript.
+const CHAT_PEEK_MS  = 7000;
+const CHAT_PEEK_MAX = 3;
+// Below this the chat cannot be a column beside the stage without squeezing the
+// tiles into nothing, so it stays the drawer it is everywhere else.
+const CHAT_DOCK_MIN_WIDTH = 1100;
+const CHAT_INPUT_MAX_HEIGHT = 120;  // px the composer grows to before it scrolls
+const EMOJI_SEARCH_MAX = 240;   // matches rendered per query; a grid nobody scrolls to the end of
+// The chat drawer's width, dragged on its own separator. Clamped so it can
+// neither vanish nor swallow the room behind it.
+const CHAT_WIDTH_KEY     = 'chat-width';
+const CHAT_WIDTH_DEFAULT = 360;
+const CHAT_WIDTH_MIN     = 280;
+const CHAT_WIDTH_MAX     = 720;
 var   _rejoinDismissed          = false;
 const RECENT_ROOMS_KEY          = 'recent-rooms';
 const RECENT_ROOMS_MAX          = 5;
@@ -1171,6 +1211,28 @@ function playCarillon() {
     osc.frequency.setValueAtTime(freq, t);
     gain.gain.setValueAtTime(0, t);
     gain.gain.linearRampToValueAtTime(0.22, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.start(t);
+    osc.stop(t + dur);
+  });
+}
+
+// Chat ping: two quick high notes, quieter and shorter than the join carillon —
+// a message arriving is not somebody arriving.
+function playChatPing() {
+  const ctx = _audioCtx;
+  if (ctx.state === 'suspended') ctx.resume();
+  [1046.50, 1318.51].forEach(function(freq, i) {
+    const osc  = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    const t   = ctx.currentTime + i * 0.09;
+    const dur = 0.18;
+    osc.frequency.setValueAtTime(freq, t);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.10, t + 0.01);
     gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     osc.start(t);
     osc.stop(t + dur);
@@ -2735,7 +2797,11 @@ function matchesShortcut(e) {
 }
 
 function shouldIgnorePTTShortcuts() {
-  return editingSelfPseudo;
+  if (editingSelfPseudo) return true;
+  // A focused text field owns the keyboard. In the chat composer Space is a
+  // space and Enter sends a message — neither may reach push-to-talk.
+  var el = document.activeElement;
+  return !!(el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable));
 }
 
 function displayShortcut(raw) {
@@ -3107,6 +3173,1041 @@ function loadRejoinSnapshot() {
 
 function clearRejoinSnapshot() {
   localStorage.removeItem(REJOIN_SNAPSHOT_KEY);
+}
+
+// --- Chat --------------------------------------------------------------------
+//
+// Chat rides the signaling star that is already there: a peer sends to the host,
+// the host stamps the sender's id and fans the message out to EVERYONE, itself
+// and the sender included. Two things fall out of that fan-out for free:
+//
+//   * the echo back to the sender is its ack (see _chatPending), and
+//   * every peer ends up holding a full replica of the transcript, so whoever
+//     becomes host after a migration can serve the backfill out of its own log.
+//     Nothing has to be handed over in becomeHost(), and nothing has to be added
+//     to the peer-list.
+//
+// Dedupe is by `id`, which the SENDER mints as `<peerId>:<n>` — that is what
+// makes the echo, the backfill and a post-migration resend all idempotent.
+
+var chatLog      = [];         // [{ id, peerId, text, at, reactions:Map<emoji,Set<peerId>> }]
+var _chatIds     = new Set();  // ids present in chatLog
+var _chatPending = new Map();  // id -> { id, text } sent but not yet echoed back
+var _chatTyping  = new Map();  // peerId -> expiry timestamp
+var _chatUnread  = 0;
+var _chatSeq     = 0;
+var _chatTypingActive     = false;
+var _chatLastTypingSentAt = 0;
+var _chatTypingIdleTimer  = null;
+var _chatTypingSweep      = null;
+
+// --- Chat: wire format -------------------------------------------------------
+
+// A body is trimmed and length-capped. Over the cap is dropped rather than
+// truncated: a conforming client clamps before sending, so an oversize packet is
+// not a long message, it is someone probing.
+function chatTextFromWire(text) {
+  if (typeof text !== 'string') return null;
+  var trimmed = text.trim();
+  if (!trimmed || trimmed.length > CHAT_TEXT_MAX) return null;
+  return trimmed;
+}
+
+// The host enforces the `<senderId>:` prefix on an id. Without that check a peer
+// could mint the id another peer is about to use and pre-empt that message
+// through everyone's dedupe — a silent, targeted mute.
+function chatIdFromWire(id, senderId) {
+  if (typeof id !== 'string' || !id || id.length > CHAT_ID_MAX) return null;
+  if (senderId && id.indexOf(senderId + ':') !== 0) return null;
+  return id;
+}
+
+function serializeChatMessage(m) {
+  var reactions = {};
+  m.reactions.forEach(function(peers, emoji) { reactions[emoji] = Array.from(peers); });
+  return { id: m.id, peerId: m.peerId, text: m.text, at: m.at, reactions: reactions };
+}
+
+function deserializeChatMessage(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (typeof raw.id !== 'string' || !raw.id || raw.id.length > CHAT_ID_MAX) return null;
+  var text = chatTextFromWire(raw.text);
+  if (!text) return null;
+  var reactions = new Map();
+  var src = (raw.reactions && typeof raw.reactions === 'object') ? raw.reactions : {};
+  Object.keys(src).forEach(function(emoji) {
+    if (CHAT_REACTIONS.indexOf(emoji) === -1) return;
+    var peers = src[emoji];
+    if (Array.isArray(peers) && peers.length) reactions.set(emoji, new Set(peers));
+  });
+  return {
+    id: raw.id,
+    peerId: typeof raw.peerId === 'string' ? raw.peerId : '',
+    text: text,
+    at: typeof raw.at === 'number' ? raw.at : Date.now(),
+    reactions: reactions
+  };
+}
+
+// --- Chat: state -------------------------------------------------------------
+
+function trimChatLog() {
+  while (chatLog.length > CHAT_LOG_MAX) {
+    var dropped = chatLog.shift();
+    _chatIds.delete(dropped.id);
+  }
+}
+
+// Every path into the transcript comes through here — your own message coming
+// back from the host, someone else's message, and the joiner backfill.
+function appendChatMessage(raw, opts) {
+  var m = deserializeChatMessage(raw);
+  if (!m) return false;
+  _chatPending.delete(m.id);
+  if (_chatIds.has(m.id)) return false;
+  _chatIds.add(m.id);
+  chatLog.push(m);
+  trimChatLog();
+  var mine = !!(peer && m.peerId === peer.id);
+  if (!(opts && opts.quiet) && !mine && !chatPanelOpen()) {
+    _chatUnread++;
+    playChatPing();
+    showChatPeek(m);
+  }
+  return true;
+}
+
+// Any emoji in the vendored catalog may be a reaction, and nothing else may:
+// checking membership of a known set rather than a pattern means a reaction can
+// never be a sentence, a control character or markup, whatever a peer sends.
+// A peer running a newer Unicode than ours has its unknown emoji dropped, which
+// is the safe direction to fail in.
+var _emojiSet = null;
+
+function isChatEmoji(ch) {
+  if (typeof ch !== 'string' || !ch || ch.length > 32) return false;
+  if (!_emojiSet) {
+    _emojiSet = new Set();
+    emojiCatalog().forEach(function(group) {
+      group.items.forEach(function(item) { _emojiSet.add(item[0]); });
+    });
+  }
+  // No catalog (a page that did not load emoji-data.js): fall back to the seed
+  // set rather than refusing every reaction.
+  if (!_emojiSet.size) return CHAT_REACTIONS.indexOf(ch) !== -1;
+  return _emojiSet.has(ch);
+}
+
+// Toggle, not set: the same peer sending the same emoji twice takes it back. A
+// reaction for a message we no longer hold (trimmed, or never received) is
+// dropped — there is nothing to attach it to.
+function applyChatReaction(msgId, emoji, peerId) {
+  if (!peerId || typeof msgId !== 'string') return false;
+  if (!isChatEmoji(emoji)) return false;
+  var m = null;
+  for (var i = chatLog.length - 1; i >= 0; i--) { if (chatLog[i].id === msgId) { m = chatLog[i]; break; } }
+  if (!m) return false;
+  var set = m.reactions.get(emoji);
+  if (!set) { set = new Set(); m.reactions.set(emoji, set); }
+  if (set.has(peerId)) {
+    set.delete(peerId);
+    if (!set.size) m.reactions.delete(emoji);
+  } else {
+    set.add(peerId);
+  }
+  return true;
+}
+
+// A typing flag expires on its own, so a peer that vanishes mid-sentence does
+// not stay "typing…" for the rest of the call.
+function noteChatTyping(peerId, active) {
+  if (!peerId || (peer && peerId === peer.id)) return;
+  if (active) {
+    _chatTyping.set(peerId, Date.now() + CHAT_TYPING_TTL_MS);
+    ensureChatTypingSweep();
+  } else {
+    _chatTyping.delete(peerId);
+  }
+  renderChatTyping();
+}
+
+function activeChatTypists() {
+  var now = Date.now();
+  var out = [];
+  Array.from(_chatTyping.keys()).forEach(function(peerId) {
+    if (_chatTyping.get(peerId) <= now || !connections.has(peerId)) _chatTyping.delete(peerId);
+    else out.push(peerId);
+  });
+  return out;
+}
+
+// Expiry is a display concern only, so it is swept by a timer that exists only
+// while somebody is actually typing.
+function ensureChatTypingSweep() {
+  if (_chatTypingSweep) return;
+  _chatTypingSweep = setInterval(function() {
+    renderChatTyping();
+    if (!_chatTyping.size) stopChatTypingSweep();
+  }, 1000);
+}
+
+function stopChatTypingSweep() {
+  if (_chatTypingSweep) { clearInterval(_chatTypingSweep); _chatTypingSweep = null; }
+}
+
+function resetChatState() {
+  chatLog = [];
+  _chatIds.clear();
+  _chatPending.clear();
+  _chatTyping.clear();
+  _chatUnread = 0;
+  _chatSeq = 0;
+  _chatTypingActive = false;
+  _chatLastTypingSentAt = 0;
+  if (_chatTypingIdleTimer) { clearTimeout(_chatTypingIdleTimer); _chatTypingIdleTimer = null; }
+  stopChatTypingSweep();
+  clearChatPeek();
+  renderChat();
+  updateChatUnreadBadge();
+}
+
+// --- Chat: persistence -------------------------------------------------------
+//
+// One entry, keyed by the room it belongs to and sharing the rejoin snapshot's
+// TTL — a transcript is exactly as useful as the offer to rejoin the room it
+// came from. After a host migration `roomCode` is the new host's id, so the next
+// save re-keys the entry on its own; saveChatLog() is called on migration
+// success so that happens even if nobody speaks again.
+
+function saveChatLog() {
+  if (!roomCode) return;
+  try {
+    localStorage.setItem(CHAT_LOG_KEY, JSON.stringify({
+      roomCode: roomCode,
+      savedAt: Date.now(),
+      messages: chatLog.map(serializeChatMessage)
+    }));
+  } catch (_) {}  // quota or a private window — the in-memory log still works
+}
+
+function loadChatLog(code) {
+  if (!code) return;
+  try {
+    var raw = localStorage.getItem(CHAT_LOG_KEY);
+    if (!raw) return;
+    var stored = JSON.parse(raw);
+    if (!stored || stored.roomCode !== code || !stored.savedAt) return;
+    if (Date.now() - stored.savedAt > REJOIN_TTL_MS) { clearChatLog(); return; }
+    (stored.messages || []).forEach(function(entry) { appendChatMessage(entry, { quiet: true }); });
+    renderChat();
+  } catch (_) {}
+}
+
+function clearChatLog() {
+  try { localStorage.removeItem(CHAT_LOG_KEY); } catch (_) {}
+}
+
+// --- Chat: sending -----------------------------------------------------------
+
+function chatMessageId() {
+  return (peer && peer.id ? peer.id : 'self') + ':' + (++_chatSeq);
+}
+
+function sendChatMessage(text) {
+  if (!inRoom || !peer) return false;
+  var body = typeof text === 'string' ? text.trim().slice(0, CHAT_TEXT_MAX) : '';
+  if (!body) return false;
+  sendChatTyping(false);
+  var id = chatMessageId();
+  if (isHost) {
+    fanOutChatMessage(peer.id, id, body);
+  } else {
+    // Held until the host echoes it back. Rendered dimmed meanwhile, and
+    // re-sent if the host dies before the echo arrives.
+    _chatPending.set(id, { id: id, text: body });
+    _sendToHostData({ type: 'chat', id: id, text: body });
+    renderChat();
+  }
+  return true;
+}
+
+function sendChatReaction(msgId, emoji) {
+  if (!inRoom || !peer || !isChatEmoji(emoji)) return false;
+  if (isHost) fanOutChatReaction(peer.id, msgId, emoji);
+  else _sendToHostData({ type: 'chat-react', msgId: msgId, emoji: emoji });
+  return true;
+}
+
+function sendChatTyping(active) {
+  if (!inRoom || !peer) return;
+  var now = Date.now();
+  if (active) {
+    if (_chatTypingActive && now - _chatLastTypingSentAt < CHAT_TYPING_THROTTLE_MS) return;
+  } else if (!_chatTypingActive) {
+    return;
+  }
+  _chatTypingActive = !!active;
+  _chatLastTypingSentAt = now;
+  if (isHost) fanOutChatTyping(peer.id, active);
+  else _sendToHostData({ type: 'chat-typing', active: !!active });
+  if (_chatTypingIdleTimer) { clearTimeout(_chatTypingIdleTimer); _chatTypingIdleTimer = null; }
+  if (active) _chatTypingIdleTimer = setTimeout(function() { sendChatTyping(false); }, CHAT_TYPING_IDLE_MS);
+}
+
+// Anything the host never got an echo for goes out again once a new host is in
+// place. The receivers' dedupe makes a double delivery harmless, so this is
+// allowed to be optimistic.
+function resendPendingChat() {
+  if (!inRoom || !peer || !_chatPending.size) return;
+  Array.from(_chatPending.values()).forEach(function(p) {
+    if (isHost) fanOutChatMessage(peer.id, p.id, p.text);
+    else _sendToHostData({ type: 'chat', id: p.id, text: p.text });
+  });
+}
+
+// --- Chat: host fan-out ------------------------------------------------------
+//
+// The host is the only stamp of authority on a chat message: it decides the
+// sender id — so a peer cannot post under someone else's name — and the
+// timestamp, then sends one identical object to everybody.
+
+function fanOutChatMessage(senderId, id, text) {
+  if (!isHost) return;
+  var out = { type: 'chat', id: id, peerId: senderId, text: text, at: Date.now() };
+  connections.forEach(function(c) { if (c.data) sendDataIfOpen(c.data, out); });
+  if (appendChatMessage(out)) { renderChat(); saveChatLog(); updateChatUnreadBadge(); }
+}
+
+function fanOutChatReaction(senderId, msgId, emoji) {
+  if (!isHost) return;
+  if (typeof msgId !== 'string' || !isChatEmoji(emoji)) return;
+  var out = { type: 'chat-react', msgId: msgId, emoji: emoji, peerId: senderId };
+  connections.forEach(function(c) { if (c.data) sendDataIfOpen(c.data, out); });
+  if (applyChatReaction(msgId, emoji, senderId)) { renderChat(); saveChatLog(); }
+}
+
+function fanOutChatTyping(senderId, active) {
+  if (!isHost) return;
+  var out = { type: 'chat-typing', peerId: senderId, active: !!active };
+  connections.forEach(function(c, id) { if (id !== senderId && c.data) sendDataIfOpen(c.data, out); });
+  noteChatTyping(senderId, active);  // no-op when the host is the one typing
+}
+
+// --- Chat: rendering ---------------------------------------------------------
+
+function chatAuthorName(peerId) {
+  if (peer && peerId === peer.id) return pseudoForPeer();
+  return peerDisplayName(peerId);
+}
+
+function chatAuthorColor(peerId) {
+  if (peer && peerId === peer.id) return pseudoColorForSelf();
+  var c = peerId ? connections.get(peerId) : null;
+  return (c && c.pseudoColor) || null;
+}
+
+function chatTimeLabel(at) {
+  try {
+    return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch (_) { return ''; }
+}
+
+// Static, author-written markup — the only innerHTML the chat uses, and never
+// on anything that came off the wire.
+var ICON_ADD_REACTION = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<path d="M21.5 12a9.5 9.5 0 1 1-6.6-9.04"/>'
+  + '<path d="M8.2 14.4s1.3 1.6 3.8 1.6 3.8-1.6 3.8-1.6"/>'
+  + '<line x1="9" y1="10" x2="9.01" y2="10"/><line x1="15" y1="10" x2="15.01" y2="10"/>'
+  + '<line x1="19" y1="2" x2="19" y2="8"/><line x1="16" y1="5" x2="22" y2="5"/></svg>';
+
+// A chat body is the one string in this app that arrives verbatim from another
+// person, so it never goes near innerHTML. The only markup it can produce is an
+// <a> whose href we built and validated ourselves.
+var CHAT_URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>()]+[^\s<>().,;:!?'"]/gi;
+
+function chatSafeHref(raw) {
+  var candidate = /^www\./i.test(raw) ? 'https://' + raw : raw;
+  try {
+    var u = new URL(candidate);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return u.href;
+  } catch (_) { return null; }
+}
+
+function renderChatText(target, text) {
+  CHAT_URL_RE.lastIndex = 0;
+  var last = 0;
+  var match;
+  while ((match = CHAT_URL_RE.exec(text)) !== null) {
+    var href = chatSafeHref(match[0]);
+    if (!href) continue;  // not a link we are willing to make — leave it as text
+    if (match.index > last) target.appendChild(document.createTextNode(text.slice(last, match.index)));
+    var a = document.createElement('a');
+    a.href = href;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = match[0];
+    target.appendChild(a);
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) target.appendChild(document.createTextNode(text.slice(last)));
+}
+
+// One row is one line: name then text, with everything periodic (the time, the
+// react button) pulled out of the flow into a hover strip. A transcript read
+// down a 360px column is mostly whitespace otherwise.
+function renderChatMessage(m, opts) {
+  var pending = !!(opts && opts.pending);
+  var grouped = !!(opts && opts.grouped);
+  var mine = !!(peer && m.peerId === peer.id);
+  var row = document.createElement('div');
+  row.className = 'chat-msg'
+    + (mine ? ' chat-msg-self' : '')
+    + (pending ? ' chat-msg-pending' : '')
+    + (grouped ? ' chat-msg-grouped' : '');
+  row.dataset.msgId = m.id;
+
+  var line = document.createElement('div');
+  line.className = 'chat-msg-line';
+  // A run of messages from one person names them once. The name is still in the
+  // DOM for a screen reader on every row — it is only hidden visually.
+  var author = document.createElement('span');
+  author.className = 'chat-msg-author' + (grouped ? ' chat-msg-author-repeat' : '');
+  // The separating space belongs INSIDE the span, not to a ::after: it has to
+  // disappear with the name on a grouped row, and it has to survive a
+  // copy-paste of the transcript, which a generated one would not.
+  author.textContent = chatAuthorName(m.peerId) + ' ';
+  var color = chatAuthorColor(m.peerId);
+  if (color) author.style.color = color;
+  line.appendChild(author);
+  var body = document.createElement('span');
+  body.className = 'chat-msg-body';
+  renderChatText(body, m.text);
+  line.appendChild(body);
+  row.appendChild(line);
+
+  if (m.reactions.size) {
+    var foot = document.createElement('div');
+    foot.className = 'chat-msg-foot';
+    m.reactions.forEach(function(peers, emoji) {
+      var chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'chat-reaction' + (peer && peers.has(peer.id) ? ' chat-reaction-mine' : '');
+      chip.dataset.emoji = emoji;
+      chip.dataset.msgId = m.id;
+      chip.textContent = emoji + ' ' + peers.size;
+      chip.title = Array.from(peers).map(chatAuthorName).join(', ');
+      foot.appendChild(chip);
+    });
+    row.appendChild(foot);
+  }
+
+  // No stamp on the row: the separator above it already says when this stretch
+  // of conversation happened, and repeating that per message is what made the
+  // column mostly chrome. The exact time stays one hover away.
+  row.title = pending ? 'Not acknowledged by the host yet' : chatFullTimeLabel(m.at);
+
+  // The hover strip. Absolute, so the button costs neither a line of height nor
+  // a column of width while you are just reading.
+  if (!pending) {
+    var tools = document.createElement('div');
+    tools.className = 'chat-msg-tools';
+    var add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'chat-react-open';
+    add.dataset.msgId = m.id;
+    add.title = 'React';
+    add.setAttribute('aria-label', 'React to this message');
+    // An icon, not an emoji: a literal ☺ on the button reads as "insert this
+    // one" next to a row of emoji that do exactly that.
+    add.innerHTML = ICON_ADD_REACTION;
+    tools.appendChild(add);
+    row.appendChild(tools);
+  }
+  return row;
+}
+
+// A separator carries the stamp for everything under it, which is what lets the
+// messages themselves go unstamped.
+function renderChatBreak(at) {
+  var el = document.createElement('div');
+  el.className = 'chat-break';
+  var label = document.createElement('span');
+  label.textContent = chatBreakLabel(at);
+  el.appendChild(label);
+  return el;
+}
+
+function chatSameDay(a, b) {
+  var da = new Date(a);
+  var db = new Date(b);
+  return da.getFullYear() === db.getFullYear()
+    && da.getMonth() === db.getMonth()
+    && da.getDate() === db.getDate();
+}
+
+function chatBreakLabel(at) {
+  var now = Date.now();
+  var time = chatTimeLabel(at);
+  if (chatSameDay(at, now)) return time;
+  if (chatSameDay(at, now - 86400000)) return 'Yesterday ' + time;
+  try {
+    var opts = { day: 'numeric', month: 'short' };
+    if (!chatSameDay(at, now) && new Date(at).getFullYear() !== new Date(now).getFullYear()) opts.year = 'numeric';
+    return new Date(at).toLocaleDateString([], opts) + ' ' + time;
+  } catch (_) { return time; }
+}
+
+function chatFullTimeLabel(at) {
+  try { return new Date(at).toLocaleString(); } catch (_) { return ''; }
+}
+
+// Stay pinned to the newest message unless the reader has scrolled up to read
+// something — then a new arrival must not yank the view away from them.
+function chatStuckToBottom(list) {
+  return (list.scrollHeight - list.scrollTop - list.clientHeight) < 48;
+}
+
+function renderChat() {
+  var list = document.getElementById('chat-messages');
+  if (!list) return;
+  var stick = chatStuckToBottom(list);
+  closeEmojiPicker();          // its anchor row is about to be replaced
+  list.innerHTML = '';
+  if (!chatLog.length && !_chatPending.size) {
+    var empty = document.createElement('p');
+    empty.className = 'chat-empty';
+    empty.textContent = 'No messages yet.';
+    list.appendChild(empty);
+  }
+  var prev = null;
+  chatLog.forEach(function(m) {
+    var broke = !prev || !chatSameDay(prev.at, m.at) || (m.at - prev.at) > CHAT_BREAK_MS;
+    if (broke) list.appendChild(renderChatBreak(m.at));
+    var grouped = !broke && !!prev && prev.peerId === m.peerId && (m.at - prev.at) <= CHAT_GROUP_MS;
+    list.appendChild(renderChatMessage(m, { grouped: grouped }));
+    prev = m;
+  });
+  _chatPending.forEach(function(p) {
+    var at = Date.now();
+    var grouped = !!prev && !!peer && prev.peerId === peer.id && (at - prev.at) <= CHAT_GROUP_MS;
+    var draft = { id: p.id, peerId: peer ? peer.id : '', text: p.text, at: at, reactions: new Map() };
+    list.appendChild(renderChatMessage(draft, { pending: true, grouped: grouped }));
+    prev = draft;
+  });
+  if (stick) list.scrollTop = list.scrollHeight;
+  renderChatTyping();
+}
+
+function renderChatTyping() {
+  var el = document.getElementById('chat-typing');
+  if (!el) return;
+  var names = activeChatTypists().map(chatAuthorName);
+  if (!names.length) { el.textContent = ''; el.classList.add('hidden'); return; }
+  var text;
+  if (names.length === 1) text = names[0] + ' is typing…';
+  else if (names.length === 2) text = names[0] + ' and ' + names[1] + ' are typing…';
+  else text = 'Several people are typing…';
+  el.textContent = text;
+  el.classList.remove('hidden');
+}
+
+// The count appears on every way in that is currently on screen: the header
+// button on a desktop, the edge handle on a phone (where the header itself has
+// slid away).
+function updateChatUnreadBadge() {
+  var label = _chatUnread > 99 ? '99+' : String(_chatUnread);
+  document.querySelectorAll('.chat-unread').forEach(function(badge) {
+    badge.textContent = label;
+    badge.classList.toggle('hidden', _chatUnread === 0);
+  });
+  var handle = document.getElementById('stage-handle-chat');
+  if (handle) handle.setAttribute('aria-pressed', String(chatPanelOpen()));
+}
+
+// --- Chat: the peek over the call --------------------------------------------
+//
+// While the panel is not on screen, a new message surfaces briefly at the
+// bottom of the stage and then gets out of the way. It is a glance, not a
+// second transcript: three at most, and never while the panel is showing the
+// same thing.
+
+var _chatPeekTimers = new Set();
+
+function showChatPeek(m) {
+  var host = document.getElementById('chat-peek');
+  if (!host || !inRoom) return;
+  var el = document.createElement('div');
+  el.className = 'chat-peek-item';
+  var author = document.createElement('span');
+  author.className = 'chat-peek-author';
+  author.textContent = chatAuthorName(m.peerId) + ' ';
+  var color = chatAuthorColor(m.peerId);
+  if (color) author.style.color = color;
+  el.appendChild(author);
+  var body = document.createElement('span');
+  body.className = 'chat-peek-body';
+  renderChatText(body, m.text);
+  el.appendChild(body);
+  host.appendChild(el);
+  while (host.children.length > CHAT_PEEK_MAX) dropChatPeek(host.firstChild);
+  var timer = setTimeout(function() { dropChatPeek(el); }, CHAT_PEEK_MS);
+  _chatPeekTimers.add(timer);
+  el._voxalPeekTimer = timer;
+}
+
+function dropChatPeek(el) {
+  if (!el) return;
+  if (el._voxalPeekTimer) { clearTimeout(el._voxalPeekTimer); _chatPeekTimers.delete(el._voxalPeekTimer); }
+  el.remove();
+}
+
+function clearChatPeek() {
+  var host = document.getElementById('chat-peek');
+  _chatPeekTimers.forEach(function(t) { clearTimeout(t); });
+  _chatPeekTimers.clear();
+  if (host) host.innerHTML = '';
+}
+
+// --- Chat: the panel ---------------------------------------------------------
+//
+// The panel is a right-hand drawer in every layout regime, driven by one body
+// class. It is deliberately NOT a STAGE_PANELS entry: those are torn down by
+// applyVideoStageMode() whenever the stage is not immersive, which would slam
+// the chat shut on desktop on every relayout. It only borrows their mutual
+// exclusion — on a phone the roster and the chat cannot share the screen.
+
+function chatPanelOpen() {
+  return document.body.classList.contains('chat-open');
+}
+
+// Wide enough, and a stage to sit beside: the chat stops being a drawer over
+// the room and becomes the right-hand column of it, opposite the participants.
+// Decided here rather than in a media query for the same reason videoStageMode()
+// is — CSS would have to re-derive the is-web / tiny-embed reasoning and could
+// then disagree with the JS that decides whether a peek is a duplicate.
+function chatDocked() {
+  if (IS_TINY_EMBED || !inRoom) return false;
+  if (!document.body.classList.contains('video-stage')) return false;
+  if (document.body.classList.contains('video-stage-immersive')) return false;
+  return window.innerWidth >= CHAT_DOCK_MIN_WIDTH;
+}
+
+// Docking decides WHERE an open chat goes, never whether it is open: a call
+// must not silently hand a third of the stage to a conversation nobody has
+// started. The unread badge and the peek are what make it findable instead.
+function applyChatDock() {
+  document.body.classList.toggle('chat-docked', chatDocked());
+}
+
+function toggleChatPanel(open) {
+  var next = (open === undefined) ? !chatPanelOpen() : !!open;
+  if (next) closeStagePanels();
+  document.body.classList.toggle('chat-open', next);
+  var handle = document.getElementById('stage-handle-chat');
+  if (handle) handle.setAttribute('aria-expanded', String(next));
+  if (next) {
+    _chatUnread = 0;
+    clearChatPeek();
+    var list = document.getElementById('chat-messages');
+    if (list) list.scrollTop = list.scrollHeight;
+    var input = document.getElementById('chat-input');
+    if (input) setTimeout(function() { try { input.focus(); } catch (_) {} }, 60);
+  } else {
+    sendChatTyping(false);
+    closeEmojiPicker();
+  }
+  updateChatUnreadBadge();
+}
+
+function submitChatInput() {
+  var input = document.getElementById('chat-input');
+  if (!input) return;
+  if (sendChatMessage(input.value)) {
+    input.value = '';
+    autoGrowChatInput(input);
+  }
+}
+
+// The composer is one line until it needs more. `overflow-y` is toggled rather
+// than left on `auto`: a one-row textarea whose scrollHeight includes its own
+// padding reports itself overflowing by a pixel or two, and every engine then
+// paints a permanent scrollbar down an empty box.
+function autoGrowChatInput(input) {
+  input.style.height = 'auto';
+  var wanted = input.scrollHeight;
+  var capped = Math.min(wanted, CHAT_INPUT_MAX_HEIGHT);
+  input.style.height = capped + 'px';
+  input.style.overflowY = wanted > CHAT_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
+}
+
+// --- Chat: the emoji picker --------------------------------------------------
+//
+// One picker for both jobs — inserting into the composer, and reacting to a
+// message — because they differ only in what happens to the emoji you pick. It
+// docks above the composer instead of anchoring to whatever opened it: the
+// drawer is 280–720px wide, and there is nowhere for a floating popover to land
+// that is not on top of the thing you are reacting to.
+
+var _emojiCatalog = null;
+var _emojiTarget  = null;   // { mode:'compose' } | { mode:'react', msgId }
+var _emojiGroup   = 'recent';
+
+// Parsed once, from the vendored dataset. Each group's `data` is one string of
+// "<emoji> <name>" lines, so this is a split, not a JSON parse.
+function emojiCatalog() {
+  if (_emojiCatalog) return _emojiCatalog;
+  var groups = (typeof window !== 'undefined' && window.EMOJI_GROUPS) || [];
+  _emojiCatalog = groups.map(function(g) {
+    return {
+      name: g.name,
+      icon: g.icon,
+      items: String(g.data || '').split('\n').filter(Boolean).map(function(line) {
+        var sp = line.indexOf(' ');
+        var name = line.slice(sp + 1);
+        // [emoji, display name, folded name] — folded once here rather than on
+        // every keystroke of a search over nineteen hundred entries.
+        return [line.slice(0, sp), name, name.toLowerCase()];
+      })
+    };
+  });
+  return _emojiCatalog;
+}
+
+function emojiNameOf(ch) {
+  var found = '';
+  emojiCatalog().some(function(g) {
+    return g.items.some(function(it) {
+      if (it[0] !== ch) return false;
+      found = it[1];
+      return true;
+    });
+  });
+  return found;
+}
+
+// Recents are what makes a 1900-emoji grid usable, so they are seeded with the
+// reaction row rather than starting empty.
+function readRecentEmoji() {
+  var stored = [];
+  try {
+    var raw = localStorage.getItem(EMOJI_RECENT_KEY);
+    if (raw) stored = JSON.parse(raw);
+  } catch (_) {}
+  if (!Array.isArray(stored)) stored = [];
+  var out = stored.filter(isChatEmoji);
+  CHAT_REACTIONS.forEach(function(ch) {
+    if (out.length < EMOJI_RECENT_MAX && out.indexOf(ch) === -1) out.push(ch);
+  });
+  return out.slice(0, EMOJI_RECENT_MAX);
+}
+
+function noteRecentEmoji(ch) {
+  if (!isChatEmoji(ch)) return;
+  var list = readRecentEmoji().filter(function(x) { return x !== ch; });
+  list.unshift(ch);
+  try { localStorage.setItem(EMOJI_RECENT_KEY, JSON.stringify(list.slice(0, EMOJI_RECENT_MAX))); } catch (_) {}
+}
+
+function emojiPickerOpen() {
+  var el = document.getElementById('emoji-picker');
+  return !!el && !el.classList.contains('hidden');
+}
+
+function openEmojiPicker(target) {
+  var el = document.getElementById('emoji-picker');
+  if (!el) return;
+  _emojiTarget = target;
+  el.classList.remove('hidden');
+  el.dataset.mode = target.mode;
+  var search = document.getElementById('emoji-search');
+  if (search) { search.value = ''; }
+  renderEmojiTabs();
+  renderEmojiGrid('');
+  var btn = document.getElementById('btn-emoji');
+  if (btn) btn.setAttribute('aria-expanded', String(target.mode === 'compose'));
+  if (search) setTimeout(function() { try { search.focus(); } catch (_) {} }, 40);
+}
+
+function closeEmojiPicker() {
+  var el = document.getElementById('emoji-picker');
+  if (!el || el.classList.contains('hidden')) return;
+  el.classList.add('hidden');
+  _emojiTarget = null;
+  var btn = document.getElementById('btn-emoji');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+
+function renderEmojiTabs() {
+  var tabs = document.getElementById('emoji-tabs');
+  if (!tabs) return;
+  tabs.innerHTML = '';
+  var entries = [{ key: 'recent', icon: '\u{1F553}', name: 'Recent' }].concat(
+    emojiCatalog().map(function(g, i) { return { key: String(i), icon: g.icon, name: g.name }; })
+  );
+  entries.forEach(function(entry) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'emoji-tab' + (entry.key === _emojiGroup ? ' emoji-tab-active' : '');
+    b.dataset.group = entry.key;
+    b.textContent = entry.icon;
+    b.title = entry.name;
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-selected', String(entry.key === _emojiGroup));
+    b.setAttribute('aria-label', entry.name);
+    tabs.appendChild(b);
+  });
+}
+
+// A search spans every group; without one only the selected group is built, so
+// the grid is a few hundred buttons rather than nineteen hundred.
+function emojiMatches(query) {
+  var q = String(query || '').trim().toLowerCase();
+  if (!q) {
+    if (_emojiGroup === 'recent') {
+      return readRecentEmoji().map(function(ch) { return [ch, emojiNameOf(ch) || '', '']; });
+    }
+    var group = emojiCatalog()[Number(_emojiGroup)];
+    return group ? group.items : [];
+  }
+  var out = [];
+  emojiCatalog().some(function(g) {
+    return g.items.some(function(it) {
+      if (it[2].indexOf(q) !== -1 || it[0] === q) out.push(it);
+      return out.length >= EMOJI_SEARCH_MAX;
+    });
+  });
+  return out;
+}
+
+function renderEmojiGrid(query) {
+  var grid = document.getElementById('emoji-grid');
+  if (!grid) return;
+  var items = emojiMatches(query);
+  grid.innerHTML = '';
+  if (!items.length) {
+    var none = document.createElement('p');
+    none.className = 'emoji-none';
+    none.textContent = 'No emoji match that.';
+    grid.appendChild(none);
+    return;
+  }
+  var frag = document.createDocumentFragment();
+  items.forEach(function(it) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'emoji-cell';
+    b.dataset.emoji = it[0];
+    b.textContent = it[0];
+    b.title = it[1];
+    b.setAttribute('aria-label', it[1]);
+    frag.appendChild(b);
+  });
+  grid.appendChild(frag);
+  grid.scrollTop = 0;
+}
+
+function chooseEmoji(ch) {
+  if (!isChatEmoji(ch) || !_emojiTarget) return;
+  noteRecentEmoji(ch);
+  if (_emojiTarget.mode === 'react') {
+    sendChatReaction(_emojiTarget.msgId, ch);
+    closeEmojiPicker();
+    return;
+  }
+  insertIntoComposer(ch);
+  closeEmojiPicker();
+}
+
+// Insert at the caret, not at the end: an emoji picked mid-sentence belongs
+// where the sentence was.
+function insertIntoComposer(text) {
+  var input = document.getElementById('chat-input');
+  if (!input) return;
+  var start = input.selectionStart;
+  var end = input.selectionEnd;
+  if (typeof start !== 'number' || typeof end !== 'number') {
+    input.value += text;
+  } else {
+    input.value = input.value.slice(0, start) + text + input.value.slice(end);
+    var caret = start + text.length;
+    try { input.setSelectionRange(caret, caret); } catch (_) {}
+  }
+  autoGrowChatInput(input);
+  try { input.focus(); } catch (_) {}
+  sendChatTyping(true);
+}
+
+// --- Chat: the drawer's own width --------------------------------------------
+//
+// The separator is the panel's left edge. Width is a CSS variable so the drag
+// costs one custom-property write per frame rather than a re-layout of the
+// room behind it, and it is only persisted on release.
+
+var _chatResizeDrag = null;
+
+function readChatWidth() {
+  var stored = parseInt(localStorage.getItem(CHAT_WIDTH_KEY), 10);
+  return clampChatWidth(isNaN(stored) ? CHAT_WIDTH_DEFAULT : stored);
+}
+
+function clampChatWidth(px) {
+  var max = Math.min(CHAT_WIDTH_MAX, Math.max(CHAT_WIDTH_MIN, Math.round(window.innerWidth * 0.9)));
+  return Math.max(CHAT_WIDTH_MIN, Math.min(max, Math.round(px)));
+}
+
+function applyChatWidth(px) {
+  document.documentElement.style.setProperty('--chat-width', clampChatWidth(px) + 'px');
+}
+
+function saveChatWidth(px) {
+  try { localStorage.setItem(CHAT_WIDTH_KEY, String(clampChatWidth(px))); } catch (_) {}
+}
+
+function _chatResizePointerDown(e) {
+  if (_chatResizeDrag || (e.button !== undefined && e.button !== 0)) return;
+  var panel = document.getElementById('room-chat-panel');
+  if (!panel) return;
+  _chatResizeDrag = { pointerId: e.pointerId, width: panel.getBoundingClientRect().width };
+  // On the window: the pointer routinely leaves a 6px grip mid-drag, and a lost
+  // pointerup would strand the drawer at whatever width the cursor was over.
+  window.addEventListener('pointermove', _onChatResizePointerMove);
+  window.addEventListener('pointerup', _onChatResizePointerUp);
+  window.addEventListener('pointercancel', _onChatResizePointerUp);
+  document.body.classList.add('chat-resizing');
+  e.preventDefault();
+}
+
+function _onChatResizePointerMove(e) {
+  var d = _chatResizeDrag;
+  if (!d || (e.pointerId !== undefined && e.pointerId !== d.pointerId)) return;
+  d.width = window.innerWidth - e.clientX;
+  applyChatWidth(d.width);
+}
+
+function _onChatResizePointerUp(e) {
+  var d = _chatResizeDrag;
+  if (!d || (e && e.pointerId !== undefined && e.pointerId !== d.pointerId)) return;
+  window.removeEventListener('pointermove', _onChatResizePointerMove);
+  window.removeEventListener('pointerup', _onChatResizePointerUp);
+  window.removeEventListener('pointercancel', _onChatResizePointerUp);
+  _chatResizeDrag = null;
+  document.body.classList.remove('chat-resizing');
+  saveChatWidth(d.width);
+}
+
+function nudgeChatWidth(delta) {
+  var panel = document.getElementById('room-chat-panel');
+  var width = clampChatWidth((panel ? panel.getBoundingClientRect().width : readChatWidth()) + delta);
+  applyChatWidth(width);
+  saveChatWidth(width);
+}
+
+function initChatUI() {
+  var input = document.getElementById('chat-input');
+  var list  = document.getElementById('chat-messages');
+  if (!input || !list || input._voxalChatWired) return;
+  input._voxalChatWired = true;
+
+  applyChatWidth(readChatWidth());
+
+  var close = document.getElementById('btn-chat-close');
+  if (close) close.addEventListener('click', function() { toggleChatPanel(false); });
+  var send = document.getElementById('btn-chat-send');
+  if (send) send.addEventListener('click', submitChatInput);
+
+  input.addEventListener('keydown', function(e) {
+    // Enter sends, Shift+Enter is a newline. The composer must never see the
+    // push-to-talk key as a talk trigger — see the global handler's guard.
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitChatInput(); }
+  });
+  input.addEventListener('input', function() {
+    autoGrowChatInput(input);
+    if (input.value.trim()) sendChatTyping(true); else sendChatTyping(false);
+  });
+  input.addEventListener('blur', function() { sendChatTyping(false); });
+  autoGrowChatInput(input);
+
+  // Reactions are delegated: the list is re-rendered whole on every change.
+  list.addEventListener('click', function(e) {
+    var chip = e.target.closest('.chat-reaction');
+    if (chip) { sendChatReaction(chip.dataset.msgId, chip.dataset.emoji); return; }
+    var open = e.target.closest('.chat-react-open');
+    if (open) {
+      var already = emojiPickerOpen() && _emojiTarget && _emojiTarget.msgId === open.dataset.msgId;
+      if (already) closeEmojiPicker();
+      else openEmojiPicker({ mode: 'react', msgId: open.dataset.msgId });
+    }
+  });
+
+  var emojiBtn = document.getElementById('btn-emoji');
+  if (emojiBtn) {
+    emojiBtn.addEventListener('click', function() {
+      if (emojiPickerOpen() && _emojiTarget && _emojiTarget.mode === 'compose') closeEmojiPicker();
+      else openEmojiPicker({ mode: 'compose' });
+    });
+  }
+
+  var picker = document.getElementById('emoji-picker');
+  var search = document.getElementById('emoji-search');
+  var tabs   = document.getElementById('emoji-tabs');
+  var grid   = document.getElementById('emoji-grid');
+  if (search) {
+    search.addEventListener('input', function() { renderEmojiGrid(search.value); });
+    search.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') { e.stopPropagation(); closeEmojiPicker(); }
+    });
+  }
+  if (tabs) {
+    tabs.addEventListener('click', function(e) {
+      var tab = e.target.closest('.emoji-tab');
+      if (!tab) return;
+      _emojiGroup = tab.dataset.group;
+      if (search) search.value = '';
+      renderEmojiTabs();
+      renderEmojiGrid('');
+    });
+  }
+  if (grid) {
+    grid.addEventListener('click', function(e) {
+      var cell = e.target.closest('.emoji-cell');
+      if (cell) chooseEmoji(cell.dataset.emoji);
+    });
+  }
+  // A click anywhere else dismisses it — but not the click that opened it.
+  document.addEventListener('pointerdown', function(e) {
+    if (!emojiPickerOpen()) return;
+    if (picker && picker.contains(e.target)) return;
+    if (e.target.closest('#btn-emoji, .chat-react-open')) return;
+    closeEmojiPicker();
+  });
+
+  var resizer = document.getElementById('chat-resizer');
+  if (resizer) {
+    resizer.addEventListener('pointerdown', _chatResizePointerDown);
+    resizer.addEventListener('dblclick', function() {
+      applyChatWidth(CHAT_WIDTH_DEFAULT);
+      saveChatWidth(CHAT_WIDTH_DEFAULT);
+    });
+    // Keyboard parity: it is a real separator, so it has to be steerable.
+    resizer.addEventListener('keydown', function(e) {
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); nudgeChatWidth(24); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); nudgeChatWidth(-24); }
+    });
+  }
+  // A window that shrank below the stored width must not leave the drawer
+  // hanging off the side.
+  window.addEventListener('resize', function() {
+    applyChatWidth(readChatWidth());
+    applyChatDock();
+  });
+
+  // A peek is a shortcut into the conversation it came from.
+  var peek = document.getElementById('chat-peek');
+  if (peek) peek.addEventListener('click', function() { toggleChatPanel(true); });
+
+  renderChat();
+  updateChatUnreadBadge();
 }
 
 function rejoinCandidates(snapshot) {
@@ -8912,6 +10013,7 @@ function updateVideoStage() {
   // Both classes obey the same rule: set ONLY while a camera or screen is
   // genuinely live, so an audio-only room still renders byte-identically.
   document.body.classList.toggle('video-stage-immersive', active && mode === 'immersive');
+  applyChatDock();
   stage.classList.toggle('hidden', !active);
   // The screen must not sleep while you are watching someone — and must be
   // allowed to again the moment the stage stands down.
@@ -9015,12 +10117,38 @@ function releaseStageWakeLock() {
 // `sign` is the direction of the GESTURE that opens the panel, not the direction
 // of the transform that hides it — they are opposites, and conflating them is
 // how the drag ends up refusing to open. The header hides upward and is opened
-// by pulling DOWN (+y); the roster hides to the right and is opened by pulling
-// LEFT (-x).
+// by pulling DOWN (+y); the roster lives off the LEFT edge and is opened by
+// pulling right (+x); the chat lives off the right and is opened by pulling
+// left (-x). Each handle sits on the edge its panel comes from, so the gesture
+// and the panel agree.
 var STAGE_PANELS = {
   header: { cls: 'stage-header-open', panel: '.room-header', handle: 'stage-handle-header', axis: 'y', sign: 1 },
-  roster: { cls: 'stage-roster-open', panel: '.room-peers-panel', handle: 'stage-handle-roster', axis: 'x', sign: -1 }
+  roster: { cls: 'stage-roster-open', panel: '.room-peers-panel', handle: 'stage-handle-roster', axis: 'x', sign: 1 }
 };
+
+// The chat drags exactly like a stage panel, and on a phone it is one of the
+// three things reachable from an edge — but it is deliberately NOT in
+// STAGE_PANELS: those are closed wholesale by applyVideoStageMode() on every
+// relayout that is not the immersive stage, which would slam the chat shut on
+// desktop. It borrows the gesture and the mutual exclusion, nothing else.
+var CHAT_DRAG_PANEL = {
+  cls: 'chat-open', panel: '.room-chat-panel', handle: 'stage-handle-chat', axis: 'x', sign: -1
+};
+
+var DRAGGABLE_PANELS = ['header', 'roster', 'chat'];
+
+function panelSpec(which) {
+  return which === 'chat' ? CHAT_DRAG_PANEL : STAGE_PANELS[which];
+}
+
+function panelIsOpen(which) {
+  return which === 'chat' ? chatPanelOpen() : stagePanelOpen(which);
+}
+
+function setPanelOpen(which, open) {
+  if (which === 'chat') toggleChatPanel(open);
+  else setStagePanel(which, open);
+}
 
 // A drag has to travel this fraction of the panel before release counts as a
 // change of state; anything shorter snaps back, and a tap toggles.
@@ -9042,6 +10170,10 @@ function setStagePanel(which, open) {
       if (other !== which) document.body.classList.remove(STAGE_PANELS[other].cls);
     });
   }
+  // The chat drawer occupies the same edge as the roster on a phone, so it is
+  // an alternative to these too — even though it is not one of them (see
+  // toggleChatPanel for why it cannot be).
+  if (open) document.body.classList.remove('chat-open');
   document.body.classList.toggle(spec.cls, !!open);
   Object.keys(STAGE_PANELS).forEach(function(key) {
     var el = document.getElementById(STAGE_PANELS[key].handle);
@@ -9076,7 +10208,7 @@ function relayoutVideoStage() {
 var _stagePanelDrag = null;
 
 function _stagePanelPointerDown(which, e) {
-  var spec = STAGE_PANELS[which];
+  var spec = panelSpec(which);
   if (!spec || _stagePanelDrag || (e.button !== undefined && e.button !== 0)) return;
   var panel = document.querySelector('#screen-room ' + spec.panel);
   if (!panel) return;
@@ -9088,7 +10220,7 @@ function _stagePanelPointerDown(which, e) {
     startX: e.clientX,
     startY: e.clientY,
     moved: false,
-    wasOpen: stagePanelOpen(which),
+    wasOpen: panelIsOpen(which),
     size: spec.axis === 'y' ? box.height : box.width,
     panel: panel
   };
@@ -9135,12 +10267,12 @@ function _onStagePanelPointerUp(e) {
   if (!d.moved) open = !d.wasOpen;
   else if (d.wasOpen) open = d.progress > (1 - STAGE_PANEL_COMMIT);
   else open = d.progress > STAGE_PANEL_COMMIT;
-  setStagePanel(d.which, open);
+  setPanelOpen(d.which, open);
 }
 
 function initStagePanelHandles() {
-  Object.keys(STAGE_PANELS).forEach(function(which) {
-    var el = document.getElementById(STAGE_PANELS[which].handle);
+  DRAGGABLE_PANELS.forEach(function(which) {
+    var el = document.getElementById(panelSpec(which).handle);
     if (!el || el._voxalHandleWired) return;
     el._voxalHandleWired = true;
     el.addEventListener('pointerdown', function(e) { _stagePanelPointerDown(which, e); });
@@ -9148,13 +10280,13 @@ function initStagePanelHandles() {
     el.addEventListener('keydown', function(e) {
       if (e.key !== 'Enter' && e.key !== ' ') return;
       e.preventDefault();
-      setStagePanel(which, !stagePanelOpen(which));
+      setPanelOpen(which, !panelIsOpen(which));
     });
   });
   var scrim = document.getElementById('stage-panel-scrim');
   if (scrim && !scrim._voxalWired) {
     scrim._voxalWired = true;
-    scrim.addEventListener('pointerdown', function() { closeStagePanels(); });
+    scrim.addEventListener('pointerdown', function() { closeStagePanels(); toggleChatPanel(false); });
   }
 }
 
@@ -11292,6 +12424,8 @@ function leaveRoom() {
   var returnTinyRoomId = IS_TINY_EMBED ? (_invitePendingRoomId || roomDisplayCode() || roomCode || '') : '';
   var returnTinyPeerCount = IS_TINY_EMBED ? currentRoomPeerCount() : 0;
   saveRejoinSnapshot();
+  saveChatLog();
+  toggleChatPanel(false);
   resetVideoState();
   // If this host is the last participant in a published lobby, delete it from the API
   if (isHost && _publishSecret && connections.size === 0) {
@@ -11338,6 +12472,7 @@ function leaveRoom() {
   stopPeerHeartbeat();
   stopPeerHeartbeatSweep();
   knownPeerIds.clear();
+  resetChatState();
   releaseAudioFocus();
   nativePTTLeave();
   stopKeepAlive();
@@ -11731,6 +12866,10 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
         pseudoColor: msg.hostPseudoColor || null
       }));
       console.log('[migration] Connected to new host ' + migrationPeerLabel(targetHostId) + '. Received peer-list.');
+      // The transcript belongs to a room whose code is now this new host's id,
+      // and anything the old host never echoed back has to go out again.
+      saveChatLog();
+      resendPendingChat();
       safeHandleHostMessage(msg);
       return;
     }
@@ -12023,6 +13162,15 @@ function handleJoinerDataConnection(dataConn) {
       });
       sendHostPeerList(dataConn, joinerId);
 
+      // The transcript so far. Served from the host's own replica, which is why
+      // a migration needs to hand nothing over — see the chat section.
+      if (chatLog.length) {
+        sendDataIfOpen(dataConn, {
+          type: 'chat-history',
+          messages: chatLog.map(serializeChatMessage)
+        });
+      }
+
       // Inform joiner of the public lobby ID if the room is published
       if (_publishedRoomId) {
         var isDeputy = (joinerId === currentDeputyId());
@@ -12204,6 +13352,15 @@ function handleJoinerDataConnection(dataConn) {
       } else {
         onDeviceInfoResponse(joinerId, msg.info, msg.declined);
       }
+    } else if (msg.type === 'chat') {
+      // `joinerId`, never msg.peerId: the sender field is the host's to stamp.
+      var chatText = chatTextFromWire(msg.text);
+      var chatId   = chatIdFromWire(msg.id, joinerId);
+      if (chatText && chatId) fanOutChatMessage(joinerId, chatId, chatText);
+    } else if (msg.type === 'chat-react') {
+      fanOutChatReaction(joinerId, msg.msgId, msg.emoji);
+    } else if (msg.type === 'chat-typing') {
+      fanOutChatTyping(joinerId, !!msg.active);
     }
   });
 
@@ -12300,6 +13457,8 @@ async function createRoom(onJoined) {
     peer.on('open', function(id) {
       if (cancelled) { peer.destroy(); settle(reject, new Error('Connection cancelled.')); return; }
       isHost = true; roomCode = id; inRoom = true;
+      resetChatState();
+      loadChatLog(id);
       roomState = ROOM_STATE_CONNECTED;
       stopHostHeartbeatMonitor();
       stopPeerHeartbeat();
@@ -12396,6 +13555,26 @@ function handleHostMessage(msg) {
   }
   if (msg.type === 'device-info-response') {
     onDeviceInfoResponse(msg.peerId, msg.info, msg.declined);
+    return;
+  }
+  if (msg.type === 'chat') {
+    if (appendChatMessage(msg)) { renderChat(); saveChatLog(); updateChatUnreadBadge(); }
+    return;
+  }
+  if (msg.type === 'chat-history') {
+    var backfilled = 0;
+    (msg.messages || []).forEach(function(entry) {
+      if (appendChatMessage(entry, { quiet: true })) backfilled++;
+    });
+    if (backfilled) { renderChat(); saveChatLog(); }
+    return;
+  }
+  if (msg.type === 'chat-react') {
+    if (applyChatReaction(msg.msgId, msg.emoji, msg.peerId)) { renderChat(); saveChatLog(); }
+    return;
+  }
+  if (msg.type === 'chat-typing') {
+    noteChatTyping(msg.peerId, !!msg.active);
     return;
   }
   if (msg.type === 'pseudo-assigned') {
@@ -12738,6 +13917,8 @@ function finishJoin(targetHostId, hostData) {
   roomCode = targetHostId;
   isHost = false;
   inRoom = true;
+  resetChatState();
+  loadChatLog(targetHostId);
   connectingToHostId = null;
   roomState = ROOM_STATE_CONNECTED;
   noteHostHeartbeat();
@@ -14427,6 +15608,7 @@ window.addEventListener('DOMContentLoaded', function() {
         .catch(function(err) {
           showError(err.message);
           clearRejoinSnapshot();
+          clearChatLog();
           _rejoinDismissed = true;
           var b = $('rejoin-bar');
           if (b) b.remove();
@@ -14441,6 +15623,7 @@ window.addEventListener('DOMContentLoaded', function() {
     });
     bar.querySelector('#btn-dismiss-rejoin').addEventListener('click', function() {
       clearRejoinSnapshot();
+      clearChatLog();
       _rejoinDismissed = true;
       bar.remove();
     });
@@ -14543,6 +15726,7 @@ window.addEventListener('DOMContentLoaded', function() {
   });
 
   $('btn-freehand').addEventListener('click', function() { setFreeHand(!freeHandMode); });
+  initChatUI();
   // Edit shortcut — delegated since the button is dynamically rendered in ptt-hint
   $('ptt-hint').addEventListener('click', function(e) {
     var btn = e.target.closest('#btn-edit-shortcut');

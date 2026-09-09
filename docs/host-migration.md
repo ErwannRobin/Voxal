@@ -106,6 +106,7 @@ After the window, the host rebroadcasts and prunes ghosts that never reattached.
 | `peer-list` | Authoritative room/successor state; marks migration success |
 | `redirect` | Sends misdirected joiners to current host |
 | `peer-joined` / `peer-left` | Membership updates between authoritative snapshots |
+| `chat` / `chat-history` | Nothing to hand over: the host fans every chat message out to **everyone**, so every peer already holds a full replica of the transcript and whoever is promoted serves the backfill from its own log. The only loss is a message in flight when the host died — the sender holds it in `_chatPending` and re-sends it once the first `peer-list` from the new host arrives |
 
 ## Debugging tips
 
