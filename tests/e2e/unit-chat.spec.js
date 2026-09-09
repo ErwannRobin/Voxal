@@ -678,6 +678,26 @@ test.describe('the drawer\'s width', () => {
     expect(after.dragging).toBe(false);
   });
 
+  // The handle rides on the drawer's edge, so an eased `right` leaves it
+  // chasing the pointer a quarter of a second behind the seam it is attached
+  // to. Measured mid-drag, not after: settling hides the bug.
+  test('the edge handle keeps up with the separator mid-drag', async ({ page }) => {
+    await page.setViewportSize({ width: 1200, height: 760 });
+    await page.evaluate(() => { applyChatWidth(360); saveChatWidth(360); });
+    const seam = () => page.evaluate(() => Math.round(
+      document.getElementById('stage-handle-chat').getBoundingClientRect().right
+      - document.getElementById('room-chat-panel').getBoundingClientRect().left));
+
+    const atRest = await seam();
+    const grip = await page.locator('#chat-resizer').boundingBox();
+    await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(grip.x + grip.width / 2 - 150, grip.y + grip.height / 2, { steps: 10 });
+    const during = await seam();
+    await page.mouse.up();
+    expect(during).toBe(atRest);
+  });
+
   test('double-clicking the separator puts it back', async ({ page }) => {
     await page.evaluate(() => { applyChatWidth(600); saveChatWidth(600); });
     await page.dblclick('#chat-resizer');
@@ -813,16 +833,15 @@ test.describe('the chat as a column of the room', () => {
       // applyChatDock() is what reads it.
       document.body.classList.add('video-stage');
       applyChatDock();
-      const shut = chatPanelOpen();
+      const alreadyOpen = chatPanelOpen();
       toggleChatPanel(true);
       const panel = document.getElementById('room-chat-panel');
       const roster = document.getElementById('room-peers-panel').getBoundingClientRect();
       return {
         docked: document.body.classList.contains('chat-docked'),
-        // Docking decides WHERE an open chat goes, never whether it is open: a
-        // call must not hand a third of the stage to a conversation nobody has
-        // started.
-        openedItself: shut,
+        // A desktop room shows the conversation from the start — showScreen()
+        // opened it on entry, before this test asked for anything.
+        openedItself: alreadyOpen,
         // In the flow, not floating over the room…
         transform: getComputedStyle(panel).transform,
         position: getComputedStyle(panel).position,
@@ -833,10 +852,38 @@ test.describe('the chat as a column of the room', () => {
       };
     });
     expect(seen.docked).toBe(true);
-    expect(seen.openedItself).toBe(false);
+    expect(seen.openedItself).toBe(true);
     expect(seen.oppositeTheRoster).toBe(true);
     expect(seen.position).toBe('relative');
     expect(seen.transform === 'none' || seen.transform === 'matrix(1, 0, 0, 1, 0, 0)').toBe(true);
+  });
+
+  // Docked, the drawer is a grid column rather than a fixed overlay, so its
+  // left edge is the column's width PLUS the padding the room keeps on the
+  // outside. Offsetting the handle by the column alone floats it clear of the
+  // separator — visible the moment a camera goes on.
+  test('the edge handle sits on the separator in both regimes', async ({ page }) => {
+    await page.setViewportSize({ width: 1400, height: 800 });
+    const seam = (docked) => page.evaluate((wantDocked) => {
+      // `video-stage` stands in for a live camera. It has to be re-asserted at
+      // every measurement: the viewport change queues a rAF in which
+      // updateVideoStage() strips it again, there being no real tile behind it.
+      if (wantDocked) { document.body.classList.add('video-stage'); applyChatDock(); }
+      return {
+        docked: document.body.classList.contains('chat-docked'),
+        seam: Math.round(
+          document.getElementById('stage-handle-chat').getBoundingClientRect().right
+          - document.getElementById('room-chat-panel').getBoundingClientRect().left),
+      };
+    }, docked);
+
+    await page.evaluate(() => toggleChatPanel(true));
+    const asDrawer = await seam(false);
+    expect(asDrawer.docked).toBe(false);
+
+    // `right` is eased, so the handle is still on its way for a quarter of a
+    // second after the regime changes under it.
+    await expect.poll(() => seam(true)).toEqual({ docked: true, seam: asDrawer.seam });
   });
 
   test('a narrow room keeps it a drawer', async ({ page }) => {
@@ -857,6 +904,80 @@ test.describe('the chat as a column of the room', () => {
       return document.body.classList.contains('chat-docked');
     });
     expect(docked).toBe(false);
+  });
+});
+
+test.describe('expanded by default on a desktop', () => {
+  const enterRoom = async (page) => {
+    await seedRoom(page, {
+      selfId: 'me', isHost: false, roomCode: 'the-host',
+      connections: [{ id: 'the-host', pseudo: 'Host' }],
+    });
+    await page.evaluate(() => { resetChatState(); showScreen('room'); });
+  };
+
+  test('a room wide enough to sit beside opens the conversation on entry', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await enterRoom(page);
+    const seen = await page.evaluate(() => ({
+      open: chatPanelOpen(),
+      expanded: document.getElementById('stage-handle-chat').getAttribute('aria-expanded'),
+      // It opened by itself, so it must not have taken the keyboard: the
+      // composer owning it would silence push-to-talk in a room nobody has
+      // typed in yet.
+      focused: document.activeElement.id,
+    }));
+    expect(seen.open).toBe(true);
+    expect(seen.expanded).toBe('true');
+    expect(seen.focused).not.toBe('chat-input');
+  });
+
+  test('a phone-sized room keeps it shut — the drawer would cover the call', async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 700 });
+    await enterRoom(page);
+    expect(await page.evaluate(() => chatPanelOpen())).toBe(false);
+  });
+
+  test('the collapse icon folds it away and that choice outlives the room', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await enterRoom(page);
+    await page.click('#btn-chat-close');
+    const collapsed = await page.evaluate(() => ({
+      open: chatPanelOpen(),
+      stored: localStorage.getItem(CHAT_COLLAPSED_KEY),
+    }));
+    expect(collapsed).toEqual({ open: false, stored: '1' });
+
+    // Coming back into a room must not undo it.
+    const again = await page.evaluate(() => { showScreen('home'); showScreen('room'); return chatPanelOpen(); });
+    expect(again).toBe(false);
+  });
+
+  test('a resize does not push it back over a call it was shut for', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await enterRoom(page);
+    await page.evaluate(() => toggleChatPanel(false));
+    await page.setViewportSize({ width: 1500, height: 800 });
+    expect(await page.evaluate(() => chatPanelOpen())).toBe(false);
+
+    // The next room is a fresh answer to the question, though.
+    const nextRoom = await page.evaluate(() => { resetChatState(); showScreen('room'); return chatPanelOpen(); });
+    expect(nextRoom).toBe(true);
+  });
+
+  test('the bubble on the edge is what brings it back', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await enterRoom(page);
+    await page.click('#btn-chat-close');
+    expect(await page.evaluate(() => chatPanelOpen())).toBe(false);
+
+    await page.locator('#stage-handle-chat').click();
+    const reopened = await page.evaluate(() => ({
+      open: chatPanelOpen(),
+      // Re-opening it is a choice too, so the default goes back to expanded.
+      stored: localStorage.getItem(CHAT_COLLAPSED_KEY),
+    }));
+    expect(reopened).toEqual({ open: true, stored: null });
   });
 });
 

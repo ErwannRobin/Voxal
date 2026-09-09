@@ -966,12 +966,51 @@ seems too sharp".
   hid the thing you had just grabbed — and the symptom was Playwright timing out
   on "element is not visible" after a click that had already worked.
 
-- **Docking a panel decides where it goes, not whether it is open.** The first
-  version opened the chat by itself the moment a camera went live, since that is
-  when it becomes a column rather than a drawer. It handed a third of the stage
-  to a conversation nobody had started, and it moved the video tiles under three
-  existing layout tests. The unread badge and the peek exist precisely so the
-  chat can stay shut and still be findable.
+- **Docking a panel decides where it goes; a separate rule decides whether it is
+  open.** An early version tied the two together and opened the chat the moment a
+  camera went live — a conversation nobody had started appearing mid-call. They
+  are still separate, but the answer to the second question is now *yes on a
+  desktop*: `chatOpensOnEntry()` opens it on entry to the room screen when the
+  window is at least `CHAT_DOCK_MIN_WIDTH` and the stage is not the immersive
+  one. Two things make that safe where the camera-triggered version was not — it
+  happens on *entry*, never mid-call, and it never focuses the composer (see the
+  push-to-talk note above). It does move the video tiles: `unit-video-layout`'s
+  `enterRoom()` collapses the chat so it still measures the box it describes.
+
+- **An auto-opened panel needs a "shut here" flag as well as a stored
+  preference.** Persisting only the deliberate collapse left a resize re-opening
+  a drawer that had just been closed some other way — every `resize` re-asks the
+  auto-open question. `_chatCollapsedHere` is set by *any* close and cleared by
+  `resetChatState()` (i.e. per room), so the stored default applies once per
+  room rather than once per layout event.
+
+- **A control that rides on a draggable edge must drop its own transition.**
+  `.stage-handle-right` eases `right` so it glides out when the drawer opens —
+  which during a *resize* drag leaves it chasing the pointer a quarter of a
+  second behind the seam it is attached to. `body.chat-resizing` now kills it,
+  the same way it already killed the drawer's. Measured mid-drag: after
+  `mouse.up()` everything settles and the bug is invisible.
+
+- **A panel that changes positioning regime changes what "its edge" means.** As
+  a fixed drawer the chat is flush to the viewport, so an offset of the drawer's
+  width lands exactly on its separator. Docked, it is a grid *column* — its left
+  edge is that width plus `#screen-room`'s own `padding-right`, so the same
+  offset floated the handle 18px clear of the seam the moment a camera went on.
+  Anything anchored to a panel's edge needs one rule per regime, not one number.
+
+- **`body.video-stage` as a stand-in for a live camera does not stay put.** A
+  test that adds the class by hand and then changes the viewport loses it: the
+  resize queues a rAF in which `updateVideoStage()` recomputes the class from the
+  tiles that are actually there and takes it straight back off. Re-assert it at
+  each measurement, or measure inside the one synchronous `evaluate` that set it.
+
+- **A control wired by the layout that *usually* shows it is dead everywhere
+  else.** The chat's edge handle is on screen in every room, but
+  `initStagePanelHandles()` was only called from `updateVideoStage()` under
+  `mode === 'immersive'` — so on a desktop the bubble was a real, styled,
+  hover-able button with no listener on it at all. It is now wired from
+  `initChatUI()`, which runs once wherever the chat exists. Nothing about the
+  element's appearance says which of the two happened.
 
 - **A one-row `<textarea>` paints a scrollbar down an empty box.** Its
   `scrollHeight` includes its own padding, so it reports itself overflowing by a

@@ -617,13 +617,27 @@ be any emoji in that catalog rather than one of six.
 The drawer's width is dragged on its own separator and remembered in
 `chat-width`. On a wide screen with a live stage it stops being a drawer at all:
 `applyChatDock()` publishes `body.chat-docked` and the room becomes
-participants | stage | chat, the shape every video call has. Docking never opens
-it — while it is shut, a new message surfaces for a few seconds over the call
-(`#chat-peek`) and the count rides on the header's chat button.
+participants | stage | chat, the shape every video call has. Docking still only
+decides WHERE an open chat goes; whether it is open is `chatOpensOnEntry()`'s
+call.
+
+On a desktop the chat **starts expanded**: a room at least `CHAT_DOCK_MIN_WIDTH`
+wide, outside the immersive/native stage, opens it on entry to the room screen
+(`applyChatAutoOpen()`, from `showScreen('room')`). Below that width the drawer
+would cover the call, so it stays shut. Auto-opening never focuses the composer
+— a focused text field takes the keyboard away from push-to-talk. A deliberate
+collapse is remembered in `chat-collapsed` and any close at all suppresses the
+auto-open for the rest of that room (`_chatCollapsedHere`), so a resize never
+pushes the drawer back over a call. While it is shut, a new message surfaces for
+a few seconds over the call (`#chat-peek`) and the count rides on the edge
+handle.
 
 The chat is reached from a handle on the right edge — the chat icon, the unread
 count, and a drag — in **every** room, voice-only ones included. There is no
-button for it in the header. On the immersive phone stage it is one of three
+button for it in the header. That handle is wired by `initChatUI()` rather than
+by the immersive stage, so it is a live control on a desktop too; folding the
+drawer away is the collapse icon in its header (`#btn-chat-close`), which is the
+same toggle from the other side. On the immersive phone stage it is one of three
 edges: participants from the left, the conversation from the right, the room
 header from the top. The chat borrows `STAGE_PANELS`' drag gesture through
 `CHAT_DRAG_PANEL` without joining it — see [[chat-drawer-not-a-stage-panel]] in

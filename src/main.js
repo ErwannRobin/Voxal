@@ -219,6 +219,10 @@ const CHAT_WIDTH_KEY     = 'chat-width';
 const CHAT_WIDTH_DEFAULT = 360;
 const CHAT_WIDTH_MIN     = 280;
 const CHAT_WIDTH_MAX     = 720;
+// Whether the desktop drawer was deliberately collapsed. Stored as a presence,
+// so "never chosen" is an absence and the default stays open — see
+// chatOpensOnEntry().
+const CHAT_COLLAPSED_KEY = 'chat-collapsed';
 var   _rejoinDismissed          = false;
 const RECENT_ROOMS_KEY          = 'recent-rooms';
 const RECENT_ROOMS_MAX          = 5;
@@ -2393,6 +2397,9 @@ function showScreen(name) {
     if (window._updateRecentRooms) window._updateRecentRooms();
   }
   else                 stopPresencePolling();
+  // A desktop room shows the conversation from the start unless it was
+  // deliberately collapsed.
+  if (name === 'room') applyChatAutoOpen();
   if (window._updateTinyPeersToggle) window._updateTinyPeersToggle();
 }
 
@@ -3356,6 +3363,7 @@ function stopChatTypingSweep() {
 }
 
 function resetChatState() {
+  _chatCollapsedHere = false;
   chatLog = [];
   _chatIds.clear();
   _chatPending.clear();
@@ -3793,15 +3801,68 @@ function chatDocked() {
   return window.innerWidth >= CHAT_DOCK_MIN_WIDTH;
 }
 
-// Docking decides WHERE an open chat goes, never whether it is open: a call
-// must not silently hand a third of the stage to a conversation nobody has
-// started. The unread badge and the peek are what make it findable instead.
+// Docking decides WHERE an open chat goes, never whether it is open — that is
+// chatOpensOnEntry()'s call.
 function applyChatDock() {
   document.body.classList.toggle('chat-docked', chatDocked());
 }
 
-function toggleChatPanel(open) {
+// --- Chat: open by default on a desktop --------------------------------------
+//
+// On a screen with room to spare the conversation is part of the call, not
+// something you have to go and find, so the drawer starts expanded. On a phone
+// it stays shut: there the drawer covers the room, and a call must not open
+// over its own controls.
+//
+// A deliberate collapse is remembered, so "expanded by default" is a default
+// and not something that undoes the user's choice on every join.
+
+// Shut during THIS room, deliberately or not. Auto-open answers the question
+// "has anyone put this away yet?", and a resize is not a new answer to it — a
+// window dragged wider must not push a drawer back over a call. Cleared by
+// resetChatState(), so the next room starts from the stored default again.
+var _chatCollapsedHere = false;
+
+function chatCollapsedByChoice() {
+  if (_chatCollapsedHere) return true;
+  try { return localStorage.getItem(CHAT_COLLAPSED_KEY) === '1'; } catch (_) { return false; }
+}
+
+function rememberChatCollapsed(collapsed) {
+  try {
+    if (collapsed) localStorage.setItem(CHAT_COLLAPSED_KEY, '1');
+    else localStorage.removeItem(CHAT_COLLAPSED_KEY);
+  } catch (_) { /* private mode / disabled storage */ }
+}
+
+// Wide enough that an open drawer sits BESIDE the room rather than over it, and
+// not the phone/native stage, where there is only ever one column to have. The
+// threshold is the docking one on purpose: the same width that lets the chat be
+// a column is the width at which it can be open without costing anything.
+function chatOpensOnEntry() {
+  if (IS_TINY_EMBED || !inRoom) return false;
+  if (videoStageMode() === 'immersive') return false;
+  if (chatCollapsedByChoice()) return false;
+  return window.innerWidth >= CHAT_DOCK_MIN_WIDTH;
+}
+
+// Idempotent, and never re-opens what is already open: safe to call on every
+// entry to the room screen and on every resize.
+function applyChatAutoOpen() {
+  if (chatPanelOpen() || !chatOpensOnEntry()) return;
+  // No focus: the composer owns the keyboard while it has it, and a chat that
+  // opened by itself must not take push-to-talk away from a room nobody has
+  // typed in yet.
+  toggleChatPanel(true, { focus: false });
+}
+
+// `opts.focus` is false for an open nobody asked for (see applyChatAutoOpen);
+// `opts.remember` marks the deliberate gestures — the collapse icon and the
+// edge handle — whose choice outlives the room.
+function toggleChatPanel(open, opts) {
   var next = (open === undefined) ? !chatPanelOpen() : !!open;
+  _chatCollapsedHere = !next;
+  if (opts && opts.remember) rememberChatCollapsed(!next);
   if (next) closeStagePanels();
   document.body.classList.toggle('chat-open', next);
   var handle = document.getElementById('stage-handle-chat');
@@ -3812,7 +3873,9 @@ function toggleChatPanel(open) {
     var list = document.getElementById('chat-messages');
     if (list) list.scrollTop = list.scrollHeight;
     var input = document.getElementById('chat-input');
-    if (input) setTimeout(function() { try { input.focus(); } catch (_) {} }, 60);
+    if (input && !(opts && opts.focus === false)) {
+      setTimeout(function() { try { input.focus(); } catch (_) {} }, 60);
+    }
   } else {
     sendChatTyping(false);
     closeEmojiPicker();
@@ -4110,9 +4173,13 @@ function initChatUI() {
   input._voxalChatWired = true;
 
   applyChatWidth(readChatWidth());
+  // The other two handles belong to the immersive phone stage and are wired
+  // when it appears; the chat's is on screen in every room, so it is wired here
+  // — without this the bubble is a button that does nothing on a desktop.
+  initStagePanelHandles();
 
   var close = document.getElementById('btn-chat-close');
-  if (close) close.addEventListener('click', function() { toggleChatPanel(false); });
+  if (close) close.addEventListener('click', function() { toggleChatPanel(false, { remember: true }); });
   var send = document.getElementById('btn-chat-send');
   if (send) send.addEventListener('click', submitChatInput);
 
@@ -4200,11 +4267,13 @@ function initChatUI() {
   window.addEventListener('resize', function() {
     applyChatWidth(readChatWidth());
     applyChatDock();
+    // A window that grew into desktop territory gets the desktop default.
+    applyChatAutoOpen();
   });
 
   // A peek is a shortcut into the conversation it came from.
   var peek = document.getElementById('chat-peek');
-  if (peek) peek.addEventListener('click', function() { toggleChatPanel(true); });
+  if (peek) peek.addEventListener('click', function() { toggleChatPanel(true, { remember: true }); });
 
   renderChat();
   updateChatUnreadBadge();
@@ -10153,7 +10222,9 @@ function panelIsOpen(which) {
 }
 
 function setPanelOpen(which, open) {
-  if (which === 'chat') toggleChatPanel(open);
+  // Reaching for the handle is as deliberate as reaching for the collapse
+  // icon, so it settles the drawer's default the same way.
+  if (which === 'chat') toggleChatPanel(open, { remember: true });
   else setStagePanel(which, open);
 }
 

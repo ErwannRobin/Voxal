@@ -18,6 +18,10 @@ async function enterRoom(page, cfg = {}) {
   await seedRoom(page, { selfId: 'self', isHost: true, roomCode: 'room1', ...cfg });
   await page.evaluate(() => {
     showScreen('room');
+    // A desktop room opens the chat beside the stage (see unit-chat.spec.js).
+    // These tests are about how a box of a known width is divided up, so they
+    // take that column back rather than measuring around it.
+    toggleChatPanel(false);
     updatePeerList();
   });
 }
