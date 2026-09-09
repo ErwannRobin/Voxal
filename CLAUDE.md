@@ -90,6 +90,25 @@ else                                           // plain web
 
 Every Tauri/Capacitor-specific feature must be guarded this way.
 
+In CSS, the head inline script tags `<html>`: `is-native` is **Capacitor mobile
+only** (portrait-locked, one column), while the Tauri desktop app carries
+`is-web` **plus** `is-desktop-app` — it is a resizable desktop window, so it
+takes the same layout regimes as desktop web.
+
+### Desktop window shape (Tauri)
+
+The Mac window is part of the layout, not a fixed frame around it.
+`applyDesktopWindowShape()` in `main.js` sizes it from the room's configuration:
+opening the chat grows the window to the right by exactly the drawer's width
+(`body.chat-side`, reserved as `padding-right` on `body`), and a live camera or
+screen gives it the landscape shape the desktop web app uses (stage left, roster
++ PTT railed right — the `html.is-web` grid at ≥861px). Both are reversible: the
+plain voice column is remembered, including a size the user chose themselves, and
+handed back. Called from `toggleChatPanel()`, `updateVideoStage()` and
+`showScreen()`; a no-op off Tauri. Needs `core:window:allow-set-size` (plus the
+position/scale permissions for the on-screen nudge) in
+`src-tauri/capabilities/default.json`.
+
 ### Presence (optional)
 
 Auth token + org ID stored in `localStorage`. All API calls go through `presenceBase()` which reads `localStorage['service-url']` with fallback to `https://voxal.app`. Deep links from the auth flow arrive via `voxal://auth?token=…` (desktop) or `postMessage` (web) and are handled by `handleDeepLink()` — always validate the `state` parameter against `sessionStorage`.

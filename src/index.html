@@ -42,11 +42,17 @@
       (function() {
         var t = localStorage.getItem('theme') || 'system';
         document.documentElement.setAttribute('data-theme', t);
-        // Tag the platform so the landscape reflow can be scoped to web only
-        // (native apps are portrait-locked; this guards edge cases).
-        var isNative = !!window.__TAURI__ ||
+        // Tag the platform so the layout regimes can be scoped. `is-native` is
+        // Capacitor mobile ONLY — it is portrait-locked and has one column to
+        // give. The Tauri desktop app is a resizable desktop window that grows
+        // and shrinks with the configuration (see applyDesktopWindowShape()), so
+        // it takes the same regimes as desktop web (`is-web`) plus a marker of
+        // its own for the parts that are genuinely window-level.
+        var isTauri = !!window.__TAURI__;
+        var isNativeMobile =
           !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-        document.documentElement.classList.add(isNative ? 'is-native' : 'is-web');
+        document.documentElement.classList.add(isNativeMobile ? 'is-native' : 'is-web');
+        if (isTauri) document.documentElement.classList.add('is-desktop-app');
         // Handedness: which side the talk button sits on in the landscape layout.
         document.documentElement.setAttribute(
           'data-hand', localStorage.getItem('handedness') === 'left' ? 'left' : 'right');

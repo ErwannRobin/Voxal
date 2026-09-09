@@ -278,7 +278,7 @@ Copilot should read this file at the start of every session.
 - **The roster's camera icon is a control, and it must not change meaning under the user.** It used to be suppressed while the stage showed that peer (via a `videoStageIsActive()` helper, now gone) on the grounds that a floating viewer on top of a tile is redundant — but that left the roster with *no* per-participant video control at all on the very surface that has the most video. The icon now stays for everyone with a live camera (or screen), and `togglePeerVideoWatch()` branches on **`videoStageAvailable()`, never on whether the stage currently has tiles**: hiding the last visible tile stands the stage down, and a count-based gate would at that moment silently re-mean the icon as "open a floating viewer", leaving nothing that could un-hide the peer. `videoStageAvailable()` is a media query, so it cannot go stale mid-tick the way an observational DOM check ("is `#video-stage` visible?") does.
   - **Hiding a peer is local and says nothing on the wire.** `_hiddenStageKeys` (tile keys) only filters what *you* render — the peer's camera keeps running and no message is sent, because no participant gets to reach across the room and switch off somebody else's camera. Deliberately *not* persisted, and cleared in `resetVideoState()`: it is a choice about this call. A hide is also released as soon as its source disappears, so a peer who turns their camera off and on again comes back visible instead of staying hidden behind an icon nobody remembers pressing.
   - **On your own row the icon shows/hides your *self-view*, and must not touch the stream.** It briefly called `startVideoShare`/`stopVideoShare` and that was wrong: the footer Camera button already owns whether you transmit, and two controls for one stream is how you end up switching off a camera you only meant to stop looking at. It toggles `camera:self` in the same `_hiddenStageKeys` set as everyone else, and is therefore only rendered where a self-view exists to hide — `localVideoActive && videoStageAvailable()`, never as an "off" affordance for a camera that is not on.
-- **The stage and the floating viewer are alternatives, never both.** `videoStageAvailable()` gates on `IS_TINY_EMBED`, `html.is-web` and a `matchMedia('(min-width: 861px)')` check, matching the CSS. Where it is false — mobile, tiny embed, narrow web, and **Tauri desktop, which keeps its WebviewWindow pop-out** — the icon opens/closes `openVideoViewer()`/`openScreenViewer()`; where it is true the same press shows/hides that peer's tile. Both readings are "am I watching this person", which is why one icon can carry both.
+- **The stage and the floating viewer are alternatives, never both.** `videoStageAvailable()` gates on `IS_TINY_EMBED`, `html.is-web` and a `matchMedia('(min-width: 861px)')` check, matching the CSS. Where it is false — mobile, tiny embed, narrow web (**and, until the desktop-window work below, Tauri desktop**, which was on its WebviewWindow pop-out) — the icon opens/closes `openVideoViewer()`/`openScreenViewer()`; where it is true the same press shows/hides that peer's tile. Both readings are "am I watching this person", which is why one icon can carry both.
 - **The self-view is a draggable badge, not a tile — except when it is the only camera.** `selfBadgeTileKey()` minimizes `camera:self` into `#video-stage-self` whenever another *camera* tile is visible (a screen share doesn't count — alone with someone's screen you are still the only face), and an explicit pin outranks minimising in either direction. `renderVideoStage()` gained a third container and routes by key, so the badge↔grid transition **moves the same element** and never reassigns `srcObject` (which would flash the tile — the counting test now covers this path too).
   - **Corner-anchored, not free-floating.** Dropping the badge at an arbitrary offset means the next window resize parks it over someone's face; four `[data-corner]` CSS rules survive every size with no state to recompute, so the drag is really a *pick a corner* gesture that snaps on release (by the badge's **centre**, so the snap lands where it looks like you let go).
   - **Listen for `pointermove`/`pointerup` on the window, not on the badge.** The pointer routinely leaves a 200px badge mid-drag; a `pointerup` delivered elsewhere would leave it glued to the cursor. The listeners are added on `pointerdown` and removed on release.
@@ -295,7 +295,7 @@ Copilot should read this file at the start of every session.
 
 ## Video stage on mobile — the immersive shape
 
-- **One selector decides the shape, and everything else already followed it.** The stage shipped desktop-only behind `videoStageAvailable()`, and because `updateVideoStage()`, `togglePeerVideoWatch()` and the self-view badge *all* consult that single function, bringing the whole feature to phones was one function, not a sweep. It is now `videoStageMode()` → `'none' | 'desktop' | 'immersive'`, with `videoStageAvailable()` kept as a derived boolean so no call site changed. `'none'` is the tiny embed **and Tauri** — Tauri has *neither* `is-web` nor `is-native` on `<html>` (the head inline script only sets one of the two), which is precisely what keeps it on its pop-out `WebviewWindow`. Native resolves to `'immersive'` at **any** width without measuring, because a native tablet in portrait is 768–1024px and would otherwise trip the desktop breakpoint — it can't actually match the desktop CSS, which is `html.is-web`-qualified, so a width test there would disagree with the stylesheet.
+- **One selector decides the shape, and everything else already followed it.** The stage shipped desktop-only behind `videoStageAvailable()`, and because `updateVideoStage()`, `togglePeerVideoWatch()` and the self-view badge *all* consult that single function, bringing the whole feature to phones was one function, not a sweep. It is now `videoStageMode()` → `'none' | 'desktop' | 'immersive'`, with `videoStageAvailable()` kept as a derived boolean so no call site changed. `'none'` is the tiny embed and any surface with neither platform class. (It **used to include Tauri**, which carried neither `is-web` nor `is-native`; the desktop-window work below moved it onto `is-web` + `is-desktop-app`, so it now reads `'desktop'` or `'immersive'` by width like web does.) Native resolves to `'immersive'` at **any** width without measuring, because a native tablet in portrait is 768–1024px and would otherwise trip the desktop breakpoint — it can't actually match the desktop CSS, which is `html.is-web`-qualified, so a width test there would disagree with the stylesheet.
 - **Publish the mode as a body class instead of re-deriving it in CSS.** A media query would have to duplicate the `is-web`/`is-native`/tiny-embed reasoning and could then disagree with the JS that renders the tiles. `body.video-stage-immersive` (set by `updateVideoStage()` alongside `body.video-stage`) means the immersive block needs **no `@media` at all**, which also sidesteps the declaration-order fight documented in the landscape/desktop blocks — it can't tie with rules it shares no specificity contest with. Both classes obey the same rule: set only while a camera or screen is genuinely live, so an audio-only room still renders byte-identically.
 - **An absolutely-positioned child is laid out against its container's PADDING box, not its content box.** `#screen-room` carries `env(safe-area-inset-*)` padding, so the obvious way to make the stage bleed edge-to-edge — offset it by the padding, `top: calc(-1 * …)` on all four sides — **overshoots by exactly twice the padding** (measured: a 390px room produced a 426px stage). Plain `inset: 0` already spans the padding and reaches the physical edges, while the chrome keeps the padding and stays inside the safe area. Caught by asserting the stage's `getBoundingClientRect()` equals the room's; a visual check would have missed 18px of overhang under a status bar.
 - **"Edge to edge" is about the stage, not the tiles — and skipping that distinction buries half the UI.** With the stage at `inset: 0` the grid ran the full height, so the **bottom tile's name bar sat under the 184px control stack** (measured: tiles at 0–421 and 423–844, bar starting at 648). The fix is to inset the *grid* by the space the chrome actually occupies while the *stage background* stays full-bleed, so video still reaches the physical edges. The bottom inset is **measured** (`applyImmersiveStageInsets()`), not a constant: the control stack changes height with content — a name wraps, the Screen button is absent on mobile.
@@ -1071,3 +1071,79 @@ seems too sharp".
   three tests that have nothing to do with the change under test. Delete
   `src/build-info.js` before running the suite.
 
+## The desktop app's window is part of its layout
+
+- **`is-native` meant two incompatible things, and one of them was wrong.** The
+  head inline script tagged *both* Capacitor mobile and Tauri as `is-native`, so
+  the Mac app inherited the phone reasoning everywhere: `videoStageMode()`
+  returned `'immersive'` at any width, and every `html.is-web` layout regime —
+  the landscape reflow, the desktop stage grid, the docked chat column — was
+  unreachable on a desktop OS. Capacitor is portrait-locked with one column to
+  give; Tauri is a *resizable desktop window*. They now split: `is-native` is
+  Capacitor only, and Tauri carries **`is-web` + `is-desktop-app`**. Nothing in
+  the 34 `html.is-web` rules had to change — the Mac simply started matching the
+  regimes that were already written for a wide window. (Two `html.is-native`
+  settings-modal rules already carried a comment saying they only ever meant
+  Capacitor mobile; that comment is now literally true.)
+
+- **On the Mac, the window IS the layout — so the window resizes, not the room.**
+  `applyDesktopWindowShape()` (Tauri-only, no-op everywhere else) sizes the
+  window from the configuration: the chat drawer grows it to the right by
+  exactly the drawer's width, and a live stage gives it the landscape shape the
+  desktop web app uses. It is called from the three places that publish the
+  configuration — `toggleChatPanel()`, `updateVideoStage()`, `showScreen()` —
+  and is idempotent, comparing against the current size before asking.
+
+- **`setSize` takes a LOGICAL inner size, which is exactly `window.innerWidth`.**
+  The webview fills the window's inner box, so the current size needs no
+  `innerSize()` + `scaleFactor()` round-trip and no extra permission: plain CSS
+  pixels in, plain CSS pixels out. The `dpi` namespace (`window.__TAURI__.dpi.
+  LogicalSize`) is a separate global from `window.__TAURI__.window` — the v2
+  IIFE exports `app, core, dpi, event, image, menu, mocks, path, tray, webview,
+  webviewWindow, window`, and `setSize` re-wraps anything that is not already a
+  `Size`, so the real constructor is the safe thing to pass.
+  Permissions needed in `capabilities/default.json`: `core:window:allow-set-size`
+  (the resize), plus `allow-outer-position`, `allow-scale-factor` and
+  `allow-set-position` for pulling a grown window back on screen. Only the first
+  is load-bearing — the on-screen nudge is best-effort and swallows a refusal.
+
+- **Never resize the window from inside the chat separator's drag.** The drag
+  measures `window.innerWidth - e.clientX`; growing the window mid-drag moves
+  the very edge that measurement starts from, and the drawer chases its own
+  growth without converging. The window follows on `pointerup` (and on the
+  keyboard `nudgeChatWidth()`), never on `pointermove`.
+
+- **The strip reserved for the drawer must be the STORED width, not
+  `readChatWidth()`.** That reader clamps to 90% of the *current* window — the
+  narrow one we are about to grow — so a 360px drawer reserved 315px of a 350px
+  window and then didn't fit the window it caused. `storedChatWidth()` clamps to
+  the drawer's own bounds only; `readChatWidth()` is now that, plus the viewport
+  clamp.
+
+- **Tell your own resizes from the user's, or you will eat their sizing.** The
+  window the app is showing while the room is plain (minus the drawer, while the
+  chat is open) is remembered as the voice column and handed back when the extra
+  space is no longer needed. Every `setSize` echoes back as a `resize` event, so
+  `noteDesktopWindowResize()` ignores anything within 2px of what it just asked
+  for — and ignores resizes made under a live stage entirely, since that width is
+  ours, not a statement about the voice column.
+
+- **The chat must not auto-open on the desktop app.** `chatOpensOnEntry()` reads
+  "wide window" as "room to spare", which is true everywhere except the one
+  surface that *chose* its own width: on the Mac a window wide enough for the
+  chat is one we made wide, so the rule would open the drawer, which would grow
+  the window, in the middle of joining a call.
+
+- **The drawer's strip is reserved on `body`, not on `#screen-room`.** The
+  screens are body's flex items at `width: 100%` and the chat panel is
+  `position: fixed` in the gap, so one `padding-right` moves the room, the
+  roster and the absolutely-positioned talk bar together — and it matches the
+  panel's own width rule cap-for-cap (`min(var(--chat-width), 92vw)`), which the
+  window was grown to fit.
+
+- **Expect one frame of the wrong stage shape.** `setSize` is async, so the tick
+  that turns a camera on still measures the narrow window and publishes
+  `video-stage-immersive`; the resize event brings `updateVideoStage()` straight
+  back with the landscape width. Chasing that would mean teaching
+  `videoStageMode()` about a pending window size, which is a second source of
+  truth for the same question.
