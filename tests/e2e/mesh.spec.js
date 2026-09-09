@@ -11,6 +11,11 @@ import {
   waitForSharedDeputy,
   outgoingAudioSenderCounts,
   negotiatedOpusFmtp,
+  sendChat,
+  chatIds,
+  chatText,
+  chatTypingText,
+  chatReactions,
 } from './mesh-helpers.js';
 
 // Multi-peer mesh tests — real PeerJS signaling + real WebRTC between isolated
@@ -64,6 +69,111 @@ test.describe('mesh @mesh', () => {
     // And a host rename must reach the joiner.
     await host.evaluate(() => window.setMyPseudo('RenamedHost'));
     await expect.poll(() => rosterText(a), POLL).toContain('RenamedHost');
+  });
+
+  test('a chat message reaches every peer, and the sender gets it back', async ({ makePeer }) => {
+    const host = await makePeer({ pseudo: 'Hostie' });
+    const code = await createRoom(host);
+    const a = await makePeer({ pseudo: 'Alice' });
+    const b = await makePeer({ pseudo: 'Bob' });
+    await joinRoom(a, code);
+    await joinRoom(b, code);
+    for (const p of [host, a, b]) {
+      await expect.poll(() => rosterCount(p), POLL).toBe(3);
+    }
+
+    // A non-host speaks: the host relays it to everyone, the sender included —
+    // that echo is what clears its pending copy.
+    await sendChat(a, 'hello from alice');
+    for (const p of [host, a, b]) {
+      await expect.poll(() => chatText(p), POLL).toContain('hello from alice');
+    }
+    await expect.poll(async () => (await a.evaluate(() => _chatPending.size)), POLL).toBe(0);
+
+    // And the host speaking reaches the joiners.
+    await sendChat(host, 'hello from the host');
+    for (const p of [a, b]) {
+      await expect.poll(() => chatText(p), POLL).toContain('hello from the host');
+    }
+
+    // Everyone ends up with the same transcript, in the same order — the host
+    // is the only thing that decides it.
+    const [hostIds, aIds, bIds] = await Promise.all([host, a, b].map(chatIds));
+    expect(aIds).toEqual(hostIds);
+    expect(bIds).toEqual(hostIds);
+  });
+
+  test('a late joiner is backfilled with what it missed', async ({ makePeer }) => {
+    const host = await makePeer({ pseudo: 'Hostie' });
+    const code = await createRoom(host);
+    const a = await makePeer({ pseudo: 'Alice' });
+    await joinRoom(a, code);
+    await expect.poll(() => rosterCount(host), POLL).toBe(2);
+
+    await sendChat(host, 'first');
+    await sendChat(a, 'second');
+    await expect.poll(() => chatText(host), POLL).toContain('second');
+
+    const c = await makePeer({ pseudo: 'Carol' });
+    await joinRoom(c, code);
+    await expect.poll(() => rosterCount(c), POLL).toBe(3);
+
+    await expect.poll(() => chatText(c), POLL).toContain('first');
+    await expect.poll(() => chatText(c), POLL).toContain('second');
+  });
+
+  test('a reaction and a typing indicator propagate', async ({ makePeer }) => {
+    const host = await makePeer({ pseudo: 'Hostie' });
+    const code = await createRoom(host);
+    const a = await makePeer({ pseudo: 'Alice' });
+    await joinRoom(a, code);
+    await expect.poll(() => rosterCount(host), POLL).toBe(2);
+
+    await sendChat(host, 'react to me');
+    await expect.poll(() => chatText(a), POLL).toContain('react to me');
+    const [msgId] = await chatIds(a);
+
+    // Alice reacts; the host must see the chip with a count of one.
+    await a.evaluate((id) => window.sendChatReaction(id, CHAT_REACTIONS[0]), msgId);
+    await expect.poll(() => chatReactions(host, msgId), POLL).toHaveLength(1);
+    expect((await chatReactions(host, msgId))[0]).toContain(' 1');
+
+    // Alice starts typing; the host's composer line names her. Re-armed on every
+    // poll because a typing flag deliberately expires on its own after a few
+    // seconds — the assertion must not race that timeout.
+    await expect.poll(async () => {
+      await a.evaluate(() => { _chatTypingActive = false; window.sendChatTyping(true); });
+      return chatTypingText(host);
+    }, POLL).toContain('Alice');
+  });
+
+  test('the transcript survives host migration, and chat keeps flowing', async ({ makePeer }) => {
+    const host = await makePeer({ pseudo: 'Hostie' });
+    const code = await createRoom(host);
+    const a = await makePeer({ pseudo: 'Alice' });
+    await joinRoom(a, code);
+    await expect.poll(() => rosterCount(a), POLL).toBe(2);
+    await waitForSharedDeputy(expect, [a], POLL);
+
+    await sendChat(host, 'said before the handover');
+    await expect.poll(() => chatText(a), POLL).toContain('said before the handover');
+
+    // Every peer holds a full replica, so the survivor keeps the transcript
+    // without anything being handed over.
+    await killPeer(host);
+    await expect.poll(async () => (await getState(a)).isHost, POLL).toBe(true);
+    expect(await chatText(a)).toContain('said before the handover');
+
+    // A newcomer joining the NEW host is backfilled from that same replica.
+    const newCode = (await getState(a)).roomCode;
+    const c = await makePeer({ pseudo: 'Carol' });
+    await joinRoom(c, newCode);
+    await expect.poll(() => rosterCount(c), POLL).toBe(2);
+    await expect.poll(() => chatText(c), POLL).toContain('said before the handover');
+
+    // …and new messages still flow through the promoted host.
+    await sendChat(c, 'said after the handover');
+    await expect.poll(() => chatText(a), POLL).toContain('said after the handover');
   });
 
   test('audio mesh forms once peers transmit', async ({ makePeer }) => {

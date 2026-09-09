@@ -594,4 +594,30 @@ a link must describe the room, not how the sender's window happened to be opened
 
 ---
 
+## 💬 In-room text chat
+
+Shipped: a right-hand drawer with plain text + autolinked URLs, typing
+indicators, six emoji reactions, an unread badge and a ping. Four message types
+on the existing star signaling (`chat`, `chat-history`, `chat-react`,
+`chat-typing`), `PROTOCOL_VERSION` bumped to 2. The transcript is in memory,
+mirrored to `localStorage` under `chat-log` with the rejoin snapshot's key and
+TTL, and capped at 200 messages. Covered by `tests/e2e/unit-chat.spec.js` (30
+cases) and four `@mesh` tests.
+
+Deliberately left for later:
+
+- **File and image sharing.** Chunking over the DataConnection with backpressure,
+  progress UI and a size cap is its own feature, not a bigger text box.
+- **Read receipts.** Would need a per-peer ack for every message; the room is
+  small enough that "who is in the room" already answers most of it.
+- **A message that outlives the room.** The transcript dies with the rejoin
+  snapshot on purpose — chat is a room feature, not a message store. Async text
+  between contacts is `docs/ring-a-friend.md`'s problem, and has a completely
+  different delivery model.
+- **Chat while the app is backgrounded on mobile.** The ping is a WebAudio cue,
+  so it needs the page alive. A real notification needs the same FCM/APNs work
+  ring-a-friend is waiting on.
+
+---
+
 _Add new items above this line._

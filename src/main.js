@@ -53,6 +53,11 @@
  *   log-entries          { peerId, entries,     target -> host (relayed to requester); dev only
  *                          from }
  *   log-session-end      { peerId, reason, from } target -> host (relayed to requester); dev only
+ *   chat         { id, text }                   peer -> host; host stamps the sender and fans out
+ *   chat         { id, peerId, text, at }       host -> ALL, the sender included (the echo is its ack)
+ *   chat-history { messages:[...] }             host -> joiner (reply to hello) — the transcript so far
+ *   chat-react   { msgId, emoji }               peer -> host; relayed to all as { msgId, emoji, peerId }
+ *   chat-typing  { active }                     peer -> host; relayed to all others as { peerId, active }
  *
  * Dev-mode debugging: the host advertises `debugMode` in every peer-list and
  * heartbeat. When on, a device-info "i" button appears next to each roster name.
@@ -82,7 +87,7 @@
 // app releases can share the same protocol version. Used for skew detection, not
 // (yet) to gate behavior — keep protocol changes additive/tolerant so mixed
 // rooms keep working.
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 
 const METERED_APP_STORE_KEY    = 'metered-app-name';
 const METERED_API_STORE_KEY    = 'metered-api-key';
@@ -179,6 +184,16 @@ const VIDEO_MODE_KEY            = 'video-mode-enabled';
 const SELF_VIDEO_CORNER_KEY     = 'self-video-corner'; // corner the minimized self-view badge was dragged to
 const REJOIN_SNAPSHOT_KEY       = 'rejoin-snapshot';
 const REJOIN_TTL_MS             = 30 * 60 * 1000; // 30 minutes
+
+// --- Chat --------------------------------------------------------------------
+const CHAT_LOG_KEY   = 'chat-log';  // { roomCode, savedAt, messages:[...] } — same lifetime as the rejoin snapshot
+const CHAT_LOG_MAX   = 200;         // messages kept in memory and on disk
+const CHAT_TEXT_MAX  = 2000;        // characters accepted, on send AND on relay
+const CHAT_ID_MAX    = 128;         // a message id is <peerId>:<n>; anything longer is not ours
+const CHAT_TYPING_TTL_MS      = 4000; // a typing flag expires on its own
+const CHAT_TYPING_THROTTLE_MS = 2000; // at most one 'still typing' per this
+const CHAT_TYPING_IDLE_MS     = 3000; // stop claiming to type after this much silence
+const CHAT_REACTIONS = ['\u{1F44D}', '\u2764\uFE0F', '\u{1F602}', '\u{1F389}', '\u{1F914}', '\u{1F440}'];
 var   _rejoinDismissed          = false;
 const RECENT_ROOMS_KEY          = 'recent-rooms';
 const RECENT_ROOMS_MAX          = 5;
@@ -1171,6 +1186,28 @@ function playCarillon() {
     osc.frequency.setValueAtTime(freq, t);
     gain.gain.setValueAtTime(0, t);
     gain.gain.linearRampToValueAtTime(0.22, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.start(t);
+    osc.stop(t + dur);
+  });
+}
+
+// Chat ping: two quick high notes, quieter and shorter than the join carillon —
+// a message arriving is not somebody arriving.
+function playChatPing() {
+  const ctx = _audioCtx;
+  if (ctx.state === 'suspended') ctx.resume();
+  [1046.50, 1318.51].forEach(function(freq, i) {
+    const osc  = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    const t   = ctx.currentTime + i * 0.09;
+    const dur = 0.18;
+    osc.frequency.setValueAtTime(freq, t);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.10, t + 0.01);
     gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     osc.start(t);
     osc.stop(t + dur);
@@ -2735,7 +2772,11 @@ function matchesShortcut(e) {
 }
 
 function shouldIgnorePTTShortcuts() {
-  return editingSelfPseudo;
+  if (editingSelfPseudo) return true;
+  // A focused text field owns the keyboard. In the chat composer Space is a
+  // space and Enter sends a message — neither may reach push-to-talk.
+  var el = document.activeElement;
+  return !!(el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable));
 }
 
 function displayShortcut(raw) {
@@ -3107,6 +3148,568 @@ function loadRejoinSnapshot() {
 
 function clearRejoinSnapshot() {
   localStorage.removeItem(REJOIN_SNAPSHOT_KEY);
+}
+
+// --- Chat --------------------------------------------------------------------
+//
+// Chat rides the signaling star that is already there: a peer sends to the host,
+// the host stamps the sender's id and fans the message out to EVERYONE, itself
+// and the sender included. Two things fall out of that fan-out for free:
+//
+//   * the echo back to the sender is its ack (see _chatPending), and
+//   * every peer ends up holding a full replica of the transcript, so whoever
+//     becomes host after a migration can serve the backfill out of its own log.
+//     Nothing has to be handed over in becomeHost(), and nothing has to be added
+//     to the peer-list.
+//
+// Dedupe is by `id`, which the SENDER mints as `<peerId>:<n>` — that is what
+// makes the echo, the backfill and a post-migration resend all idempotent.
+
+var chatLog      = [];         // [{ id, peerId, text, at, reactions:Map<emoji,Set<peerId>> }]
+var _chatIds     = new Set();  // ids present in chatLog
+var _chatPending = new Map();  // id -> { id, text } sent but not yet echoed back
+var _chatTyping  = new Map();  // peerId -> expiry timestamp
+var _chatUnread  = 0;
+var _chatSeq     = 0;
+var _chatTypingActive     = false;
+var _chatLastTypingSentAt = 0;
+var _chatTypingIdleTimer  = null;
+var _chatTypingSweep      = null;
+
+// --- Chat: wire format -------------------------------------------------------
+
+// A body is trimmed and length-capped. Over the cap is dropped rather than
+// truncated: a conforming client clamps before sending, so an oversize packet is
+// not a long message, it is someone probing.
+function chatTextFromWire(text) {
+  if (typeof text !== 'string') return null;
+  var trimmed = text.trim();
+  if (!trimmed || trimmed.length > CHAT_TEXT_MAX) return null;
+  return trimmed;
+}
+
+// The host enforces the `<senderId>:` prefix on an id. Without that check a peer
+// could mint the id another peer is about to use and pre-empt that message
+// through everyone's dedupe — a silent, targeted mute.
+function chatIdFromWire(id, senderId) {
+  if (typeof id !== 'string' || !id || id.length > CHAT_ID_MAX) return null;
+  if (senderId && id.indexOf(senderId + ':') !== 0) return null;
+  return id;
+}
+
+function serializeChatMessage(m) {
+  var reactions = {};
+  m.reactions.forEach(function(peers, emoji) { reactions[emoji] = Array.from(peers); });
+  return { id: m.id, peerId: m.peerId, text: m.text, at: m.at, reactions: reactions };
+}
+
+function deserializeChatMessage(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (typeof raw.id !== 'string' || !raw.id || raw.id.length > CHAT_ID_MAX) return null;
+  var text = chatTextFromWire(raw.text);
+  if (!text) return null;
+  var reactions = new Map();
+  var src = (raw.reactions && typeof raw.reactions === 'object') ? raw.reactions : {};
+  Object.keys(src).forEach(function(emoji) {
+    if (CHAT_REACTIONS.indexOf(emoji) === -1) return;
+    var peers = src[emoji];
+    if (Array.isArray(peers) && peers.length) reactions.set(emoji, new Set(peers));
+  });
+  return {
+    id: raw.id,
+    peerId: typeof raw.peerId === 'string' ? raw.peerId : '',
+    text: text,
+    at: typeof raw.at === 'number' ? raw.at : Date.now(),
+    reactions: reactions
+  };
+}
+
+// --- Chat: state -------------------------------------------------------------
+
+function trimChatLog() {
+  while (chatLog.length > CHAT_LOG_MAX) {
+    var dropped = chatLog.shift();
+    _chatIds.delete(dropped.id);
+  }
+}
+
+// Every path into the transcript comes through here — your own message coming
+// back from the host, someone else's message, and the joiner backfill.
+function appendChatMessage(raw, opts) {
+  var m = deserializeChatMessage(raw);
+  if (!m) return false;
+  _chatPending.delete(m.id);
+  if (_chatIds.has(m.id)) return false;
+  _chatIds.add(m.id);
+  chatLog.push(m);
+  trimChatLog();
+  var mine = !!(peer && m.peerId === peer.id);
+  if (!(opts && opts.quiet) && !mine && !chatPanelOpen()) {
+    _chatUnread++;
+    playChatPing();
+  }
+  return true;
+}
+
+// Toggle, not set: the same peer sending the same emoji twice takes it back. A
+// reaction for a message we no longer hold (trimmed, or never received) is
+// dropped — there is nothing to attach it to.
+function applyChatReaction(msgId, emoji, peerId) {
+  if (!peerId || typeof msgId !== 'string') return false;
+  if (CHAT_REACTIONS.indexOf(emoji) === -1) return false;
+  var m = null;
+  for (var i = chatLog.length - 1; i >= 0; i--) { if (chatLog[i].id === msgId) { m = chatLog[i]; break; } }
+  if (!m) return false;
+  var set = m.reactions.get(emoji);
+  if (!set) { set = new Set(); m.reactions.set(emoji, set); }
+  if (set.has(peerId)) {
+    set.delete(peerId);
+    if (!set.size) m.reactions.delete(emoji);
+  } else {
+    set.add(peerId);
+  }
+  return true;
+}
+
+// A typing flag expires on its own, so a peer that vanishes mid-sentence does
+// not stay "typing…" for the rest of the call.
+function noteChatTyping(peerId, active) {
+  if (!peerId || (peer && peerId === peer.id)) return;
+  if (active) {
+    _chatTyping.set(peerId, Date.now() + CHAT_TYPING_TTL_MS);
+    ensureChatTypingSweep();
+  } else {
+    _chatTyping.delete(peerId);
+  }
+  renderChatTyping();
+}
+
+function activeChatTypists() {
+  var now = Date.now();
+  var out = [];
+  Array.from(_chatTyping.keys()).forEach(function(peerId) {
+    if (_chatTyping.get(peerId) <= now || !connections.has(peerId)) _chatTyping.delete(peerId);
+    else out.push(peerId);
+  });
+  return out;
+}
+
+// Expiry is a display concern only, so it is swept by a timer that exists only
+// while somebody is actually typing.
+function ensureChatTypingSweep() {
+  if (_chatTypingSweep) return;
+  _chatTypingSweep = setInterval(function() {
+    renderChatTyping();
+    if (!_chatTyping.size) stopChatTypingSweep();
+  }, 1000);
+}
+
+function stopChatTypingSweep() {
+  if (_chatTypingSweep) { clearInterval(_chatTypingSweep); _chatTypingSweep = null; }
+}
+
+function resetChatState() {
+  chatLog = [];
+  _chatIds.clear();
+  _chatPending.clear();
+  _chatTyping.clear();
+  _chatUnread = 0;
+  _chatSeq = 0;
+  _chatTypingActive = false;
+  _chatLastTypingSentAt = 0;
+  if (_chatTypingIdleTimer) { clearTimeout(_chatTypingIdleTimer); _chatTypingIdleTimer = null; }
+  stopChatTypingSweep();
+  renderChat();
+  updateChatUnreadBadge();
+}
+
+// --- Chat: persistence -------------------------------------------------------
+//
+// One entry, keyed by the room it belongs to and sharing the rejoin snapshot's
+// TTL — a transcript is exactly as useful as the offer to rejoin the room it
+// came from. After a host migration `roomCode` is the new host's id, so the next
+// save re-keys the entry on its own; saveChatLog() is called on migration
+// success so that happens even if nobody speaks again.
+
+function saveChatLog() {
+  if (!roomCode) return;
+  try {
+    localStorage.setItem(CHAT_LOG_KEY, JSON.stringify({
+      roomCode: roomCode,
+      savedAt: Date.now(),
+      messages: chatLog.map(serializeChatMessage)
+    }));
+  } catch (_) {}  // quota or a private window — the in-memory log still works
+}
+
+function loadChatLog(code) {
+  if (!code) return;
+  try {
+    var raw = localStorage.getItem(CHAT_LOG_KEY);
+    if (!raw) return;
+    var stored = JSON.parse(raw);
+    if (!stored || stored.roomCode !== code || !stored.savedAt) return;
+    if (Date.now() - stored.savedAt > REJOIN_TTL_MS) { clearChatLog(); return; }
+    (stored.messages || []).forEach(function(entry) { appendChatMessage(entry, { quiet: true }); });
+    renderChat();
+  } catch (_) {}
+}
+
+function clearChatLog() {
+  try { localStorage.removeItem(CHAT_LOG_KEY); } catch (_) {}
+}
+
+// --- Chat: sending -----------------------------------------------------------
+
+function chatMessageId() {
+  return (peer && peer.id ? peer.id : 'self') + ':' + (++_chatSeq);
+}
+
+function sendChatMessage(text) {
+  if (!inRoom || !peer) return false;
+  var body = typeof text === 'string' ? text.trim().slice(0, CHAT_TEXT_MAX) : '';
+  if (!body) return false;
+  sendChatTyping(false);
+  var id = chatMessageId();
+  if (isHost) {
+    fanOutChatMessage(peer.id, id, body);
+  } else {
+    // Held until the host echoes it back. Rendered dimmed meanwhile, and
+    // re-sent if the host dies before the echo arrives.
+    _chatPending.set(id, { id: id, text: body });
+    _sendToHostData({ type: 'chat', id: id, text: body });
+    renderChat();
+  }
+  return true;
+}
+
+function sendChatReaction(msgId, emoji) {
+  if (!inRoom || !peer || CHAT_REACTIONS.indexOf(emoji) === -1) return false;
+  if (isHost) fanOutChatReaction(peer.id, msgId, emoji);
+  else _sendToHostData({ type: 'chat-react', msgId: msgId, emoji: emoji });
+  return true;
+}
+
+function sendChatTyping(active) {
+  if (!inRoom || !peer) return;
+  var now = Date.now();
+  if (active) {
+    if (_chatTypingActive && now - _chatLastTypingSentAt < CHAT_TYPING_THROTTLE_MS) return;
+  } else if (!_chatTypingActive) {
+    return;
+  }
+  _chatTypingActive = !!active;
+  _chatLastTypingSentAt = now;
+  if (isHost) fanOutChatTyping(peer.id, active);
+  else _sendToHostData({ type: 'chat-typing', active: !!active });
+  if (_chatTypingIdleTimer) { clearTimeout(_chatTypingIdleTimer); _chatTypingIdleTimer = null; }
+  if (active) _chatTypingIdleTimer = setTimeout(function() { sendChatTyping(false); }, CHAT_TYPING_IDLE_MS);
+}
+
+// Anything the host never got an echo for goes out again once a new host is in
+// place. The receivers' dedupe makes a double delivery harmless, so this is
+// allowed to be optimistic.
+function resendPendingChat() {
+  if (!inRoom || !peer || !_chatPending.size) return;
+  Array.from(_chatPending.values()).forEach(function(p) {
+    if (isHost) fanOutChatMessage(peer.id, p.id, p.text);
+    else _sendToHostData({ type: 'chat', id: p.id, text: p.text });
+  });
+}
+
+// --- Chat: host fan-out ------------------------------------------------------
+//
+// The host is the only stamp of authority on a chat message: it decides the
+// sender id — so a peer cannot post under someone else's name — and the
+// timestamp, then sends one identical object to everybody.
+
+function fanOutChatMessage(senderId, id, text) {
+  if (!isHost) return;
+  var out = { type: 'chat', id: id, peerId: senderId, text: text, at: Date.now() };
+  connections.forEach(function(c) { if (c.data) sendDataIfOpen(c.data, out); });
+  if (appendChatMessage(out)) { renderChat(); saveChatLog(); updateChatUnreadBadge(); }
+}
+
+function fanOutChatReaction(senderId, msgId, emoji) {
+  if (!isHost) return;
+  if (typeof msgId !== 'string' || CHAT_REACTIONS.indexOf(emoji) === -1) return;
+  var out = { type: 'chat-react', msgId: msgId, emoji: emoji, peerId: senderId };
+  connections.forEach(function(c) { if (c.data) sendDataIfOpen(c.data, out); });
+  if (applyChatReaction(msgId, emoji, senderId)) { renderChat(); saveChatLog(); }
+}
+
+function fanOutChatTyping(senderId, active) {
+  if (!isHost) return;
+  var out = { type: 'chat-typing', peerId: senderId, active: !!active };
+  connections.forEach(function(c, id) { if (id !== senderId && c.data) sendDataIfOpen(c.data, out); });
+  noteChatTyping(senderId, active);  // no-op when the host is the one typing
+}
+
+// --- Chat: rendering ---------------------------------------------------------
+
+function chatAuthorName(peerId) {
+  if (peer && peerId === peer.id) return pseudoForPeer();
+  return peerDisplayName(peerId);
+}
+
+function chatAuthorColor(peerId) {
+  if (peer && peerId === peer.id) return pseudoColorForSelf();
+  var c = peerId ? connections.get(peerId) : null;
+  return (c && c.pseudoColor) || null;
+}
+
+function chatTimeLabel(at) {
+  try {
+    return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch (_) { return ''; }
+}
+
+// A chat body is the one string in this app that arrives verbatim from another
+// person, so it never goes near innerHTML. The only markup it can produce is an
+// <a> whose href we built and validated ourselves.
+var CHAT_URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>()]+[^\s<>().,;:!?'"]/gi;
+
+function chatSafeHref(raw) {
+  var candidate = /^www\./i.test(raw) ? 'https://' + raw : raw;
+  try {
+    var u = new URL(candidate);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return u.href;
+  } catch (_) { return null; }
+}
+
+function renderChatText(target, text) {
+  CHAT_URL_RE.lastIndex = 0;
+  var last = 0;
+  var match;
+  while ((match = CHAT_URL_RE.exec(text)) !== null) {
+    var href = chatSafeHref(match[0]);
+    if (!href) continue;  // not a link we are willing to make — leave it as text
+    if (match.index > last) target.appendChild(document.createTextNode(text.slice(last, match.index)));
+    var a = document.createElement('a');
+    a.href = href;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = match[0];
+    target.appendChild(a);
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) target.appendChild(document.createTextNode(text.slice(last)));
+}
+
+function renderChatMessage(m, pending) {
+  var mine = !!(peer && m.peerId === peer.id);
+  var row = document.createElement('div');
+  row.className = 'chat-msg' + (mine ? ' chat-msg-self' : '') + (pending ? ' chat-msg-pending' : '');
+  row.dataset.msgId = m.id;
+
+  var head = document.createElement('div');
+  head.className = 'chat-msg-head';
+  var author = document.createElement('span');
+  author.className = 'chat-msg-author';
+  author.textContent = chatAuthorName(m.peerId);
+  var color = chatAuthorColor(m.peerId);
+  if (color) author.style.color = color;
+  head.appendChild(author);
+  var time = document.createElement('time');
+  time.className = 'chat-msg-time';
+  time.textContent = pending ? 'sending…' : chatTimeLabel(m.at);
+  head.appendChild(time);
+  row.appendChild(head);
+
+  var body = document.createElement('div');
+  body.className = 'chat-msg-body';
+  renderChatText(body, m.text);
+  row.appendChild(body);
+
+  if (!pending) {
+    var foot = document.createElement('div');
+    foot.className = 'chat-msg-foot';
+    m.reactions.forEach(function(peers, emoji) {
+      var chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'chat-reaction' + (peer && peers.has(peer.id) ? ' chat-reaction-mine' : '');
+      chip.dataset.emoji = emoji;
+      chip.dataset.msgId = m.id;
+      chip.textContent = emoji + ' ' + peers.size;
+      chip.title = Array.from(peers).map(chatAuthorName).join(', ');
+      foot.appendChild(chip);
+    });
+    var add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'chat-react-open';
+    add.dataset.msgId = m.id;
+    add.title = 'React';
+    add.setAttribute('aria-label', 'React to this message');
+    add.textContent = '☺';
+    foot.appendChild(add);
+    row.appendChild(foot);
+  }
+  return row;
+}
+
+function renderChatPicker(msgId) {
+  var picker = document.createElement('div');
+  picker.className = 'chat-react-picker';
+  picker.dataset.msgId = msgId;
+  CHAT_REACTIONS.forEach(function(emoji) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chat-reaction chat-react-opt';
+    b.dataset.emoji = emoji;
+    b.dataset.msgId = msgId;
+    b.textContent = emoji;
+    picker.appendChild(b);
+  });
+  return picker;
+}
+
+// Stay pinned to the newest message unless the reader has scrolled up to read
+// something — then a new arrival must not yank the view away from them.
+function chatStuckToBottom(list) {
+  return (list.scrollHeight - list.scrollTop - list.clientHeight) < 48;
+}
+
+function renderChat() {
+  var list = document.getElementById('chat-messages');
+  if (!list) return;
+  var stick = chatStuckToBottom(list);
+  list.innerHTML = '';
+  if (!chatLog.length && !_chatPending.size) {
+    var empty = document.createElement('p');
+    empty.className = 'chat-empty';
+    empty.textContent = 'No messages yet.';
+    list.appendChild(empty);
+  }
+  chatLog.forEach(function(m) { list.appendChild(renderChatMessage(m, false)); });
+  _chatPending.forEach(function(p) {
+    list.appendChild(renderChatMessage({
+      id: p.id, peerId: peer ? peer.id : '', text: p.text, at: Date.now(), reactions: new Map()
+    }, true));
+  });
+  if (stick) list.scrollTop = list.scrollHeight;
+  renderChatTyping();
+}
+
+function renderChatTyping() {
+  var el = document.getElementById('chat-typing');
+  if (!el) return;
+  var names = activeChatTypists().map(chatAuthorName);
+  if (!names.length) { el.textContent = ''; el.classList.add('hidden'); return; }
+  var text;
+  if (names.length === 1) text = names[0] + ' is typing…';
+  else if (names.length === 2) text = names[0] + ' and ' + names[1] + ' are typing…';
+  else text = 'Several people are typing…';
+  el.textContent = text;
+  el.classList.remove('hidden');
+}
+
+function updateChatUnreadBadge() {
+  var badge = document.getElementById('chat-unread');
+  if (badge) {
+    badge.textContent = _chatUnread > 99 ? '99+' : String(_chatUnread);
+    badge.classList.toggle('hidden', _chatUnread === 0);
+  }
+  var btn = document.getElementById('btn-chat');
+  if (btn) btn.setAttribute('aria-pressed', String(chatPanelOpen()));
+}
+
+// --- Chat: the panel ---------------------------------------------------------
+//
+// The panel is a right-hand drawer in every layout regime, driven by one body
+// class. It is deliberately NOT a STAGE_PANELS entry: those are torn down by
+// applyVideoStageMode() whenever the stage is not immersive, which would slam
+// the chat shut on desktop on every relayout. It only borrows their mutual
+// exclusion — on a phone the roster and the chat cannot share the screen.
+
+function chatPanelOpen() {
+  return document.body.classList.contains('chat-open');
+}
+
+function toggleChatPanel(open) {
+  var next = (open === undefined) ? !chatPanelOpen() : !!open;
+  if (next) closeStagePanels();
+  document.body.classList.toggle('chat-open', next);
+  var btn = document.getElementById('btn-chat');
+  if (btn) btn.setAttribute('aria-expanded', String(next));
+  if (next) {
+    _chatUnread = 0;
+    var list = document.getElementById('chat-messages');
+    if (list) list.scrollTop = list.scrollHeight;
+    var input = document.getElementById('chat-input');
+    if (input) setTimeout(function() { try { input.focus(); } catch (_) {} }, 60);
+  } else {
+    sendChatTyping(false);
+  }
+  updateChatUnreadBadge();
+}
+
+function submitChatInput() {
+  var input = document.getElementById('chat-input');
+  if (!input) return;
+  if (sendChatMessage(input.value)) {
+    input.value = '';
+    autoGrowChatInput(input);
+  }
+}
+
+function autoGrowChatInput(input) {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+}
+
+function initChatUI() {
+  var input = document.getElementById('chat-input');
+  var list  = document.getElementById('chat-messages');
+  if (!input || !list || input._voxalChatWired) return;
+  input._voxalChatWired = true;
+
+  var btn = document.getElementById('btn-chat');
+  if (btn) btn.addEventListener('click', function() { toggleChatPanel(); });
+  var close = document.getElementById('btn-chat-close');
+  if (close) close.addEventListener('click', function() { toggleChatPanel(false); });
+  var send = document.getElementById('btn-chat-send');
+  if (send) send.addEventListener('click', submitChatInput);
+
+  input.addEventListener('keydown', function(e) {
+    // Enter sends, Shift+Enter is a newline. The composer must never see the
+    // push-to-talk key as a talk trigger — see the global handler's guard.
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitChatInput(); }
+  });
+  input.addEventListener('input', function() {
+    autoGrowChatInput(input);
+    if (input.value.trim()) sendChatTyping(true); else sendChatTyping(false);
+  });
+  input.addEventListener('blur', function() { sendChatTyping(false); });
+
+  // Reactions are delegated: the list is re-rendered whole on every change.
+  list.addEventListener('click', function(e) {
+    var opt = e.target.closest('.chat-react-opt');
+    if (opt) {
+      sendChatReaction(opt.dataset.msgId, opt.dataset.emoji);
+      closeChatPickers();
+      return;
+    }
+    var chip = e.target.closest('.chat-reaction');
+    if (chip && !chip.classList.contains('chat-react-opt')) {
+      sendChatReaction(chip.dataset.msgId, chip.dataset.emoji);
+      return;
+    }
+    var open = e.target.closest('.chat-react-open');
+    if (open) {
+      var row = open.closest('.chat-msg');
+      var existing = row && row.querySelector('.chat-react-picker');
+      closeChatPickers();
+      if (row && !existing) row.appendChild(renderChatPicker(open.dataset.msgId));
+    }
+  });
+
+  renderChat();
+  updateChatUnreadBadge();
+}
+
+function closeChatPickers() {
+  document.querySelectorAll('.chat-react-picker').forEach(function(p) { p.remove(); });
 }
 
 function rejoinCandidates(snapshot) {
@@ -9042,6 +9645,10 @@ function setStagePanel(which, open) {
       if (other !== which) document.body.classList.remove(STAGE_PANELS[other].cls);
     });
   }
+  // The chat drawer occupies the same edge as the roster on a phone, so it is
+  // an alternative to these too — even though it is not one of them (see
+  // toggleChatPanel for why it cannot be).
+  if (open) document.body.classList.remove('chat-open');
   document.body.classList.toggle(spec.cls, !!open);
   Object.keys(STAGE_PANELS).forEach(function(key) {
     var el = document.getElementById(STAGE_PANELS[key].handle);
@@ -9154,7 +9761,7 @@ function initStagePanelHandles() {
   var scrim = document.getElementById('stage-panel-scrim');
   if (scrim && !scrim._voxalWired) {
     scrim._voxalWired = true;
-    scrim.addEventListener('pointerdown', function() { closeStagePanels(); });
+    scrim.addEventListener('pointerdown', function() { closeStagePanels(); toggleChatPanel(false); });
   }
 }
 
@@ -11292,6 +11899,8 @@ function leaveRoom() {
   var returnTinyRoomId = IS_TINY_EMBED ? (_invitePendingRoomId || roomDisplayCode() || roomCode || '') : '';
   var returnTinyPeerCount = IS_TINY_EMBED ? currentRoomPeerCount() : 0;
   saveRejoinSnapshot();
+  saveChatLog();
+  toggleChatPanel(false);
   resetVideoState();
   // If this host is the last participant in a published lobby, delete it from the API
   if (isHost && _publishSecret && connections.size === 0) {
@@ -11338,6 +11947,7 @@ function leaveRoom() {
   stopPeerHeartbeat();
   stopPeerHeartbeatSweep();
   knownPeerIds.clear();
+  resetChatState();
   releaseAudioFocus();
   nativePTTLeave();
   stopKeepAlive();
@@ -11731,6 +12341,10 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
         pseudoColor: msg.hostPseudoColor || null
       }));
       console.log('[migration] Connected to new host ' + migrationPeerLabel(targetHostId) + '. Received peer-list.');
+      // The transcript belongs to a room whose code is now this new host's id,
+      // and anything the old host never echoed back has to go out again.
+      saveChatLog();
+      resendPendingChat();
       safeHandleHostMessage(msg);
       return;
     }
@@ -12023,6 +12637,15 @@ function handleJoinerDataConnection(dataConn) {
       });
       sendHostPeerList(dataConn, joinerId);
 
+      // The transcript so far. Served from the host's own replica, which is why
+      // a migration needs to hand nothing over — see the chat section.
+      if (chatLog.length) {
+        sendDataIfOpen(dataConn, {
+          type: 'chat-history',
+          messages: chatLog.map(serializeChatMessage)
+        });
+      }
+
       // Inform joiner of the public lobby ID if the room is published
       if (_publishedRoomId) {
         var isDeputy = (joinerId === currentDeputyId());
@@ -12204,6 +12827,15 @@ function handleJoinerDataConnection(dataConn) {
       } else {
         onDeviceInfoResponse(joinerId, msg.info, msg.declined);
       }
+    } else if (msg.type === 'chat') {
+      // `joinerId`, never msg.peerId: the sender field is the host's to stamp.
+      var chatText = chatTextFromWire(msg.text);
+      var chatId   = chatIdFromWire(msg.id, joinerId);
+      if (chatText && chatId) fanOutChatMessage(joinerId, chatId, chatText);
+    } else if (msg.type === 'chat-react') {
+      fanOutChatReaction(joinerId, msg.msgId, msg.emoji);
+    } else if (msg.type === 'chat-typing') {
+      fanOutChatTyping(joinerId, !!msg.active);
     }
   });
 
@@ -12300,6 +12932,8 @@ async function createRoom(onJoined) {
     peer.on('open', function(id) {
       if (cancelled) { peer.destroy(); settle(reject, new Error('Connection cancelled.')); return; }
       isHost = true; roomCode = id; inRoom = true;
+      resetChatState();
+      loadChatLog(id);
       roomState = ROOM_STATE_CONNECTED;
       stopHostHeartbeatMonitor();
       stopPeerHeartbeat();
@@ -12396,6 +13030,26 @@ function handleHostMessage(msg) {
   }
   if (msg.type === 'device-info-response') {
     onDeviceInfoResponse(msg.peerId, msg.info, msg.declined);
+    return;
+  }
+  if (msg.type === 'chat') {
+    if (appendChatMessage(msg)) { renderChat(); saveChatLog(); updateChatUnreadBadge(); }
+    return;
+  }
+  if (msg.type === 'chat-history') {
+    var backfilled = 0;
+    (msg.messages || []).forEach(function(entry) {
+      if (appendChatMessage(entry, { quiet: true })) backfilled++;
+    });
+    if (backfilled) { renderChat(); saveChatLog(); }
+    return;
+  }
+  if (msg.type === 'chat-react') {
+    if (applyChatReaction(msg.msgId, msg.emoji, msg.peerId)) { renderChat(); saveChatLog(); }
+    return;
+  }
+  if (msg.type === 'chat-typing') {
+    noteChatTyping(msg.peerId, !!msg.active);
     return;
   }
   if (msg.type === 'pseudo-assigned') {
@@ -12738,6 +13392,8 @@ function finishJoin(targetHostId, hostData) {
   roomCode = targetHostId;
   isHost = false;
   inRoom = true;
+  resetChatState();
+  loadChatLog(targetHostId);
   connectingToHostId = null;
   roomState = ROOM_STATE_CONNECTED;
   noteHostHeartbeat();
@@ -14427,6 +15083,7 @@ window.addEventListener('DOMContentLoaded', function() {
         .catch(function(err) {
           showError(err.message);
           clearRejoinSnapshot();
+          clearChatLog();
           _rejoinDismissed = true;
           var b = $('rejoin-bar');
           if (b) b.remove();
@@ -14441,6 +15098,7 @@ window.addEventListener('DOMContentLoaded', function() {
     });
     bar.querySelector('#btn-dismiss-rejoin').addEventListener('click', function() {
       clearRejoinSnapshot();
+      clearChatLog();
       _rejoinDismissed = true;
       bar.remove();
     });
@@ -14543,6 +15201,7 @@ window.addEventListener('DOMContentLoaded', function() {
   });
 
   $('btn-freehand').addEventListener('click', function() { setFreeHand(!freeHandMode); });
+  initChatUI();
   // Edit shortcut — delegated since the button is dynamically rendered in ptt-hint
   $('ptt-hint').addEventListener('click', function(e) {
     var btn = e.target.closest('#btn-edit-shortcut');

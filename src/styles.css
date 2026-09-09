@@ -4215,3 +4215,173 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
     margin: -6px -4px;
   }
 }
+
+/* ── Chat ────────────────────────────────────────────────────────────
+   A right-hand drawer, identical in every layout regime: the desktop grid, the
+   landscape reflow and the immersive phone stage all put the same panel in the
+   same place, so there is one set of rules rather than one per regime. It is
+   fixed-positioned and slid out by `transform`, which keeps it out of the room
+   grid entirely — nothing above has to make room for it.
+
+   It keeps the app's own surface colours for the same reason the stage panels
+   do: turning a camera on must not restyle the room. */
+
+.room-chat-panel {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  z-index: 40;
+  width: min(360px, 88vw);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: max(calc(env(safe-area-inset-top) + 14px), 14px)
+           max(calc(env(safe-area-inset-right) + 14px), 14px)
+           max(calc(env(safe-area-inset-bottom) + 14px), 14px) 14px;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border);
+  transform: translateX(100%);
+  transition: transform 0.25s ease;
+}
+body.chat-open .room-chat-panel { transform: translateX(0); }
+/* The drawer lives inside #screen-room, so `display:none` on the inactive
+   screen already hides it off-room despite the fixed positioning. It is gone
+   entirely in the tiny embed — the same call the other room chrome makes. */
+body.embed-tiny .room-chat-panel,
+body.embed-tiny #btn-chat { display: none; }
+
+.room-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.room-chat-title { font-size: 13px; font-weight: 600; color: var(--text-muted); }
+
+.chat-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+  /* A transcript is the one thing in this app you want to be able to copy. */
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.chat-empty { font-size: 13px; color: var(--text-muted); margin: auto 0; text-align: center; }
+
+.chat-msg { display: flex; flex-direction: column; gap: 2px; }
+/* Not yet echoed back by the host: it is on the wire, not in the room. */
+.chat-msg-pending { opacity: 0.55; }
+
+.chat-msg-head { display: flex; align-items: baseline; gap: 6px; }
+.chat-msg-author { font-size: 12px; font-weight: 600; color: var(--text); }
+.chat-msg-time   { font-size: 11px; color: var(--text-muted); }
+
+.chat-msg-body {
+  font-size: 13px;
+  color: var(--text);
+  /* A pasted URL or a long unbroken token must not widen the drawer. */
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.chat-msg-body a { color: var(--accent); }
+
+.chat-msg-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 2px; }
+
+.chat-reaction {
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 12px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+.chat-reaction-mine { border-color: var(--accent); color: var(--accent); }
+
+.chat-react-open {
+  border: 1px solid transparent;
+  background: none;
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+/* Reveal on hover where there is a pointer; on touch there is no hover, so the
+   button is simply always there. */
+.chat-msg:hover .chat-react-open,
+.chat-react-open:focus-visible { opacity: 1; }
+@media (hover: none) { .chat-react-open { opacity: 1; } }
+
+.chat-react-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 4px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.chat-typing {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  min-height: 16px;
+}
+
+.room-chat-composer { display: flex; gap: 8px; align-items: flex-end; flex-shrink: 0; }
+
+.chat-input {
+  flex: 1;
+  min-width: 0;
+  max-height: 120px;
+  resize: none;
+  overflow-y: auto;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.chat-input:focus { outline: none; border-color: var(--accent); }
+.chat-send { flex-shrink: 0; }
+
+/* Unread count on the Chat button in the control row. */
+#btn-chat { position: relative; }
+.chat-unread {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+}
+
+/* On a phone the drawer covers the stage, so it gets the same scrim the roster
+   and header get — a tap outside dismisses it. */
+body.video-stage-immersive.chat-open .stage-panel-scrim { display: block; }
+/* …and the roster's grab handle must not float on top of it. */
+body.video-stage-immersive.chat-open .stage-handle-right,
+body.video-stage-immersive.chat-open .stage-handle-top { display: none; }

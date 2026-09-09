@@ -925,3 +925,36 @@ seems too sharp".
   and the navigation to a custom scheme leaves the `load` event pending, so
   `page.goto('/?room=abc')` times out. Tests that only need a query string
   should pick one that is not `room` (or pass `forceWeb=1`).
+
+
+---
+
+## In-room chat
+
+- **A persistent drawer must not be a `STAGE_PANELS` entry.** `STAGE_PANELS`
+  (the header and roster slide-ins) is torn down by `applyVideoStageMode()`'s
+  `closeStagePanels()` on *every* relayout that is not the immersive phone
+  stage — the chat drawer registered there would slam shut on desktop the moment
+  anyone's camera state changed. The drawer therefore has its own body class
+  (`chat-open`) and only borrows the mutual exclusion, in `setStagePanel()`.
+
+- **Push-to-talk owns Space, so a text field has to take the keyboard back.**
+  `shouldIgnorePTTShortcuts()` used to check `editingSelfPseudo` alone; with a
+  composer in the room, typing a space started transmitting and Enter toggled
+  hands-free. It now bails on any focused `INPUT`/`TEXTAREA`/`contenteditable`.
+  Anything that adds a text field to the room screen depends on that.
+
+- **Fanning a relay out to *everyone* — the sender included — buys two things at
+  once.** The echo back to the sender is a free ack (it is what clears
+  `_chatPending`), and it leaves every peer holding a full replica of the
+  transcript, so host migration needs no transfer at all: whoever is promoted
+  serves the joiner backfill out of its own log. The existing relays
+  (`talking`, `peer-renamed`) exclude the sender because they are state the
+  sender already has; a log is not.
+
+- **The host must stamp the sender id AND enforce the id's prefix.** Rewriting
+  `peerId` to the connection's own id is the obvious half — it stops a peer
+  posting under someone else's name. The other half is less obvious: message ids
+  are minted by senders and receivers dedupe on them, so without requiring the
+  `<senderId>:` prefix a peer could mint the id another peer is *about* to use
+  and have that future message silently swallowed everywhere.
