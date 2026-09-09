@@ -1659,6 +1659,26 @@ body.video-stage-immersive.chat-open .stage-handle-right {
   right: calc(min(360px, 88vw) + max(env(safe-area-inset-right), 0px));
 }
 
+/* Outside the phone stage the chat handle is not dragged, it is clicked — the
+   drawer is beside the room there, not over it. */
+body:not(.video-stage-immersive) .stage-handle-right { cursor: pointer; }
+
+/* …and where it does not sit ON a picture — a voice room, or the docked column
+   layout — it is app chrome, so it takes the app's own surface colours. The
+   translucent black tab is for legibility over video; on a light room it is a
+   smudge. */
+body:not(.video-stage) .stage-handle-right,
+body.chat-docked .stage-handle-right {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-right: none;
+  color: var(--text-muted);
+}
+body:not(.video-stage) .stage-handle-right:hover,
+body.chat-docked .stage-handle-right:hover { color: var(--accent); }
+body:not(.video-stage) .stage-handle-right[aria-expanded="true"],
+body.chat-docked .stage-handle-right[aria-expanded="true"] { color: var(--accent); }
+
 /* An icon handle draws its own content, so it must not also draw the pill. */
 .stage-handle-icon { color: rgba(255, 255, 255, 0.85); }
 .stage-handle-icon::before { display: none; }
@@ -4326,6 +4346,15 @@ body.embed-tiny .room-chat-panel { display: none; }
   flex-shrink: 0;
 }
 .room-chat-title { font-size: 13px; font-weight: 600; color: var(--text-muted); }
+/* The collapse control draws an icon rather than a glyph, so it does not want
+   .btn-icon's 28px type size. */
+.chat-collapse {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0;
+  padding: 2px;
+}
 
 .chat-messages {
   flex: 1;

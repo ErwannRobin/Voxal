@@ -964,12 +964,31 @@ seems too sharp".
   hid the thing you had just grabbed — and the symptom was Playwright timing out
   on "element is not visible" after a click that had already worked.
 
-- **Docking a panel decides where it goes, not whether it is open.** The first
-  version opened the chat by itself the moment a camera went live, since that is
-  when it becomes a column rather than a drawer. It handed a third of the stage
-  to a conversation nobody had started, and it moved the video tiles under three
-  existing layout tests. The unread badge and the peek exist precisely so the
-  chat can stay shut and still be findable.
+- **Docking a panel decides where it goes; a separate rule decides whether it is
+  open.** An early version tied the two together and opened the chat the moment a
+  camera went live — a conversation nobody had started appearing mid-call. They
+  are still separate, but the answer to the second question is now *yes on a
+  desktop*: `chatOpensOnEntry()` opens it on entry to the room screen when the
+  window is at least `CHAT_DOCK_MIN_WIDTH` and the stage is not the immersive
+  one. Two things make that safe where the camera-triggered version was not — it
+  happens on *entry*, never mid-call, and it never focuses the composer (see the
+  push-to-talk note above). It does move the video tiles: `unit-video-layout`'s
+  `enterRoom()` collapses the chat so it still measures the box it describes.
+
+- **An auto-opened panel needs a "shut here" flag as well as a stored
+  preference.** Persisting only the deliberate collapse left a resize re-opening
+  a drawer that had just been closed some other way — every `resize` re-asks the
+  auto-open question. `_chatCollapsedHere` is set by *any* close and cleared by
+  `resetChatState()` (i.e. per room), so the stored default applies once per
+  room rather than once per layout event.
+
+- **A control wired by the layout that *usually* shows it is dead everywhere
+  else.** The chat's edge handle is on screen in every room, but
+  `initStagePanelHandles()` was only called from `updateVideoStage()` under
+  `mode === 'immersive'` — so on a desktop the bubble was a real, styled,
+  hover-able button with no listener on it at all. It is now wired from
+  `initChatUI()`, which runs once wherever the chat exists. Nothing about the
+  element's appearance says which of the two happened.
 
 - **A one-row `<textarea>` paints a scrollbar down an empty box.** Its
   `scrollHeight` includes its own padding, so it reports itself overflowing by a

@@ -698,7 +698,12 @@
              title="Drag to resize · double-click to reset"></div>
         <div class="room-chat-header">
           <span class="room-chat-title">Chat</span>
-          <button id="btn-chat-close" class="btn-icon" type="button" title="Close chat" aria-label="Close chat">&#10005;</button>
+          <!-- Collapse, not close: the drawer folds back into the bubble on the
+               right edge, which is what re-opens it. -->
+          <button id="btn-chat-close" class="btn-icon chat-collapse" type="button"
+                  title="Collapse chat" aria-label="Collapse chat" aria-controls="room-chat-panel">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 5l7 7-7 7"/><path d="M5 5l7 7-7 7"/></svg>
+          </button>
         </div>
         <div id="chat-messages" class="chat-messages" role="log" aria-live="polite" aria-relevant="additions"></div>
         <p id="chat-typing" class="chat-typing hidden" aria-live="polite"></p>

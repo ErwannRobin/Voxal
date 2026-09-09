@@ -813,16 +813,15 @@ test.describe('the chat as a column of the room', () => {
       // applyChatDock() is what reads it.
       document.body.classList.add('video-stage');
       applyChatDock();
-      const shut = chatPanelOpen();
+      const alreadyOpen = chatPanelOpen();
       toggleChatPanel(true);
       const panel = document.getElementById('room-chat-panel');
       const roster = document.getElementById('room-peers-panel').getBoundingClientRect();
       return {
         docked: document.body.classList.contains('chat-docked'),
-        // Docking decides WHERE an open chat goes, never whether it is open: a
-        // call must not hand a third of the stage to a conversation nobody has
-        // started.
-        openedItself: shut,
+        // A desktop room shows the conversation from the start — showScreen()
+        // opened it on entry, before this test asked for anything.
+        openedItself: alreadyOpen,
         // In the flow, not floating over the room…
         transform: getComputedStyle(panel).transform,
         position: getComputedStyle(panel).position,
@@ -833,7 +832,7 @@ test.describe('the chat as a column of the room', () => {
       };
     });
     expect(seen.docked).toBe(true);
-    expect(seen.openedItself).toBe(false);
+    expect(seen.openedItself).toBe(true);
     expect(seen.oppositeTheRoster).toBe(true);
     expect(seen.position).toBe('relative');
     expect(seen.transform === 'none' || seen.transform === 'matrix(1, 0, 0, 1, 0, 0)').toBe(true);
@@ -857,6 +856,80 @@ test.describe('the chat as a column of the room', () => {
       return document.body.classList.contains('chat-docked');
     });
     expect(docked).toBe(false);
+  });
+});
+
+test.describe('expanded by default on a desktop', () => {
+  const enterRoom = async (page) => {
+    await seedRoom(page, {
+      selfId: 'me', isHost: false, roomCode: 'the-host',
+      connections: [{ id: 'the-host', pseudo: 'Host' }],
+    });
+    await page.evaluate(() => { resetChatState(); showScreen('room'); });
+  };
+
+  test('a room wide enough to sit beside opens the conversation on entry', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await enterRoom(page);
+    const seen = await page.evaluate(() => ({
+      open: chatPanelOpen(),
+      expanded: document.getElementById('stage-handle-chat').getAttribute('aria-expanded'),
+      // It opened by itself, so it must not have taken the keyboard: the
+      // composer owning it would silence push-to-talk in a room nobody has
+      // typed in yet.
+      focused: document.activeElement.id,
+    }));
+    expect(seen.open).toBe(true);
+    expect(seen.expanded).toBe('true');
+    expect(seen.focused).not.toBe('chat-input');
+  });
+
+  test('a phone-sized room keeps it shut — the drawer would cover the call', async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 700 });
+    await enterRoom(page);
+    expect(await page.evaluate(() => chatPanelOpen())).toBe(false);
+  });
+
+  test('the collapse icon folds it away and that choice outlives the room', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await enterRoom(page);
+    await page.click('#btn-chat-close');
+    const collapsed = await page.evaluate(() => ({
+      open: chatPanelOpen(),
+      stored: localStorage.getItem(CHAT_COLLAPSED_KEY),
+    }));
+    expect(collapsed).toEqual({ open: false, stored: '1' });
+
+    // Coming back into a room must not undo it.
+    const again = await page.evaluate(() => { showScreen('home'); showScreen('room'); return chatPanelOpen(); });
+    expect(again).toBe(false);
+  });
+
+  test('a resize does not push it back over a call it was shut for', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await enterRoom(page);
+    await page.evaluate(() => toggleChatPanel(false));
+    await page.setViewportSize({ width: 1500, height: 800 });
+    expect(await page.evaluate(() => chatPanelOpen())).toBe(false);
+
+    // The next room is a fresh answer to the question, though.
+    const nextRoom = await page.evaluate(() => { resetChatState(); showScreen('room'); return chatPanelOpen(); });
+    expect(nextRoom).toBe(true);
+  });
+
+  test('the bubble on the edge is what brings it back', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await enterRoom(page);
+    await page.click('#btn-chat-close');
+    expect(await page.evaluate(() => chatPanelOpen())).toBe(false);
+
+    await page.locator('#stage-handle-chat').click();
+    const reopened = await page.evaluate(() => ({
+      open: chatPanelOpen(),
+      // Re-opening it is a choice too, so the default goes back to expanded.
+      stored: localStorage.getItem(CHAT_COLLAPSED_KEY),
+    }));
+    expect(reopened).toEqual({ open: true, stored: null });
   });
 });
 
