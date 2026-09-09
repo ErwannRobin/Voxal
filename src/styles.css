@@ -462,14 +462,20 @@ html[data-theme="light"] .debug-consent-text strong { color: #b45309; }
 .room-code-copy:hover  { border-color: var(--accent); }
 .room-code-copy:active { background: var(--bg); }
 
+/* The header icon row — the settings gear (on the home topbar as well as the
+   room header), publish/unpublish, share and leave — is one set of 18px
+   stroked glyphs, so they all share the same metrics and hover. */
+.settings-icon-btn,
 .btn-publish-room,
 .btn-unpublish-room,
 .btn-share-room {
   padding: 2px;
   font-size: 0;
   opacity: 0.5;
+  touch-action: manipulation;
   transition: opacity 0.15s, color 0.15s;
 }
+.settings-icon-btn:hover,
 .btn-publish-room:hover   { opacity: 1; color: var(--accent); }
 .btn-unpublish-room,
 .btn-share-room           { opacity: 1; color: var(--accent); }
@@ -478,6 +484,18 @@ html[data-theme="light"] .debug-consent-text strong { color: #b45309; }
 .btn-publish-room.hidden,
 .btn-unpublish-room.hidden,
 .btn-share-room.hidden    { display: none; }
+
+/* Block-level on purpose. As inline children these SVGs sit in .btn-icon's
+   28px line box, which makes the button 32px tall instead of 22px — and that
+   is what used to shove the room header (and the gear in it) down 10px the
+   moment a host's publish/share buttons appeared. Block also settles it for
+   good: .btn-icon is declared later in this file, so its font-size beats the
+   font-size:0 above on specificity ties. */
+.settings-icon-btn > svg,
+.btn-publish-room > svg,
+.btn-unpublish-room > svg,
+.btn-share-room > svg,
+#btn-leave > svg { display: block; }
 
 .room-code {
   font-family: 'SF Mono', 'Fira Code', monospace;
@@ -1316,7 +1334,9 @@ kbd {
     padding-bottom: max(calc(env(safe-area-inset-bottom) + 12px), 12px);
     overflow: hidden;
   }
-  html.is-web body:not(.embed-tiny) #screen-home .screen-topbar { grid-area: topbar; margin: 0; }
+  /* Landscape home pads 12px on top, so the gear needs 2px the other way to
+     stay level with the room's 14px. Sides are unchanged (still 20 vs 18). */
+  html.is-web body:not(.embed-tiny) #screen-home .screen-topbar { grid-area: topbar; margin: 2px -2px 0; }
   html.is-web body:not(.embed-tiny) #screen-home .brand {
     grid-area: brand;
     justify-self: end;
@@ -2828,6 +2848,15 @@ input[type="password"]:focus { border-color: var(--accent); }
   position: relative;
 }
 
+/* The settings gear must land on exactly the same pixel on the welcome screen
+   as in a room, so it does not jump when you join or leave. The two screens
+   carry different chrome — #screen-home 24px top / 20px sides, #screen-room
+   14/18 — so this row is pulled back out to the room's inset. The safe-area
+   insets cancel (both paddings add the same env() value to their base), which
+   is why plain pixels are exact here. The 14px bottom hands back the 10px the
+   negative top borrowed, so nothing below the row moves. */
+#screen-home .screen-topbar { margin: -10px -2px 14px; }
+
 .conn-status-popover {
   position: absolute;
   top: calc(100% + 4px);
@@ -2868,22 +2897,8 @@ input[type="password"]:focus { border-color: var(--accent); }
 .turn-servers-popover.hidden { display: none; }
 .tsrv-row { padding: 2px 0; color: var(--text-muted); font-family: monospace; }
 
-.topbar-btn {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  font-size: 15px;
-  cursor: pointer;
-  padding: 4px 2px;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  opacity: 0.55;
-  transition: opacity 0.15s;
-  touch-action: manipulation;
-}
-.topbar-btn:hover { opacity: 1; }
-.gear-icon { font-size: 22px; }
+/* .gear-icon carries no styling of its own — it is the hook main.js uses to
+   hide the glyph alone on desktop, leaving the button in place. */
 
 .turn-badge {
   font-size: 9px;
