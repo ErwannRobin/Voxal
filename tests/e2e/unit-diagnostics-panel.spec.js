@@ -101,6 +101,29 @@ test.describe('the diagnostics popover', () => {
     expect(text).toContain('device sharing turned off');
   });
 
+  test('re-opening it starts the audio check over', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const anchor = document.createElement('button');
+      document.body.appendChild(anchor);
+      showDeviceInfoPopover('p1', anchor, false);
+      startAudioCheck('p1');
+      _audioCheck.result = { status: 'silent', headline: 'No sound was sent', detail: 'nothing' };
+      _refreshDeviceInfoPopover();
+      const stale = document.getElementById('device-info-popover').textContent;
+      closeDeviceInfoPopover();
+      showDeviceInfoPopover('p1', anchor, false);
+      const fresh = document.getElementById('device-info-popover').textContent;
+      const state = _audioCheck;
+      closeDeviceInfoPopover();
+      anchor.remove();
+      return { stale, fresh, state };
+    });
+    expect(seen.stale).toContain('No sound was sent');
+    expect(seen.fresh).not.toContain('No sound was sent');
+    expect(seen.fresh).toContain('Run check');
+    expect(seen.state).toBe(null);
+  });
+
   test('a click inside keeps it open; a click outside closes it', async ({ page }) => {
     const seen = await page.evaluate(async () => {
       const anchor = document.createElement('button');
