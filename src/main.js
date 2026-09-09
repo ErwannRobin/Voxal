@@ -208,6 +208,17 @@ const EMOJI_RECENT_MAX = 24;
 // stack there. A peek is a glance, not a second transcript.
 const CHAT_PEEK_MS  = 7000;
 const CHAT_PEEK_MAX = 3;
+// The anchored peek: a comic-strip bubble in the clear space beside the
+// participants panel, with a tail running back to the name that sent it. Below
+// MIN_WIDTH either side of the panel there is no clear space to be in — a
+// phone's roster is the whole screen wide — so the stack over the stage is used
+// instead.
+const CHAT_PEEK_ANCHOR_MIN_WIDTH = 200;
+const CHAT_PEEK_ANCHOR_MAX_WIDTH = 320;
+const CHAT_PEEK_ANCHOR_GAP  = 12;  // name → tail
+const CHAT_PEEK_ANCHOR_EDGE = 10;  // never flush against the room's own edge
+const CHAT_PEEK_ANCHOR_VGAP = 8;   // between two bubbles that would overlap
+const CHAT_PEEK_TAIL_INSET  = 14;  // how close to a corner the tail may sit
 // Below this the chat cannot be a column beside the stage without squeezing the
 // tiles into nothing, so it stays the drawer it is everywhere else.
 const CHAT_DOCK_MIN_WIDTH = 1100;
@@ -3735,10 +3746,24 @@ function updateChatUnreadBadge() {
 
 // --- Chat: the peek over the call --------------------------------------------
 //
-// While the panel is not on screen, a new message surfaces briefly at the
-// bottom of the stage and then gets out of the way. It is a glance, not a
-// second transcript: three at most, and never while the panel is showing the
-// same thing.
+// While the panel is not on screen, a new message surfaces briefly and then
+// gets out of the way. It is a glance, not a second transcript: three at most,
+// and never while the panel is showing the same thing.
+//
+// Two shapes, decided by layoutChatPeeks() on every pass rather than at the
+// moment a message lands:
+//
+//   * Anchored — with clear space beside the roster, the bubble sits in it at
+//     the height of the name that sent it, with a tail running back to that
+//     name. On a desktop the sender is already on screen in the participants
+//     panel, so the message and who it came from are read in one glance
+//     instead of two.
+//   * Stacked  — the original column low over the stage, used whenever there is
+//     nothing to point at (a phone's roster is off screen, the sender's row is
+//     scrolled out of the list, the window is too narrow to fit a bubble beside
+//     the name — which is what keeps a phone on the shape it already had). All or nothing: one bubble that cannot be anchored puts the
+//     whole set back in the stack, because a set split between the two shapes
+//     reads as two unrelated notifications.
 
 var _chatPeekTimers = new Set();
 
@@ -3747,34 +3772,222 @@ function showChatPeek(m) {
   if (!host || !inRoom) return;
   var el = document.createElement('div');
   el.className = 'chat-peek-item';
+  // Which roster row this bubble points at. Kept as the peer id, not the
+  // element: updatePeerList() throws the whole list away and rebuilds it, so an
+  // element captured here would be detached within a heartbeat.
+  el._voxalPeekPeerId = m.peerId;
+  var line = document.createElement('span');
+  line.className = 'chat-peek-line';
   var author = document.createElement('span');
   author.className = 'chat-peek-author';
   author.textContent = chatAuthorName(m.peerId) + ' ';
   var color = chatAuthorColor(m.peerId);
   if (color) author.style.color = color;
-  el.appendChild(author);
+  line.appendChild(author);
   var body = document.createElement('span');
   body.className = 'chat-peek-body';
   renderChatText(body, m.text);
-  el.appendChild(body);
+  line.appendChild(body);
+  el.appendChild(line);
   host.appendChild(el);
   while (host.children.length > CHAT_PEEK_MAX) dropChatPeek(host.firstChild);
   var timer = setTimeout(function() { dropChatPeek(el); }, CHAT_PEEK_MS);
   _chatPeekTimers.add(timer);
   el._voxalPeekTimer = timer;
+  watchChatPeekLayout(true);
+  layoutChatPeeks();
 }
 
 function dropChatPeek(el) {
   if (!el) return;
   if (el._voxalPeekTimer) { clearTimeout(el._voxalPeekTimer); _chatPeekTimers.delete(el._voxalPeekTimer); }
+  var host = el.parentNode;
   el.remove();
+  if (host) layoutChatPeeks();
+  if (!host || !host.children.length) watchChatPeekLayout(false);
 }
 
 function clearChatPeek() {
   var host = document.getElementById('chat-peek');
   _chatPeekTimers.forEach(function(t) { clearTimeout(t); });
   _chatPeekTimers.clear();
-  if (host) host.innerHTML = '';
+  if (host) { host.innerHTML = ''; anchorChatPeekHost(host, false); }
+  watchChatPeekLayout(false);
+}
+
+// --- Chat: the peek anchored to the name that sent it ------------------------
+
+// What a bubble points at: the sender's name for the height, the participants
+// list for the side.
+//
+// The two are deliberately different boxes. The tail belongs on the name, but a
+// bubble opened at the name's own right edge would land ON the rest of the row
+// — the copy, camera and stats buttons live there, and a roster row is as wide
+// as the panel, which in a voice-only desktop room is the whole column. Beside
+// the LIST it is in clear space, and the tail still runs back to the name.
+//
+// It also settles the question of where this shape applies at all, without a
+// breakpoint: a phone's roster is the full width of the screen, so there is no
+// clear space either side of it and the stack over the stage is used instead.
+function chatPeekAnchorFor(peerId) {
+  if (!peerId || IS_TINY_EMBED) return null;
+  var row = document.getElementById('peer-item-' + peerId);
+  if (!row || !row.offsetParent) return null;
+  var el = row.querySelector('.peer-name') || row.querySelector('.peer-label-row') || row;
+  var name = el.getBoundingClientRect();
+  if (name.width < 1 || name.height < 1) return null;
+  var list = document.getElementById('peers-list');
+  var listRect = list ? list.getBoundingClientRect() : row.getBoundingClientRect();
+  // Scrolled out of the participants list: the row still has a box, it is just
+  // not one the user can see.
+  if (name.bottom <= listRect.top + 1 || name.top >= listRect.bottom - 1) return null;
+  return { name: name, list: listRect };
+}
+
+// Which side of the participants list a bubble can go, and how much width it
+// may take there. `null` means neither side has room, which is what sends the
+// whole set back to the stack over the stage.
+function chatPeekAnchorSide(rect, view) {
+  var right = view.width - rect.right - CHAT_PEEK_ANCHOR_GAP - CHAT_PEEK_ANCHOR_EDGE;
+  var left  = rect.left - CHAT_PEEK_ANCHOR_GAP - CHAT_PEEK_ANCHOR_EDGE;
+  if (right >= CHAT_PEEK_ANCHOR_MIN_WIDTH && right >= left) return { side: 'right', space: right };
+  if (left  >= CHAT_PEEK_ANCHOR_MIN_WIDTH) return { side: 'left', space: left };
+  return null;
+}
+
+// Anchored, the host is a fixed overlay on the WINDOW rather than a column
+// inside `#screen-room`, and it is moved to <body> to get there. Two reasons,
+// both about the room being the wrong box: it is `overflow: hidden`, so a
+// bubble reaching past the roster would be cut off at its edge; and on a
+// desktop a voice-only room is a ~480px column centred in the window, so the
+// clear space beside the name — the whole point — is entirely outside it.
+var _chatPeekHome = null;
+
+function anchorChatPeekHost(host, on) {
+  if (on) {
+    if (host.parentNode && host.parentNode !== document.body) {
+      _chatPeekHome = host.parentNode;
+      document.body.appendChild(host);
+    }
+    host.classList.add('chat-peek-anchored');
+  } else {
+    host.classList.remove('chat-peek-anchored');
+    if (_chatPeekHome && host.parentNode !== _chatPeekHome) _chatPeekHome.appendChild(host);
+  }
+}
+
+// Coordinates are the window's: the host fills it exactly, so a child's
+// left/top is the same number a getBoundingClientRect() reads back.
+function layoutChatPeeks() {
+  var host = document.getElementById('chat-peek');
+  if (!host) return;
+  var items = Array.prototype.slice.call(host.children);
+  if (!items.length) { unanchorChatPeeks(host, items); return; }
+
+  var view = { width: window.innerWidth, height: window.innerHeight };
+  var plans = [];
+  for (var i = 0; i < items.length; i++) {
+    var at = chatPeekAnchorFor(items[i]._voxalPeekPeerId);
+    // A roster slid off the side of the screen (a phone's drawer, mid-close)
+    // still reports a rect — one nobody can see.
+    if (at && (at.name.right <= 0 || at.name.left >= view.width ||
+               at.name.bottom <= 0 || at.name.top >= view.height)) at = null;
+    var fit = at ? chatPeekAnchorSide(at.list, view) : null;
+    if (!fit) { unanchorChatPeeks(host, items); return; }
+    plans.push({ name: at.name, list: at.list, side: fit.side, space: fit.space });
+  }
+
+  anchorChatPeekHost(host, true);
+  // Width first, for every bubble, then measure: a max-width set after the
+  // measurement would reflow the text and leave every height stale.
+  items.forEach(function(el, n) {
+    el.style.maxWidth = Math.round(Math.min(CHAT_PEEK_ANCHOR_MAX_WIDTH, plans[n].space)) + 'px';
+  });
+
+  // Placed down the screen rather than in arrival order, so a bubble is only
+  // ever nudged away from a row ABOVE it: the bubbles then read in the same
+  // order as the names they came from.
+  var order = items.map(function(_, n) { return n; })
+    .sort(function(a, b) { return plans[a].name.top - plans[b].name.top; });
+
+  var bands = [];  // vertical space already spoken for, so two bubbles never overlap
+  order.forEach(function(n) {
+    var el = items[n];
+    var plan = plans[n];
+    var w = el.offsetWidth;
+    var h = el.offsetHeight;
+    var left = plan.side === 'right'
+      ? plan.list.right + CHAT_PEEK_ANCHOR_GAP
+      : plan.list.left - CHAT_PEEK_ANCHOR_GAP - w;
+    var centre = plan.name.top + plan.name.height / 2;
+    var top = clampChatPeekTop(centre - h / 2, h, view.height);
+    top = pushChatPeekClear(bands, top, h, view.height);
+    bands.push([top, top + h]);
+
+    el.classList.toggle('peek-tail-left', plan.side === 'right');
+    el.classList.toggle('peek-tail-right', plan.side === 'left');
+    el.style.left = Math.round(left) + 'px';
+    el.style.top  = Math.round(top) + 'px';
+    // The tail keeps pointing at the name even when the bubble had to shuffle
+    // down out of an older one's way, so a burst of messages stays legible as
+    // "these came from that person".
+    var tail = centre - top;
+    if (tail < CHAT_PEEK_TAIL_INSET) tail = CHAT_PEEK_TAIL_INSET;
+    if (tail > h - CHAT_PEEK_TAIL_INSET) tail = Math.max(CHAT_PEEK_TAIL_INSET, h - CHAT_PEEK_TAIL_INSET);
+    el.style.setProperty('--peek-tail', Math.round(tail) + 'px');
+  });
+}
+
+function clampChatPeekTop(top, h, limit) {
+  if (top + h > limit) top = limit - h;
+  return top < 0 ? 0 : top;
+}
+
+// Slide down past anything already placed. Two people talking at once are two
+// rows apart in the roster, so this normally does nothing; it earns its keep on
+// a burst from one person, where every bubble wants the same centre line.
+function pushChatPeekClear(bands, top, h, limit) {
+  for (var pass = 0; pass <= bands.length; pass++) {
+    var moved = false;
+    for (var i = 0; i < bands.length; i++) {
+      if (top < bands[i][1] + CHAT_PEEK_ANCHOR_VGAP && top + h > bands[i][0] - CHAT_PEEK_ANCHOR_VGAP) {
+        top = bands[i][1] + CHAT_PEEK_ANCHOR_VGAP;
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+  return clampChatPeekTop(top, h, limit);
+}
+
+function unanchorChatPeeks(host, items) {
+  anchorChatPeekHost(host, false);
+  items.forEach(function(el) {
+    el.classList.remove('peek-tail-left', 'peek-tail-right');
+    el.style.left = '';
+    el.style.top = '';
+    el.style.maxWidth = '';
+    el.style.removeProperty('--peek-tail');
+  });
+}
+
+// Everything the anchored layout reads moves under it: the roster scrolls, the
+// window resizes, and updatePeerList() rebuilds the rows outright (which calls
+// layoutChatPeeks() directly). Listeners only while something is on screen.
+var _chatPeekWatch = null;
+
+function watchChatPeekLayout(on) {
+  if (on === !!_chatPeekWatch) return;
+  var list = document.getElementById('peers-list');
+  if (on) {
+    _chatPeekWatch = function() { layoutChatPeeks(); };
+    window.addEventListener('resize', _chatPeekWatch);
+    if (list) list.addEventListener('scroll', _chatPeekWatch, { passive: true });
+  } else {
+    window.removeEventListener('resize', _chatPeekWatch);
+    if (list) list.removeEventListener('scroll', _chatPeekWatch);
+    _chatPeekWatch = null;
+  }
 }
 
 // --- Chat: the panel ---------------------------------------------------------
@@ -7001,6 +7214,11 @@ function updatePeerList() {
       const nameWrap = document.createElement('span');
       nameWrap.className = 'peer-label-row';
       const nameEl = document.createElement('span');
+      // Classed so an anchored chat peek can point at the name itself. The row
+      // around it stretches to the full width of the roster column, which in a
+      // voice-only room is most of the window — a tail aimed at that box would
+      // land nowhere near the name.
+      nameEl.className = 'peer-name';
       nameEl.textContent = label;
       if (labelColor) nameEl.style.color = labelColor;
       nameWrap.appendChild(nameEl);
@@ -7155,6 +7373,9 @@ function updatePeerList() {
   }
 
   if (window._updateTinyPeersToggle) window._updateTinyPeersToggle();
+  // The rows a peek points at were just thrown away and rebuilt, so anything on
+  // screen is pointing at a detached element until this runs.
+  layoutChatPeeks();
   updateRoomSizeWarning();
   // Single wiring point for the stage: every video/screen state change already
   // refreshes the roster, so hanging the stage off the same tick keeps the two

@@ -780,6 +780,139 @@ test.describe('the peek over the call', () => {
   });
 });
 
+test.describe('the peek pinned to the name that sent it', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await seedRoom(page, {
+      selfId: 'me', isHost: false, roomCode: 'the-host',
+      connections: [{ id: 'the-host', pseudo: 'Host' }, { id: 'other', pseudo: 'Alice' }],
+    });
+    await page.evaluate(() => {
+      showScreen('room');
+      resetChatState();
+      toggleChatPanel(false);
+      updatePeerList();
+    });
+  });
+
+  const say = (page, id, text) => page.evaluate(({ id, text }) => {
+    handleHostMessage({ type: 'chat', id, peerId: id.split(':')[0], text, at: Date.now() });
+  }, { id, text });
+
+  // The geometry the whole feature is about: the bubble beside the name, and a
+  // tail whose point lands on it.
+  const geometry = (page, peerId) => page.evaluate((pid) => {
+    const bubble = Array.from(document.querySelectorAll('#chat-peek .chat-peek-item'))
+      .find((el) => el._voxalPeekPeerId === pid);
+    if (!bubble) return null;
+    const row = document.getElementById('peer-item-' + pid);
+    const name = row.querySelector('.peer-name');
+    const b = bubble.getBoundingClientRect();
+    const n = name.getBoundingClientRect();
+    const l = document.getElementById('peers-list').getBoundingClientRect();
+    return {
+      anchored: document.getElementById('chat-peek').classList.contains('chat-peek-anchored'),
+      tailSide: bubble.classList.contains('peek-tail-left') ? 'left'
+        : bubble.classList.contains('peek-tail-right') ? 'right' : null,
+      // Where the tail's point sits in the page, from the bubble's top.
+      tailY: b.top + parseFloat(getComputedStyle(bubble).getPropertyValue('--peek-tail')),
+      nameCentreY: n.top + n.height / 2,
+      // Clear of the roster, not over it: the gap is measured from the list.
+      gapFromList: b.left - l.right,
+      clearsList: b.left >= l.right || b.right <= l.left,
+      inViewport: b.left >= 0 && b.right <= window.innerWidth && b.top >= 0 && b.bottom <= window.innerHeight,
+    };
+  }, peerId);
+
+  test('the bubble sits beside the sender, with its tail on the name', async ({ page }) => {
+    await say(page, 'other:1', 'over here');
+    const g = await geometry(page, 'other');
+    expect(g.anchored).toBe(true);
+    // The clear space is to the right of the roster in this layout, so the
+    // bubble opens there and the tail is on the bubble's left edge.
+    expect(g.tailSide).toBe('left');
+    expect(g.clearsList).toBe(true);
+    expect(g.gapFromList).toBeGreaterThan(0);
+    expect(g.gapFromList).toBeLessThan(40);
+    // And it is at the height of the name, which is the whole point.
+    expect(Math.abs(g.tailY - g.nameCentreY)).toBeLessThan(2);
+    expect(g.inViewport).toBe(true);
+  });
+
+  test('two people talking at once each get their own bubble', async ({ page }) => {
+    await say(page, 'other:1', 'from Alice');
+    await say(page, 'the-host:1', 'from the Host');
+    const alice = await geometry(page, 'other');
+    const host = await geometry(page, 'the-host');
+    // Both are clear of the roster, and the two never share a row.
+    expect(alice.clearsList).toBe(true);
+    expect(host.clearsList).toBe(true);
+    expect(alice.tailSide).toBe('left');
+    expect(host.tailSide).toBe('left');
+    expect(Math.abs(alice.tailY - host.tailY)).toBeGreaterThan(4);
+    // The roster rows are barely a bubble apart, so the lower one is nudged
+    // clear of the upper. Whichever is placed first keeps its name exactly.
+    const [upper, lower] = [alice, host].sort((a, b) => a.nameCentreY - b.nameCentreY);
+    expect(Math.abs(upper.tailY - upper.nameCentreY)).toBeLessThan(2);
+    expect(lower.tailY).toBeGreaterThan(upper.tailY);
+  });
+
+  test('a burst from one person stacks instead of piling up', async ({ page }) => {
+    await say(page, 'other:1', 'one');
+    await say(page, 'other:2', 'two');
+    const boxes = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#chat-peek .chat-peek-item'))
+        .map((el) => el.getBoundingClientRect())
+        .map((r) => ({ top: r.top, bottom: r.bottom })));
+    expect(boxes).toHaveLength(2);
+    const [a, b] = boxes.sort((x, y) => x.top - y.top);
+    expect(b.top).toBeGreaterThanOrEqual(a.bottom);
+    // Both still point at the same name, so both keep a tail.
+    const tails = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#chat-peek .chat-peek-item'))
+        .filter((el) => el.classList.contains('peek-tail-left') || el.classList.contains('peek-tail-right')).length);
+    expect(tails).toBe(2);
+  });
+
+  test('with no clear space beside the roster it goes back to the stack over the room', async ({ page }) => {
+    await page.setViewportSize({ width: 420, height: 720 });
+    await page.evaluate(() => { updatePeerList(); });
+    await say(page, 'other:1', 'no room here');
+    const seen = await page.evaluate(() => {
+      const host = document.getElementById('chat-peek');
+      const el = host.querySelector('.chat-peek-item');
+      return {
+        anchored: host.classList.contains('chat-peek-anchored'),
+        tailed: el.classList.contains('peek-tail-left') || el.classList.contains('peek-tail-right'),
+        // Nothing left over from an anchored pass.
+        placed: !!el.style.left,
+      };
+    });
+    expect(seen).toEqual({ anchored: false, tailed: false, placed: false });
+  });
+
+  test('a sender with no row on screen puts the whole set back in the stack', async ({ page }) => {
+    await say(page, 'other:1', 'anchored');
+    expect(await page.evaluate(() =>
+      document.getElementById('chat-peek').classList.contains('chat-peek-anchored'))).toBe(true);
+    // Alice leaves; her bubble is still up but has nothing left to point at.
+    await page.evaluate(() => { connections.delete('other'); updatePeerList(); });
+    expect(await page.evaluate(() =>
+      document.getElementById('chat-peek').classList.contains('chat-peek-anchored'))).toBe(false);
+  });
+
+  test('the tail follows the name when the roster moves under it', async ({ page }) => {
+    await say(page, 'other:1', 'follow me');
+    const before = await geometry(page, 'other');
+    // Anything that reflows the roster must re-place the bubble, not leave it
+    // pointing at where the name used to be.
+    await page.evaluate(() => { updatePeerList(); });
+    const after = await geometry(page, 'other');
+    expect(Math.abs(after.tailY - after.nameCentreY)).toBeLessThan(2);
+    expect(after.tailSide).toBe(before.tailSide);
+  });
+});
+
 test.describe('the chat as a column of the room', () => {
   test.beforeEach(async ({ page }) => {
     await seedRoom(page, {

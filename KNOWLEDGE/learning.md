@@ -1028,3 +1028,33 @@ seems too sharp".
   are minted by senders and receivers dedupe on them, so without requiring the
   `<senderId>:` prefix a peer could mint the id another peer is *about* to use
   and have that future message silently swallowed everywhere.
+
+- **A `position: fixed` child is not fixed to the window if any ancestor has a
+  transform.** The chat peek's own host carried `transform: translateX(-50%)` to
+  centre its stack, which silently made it the containing block for anything
+  fixed inside it. Dropping the transform is half the fix; the other half is
+  that the host lived inside `#screen-room`, which is `overflow: hidden` — and
+  on a desktop a voice-only room is a ~480px column centred in the window, so
+  the clear space the anchored bubble wants is entirely *outside* the element it
+  was a child of. It is moved to `<body>` for that shape and back afterwards.
+
+- **A roster row is not the name in it.** `.peer-label-row` is an `inline-flex`
+  span but its flex parent stretches it to the full width of the roster column —
+  393px of it in a 480px room — so a tail aimed at its right edge landed
+  nowhere near the text. Only the innermost name span (now `.peer-name`) has the
+  text's own box. Measure the thing you mean, not the box around it.
+
+- **Point at a name, but open beside the panel.** Anchoring the peek's *left* to
+  the name's right edge put the bubble on top of the rest of the row, where the
+  copy / camera / stats buttons live, and a bubble with `pointer-events: auto`
+  over them is a dead control for seven seconds. Height from the name,
+  horizontal from `#peers-list`: the tail still does the linking, and it
+  doubles as the test for whether the shape applies at all — a phone's roster is
+  the full width of the screen, so there is no side to open on.
+
+- **Place stacked callouts top-down, not in arrival order.** Nudging each new
+  bubble clear of the ones already placed is only correct if they are placed in
+  the order their anchors appear down the screen. In arrival order a message
+  from someone ABOVE the previous sender gets pushed down past them, and the
+  bubbles end up in the reverse of the order the names are in.
+
