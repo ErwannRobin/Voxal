@@ -462,18 +462,20 @@ html[data-theme="light"] .debug-consent-text strong { color: #b45309; }
 .room-code-copy:hover  { border-color: var(--accent); }
 .room-code-copy:active { background: var(--bg); }
 
-/* The room header's icon row — settings, publish/unpublish, share — is one set
-   of 18px stroked glyphs, so they all share the same metrics and hover. */
-.room-settings-btn,
+/* The header icon row — the settings gear (on the home topbar as well as the
+   room header), publish/unpublish and share — is one set of 18px stroked
+   glyphs, so they all share the same metrics and hover. */
+.settings-icon-btn,
 .btn-publish-room,
 .btn-unpublish-room,
 .btn-share-room {
   padding: 2px;
   font-size: 0;
   opacity: 0.5;
+  touch-action: manipulation;
   transition: opacity 0.15s, color 0.15s;
 }
-.room-settings-btn:hover,
+.settings-icon-btn:hover,
 .btn-publish-room:hover   { opacity: 1; color: var(--accent); }
 .btn-unpublish-room,
 .btn-share-room           { opacity: 1; color: var(--accent); }
@@ -2754,8 +2756,9 @@ body.embed-tiny #screen-room .ptt-btn { display: none; }
 }
 .btn-icon:hover { color: var(--accent); }
 /* Same 18px glyph as the rest of the room header; font-size:0 keeps the box
-   from inheriting .btn-icon's 28px line box and sitting taller than its icon. */
-#btn-leave { font-size: 0; padding: 2px; }
+   from inheriting .btn-icon's 28px line box and sitting taller than its icon.
+   Padding stays .btn-icon's, so the hit target matches its neighbours'. */
+#btn-leave { font-size: 0; }
 #btn-leave:hover { color: var(--red); }
 
 /* ── Inputs ─────────────────────────────────────────────────────── */
@@ -2875,22 +2878,9 @@ input[type="password"]:focus { border-color: var(--accent); }
 .turn-servers-popover.hidden { display: none; }
 .tsrv-row { padding: 2px 0; color: var(--text-muted); font-family: monospace; }
 
-.topbar-btn {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  font-size: 15px;
-  cursor: pointer;
-  padding: 4px 2px;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  opacity: 0.55;
-  transition: opacity 0.15s;
-  touch-action: manipulation;
-}
-.topbar-btn:hover { opacity: 1; }
-.gear-icon { font-size: 22px; }
+/* The gear glyph itself. Kept as its own class because the desktop build hides
+   just the icon and leaves the button in place (see main.js). */
+.gear-icon { display: block; }
 
 .turn-badge {
   font-size: 9px;
