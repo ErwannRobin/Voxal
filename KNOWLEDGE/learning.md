@@ -1044,17 +1044,30 @@ seems too sharp".
   nowhere near the text. Only the innermost name span (now `.peer-name`) has the
   text's own box. Measure the thing you mean, not the box around it.
 
-- **Point at a name, but open beside the panel.** Anchoring the peek's *left* to
-  the name's right edge put the bubble on top of the rest of the row, where the
-  copy / camera / stats buttons live, and a bubble with `pointer-events: auto`
-  over them is a dead control for seven seconds. Height from the name,
-  horizontal from `#peers-list`: the tail still does the linking, and it
-  doubles as the test for whether the shape applies at all — a phone's roster is
-  the full width of the screen, so there is no side to open on.
+- **The box that decides is not always the box that positions.** The peek opens
+  at the last character of the sender's name, over the rest of the roster row —
+  that is what makes it read as coming out of the name. But the *name* cannot
+  also decide whether that shape applies: a name is short, so there is room to
+  its right on a phone too, and the bubble would cover the roster it is supposed
+  to be pointing into. `#peers-list` answers that question instead — clear space
+  beside the whole panel means a desktop, and no breakpoint is needed.
 
 - **Place stacked callouts top-down, not in arrival order.** Nudging each new
   bubble clear of the ones already placed is only correct if they are placed in
   the order their anchors appear down the screen. In arrival order a message
   from someone ABOVE the previous sender gets pushed down past them, and the
   bubbles end up in the reverse of the order the names are in.
+
+- **`textContent` cannot see what CSS hid.** The anchored peek drops the sender's
+  name (the tail says it) by hiding the span, not by leaving it unrendered — the
+  stacked shape still needs it. A test asserting what the bubble *shows* has to
+  read `innerText`; `textContent` reports the hidden name and passes a bubble
+  that renders it too.
+
+- **`make cap-sync` writes `src/build-info.js`, and three About tests then
+  fail.** `gen-build-info` stamps the real commit into a gitignored
+  `src/build-info.js`, and `unit-settings-readouts.spec.js` asserts the
+  *unstamped* fallback a contributor sees. So `make cap-sync && make test` fails
+  three tests that have nothing to do with the change under test. Delete
+  `src/build-info.js` before running the suite.
 

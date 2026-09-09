@@ -4765,8 +4765,9 @@ body.video-stage-immersive .chat-resizer { display: none; }
 
 /* ── Chat: the peek anchored to the name that sent it ─────────────
    With room beside the participants panel the message does not float over the
-   middle of the call: it comes out of the row that sent it, as a comic-strip
-   bubble with a tail pointing back at the name.
+   middle of the call: it opens at the last character of the name that sent it,
+   as a comic-strip bubble with a tail running back into that name — over
+   whatever else the roster row holds, on purpose.
 
    The host stops being a centred column over the stage and becomes an overlay
    on the whole window — layoutChatPeeks() moves it to <body> to get there, and
@@ -4797,6 +4798,11 @@ body.video-stage-immersive .chat-resizer { display: none; }
   transform-origin: left center;
 }
 .chat-peek-anchored .chat-peek-item.peek-tail-right { transform-origin: right center; }
+/* The tail has already said who this is, so the name comes out of the bubble.
+   It stays in the DOM rather than being left unrendered: the stacked shape has
+   nothing pointing at a roster row, and there the name is the only thing that
+   says who sent the message. */
+.chat-peek-anchored .chat-peek-author { display: none; }
 @keyframes chat-peek-pop {
   from { opacity: 0; transform: scale(0.92); }
   to   { opacity: 1; transform: none; }

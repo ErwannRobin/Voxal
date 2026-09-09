@@ -3753,11 +3753,11 @@ function updateChatUnreadBadge() {
 // Two shapes, decided by layoutChatPeeks() on every pass rather than at the
 // moment a message lands:
 //
-//   * Anchored — with clear space beside the roster, the bubble sits in it at
-//     the height of the name that sent it, with a tail running back to that
-//     name. On a desktop the sender is already on screen in the participants
-//     panel, so the message and who it came from are read in one glance
-//     instead of two.
+//   * Anchored — the bubble opens at the last character of the name that sent
+//     it, with a tail back into that name. On a desktop the sender is already
+//     on screen in the participants panel, so the message and who it came from
+//     are read in one glance instead of two — and the name is left out of the
+//     bubble entirely, because the tail has already said it.
 //   * Stacked  — the original column low over the stage, used whenever there is
 //     nothing to point at (a phone's roster is off screen, the sender's row is
 //     scrolled out of the list, the window is too narrow to fit a bubble beside
@@ -3817,18 +3817,16 @@ function clearChatPeek() {
 
 // --- Chat: the peek anchored to the name that sent it ------------------------
 
-// What a bubble points at: the sender's name for the height, the participants
-// list for the side.
+// What a bubble is placed against: the sender's name. It opens at the last
+// character of it, so the message reads as coming out of that name — over
+// whatever else is in the row, deliberately. It is on screen for seven seconds
+// and it is the thing being read.
 //
-// The two are deliberately different boxes. The tail belongs on the name, but a
-// bubble opened at the name's own right edge would land ON the rest of the row
-// — the copy, camera and stats buttons live there, and a roster row is as wide
-// as the panel, which in a voice-only desktop room is the whole column. Beside
-// the LIST it is in clear space, and the tail still runs back to the name.
-//
-// It also settles the question of where this shape applies at all, without a
-// breakpoint: a phone's roster is the full width of the screen, so there is no
-// clear space either side of it and the stack over the stage is used instead.
+// The participants LIST comes back separately, and only to answer a different
+// question: is there clear space beside the roster at all? That is what decides
+// whether this shape applies, without a breakpoint — a phone's roster is the
+// full width of the screen, so there is nowhere for a bubble to be, and the
+// stack over the stage is used instead.
 function chatPeekAnchorFor(peerId) {
   if (!peerId || IS_TINY_EMBED) return null;
   var row = document.getElementById('peer-item-' + peerId);
@@ -3844,14 +3842,22 @@ function chatPeekAnchorFor(peerId) {
   return { name: name, list: listRect };
 }
 
-// Which side of the participants list a bubble can go, and how much width it
-// may take there. `null` means neither side has room, which is what sends the
+// Which side of the roster a bubble opens on, and how much width it may take
+// once it is out there. The SIDE is chosen from the participants list, whose
+// edges are where the room actually runs out; the WIDTH is measured from the
+// name, which is further in, so a bubble is never narrower than the side it
+// was granted. `null` means neither side has room, which is what sends the
 // whole set back to the stack over the stage.
-function chatPeekAnchorSide(rect, view) {
-  var right = view.width - rect.right - CHAT_PEEK_ANCHOR_GAP - CHAT_PEEK_ANCHOR_EDGE;
-  var left  = rect.left - CHAT_PEEK_ANCHOR_GAP - CHAT_PEEK_ANCHOR_EDGE;
-  if (right >= CHAT_PEEK_ANCHOR_MIN_WIDTH && right >= left) return { side: 'right', space: right };
-  if (left  >= CHAT_PEEK_ANCHOR_MIN_WIDTH) return { side: 'left', space: left };
+function chatPeekAnchorSide(at, view) {
+  var room = function(rect, side) {
+    return side === 'right'
+      ? view.width - rect.right - CHAT_PEEK_ANCHOR_GAP - CHAT_PEEK_ANCHOR_EDGE
+      : rect.left - CHAT_PEEK_ANCHOR_GAP - CHAT_PEEK_ANCHOR_EDGE;
+  };
+  var right = room(at.list, 'right');
+  var left  = room(at.list, 'left');
+  if (right >= CHAT_PEEK_ANCHOR_MIN_WIDTH && right >= left) return { side: 'right', space: room(at.name, 'right') };
+  if (left  >= CHAT_PEEK_ANCHOR_MIN_WIDTH) return { side: 'left', space: room(at.name, 'left') };
   return null;
 }
 
@@ -3860,7 +3866,8 @@ function chatPeekAnchorSide(rect, view) {
 // both about the room being the wrong box: it is `overflow: hidden`, so a
 // bubble reaching past the roster would be cut off at its edge; and on a
 // desktop a voice-only room is a ~480px column centred in the window, so the
-// clear space beside the name — the whole point — is entirely outside it.
+// space a bubble opens into is largely outside it. Being last in <body> is also
+// what puts it over the roster's own controls rather than under them.
 var _chatPeekHome = null;
 
 function anchorChatPeekHost(host, on) {
@@ -3892,7 +3899,7 @@ function layoutChatPeeks() {
     // still reports a rect — one nobody can see.
     if (at && (at.name.right <= 0 || at.name.left >= view.width ||
                at.name.bottom <= 0 || at.name.top >= view.height)) at = null;
-    var fit = at ? chatPeekAnchorSide(at.list, view) : null;
+    var fit = at ? chatPeekAnchorSide(at, view) : null;
     if (!fit) { unanchorChatPeeks(host, items); return; }
     plans.push({ name: at.name, list: at.list, side: fit.side, space: fit.space });
   }
@@ -3917,8 +3924,8 @@ function layoutChatPeeks() {
     var w = el.offsetWidth;
     var h = el.offsetHeight;
     var left = plan.side === 'right'
-      ? plan.list.right + CHAT_PEEK_ANCHOR_GAP
-      : plan.list.left - CHAT_PEEK_ANCHOR_GAP - w;
+      ? plan.name.right + CHAT_PEEK_ANCHOR_GAP
+      : plan.name.left - CHAT_PEEK_ANCHOR_GAP - w;
     var centre = plan.name.top + plan.name.height / 2;
     var top = clampChatPeekTop(centre - h / 2, h, view.height);
     top = pushChatPeekClear(bands, top, h, view.height);

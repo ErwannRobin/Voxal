@@ -634,13 +634,15 @@ handle.
 
 That peek has two shapes, chosen by `layoutChatPeeks()` on every pass rather
 than once at arrival. Where there is clear space beside the participants panel —
-a desktop, in short — the bubble sits in it at the height of the sender's name,
-with a comic-strip tail running back to that name, so a message and who sent it
-are read in one glance. Where there is not — a phone, whose roster is the whole
-width of the screen — it falls back to the original stack low over the stage.
-The choice is geometry, not a breakpoint, and it is all-or-nothing across the
-set: one bubble that cannot be anchored puts all of them back in the stack,
-because a set split between the two shapes reads as two unrelated notifications.
+a desktop, in short — the bubble opens at the last character of the sender's
+name, over whatever else the roster row holds, with a comic-strip tail running
+back into that name; the name itself is left out of the bubble, because the tail
+has already said it. Where there is no such space — a phone, whose roster is the
+whole width of the screen — it falls back to the original stack low over the
+stage, and there the name comes back, since nothing else says who sent it. The
+choice is geometry, not a breakpoint, and it is all-or-nothing across the set:
+one bubble that cannot be anchored puts all of them back in the stack, because a
+set split between the two shapes reads as two unrelated notifications.
 
 The chat is reached from a handle on the right edge — the chat icon, the unread
 count, and a drag — in **every** room, voice-only ones included. There is no

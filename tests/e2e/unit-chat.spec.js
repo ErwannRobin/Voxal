@@ -817,9 +817,14 @@ test.describe('the peek pinned to the name that sent it', () => {
       // Where the tail's point sits in the page, from the bubble's top.
       tailY: b.top + parseFloat(getComputedStyle(bubble).getPropertyValue('--peek-tail')),
       nameCentreY: n.top + n.height / 2,
-      // Clear of the roster, not over it: the gap is measured from the list.
-      gapFromList: b.left - l.right,
-      clearsList: b.left >= l.right || b.right <= l.left,
+      // It opens at the last character of the name, so the gap is measured
+      // from the name's own right edge — not from the roster's.
+      gapFromName: b.left - n.right,
+      overList: b.left < l.right && b.right > l.left,
+      // The name is the tail's job now; the bubble renders only the message.
+      // innerText, not textContent: the name is hidden by CSS, not unrendered.
+      text: bubble.innerText,
+      authorShown: getComputedStyle(bubble.querySelector('.chat-peek-author')).display !== 'none',
       inViewport: b.left >= 0 && b.right <= window.innerWidth && b.top >= 0 && b.bottom <= window.innerHeight,
     };
   }, peerId);
@@ -831,12 +836,40 @@ test.describe('the peek pinned to the name that sent it', () => {
     // The clear space is to the right of the roster in this layout, so the
     // bubble opens there and the tail is on the bubble's left edge.
     expect(g.tailSide).toBe('left');
-    expect(g.clearsList).toBe(true);
-    expect(g.gapFromList).toBeGreaterThan(0);
-    expect(g.gapFromList).toBeLessThan(40);
-    // And it is at the height of the name, which is the whole point.
+    // Right after the last character of the name — not out beyond the roster.
+    expect(g.gapFromName).toBeGreaterThan(0);
+    expect(g.gapFromName).toBeLessThan(20);
+    // And at the height of the name, which is the whole point.
     expect(Math.abs(g.tailY - g.nameCentreY)).toBeLessThan(2);
     expect(g.inViewport).toBe(true);
+  });
+
+  test('it opens over the rest of the row rather than waiting for clear space', async ({ page }) => {
+    await say(page, 'other:1', 'Can you hear me? I think my mic is cutting out again.');
+    const g = await geometry(page, 'other');
+    expect(g.overList).toBe(true);
+  });
+
+  test('the name is the tail\'s job, so the bubble does not repeat it', async ({ page }) => {
+    await say(page, 'other:1', 'over here');
+    const g = await geometry(page, 'other');
+    expect(g.authorShown).toBe(false);
+    expect(g.text.trim()).toBe('over here');
+  });
+
+  test('stacked, the name is back — nothing else there says who sent it', async ({ page }) => {
+    await page.setViewportSize({ width: 420, height: 720 });
+    await page.evaluate(() => { updatePeerList(); });
+    await say(page, 'other:1', 'over here');
+    const seen = await page.evaluate(() => {
+      const el = document.querySelector('#chat-peek .chat-peek-item');
+      return {
+        anchored: document.getElementById('chat-peek').classList.contains('chat-peek-anchored'),
+        authorShown: getComputedStyle(el.querySelector('.chat-peek-author')).display !== 'none',
+        text: el.textContent,
+      };
+    });
+    expect(seen).toEqual({ anchored: false, authorShown: true, text: 'Alice over here' });
   });
 
   test('two people talking at once each get their own bubble', async ({ page }) => {
@@ -844,9 +877,9 @@ test.describe('the peek pinned to the name that sent it', () => {
     await say(page, 'the-host:1', 'from the Host');
     const alice = await geometry(page, 'other');
     const host = await geometry(page, 'the-host');
-    // Both are clear of the roster, and the two never share a row.
-    expect(alice.clearsList).toBe(true);
-    expect(host.clearsList).toBe(true);
+    // Each opens at its own name, and the two never share a row.
+    expect(alice.gapFromName).toBeGreaterThan(0);
+    expect(host.gapFromName).toBeGreaterThan(0);
     expect(alice.tailSide).toBe('left');
     expect(host.tailSide).toBe('left');
     expect(Math.abs(alice.tailY - host.tailY)).toBeGreaterThan(4);
