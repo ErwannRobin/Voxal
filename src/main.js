@@ -5493,7 +5493,11 @@ function handleAudioCheckRequestAtHost(requesterId, targetId, durationMs) {
 // Kick off a check against one peer: ask them to measure, and transmit for the
 // same window so there is something to measure.
 function startAudioCheck(peerId) {
-  if (!inRoom || !peerId || (_audioCheck && _audioCheck.peerId === peerId)) return;
+  if (!inRoom || !peerId) return;
+  // Only a check still in flight blocks a new one. Once it has a result the
+  // button reads "Test again", so a finished (or failed) check must not stop
+  // the retry it is offering.
+  if (_audioCheck && _audioCheck.peerId === peerId && !_audioCheck.result) return;
   cancelAudioCheck();
 
   _audioCheck = { peerId: peerId, startedAt: Date.now(), localEnergyStart: null, timer: null };
@@ -6546,6 +6550,9 @@ function _buildAudioCheckSection(peerId) {
 function showDeviceInfoPopover(peerId, anchorEl, isSelf) {
   closeDeviceInfoPopover();
   closeStatsPopover();
+  // A fresh open starts from a clean slate: an old verdict ("No sound was
+  // sent", "No response") must not survive the popover that produced it.
+  cancelAudioCheck();
   _deviceInfoPeerId = isSelf ? 'self' : peerId;
 
   var popover = document.createElement('div');

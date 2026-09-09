@@ -214,6 +214,23 @@ test.describe('running an audio check', () => {
     expect(sent).toBe(1);
   });
 
+  test('a finished check can be run again', async ({ page }) => {
+    await seedRoom(page, { selfId: 'host', isHost: true, connections: [{ id: 'p1' }] });
+    const seen = await page.evaluate(() => {
+      const out = [];
+      connections.get('p1').data.send = (m) => out.push(m);
+      startAudioCheck('p1');
+      // Whatever the verdict was, the button now reads "Test again".
+      _audioCheck.result = { status: 'silent', headline: 'No sound was sent', detail: '' };
+      startAudioCheck('p1');
+      const res = { sent: out.length, pending: _audioCheck && _audioCheck.result };
+      cancelAudioCheck();
+      return res;
+    });
+    expect(seen.sent).toBe(2);
+    expect(seen.pending).toBeUndefined();
+  });
+
   test('nothing runs outside a room', async ({ page }) => {
     const check = await page.evaluate(() => {
       inRoom = false;
