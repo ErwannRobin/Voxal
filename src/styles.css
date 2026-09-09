@@ -462,6 +462,9 @@ html[data-theme="light"] .debug-consent-text strong { color: #b45309; }
 .room-code-copy:hover  { border-color: var(--accent); }
 .room-code-copy:active { background: var(--bg); }
 
+/* The room header's icon row — settings, publish/unpublish, share — is one set
+   of 18px stroked glyphs, so they all share the same metrics and hover. */
+.room-settings-btn,
 .btn-publish-room,
 .btn-unpublish-room,
 .btn-share-room {
@@ -470,6 +473,7 @@ html[data-theme="light"] .debug-consent-text strong { color: #b45309; }
   opacity: 0.5;
   transition: opacity 0.15s, color 0.15s;
 }
+.room-settings-btn:hover,
 .btn-publish-room:hover   { opacity: 1; color: var(--accent); }
 .btn-unpublish-room,
 .btn-share-room           { opacity: 1; color: var(--accent); }
@@ -2749,6 +2753,9 @@ body.embed-tiny #screen-room .ptt-btn { display: none; }
   transition: color 0.15s;
 }
 .btn-icon:hover { color: var(--accent); }
+/* Same 18px glyph as the rest of the room header; font-size:0 keeps the box
+   from inheriting .btn-icon's 28px line box and sitting taller than its icon. */
+#btn-leave { font-size: 0; padding: 2px; }
 #btn-leave:hover { color: var(--red); }
 
 /* ── Inputs ─────────────────────────────────────────────────────── */
