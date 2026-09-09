@@ -4709,6 +4709,22 @@ body.video-stage-immersive .chat-resizer { display: none; }
   html.is-web body.chat-docked:not(.embed-tiny) #screen-room .room-bottom-bar { grid-area: rail; }
 }
 
+/* ── Chat: beside the room in the desktop app ─────────────────────
+   The Mac window grows to the right by exactly the drawer's width when the chat
+   opens (applyDesktopWindowShape()), so the drawer is never over the room it
+   belongs to — including in a voice-only room, where there is no stage to dock
+   against and the docked grid above does not apply. `body.chat-side` is
+   published by applyChatDock(), for the same reason `chat-docked` is.
+
+   The strip is reserved on `body`, not on the screen: the screens are its flex
+   items at `width: 100%`, and the chat panel is `position: fixed` in the gap —
+   so one padding moves the room, the roster and the absolutely-positioned talk
+   bar together. The width matches the panel's own rule exactly, cap included;
+   the window was grown to fit that number, so the two can never disagree. */
+html.is-desktop-app body.chat-side.chat-open:not(.embed-tiny) {
+  padding-right: min(var(--chat-width, 360px), 92vw);
+}
+
 /* ── Chat: the peek over the call ─────────────────────────────────
    The newest messages, briefly, while the panel is not on screen. Centred low
    over the room rather than pinned to a corner: it is meant to be read on the

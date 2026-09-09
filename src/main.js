@@ -2400,6 +2400,10 @@ function showScreen(name) {
   // A desktop room shows the conversation from the start unless it was
   // deliberately collapsed.
   if (name === 'room') applyChatAutoOpen();
+  // Leaving a room hands the desktop window its voice column back — the shape
+  // follows the configuration, and off a call there is nothing to make room for.
+  applyChatDock();
+  applyDesktopWindowShape();
   if (window._updateTinyPeersToggle) window._updateTinyPeersToggle();
 }
 
@@ -3801,10 +3805,22 @@ function chatDocked() {
   return window.innerWidth >= CHAT_DOCK_MIN_WIDTH;
 }
 
+// The desktop app's variant of the same idea, for a room with no stage to dock
+// against. The Mac window itself grows to the right by the drawer's width when
+// the chat opens (applyDesktopWindowShape()), so there the drawer is beside the
+// room at ANY window width — the room is not losing space, the window is
+// gaining it. Only a live stage takes it back: then the docked column above is
+// the right shape, and this one would reserve the strip twice.
+function chatBesideRoom() {
+  if (!IS_TAURI_DESKTOP || IS_TINY_EMBED || !inRoom) return false;
+  return !document.body.classList.contains('video-stage');
+}
+
 // Docking decides WHERE an open chat goes, never whether it is open — that is
 // chatOpensOnEntry()'s call.
 function applyChatDock() {
   document.body.classList.toggle('chat-docked', chatDocked());
+  document.body.classList.toggle('chat-side', chatBesideRoom());
 }
 
 // --- Chat: open by default on a desktop --------------------------------------
@@ -3841,6 +3857,12 @@ function rememberChatCollapsed(collapsed) {
 // a column is the width at which it can be open without costing anything.
 function chatOpensOnEntry() {
   if (IS_TINY_EMBED || !inRoom) return false;
+  // The desktop app is the one surface where width is not evidence of spare
+  // room: it sizes its own window, so a window wide enough for the chat is one
+  // WE made wide. Opening the drawer there would grow the window again, on its
+  // own, in the middle of joining a call — so on the Mac the chat is only ever
+  // opened by the person using it.
+  if (IS_TAURI_DESKTOP) return false;
   if (videoStageMode() === 'immersive') return false;
   if (chatCollapsedByChoice()) return false;
   return window.innerWidth >= CHAT_DOCK_MIN_WIDTH;
@@ -3865,6 +3887,10 @@ function toggleChatPanel(open, opts) {
   if (opts && opts.remember) rememberChatCollapsed(!next);
   if (next) closeStagePanels();
   document.body.classList.toggle('chat-open', next);
+  // Where the drawer goes, and — on the Mac — how much window there is for it
+  // to go into. Both read `chat-open`, so both run after the toggle.
+  applyChatDock();
+  applyDesktopWindowShape();
   var handle = document.getElementById('stage-handle-chat');
   if (handle) handle.setAttribute('aria-expanded', String(next));
   if (next) {
@@ -4110,8 +4136,17 @@ function insertIntoComposer(text) {
 var _chatResizeDrag = null;
 
 function readChatWidth() {
+  return clampChatWidth(storedChatWidth());
+}
+
+// The stored width clamped to its OWN bounds only — never to the window, the
+// way clampChatWidth() also does. The desktop app sizes its window to fit the
+// drawer, and a width clamped to the narrow window it has *before* growing
+// would reserve a strip narrower than the drawer that lands in it.
+function storedChatWidth() {
   var stored = parseInt(localStorage.getItem(CHAT_WIDTH_KEY), 10);
-  return clampChatWidth(isNaN(stored) ? CHAT_WIDTH_DEFAULT : stored);
+  if (isNaN(stored)) stored = CHAT_WIDTH_DEFAULT;
+  return Math.max(CHAT_WIDTH_MIN, Math.min(CHAT_WIDTH_MAX, Math.round(stored)));
 }
 
 function clampChatWidth(px) {
@@ -4157,6 +4192,10 @@ function _onChatResizePointerUp(e) {
   _chatResizeDrag = null;
   document.body.classList.remove('chat-resizing');
   saveChatWidth(d.width);
+  // On the Mac the window follows the separator — but only on release. Resizing
+  // it mid-drag would move the very edge the width is measured from
+  // (`innerWidth - clientX`), and the drawer would chase its own growth.
+  applyDesktopWindowShape();
 }
 
 function nudgeChatWidth(delta) {
@@ -4164,6 +4203,152 @@ function nudgeChatWidth(delta) {
   var width = clampChatWidth((panel ? panel.getBoundingClientRect().width : readChatWidth()) + delta);
   applyChatWidth(width);
   saveChatWidth(width);
+  applyDesktopWindowShape();
+}
+
+// --- The desktop window's own shape (Tauri) ----------------------------------
+//
+// On the Mac the window IS part of the layout. The app ships as a narrow voice
+// column — the right shape for a push-to-talk room, and the wrong shape for
+// anything that has to sit beside it — so the two configurations that need more
+// room take it from the window rather than from the room:
+//
+//   chat open   → the window grows to the RIGHT by exactly the drawer's width,
+//                 so the conversation lands beside the room, not over it
+//                 (`body.chat-side`, see chatBesideRoom()).
+//   stage live  → the window takes the landscape shape the desktop web app uses
+//                 (tiles left, roster and PTT railed right), which is what
+//                 videoStageMode() reports as soon as the width crosses its
+//                 861px breakpoint — the CSS is shared, not re-implemented.
+//
+// Both are reversible: the size the window had as a plain voice column is
+// remembered and handed back the moment the reason for the extra space goes
+// away. A resize the USER made becomes the new voice size (see
+// noteDesktopWindowResize), so growing for the chat never undoes their sizing.
+//
+// Everything here is a no-op off Tauri, and every Tauri call is best-effort: a
+// missing window permission must cost a window that did not resize, never a
+// room that did not open.
+
+const DESKTOP_MIN_WIDTH    = 280;    // tauri.conf.json's own minWidth
+const DESKTOP_VOICE_WIDTH  = 350;    // …and its starting width
+// Wide enough for the desktop stage (VIDEO_STAGE_MIN_WIDTH) and for the chat to
+// dock beside it (CHAT_DOCK_MIN_WIDTH). A video window that could not take the
+// chat as a column would open the drawer back over the tiles it just made room
+// for — so the smaller breakpoint is not enough here.
+const DESKTOP_VIDEO_WIDTH  = 1180;
+const DESKTOP_VIDEO_HEIGHT = 760;
+
+var _desktopVoiceSize   = null;   // {width,height} of the plain column: no chat, no stage
+var _desktopAppliedSize = null;   // the last size WE set, to tell ours from theirs
+
+function desktopWindowShapeActive() {
+  return IS_TAURI_DESKTOP && !IS_TINY_EMBED;
+}
+
+// The Tauri window handle, or null wherever the bridge is absent or older than
+// the v2 API (the E2E fakes install only the namespaces they exercise).
+function tauriWindowHandle() {
+  try {
+    var api = window.__TAURI__ && window.__TAURI__.window;
+    return (api && typeof api.getCurrentWindow === 'function') ? api.getCurrentWindow() : null;
+  } catch (_) { return null; }
+}
+
+// The webview fills the window's inner box, and `setSize` sets that same inner
+// box in logical pixels — so the window's current size is readable as plain CSS
+// pixels, with no scale factor and no extra permission.
+function currentDesktopSize() {
+  return { width: window.innerWidth, height: window.innerHeight };
+}
+
+function desktopScreenLimits() {
+  var w = (window.screen && window.screen.availWidth)  || window.innerWidth;
+  var h = (window.screen && window.screen.availHeight) || window.innerHeight;
+  return { width: Math.max(DESKTOP_MIN_WIDTH, w), height: Math.max(240, h) };
+}
+
+// What the window should be, given what the room is currently showing. Pure
+// apart from reading the body classes and the stored chat width, so the sizing
+// rules can be tested without a window to resize.
+function desktopWindowTarget() {
+  var voice = _desktopVoiceSize || { width: DESKTOP_VOICE_WIDTH, height: window.innerHeight };
+  var target = { width: voice.width, height: voice.height };
+  if (inRoom && document.body.classList.contains('video-stage')) {
+    target.width  = DESKTOP_VIDEO_WIDTH;
+    // Height is only ever raised: a taller window the user chose is theirs.
+    target.height = Math.max(voice.height, DESKTOP_VIDEO_HEIGHT);
+  }
+  // The drawer's own width, not the window-clamped one — this is the growth
+  // that MAKES the window wide enough for it.
+  if (inRoom && chatPanelOpen()) target.width += storedChatWidth();
+  var limit = desktopScreenLimits();
+  return {
+    width:  Math.max(DESKTOP_MIN_WIDTH, Math.min(target.width,  limit.width)),
+    height: Math.max(240,               Math.min(target.height, limit.height)),
+  };
+}
+
+// Idempotent: safe to call from anywhere the room's configuration changes.
+function applyDesktopWindowShape() {
+  if (!desktopWindowShapeActive()) return;
+  var win = tauriWindowHandle();
+  var dpi = window.__TAURI__ && window.__TAURI__.dpi;
+  if (!win || typeof win.setSize !== 'function' || !dpi || !dpi.LogicalSize) return;
+  var target = desktopWindowTarget();
+  var now = currentDesktopSize();
+  if (Math.abs(now.width - target.width) < 2 && Math.abs(now.height - target.height) < 2) return;
+  _desktopAppliedSize = target;
+  try {
+    var done = win.setSize(new dpi.LogicalSize(target.width, target.height));
+    if (done && done.then) {
+      done.then(keepDesktopWindowOnScreen, function(e) {
+        console.warn('[window] resize refused:', e && e.message ? e.message : e);
+      });
+    }
+  } catch (e) {
+    console.warn('[window] resize failed:', e && e.message ? e.message : e);
+  }
+}
+
+// Growing to the right can walk the window off the screen it is on. Pulling it
+// back is best-effort on purpose: it needs three more window permissions than
+// the resize itself, and a refusal must cost nothing worse than a window that
+// hangs over the edge until the user drags it.
+function keepDesktopWindowOnScreen() {
+  var win = tauriWindowHandle();
+  var dpi = window.__TAURI__ && window.__TAURI__.dpi;
+  if (!win || !dpi || !dpi.LogicalPosition || typeof win.outerPosition !== 'function') return;
+  Promise.all([win.scaleFactor(), win.outerPosition()]).then(function(both) {
+    var pos = both[1].toLogical(both[0]);
+    var limit = desktopScreenLimits();
+    var overhang = (pos.x + window.innerWidth) - limit.width;
+    if (overhang <= 0) return;
+    return win.setPosition(new dpi.LogicalPosition(Math.max(0, pos.x - overhang), pos.y));
+  }).catch(function() { /* no permission, or no monitor to speak of */ });
+}
+
+// The user's own resizing is authoritative. Whatever the window is while the
+// room is plain — minus the drawer, while the chat is open — becomes the size
+// the chat and the stage grow FROM, and the size they hand back. The landscape
+// shape is ours rather than theirs, so a resize made under a live stage is left
+// alone: it would otherwise record 1180px as "the voice column".
+function noteDesktopWindowResize() {
+  if (!desktopWindowShapeActive()) return;
+  var now = currentDesktopSize();
+  var mine = _desktopAppliedSize;
+  // Our own setSize echoes back as a resize; only a size we did not ask for
+  // says anything about what the user wants.
+  if (mine && Math.abs(now.width - mine.width) < 2 && Math.abs(now.height - mine.height) < 2) return;
+  if (inRoom && document.body.classList.contains('video-stage')) return;
+  var width = now.width - ((inRoom && chatPanelOpen()) ? storedChatWidth() : 0);
+  _desktopVoiceSize = { width: Math.max(DESKTOP_MIN_WIDTH, width), height: now.height };
+}
+
+function initDesktopWindowShape() {
+  if (!desktopWindowShapeActive()) return;
+  _desktopVoiceSize = currentDesktopSize();
+  window.addEventListener('resize', noteDesktopWindowResize);
 }
 
 function initChatUI() {
@@ -10050,10 +10235,14 @@ function cssEscapeAttr(value) {
 //                 them (phones: mobile web AND the Capacitor apps).
 //   'none'      — no stage; the roster's camera icon keeps opening the floating
 //                 viewer panel, and the room layout is untouched. This is the
-//                 tiny embed and Tauri, which has its own pop-out WebviewWindow.
+//                 tiny embed, and any surface with neither platform class.
 //
-// `is-native` / `is-web` are set by the head inline script in index.html; Tauri
-// gets NEITHER, which is exactly what keeps it on the pop-out.
+// `is-native` / `is-web` are set by the head inline script in index.html.
+// `is-native` is Capacitor mobile only. The Tauri desktop app carries `is-web`
+// (plus `is-desktop-app`) because it is a resizable desktop window that sizes
+// itself to the configuration — see applyDesktopWindowShape(), which gives it
+// the landscape shape this 'desktop' mode describes as soon as a camera is
+// live. Below the breakpoint it reads 'immersive', exactly as narrow web does.
 var VIDEO_STAGE_MIN_WIDTH = 861;
 
 function videoStageWideEnough() {
@@ -10090,6 +10279,10 @@ function updateVideoStage() {
   // genuinely live, so an audio-only room still renders byte-identically.
   document.body.classList.toggle('video-stage-immersive', active && mode === 'immersive');
   applyChatDock();
+  // On the Mac a live stage is also a window size. The resize lands async, so
+  // the mode above may still say 'immersive' for one tick — the resize event
+  // brings us straight back here with the landscape width.
+  applyDesktopWindowShape();
   stage.classList.toggle('hidden', !active);
   // The screen must not sleep while you are watching someone — and must be
   // allowed to again the moment the stage stands down.
@@ -15805,6 +15998,9 @@ window.addEventListener('DOMContentLoaded', function() {
 
   $('btn-freehand').addEventListener('click', function() { setFreeHand(!freeHandMode); });
   initChatUI();
+  // The window this app opened with IS the voice column, until the user says
+  // otherwise — record it before anything has a chance to grow it.
+  initDesktopWindowShape();
   // Edit shortcut — delegated since the button is dynamically rendered in ptt-hint
   $('ptt-hint').addEventListener('click', function(e) {
     var btn = e.target.closest('#btn-edit-shortcut');

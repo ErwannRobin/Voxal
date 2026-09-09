@@ -64,7 +64,9 @@ test.describe('videoStageMode — which shape of stage applies where', () => {
     expect(await page.evaluate(() => videoStageMode())).toBe('immersive');
   });
 
-  // Tauri gets neither class and keeps its own pop-out WebviewWindow.
+  // Neither class = no layout regime to render a stage into. (The Tauri desktop
+  // app is NOT this case any more: it carries `is-web` + `is-desktop-app` and
+  // sizes its own window to the landscape shape — see unit-desktop-window.)
   test('a surface that is neither web nor native has no stage', async ({ page }) => {
     await page.setViewportSize(DESKTOP);
     await page.goto('/');
