@@ -1658,6 +1658,11 @@ body.chat-open .stage-handle-right {
 body.video-stage-immersive.chat-open .stage-handle-right {
   right: calc(min(360px, 88vw) + max(env(safe-area-inset-right), 0px));
 }
+/* While the separator is being dragged the handle rides on its edge, and an
+   eased `right` makes it chase the pointer a quarter of a second behind the
+   seam it is supposed to be attached to. The drawer itself already drops its
+   transition for the same reason. */
+body.chat-resizing .stage-handle-right { transition: none; }
 
 /* Outside the phone stage the chat handle is not dragged, it is clicked — the
    drawer is beside the room there, not over it. */
@@ -4678,8 +4683,12 @@ body.video-stage-immersive .chat-resizer { display: none; }
   }
   /* Collapsed: the button still hides it, and the room takes the space back. */
   html.is-web body.chat-docked:not(.chat-open):not(.embed-tiny) #screen-room .room-chat-panel { display: none; }
+  /* Docked, the drawer is a grid COLUMN, so its left edge is the column's width
+     plus whatever the room reserves on the outside — `#screen-room`'s own
+     padding-right, repeated here. Offsetting by the column alone leaves the
+     handle floating 18px clear of the separator it is meant to be stuck to. */
   html.is-web body.chat-docked.chat-open:not(.embed-tiny) .stage-handle-right {
-    right: calc(min(var(--chat-width, 360px), 38vw) + max(env(safe-area-inset-right), 0px));
+    right: calc(min(var(--chat-width, 360px), 38vw) + max(calc(env(safe-area-inset-right) + 18px), 18px));
   }
 
   html.is-web body.chat-docked:not(.embed-tiny) #screen-room .room-chat-panel {

@@ -982,6 +982,26 @@ seems too sharp".
   `resetChatState()` (i.e. per room), so the stored default applies once per
   room rather than once per layout event.
 
+- **A control that rides on a draggable edge must drop its own transition.**
+  `.stage-handle-right` eases `right` so it glides out when the drawer opens —
+  which during a *resize* drag leaves it chasing the pointer a quarter of a
+  second behind the seam it is attached to. `body.chat-resizing` now kills it,
+  the same way it already killed the drawer's. Measured mid-drag: after
+  `mouse.up()` everything settles and the bug is invisible.
+
+- **A panel that changes positioning regime changes what "its edge" means.** As
+  a fixed drawer the chat is flush to the viewport, so an offset of the drawer's
+  width lands exactly on its separator. Docked, it is a grid *column* — its left
+  edge is that width plus `#screen-room`'s own `padding-right`, so the same
+  offset floated the handle 18px clear of the seam the moment a camera went on.
+  Anything anchored to a panel's edge needs one rule per regime, not one number.
+
+- **`body.video-stage` as a stand-in for a live camera does not stay put.** A
+  test that adds the class by hand and then changes the viewport loses it: the
+  resize queues a rAF in which `updateVideoStage()` recomputes the class from the
+  tiles that are actually there and takes it straight back off. Re-assert it at
+  each measurement, or measure inside the one synchronous `evaluate` that set it.
+
 - **A control wired by the layout that *usually* shows it is dead everywhere
   else.** The chat's edge handle is on screen in every room, but
   `initStagePanelHandles()` was only called from `updateVideoStage()` under

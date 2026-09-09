@@ -678,6 +678,26 @@ test.describe('the drawer\'s width', () => {
     expect(after.dragging).toBe(false);
   });
 
+  // The handle rides on the drawer's edge, so an eased `right` leaves it
+  // chasing the pointer a quarter of a second behind the seam it is attached
+  // to. Measured mid-drag, not after: settling hides the bug.
+  test('the edge handle keeps up with the separator mid-drag', async ({ page }) => {
+    await page.setViewportSize({ width: 1200, height: 760 });
+    await page.evaluate(() => { applyChatWidth(360); saveChatWidth(360); });
+    const seam = () => page.evaluate(() => Math.round(
+      document.getElementById('stage-handle-chat').getBoundingClientRect().right
+      - document.getElementById('room-chat-panel').getBoundingClientRect().left));
+
+    const atRest = await seam();
+    const grip = await page.locator('#chat-resizer').boundingBox();
+    await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(grip.x + grip.width / 2 - 150, grip.y + grip.height / 2, { steps: 10 });
+    const during = await seam();
+    await page.mouse.up();
+    expect(during).toBe(atRest);
+  });
+
   test('double-clicking the separator puts it back', async ({ page }) => {
     await page.evaluate(() => { applyChatWidth(600); saveChatWidth(600); });
     await page.dblclick('#chat-resizer');
@@ -836,6 +856,34 @@ test.describe('the chat as a column of the room', () => {
     expect(seen.oppositeTheRoster).toBe(true);
     expect(seen.position).toBe('relative');
     expect(seen.transform === 'none' || seen.transform === 'matrix(1, 0, 0, 1, 0, 0)').toBe(true);
+  });
+
+  // Docked, the drawer is a grid column rather than a fixed overlay, so its
+  // left edge is the column's width PLUS the padding the room keeps on the
+  // outside. Offsetting the handle by the column alone floats it clear of the
+  // separator — visible the moment a camera goes on.
+  test('the edge handle sits on the separator in both regimes', async ({ page }) => {
+    await page.setViewportSize({ width: 1400, height: 800 });
+    const seam = (docked) => page.evaluate((wantDocked) => {
+      // `video-stage` stands in for a live camera. It has to be re-asserted at
+      // every measurement: the viewport change queues a rAF in which
+      // updateVideoStage() strips it again, there being no real tile behind it.
+      if (wantDocked) { document.body.classList.add('video-stage'); applyChatDock(); }
+      return {
+        docked: document.body.classList.contains('chat-docked'),
+        seam: Math.round(
+          document.getElementById('stage-handle-chat').getBoundingClientRect().right
+          - document.getElementById('room-chat-panel').getBoundingClientRect().left),
+      };
+    }, docked);
+
+    await page.evaluate(() => toggleChatPanel(true));
+    const asDrawer = await seam(false);
+    expect(asDrawer.docked).toBe(false);
+
+    // `right` is eased, so the handle is still on its way for a quarter of a
+    // second after the regime changes under it.
+    await expect.poll(() => seam(true)).toEqual({ docked: true, seam: asDrawer.seam });
   });
 
   test('a narrow room keeps it a drawer', async ({ page }) => {
