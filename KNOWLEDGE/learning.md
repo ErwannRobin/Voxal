@@ -1029,6 +1029,56 @@ seems too sharp".
   `<senderId>:` prefix a peer could mint the id another peer is *about* to use
   and have that future message silently swallowed everywhere.
 
+- **A `position: fixed` child is not fixed to the window if any ancestor has a
+  transform.** The chat peek's own host carried `transform: translateX(-50%)` to
+  centre its stack, which silently made it the containing block for anything
+  fixed inside it. Dropping the transform is half the fix; the other half is
+  that the host lived inside `#screen-room`, which is `overflow: hidden` — and
+  on a desktop a voice-only room is a ~480px column centred in the window, so
+  the clear space the anchored bubble wants is entirely *outside* the element it
+  was a child of. It is moved to `<body>` for that shape and back afterwards.
+
+- **A roster row is not the name in it.** `.peer-label-row` is an `inline-flex`
+  span but its flex parent stretches it to the full width of the roster column —
+  393px of it in a 480px room — so a tail aimed at its right edge landed
+  nowhere near the text. Only the innermost name span (now `.peer-name`) has the
+  text's own box. Measure the thing you mean, not the box around it.
+
+- **The box that decides is not always the box that positions.** The peek opens
+  at the last character of the sender's name, over the rest of the roster row —
+  that is what makes it read as coming out of the name. But the *name* cannot
+  also decide whether that shape applies: a name is short, so there is room to
+  its right on a phone too, and the bubble would cover the roster it is supposed
+  to be pointing into. `#peers-list` answers that question instead — clear space
+  beside the whole panel means a desktop, and no breakpoint is needed.
+
+- **Place stacked callouts top-down, not in arrival order.** Nudging each new
+  bubble clear of the ones already placed is only correct if they are placed in
+  the order their anchors appear down the screen. In arrival order a message
+  from someone ABOVE the previous sender gets pushed down past them, and the
+  bubbles end up in the reverse of the order the names are in.
+
+- **What shares an anchor should share a line.** Two bubbles pointing at the
+  same name are not two things to keep apart — they are one run, and pushing the
+  second one down walks it away from the name it belongs to and towards the next
+  person's. They go side by side out of the name instead, with a tail only on
+  the one that starts the run: a tail on the second would point at the first
+  bubble rather than at the person. Collision avoidance then works on the run,
+  not the bubble, so a wrapped line never parts from its own first line.
+
+- **`textContent` cannot see what CSS hid.** The anchored peek drops the sender's
+  name (the tail says it) by hiding the span, not by leaving it unrendered — the
+  stacked shape still needs it. A test asserting what the bubble *shows* has to
+  read `innerText`; `textContent` reports the hidden name and passes a bubble
+  that renders it too.
+
+- **`make cap-sync` writes `src/build-info.js`, and three About tests then
+  fail.** `gen-build-info` stamps the real commit into a gitignored
+  `src/build-info.js`, and `unit-settings-readouts.spec.js` asserts the
+  *unstamped* fallback a contributor sees. So `make cap-sync && make test` fails
+  three tests that have nothing to do with the change under test. Delete
+  `src/build-info.js` before running the suite.
+
 ## The desktop app's window is part of its layout
 
 - **`is-native` meant two incompatible things, and one of them was wrong.** The
@@ -1105,3 +1155,10 @@ seems too sharp".
   back with the landscape width. Chasing that would mean teaching
   `videoStageMode()` about a pending window size, which is a second source of
   truth for the same question.
+
+- **"26 hours ago" is not yesterday.** `unit-chat.spec.js`'s day-separator test
+  seeded a message at `now - 26h` and expected a "Yesterday" label — which is
+  two calendar days back whenever the suite runs between midnight and 02:00, so
+  it went red purely on the clock. A test about calendar days has to be anchored
+  to one (yesterday midday), never to an offset in hours.
+

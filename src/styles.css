@@ -4734,9 +4734,12 @@ html.is-desktop-app body.chat-side.chat-open:not(.embed-tiny) {
 }
 
 /* ── Chat: the peek over the call ─────────────────────────────────
-   The newest messages, briefly, while the panel is not on screen. Centred low
-   over the room rather than pinned to a corner: it is meant to be read on the
-   way past, not parked on. */
+   The newest messages, briefly, while the panel is not on screen. Meant to be
+   read on the way past, not parked on.
+
+   These rules are the fallback shape: a low, centred column over the room, used
+   wherever there is no roster row to point at. Where there is one, the anchored
+   rules further down take over — see layoutChatPeeks(). */
 
 .chat-peek {
   position: absolute;
@@ -4756,6 +4759,7 @@ html.is-desktop-app body.chat-side.chat-open:not(.embed-tiny) {
    events back that the container gave away. */
 .chat-peek-item {
   pointer-events: auto;
+  position: relative;
   padding: 7px 11px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
@@ -4765,12 +4769,16 @@ html.is-desktop-app body.chat-side.chat-open:not(.embed-tiny) {
   color: var(--text);
   cursor: pointer;
   overflow-wrap: anywhere;
+  animation: chat-peek-in 0.18s ease;
+}
+/* The clamp lives on the line, not on the bubble: an `overflow: hidden` bubble
+   would cut off the tail, which is drawn outside its own box. */
+.chat-peek-line {
   /* Two lines is a glance; the rest is what the panel is for. */
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  animation: chat-peek-in 0.18s ease;
 }
 .chat-peek-author { font-weight: 600; }
 .chat-peek-body a { color: var(--accent); }
@@ -4778,8 +4786,77 @@ html.is-desktop-app body.chat-side.chat-open:not(.embed-tiny) {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: none; }
 }
+
+/* ── Chat: the peek anchored to the name that sent it ─────────────
+   With room beside the participants panel the message does not float over the
+   middle of the call: it opens at the last character of the name that sent it,
+   as a comic-strip bubble with a tail running back into that name — over
+   whatever else the roster row holds, on purpose.
+
+   The host stops being a centred column over the stage and becomes an overlay
+   on the whole window — layoutChatPeeks() moves it to <body> to get there, and
+   places each bubble inside it in window coordinates. The centring transform
+   goes with it: left unset it would make this element the containing block for
+   its own children and shift every bubble by half its width. */
+
+.chat-peek.chat-peek-anchored {
+  position: fixed;
+  display: block;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: auto;
+  gap: 0;
+  transform: none;
+  /* Above the room's own chrome (the panels and their handles top out at 41),
+     below the popovers and the toast. */
+  z-index: 60;
+}
+.chat-peek-anchored .chat-peek-item {
+  position: absolute;
+  width: max-content;
+  /* Overridden inline with whatever the chosen side actually has room for. */
+  max-width: 320px;
+  animation: chat-peek-pop 0.18s ease;
+  transform-origin: left center;
+}
+.chat-peek-anchored .chat-peek-item.peek-tail-right { transform-origin: right center; }
+/* The tail has already said who this is, so the name comes out of the bubble.
+   It stays in the DOM rather than being left unrendered: the stacked shape has
+   nothing pointing at a roster row, and there the name is the only thing that
+   says who sent the message. */
+.chat-peek-anchored .chat-peek-author { display: none; }
+@keyframes chat-peek-pop {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* The tail. Two triangles, one a pixel wider than the other, so the bubble's
+   1px outline carries on around the point instead of stopping at its base.
+   `--peek-tail` is the tail's centre, measured down from the top of the bubble
+   — set by layoutChatPeeks() so it lands on the name even when the bubble has
+   been nudged down out of an older one's way. */
+.chat-peek-item.peek-tail-left::before,
+.chat-peek-item.peek-tail-left::after,
+.chat-peek-item.peek-tail-right::before,
+.chat-peek-item.peek-tail-right::after {
+  content: '';
+  position: absolute;
+  top: calc(var(--peek-tail, 18px) - 8px);
+  width: 0;
+  height: 0;
+  border-top: 8px solid transparent;
+  border-bottom: 8px solid transparent;
+}
+.chat-peek-item.peek-tail-left::before  { left: -9px;  border-right: 9px solid var(--border); }
+.chat-peek-item.peek-tail-left::after   { left: -8px;  border-right: 8px solid var(--bg-surface); }
+.chat-peek-item.peek-tail-right::before { right: -9px; border-left: 9px solid var(--border); }
+.chat-peek-item.peek-tail-right::after  { right: -8px; border-left: 8px solid var(--bg-surface); }
+
 @media (prefers-reduced-motion: reduce) {
-  .chat-peek-item { animation: none; }
+  .chat-peek-item,
+  .chat-peek-anchored .chat-peek-item { animation: none; }
 }
 
 /* The handle is the chat's only entry point, so it says whether the chat is

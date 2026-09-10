@@ -693,7 +693,11 @@
            so it stacks against the other panels. -->
       <!-- What you would have missed: the newest messages, briefly, while the
            chat panel is not on screen. Never a duplicate of what the panel is
-           already showing — see chatPanelVisible(). -->
+           already showing — see chatPanelVisible(). With room beside the
+           participants panel each one is a bubble pinned to the name that sent
+           it, tail and all; otherwise they stack low over the room. Placed by
+           layoutChatPeeks() in this element's own coordinates, which is why it
+           is a direct child of the positioned #screen-room. -->
       <div id="chat-peek" class="chat-peek" aria-hidden="true"></div>
 
       <div id="room-chat-panel" class="room-chat-panel" role="region" aria-label="Chat">

@@ -467,7 +467,13 @@ test.describe('the transcript on screen', () => {
     const labels = await page.evaluate(() => {
       resetChatState();
       const now = Date.now();
-      appendChatMessage({ id: 'other:1', peerId: 'other', text: 'yesterday', at: now - 26 * 3600 * 1000 }, { quiet: true });
+      // Anchored to yesterday midday, not to "26 hours ago": run between
+      // midnight and 02:00 the latter is two calendar days back and the
+      // separator reads as a date rather than "Yesterday".
+      const yesterday = new Date();
+      yesterday.setHours(12, 0, 0, 0);
+      yesterday.setDate(yesterday.getDate() - 1);
+      appendChatMessage({ id: 'other:1', peerId: 'other', text: 'yesterday', at: yesterday.getTime() }, { quiet: true });
       appendChatMessage({ id: 'other:2', peerId: 'other', text: 'after a pause', at: now - CHAT_BREAK_MS - 1000 }, { quiet: true });
       appendChatMessage({ id: 'other:3', peerId: 'other', text: 'right after', at: now }, { quiet: true });
       appendChatMessage({ id: 'other:4', peerId: 'other', text: 'and again', at: now + 1000 }, { quiet: true });
@@ -777,6 +783,208 @@ test.describe('the peek over the call', () => {
       return { before, after: document.querySelectorAll('#chat-peek .chat-peek-item').length };
     });
     expect(seen).toEqual({ before: 1, after: 0 });
+  });
+});
+
+test.describe('the peek pinned to the name that sent it', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await seedRoom(page, {
+      selfId: 'me', isHost: false, roomCode: 'the-host',
+      connections: [{ id: 'the-host', pseudo: 'Host' }, { id: 'other', pseudo: 'Alice' }],
+    });
+    await page.evaluate(() => {
+      showScreen('room');
+      resetChatState();
+      toggleChatPanel(false);
+      updatePeerList();
+    });
+  });
+
+  const say = (page, id, text) => page.evaluate(({ id, text }) => {
+    handleHostMessage({ type: 'chat', id, peerId: id.split(':')[0], text, at: Date.now() });
+  }, { id, text });
+
+  // The geometry the whole feature is about: the bubble beside the name, and a
+  // tail whose point lands on it.
+  const geometry = (page, peerId) => page.evaluate((pid) => {
+    const bubble = Array.from(document.querySelectorAll('#chat-peek .chat-peek-item'))
+      .find((el) => el._voxalPeekPeerId === pid);
+    if (!bubble) return null;
+    const row = document.getElementById('peer-item-' + pid);
+    const name = row.querySelector('.peer-name');
+    const b = bubble.getBoundingClientRect();
+    const n = name.getBoundingClientRect();
+    const l = document.getElementById('peers-list').getBoundingClientRect();
+    return {
+      anchored: document.getElementById('chat-peek').classList.contains('chat-peek-anchored'),
+      tailSide: bubble.classList.contains('peek-tail-left') ? 'left'
+        : bubble.classList.contains('peek-tail-right') ? 'right' : null,
+      // Where the tail's point sits in the page, from the bubble's top.
+      tailY: b.top + parseFloat(getComputedStyle(bubble).getPropertyValue('--peek-tail')),
+      nameCentreY: n.top + n.height / 2,
+      // It opens at the last character of the name, so the gap is measured
+      // from the name's own right edge — not from the roster's.
+      gapFromName: b.left - n.right,
+      overList: b.left < l.right && b.right > l.left,
+      // The name is the tail's job now; the bubble renders only the message.
+      // innerText, not textContent: the name is hidden by CSS, not unrendered.
+      text: bubble.innerText,
+      authorShown: getComputedStyle(bubble.querySelector('.chat-peek-author')).display !== 'none',
+      inViewport: b.left >= 0 && b.right <= window.innerWidth && b.top >= 0 && b.bottom <= window.innerHeight,
+    };
+  }, peerId);
+
+  test('the bubble sits beside the sender, with its tail on the name', async ({ page }) => {
+    await say(page, 'other:1', 'over here');
+    const g = await geometry(page, 'other');
+    expect(g.anchored).toBe(true);
+    // The clear space is to the right of the roster in this layout, so the
+    // bubble opens there and the tail is on the bubble's left edge.
+    expect(g.tailSide).toBe('left');
+    // Right after the last character of the name — not out beyond the roster.
+    expect(g.gapFromName).toBeGreaterThan(0);
+    expect(g.gapFromName).toBeLessThan(20);
+    // And at the height of the name, which is the whole point.
+    expect(Math.abs(g.tailY - g.nameCentreY)).toBeLessThan(2);
+    expect(g.inViewport).toBe(true);
+  });
+
+  test('it opens over the rest of the row rather than waiting for clear space', async ({ page }) => {
+    await say(page, 'other:1', 'Can you hear me? I think my mic is cutting out again.');
+    const g = await geometry(page, 'other');
+    expect(g.overList).toBe(true);
+  });
+
+  test('the name is the tail\'s job, so the bubble does not repeat it', async ({ page }) => {
+    await say(page, 'other:1', 'over here');
+    const g = await geometry(page, 'other');
+    expect(g.authorShown).toBe(false);
+    expect(g.text.trim()).toBe('over here');
+  });
+
+  test('stacked, the name is back — nothing else there says who sent it', async ({ page }) => {
+    await page.setViewportSize({ width: 420, height: 720 });
+    await page.evaluate(() => { updatePeerList(); });
+    await say(page, 'other:1', 'over here');
+    const seen = await page.evaluate(() => {
+      const el = document.querySelector('#chat-peek .chat-peek-item');
+      return {
+        anchored: document.getElementById('chat-peek').classList.contains('chat-peek-anchored'),
+        authorShown: getComputedStyle(el.querySelector('.chat-peek-author')).display !== 'none',
+        text: el.textContent,
+      };
+    });
+    expect(seen).toEqual({ anchored: false, authorShown: true, text: 'Alice over here' });
+  });
+
+  test('two people talking at once each get their own bubble', async ({ page }) => {
+    await say(page, 'other:1', 'from Alice');
+    await say(page, 'the-host:1', 'from the Host');
+    const alice = await geometry(page, 'other');
+    const host = await geometry(page, 'the-host');
+    // Each opens at its own name, and the two never share a row.
+    expect(alice.gapFromName).toBeGreaterThan(0);
+    expect(host.gapFromName).toBeGreaterThan(0);
+    expect(alice.tailSide).toBe('left');
+    expect(host.tailSide).toBe('left');
+    expect(Math.abs(alice.tailY - host.tailY)).toBeGreaterThan(4);
+    // The roster rows are barely a bubble apart, so the lower one is nudged
+    // clear of the upper. Whichever is placed first keeps its name exactly.
+    const [upper, lower] = [alice, host].sort((a, b) => a.nameCentreY - b.nameCentreY);
+    expect(Math.abs(upper.tailY - upper.nameCentreY)).toBeLessThan(2);
+    expect(lower.tailY).toBeGreaterThan(upper.tailY);
+  });
+
+  test('a burst from one person runs along the name, not down the screen', async ({ page }) => {
+    await say(page, 'other:1', 'one');
+    await say(page, 'other:2', 'two');
+    await say(page, 'other:3', 'three');
+    const seen = await page.evaluate(() => {
+      const els = Array.from(document.querySelectorAll('#chat-peek .chat-peek-item'));
+      const name = document.querySelector('#peer-item-other .peer-name').getBoundingClientRect();
+      return {
+        boxes: els.map((el) => {
+          const r = el.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+        }),
+        // Only the bubble the run starts at touches the name.
+        tails: els.map((el) => el.classList.contains('peek-tail-left') || el.classList.contains('peek-tail-right')),
+        nameRight: name.right,
+      };
+    });
+    expect(seen.boxes).toHaveLength(3);
+    // One line: every bubble overlaps the others vertically, and each starts
+    // after the one before it. Arrival order runs away from the name.
+    const [a, b, c] = seen.boxes;
+    expect(a.left).toBeCloseTo(seen.nameRight + 12, 0);
+    expect(b.left).toBeGreaterThanOrEqual(a.right);
+    expect(c.left).toBeGreaterThanOrEqual(b.right);
+    expect(b.top).toBeLessThan(a.bottom);
+    expect(c.top).toBeLessThan(a.bottom);
+    expect(seen.tails).toEqual([true, false, false]);
+  });
+
+  test('a run that outgrows the window wraps under itself rather than off it', async ({ page }) => {
+    const long = 'Can you hear me? I think my mic is cutting out again, one moment.';
+    await say(page, 'other:1', long);
+    await say(page, 'other:2', long);
+    await say(page, 'other:3', long);
+    const seen = await page.evaluate(() => {
+      const els = Array.from(document.querySelectorAll('#chat-peek .chat-peek-item'));
+      return {
+        boxes: els.map((el) => {
+          const r = el.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+        }),
+        width: window.innerWidth,
+      };
+    });
+    // Nothing hangs off the side, and the run did have to wrap.
+    seen.boxes.forEach((r) => {
+      expect(r.left).toBeGreaterThanOrEqual(0);
+      expect(r.right).toBeLessThanOrEqual(seen.width);
+    });
+    const tops = new Set(seen.boxes.map((r) => Math.round(r.top)));
+    expect(tops.size).toBeGreaterThan(1);
+  });
+
+  test('with no clear space beside the roster it goes back to the stack over the room', async ({ page }) => {
+    await page.setViewportSize({ width: 420, height: 720 });
+    await page.evaluate(() => { updatePeerList(); });
+    await say(page, 'other:1', 'no room here');
+    const seen = await page.evaluate(() => {
+      const host = document.getElementById('chat-peek');
+      const el = host.querySelector('.chat-peek-item');
+      return {
+        anchored: host.classList.contains('chat-peek-anchored'),
+        tailed: el.classList.contains('peek-tail-left') || el.classList.contains('peek-tail-right'),
+        // Nothing left over from an anchored pass.
+        placed: !!el.style.left,
+      };
+    });
+    expect(seen).toEqual({ anchored: false, tailed: false, placed: false });
+  });
+
+  test('a sender with no row on screen puts the whole set back in the stack', async ({ page }) => {
+    await say(page, 'other:1', 'anchored');
+    expect(await page.evaluate(() =>
+      document.getElementById('chat-peek').classList.contains('chat-peek-anchored'))).toBe(true);
+    // Alice leaves; her bubble is still up but has nothing left to point at.
+    await page.evaluate(() => { connections.delete('other'); updatePeerList(); });
+    expect(await page.evaluate(() =>
+      document.getElementById('chat-peek').classList.contains('chat-peek-anchored'))).toBe(false);
+  });
+
+  test('the tail follows the name when the roster moves under it', async ({ page }) => {
+    await say(page, 'other:1', 'follow me');
+    const before = await geometry(page, 'other');
+    // Anything that reflows the roster must re-place the bubble, not leave it
+    // pointing at where the name used to be.
+    await page.evaluate(() => { updatePeerList(); });
+    const after = await geometry(page, 'other');
+    expect(Math.abs(after.tailY - after.nameCentreY)).toBeLessThan(2);
+    expect(after.tailSide).toBe(before.tailSide);
   });
 });
 
