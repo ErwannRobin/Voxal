@@ -1079,6 +1079,62 @@ seems too sharp".
   three tests that have nothing to do with the change under test. Delete
   `src/build-info.js` before running the suite.
 
+- **⌘E never reaches a web page on macOS.** It is the system's "Use Selection
+  for Find", handled above the page in both WebKit and Chromium, so the camera
+  shortcut the palette printed simply did nothing on the one platform it was
+  copied from (Google Meet is a *desktop app* there). ⌘U is free. The lesson is
+  the general one: a single-modifier letter key is worth testing on the actual
+  OS before printing it in a menu — the browser is not the only thing that can
+  take it. `ROOM_ACCEL_SHORTCUTS` entries now carry a list of keys so a moved
+  binding does not have to break the old one.
+
+- **A transform is still the OLD one on the frame the class changes.** The chat
+  drawer is slid in by a class that flips a `transform`, so
+  `getBoundingClientRect()` read inside `toggleChatPanel()` reports where the
+  drawer is *leaving*, not where it is going. Anything deciding "is the drawer
+  covering the room?" has to use `offsetWidth` (unaffected by transforms) plus
+  where the panel is pinned, or wait a frame — and waiting a frame means the
+  scrim appears a quarter of a second after the drawer, which reads as a bug.
+
+- **`offsetParent` is null for `position: fixed`.** Both the chat drawer and the
+  stage panels are fixed, so the usual `if (!el.offsetParent) return;` visibility
+  guard rejects them in Chromium whether they are on screen or not. Test
+  `offsetWidth` instead.
+
+- **A badge inside the stage cannot paint above the control bar, whatever its
+  z-index.** The stage carries `z-index: 5` and therefore its own stacking
+  context, so a child of it can never out-paint the bar's `z-index: 20` sibling
+  — no value of the child's own z-index helps. Parking the self-view in the band
+  beside the mic works visually (the bar is transparent there) but the press
+  that should pick the badge up lands on the bar. The fix is to forward it: the
+  bar hit-tests the badge's own rect and hands the event to its pointerdown.
+
+- **A measurement in the wrong place starts a transition nobody asked for.**
+  `applyChatDock()` runs inside `updateVideoStage()`, right after the class that
+  switches the room to the immersive stage. Adding a `getBoundingClientRect()`
+  there (to publish `--room-bar-inset`) flushed style mid-change, and the header
+  — which has `transition: transform 0.25s` and goes from in-flow to
+  `translateY(-100%)` — started animating away from a position the user had
+  never seen it in, instead of simply being off screen. The test that caught it
+  reads the header's box straight after entering the room and found it still on
+  screen. Rule of thumb: a function that only toggles classes must go on
+  toggling classes; take the measurement lazily, or only on the path that reads
+  it (here, only while the drawer actually overlays the room).
+
+- **`CSSStyleRule` has a `cssRules` property now.** Chromium ships CSS Nesting,
+  so the usual `if (r.cssRules) { walk(r.cssRules); return; }` recursion in a
+  stylesheet walker skips every ordinary rule and reports that nothing matches.
+  Test `r.cssRules && r.cssRules.length`, and do not `return` afterwards. Worth
+  knowing before debugging the app for an hour over a broken debug script.
+
+- **`min-height` on a flex child beats the container's `max-height`.** The emoji
+  grid has `min-height: 190px` as a *floor* so a picker with six recents does
+  not collapse to two rows. On a phone in landscape (390px tall) that floor plus
+  the search box and tabs is more than the picker's own `max-height: 60vh`, so
+  the picker overflows the box it declared. Anything with a pixel floor inside a
+  viewport-capped column needs the floor relaxed in a short-viewport query, not
+  just the cap.
+
 ## The desktop app's window is part of its layout
 
 - **`is-native` meant two incompatible things, and one of them was wrong.** The

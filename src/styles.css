@@ -1361,6 +1361,45 @@ kbd {
   }
   html.is-web body:not(.embed-tiny) #screen-home #divider-after-connect { margin: 12px 0; }
   html.is-web body:not(.embed-tiny) #screen-home #dev-log-panel { display: none; }
+
+  /* The chat drawer, in a room that is already two columns wide and 390px tall.
+     Left as an overlay it lands exactly on the talk column — `data-hand` puts
+     the talk button on the right, which is the edge the drawer comes from — so
+     opening the conversation would hide the one control this app is for. It
+     gets a column of its own instead: the strip is reserved on `body`, the same
+     mechanism the Mac's own window uses (see body.chat-side), so the room's
+     grid compresses into what is left and the talk button stays where it is.
+     Capped at 42vw, because a third column can only come out of the other two.
+
+     `chatOverlaysRoom()` measures the room's right edge against the drawer's,
+     so this rule is also what stops a scrim being published here: with the
+     strip reserved there is nothing behind the drawer to tap away. */
+  html.is-web body:not(.embed-tiny):not(.video-stage).chat-open {
+    padding-right: min(var(--chat-width, 360px), 42vw);
+  }
+  html.is-web body:not(.embed-tiny):not(.video-stage).chat-open .room-chat-panel {
+    width: min(var(--chat-width, 360px), 42vw);
+  }
+  html.is-web body:not(.embed-tiny):not(.video-stage).chat-open .stage-handle-right {
+    right: calc(min(var(--chat-width, 360px), 42vw) + max(env(safe-area-inset-right), 0px));
+  }
+}
+
+/* ── Chat: a viewport with no height to spare ─────────────────────
+   A phone on its side is ~390px tall, and the drawer is a column of fixed
+   blocks with the transcript as the only flexible one — so every block that
+   asserts a height in pixels takes it straight out of the conversation. The
+   emoji grid is the worst of them: a 190px floor plus its search box and tabs
+   is more than the picker's own 60vh cap allows, which is a picker that
+   overflows its own box. Here they are all relative to the viewport instead. */
+@media (max-height: 600px) {
+  .chat-suggest { max-height: 32vh; }
+  .emoji-picker { max-height: 76vh; }
+  .emoji-grid { min-height: 0; max-height: 42vh; }
+  .chat-msg-menu-sheet { max-height: 92vh; }
+  /* The composer's own ceiling is enforced in autoGrowChatInput(), not here: it
+     is what decides whether the box scrolls, and a CSS clip it did not know
+     about would hide the end of a draft with no way to reach it. */
 }
 
 /* ── Video stage ─────────────────────────────────────────────────── */
@@ -1715,18 +1754,58 @@ body.chat-docked .stage-handle-right[aria-expanded="true"] { color: var(--accent
   top: 0;
   left: 0;
   right: 0;
-  bottom: var(--stage-inset-bottom, 0px);
+  /* The immersive stage measures its own control stack; every other regime is
+     measured by publishRoomBarInset(). Either way the scrim stops above the
+     talk button — dimming it and swallowing its tap is the one thing this
+     layout may not do. */
+  bottom: var(--stage-inset-bottom, var(--room-bar-inset, 0px));
   z-index: 39;
   display: none;
   background: rgba(0, 0, 0, 0.35);
 }
 body.video-stage-immersive.stage-header-open .stage-panel-scrim,
 body.video-stage-immersive.stage-roster-open .stage-panel-scrim { display: block; }
+/* The chat drawer gets one wherever it is sitting ON the room rather than
+   beside it — `body.chat-overlay`, measured by chatOverlaysRoom(). That is what
+   makes the gesture the same on a phone turned on its side as upright: before,
+   only the immersive video stage published a scrim, so a landscape room had a
+   drawer that could only be put away from its handle. Where the drawer has a
+   column of its own (docked, or beside the Mac's own window) there is nothing
+   behind it to tap and no scrim is published. */
+body.chat-overlay .stage-panel-scrim { display: block; }
 
 /* "Hold Space anywhere to talk" describes a keyboard, and screen space over
    video is the scarcest thing here — every line it takes is taken from the
    tiles it sits on. It comes back the moment the stage stands down. */
 body.video-stage-immersive #screen-room .ptt-hint { display: none; }
+
+/* ── The immersive stage on a phone held sideways ─────────────────
+   The control stack is an 80px circle with a row of buttons UNDER it, which on
+   a 390px-tall screen is better than a third of the picture — and the stage's
+   bottom inset is measured from that stack, so the tiles, the self-view badge
+   and the scrim all lose the same third. Laid out as a row it costs about half
+   as much, and everything measured from it recovers with it.
+
+   Nothing moves out of reach: the talk button is still the biggest thing in the
+   bar and still dead centre of the gesture, which is the rule this layout is
+   built around. */
+@media (orientation: landscape) and (max-height: 600px) {
+  body.video-stage-immersive #screen-room .room-bottom-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+  }
+  body.video-stage-immersive #screen-room .room-bottom-bar .room-controls {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+  }
+  /* Side by side with the mic there is width to spare and no height at all, so
+     the buttons stay on one line rather than wrapping into a second. */
+  body.video-stage-immersive #screen-room .room-bottom-bar .ctrl-row { flex-wrap: nowrap; }
+  body.video-stage-immersive #screen-room .ptt-btn { width: 62px; height: 62px; font-size: 24px; }
+}
 
 /* Flip lives ON the self camera tile — it is a property of that camera, not a
    room control, and putting it here means it follows the self-view wherever it
@@ -1769,6 +1848,35 @@ body.video-stage-immersive #video-stage-self[data-corner="bl"],
 body.video-stage-immersive #video-stage-self[data-corner="br"] {
   bottom: calc(var(--stage-inset-bottom, 0px) + var(--stage-ribbon-height, 0px) + 12px);
 }
+
+/* Beside the mic. On a phone held upright the talk button is a circle in the
+   middle of a wide black band, and that band is the only space on the screen
+   that is not somebody's face — so the self-view can be parked in it, either
+   side, level with the button. The measurements come from the control stack
+   itself (applySelfBadgeCorner): the mic's own centre, and how much room the
+   narrower side actually has. Whether the band exists at all is that
+   measurement and nothing else — below SELF_BADGE_BAR_MIN_SIDE there is no
+   slot, and a badge parked in one is handed back to a bottom corner without
+   losing the stored choice. See effectiveSelfBadgeCorner(). */
+body.video-stage-immersive #video-stage-self[data-corner="barl"],
+body.video-stage-immersive #video-stage-self[data-corner="barr"] {
+  top: auto;
+  bottom: var(--stage-ptt-centre, 56px);
+  width: var(--stage-bar-slot, 120px);
+  min-width: 0;
+  max-width: none;
+  /* Anchored by its own middle, so it is level with the mic rather than
+     hanging off the line the mic sits on. */
+  transform: translateY(50%);
+  box-shadow: none;
+}
+body.video-stage-immersive #video-stage-self[data-corner="barl"] { left: 10px; right: auto; }
+body.video-stage-immersive #video-stage-self[data-corner="barr"] { right: 10px; left: auto; }
+/* While it is being dragged the badge follows the pointer from its top-left
+   corner, which the centring transform above would offset by half its height.
+   Specificity has to match the rule it is undoing, hence the full selector. */
+body.video-stage-immersive #video-stage-self.dragging[data-corner="barl"],
+body.video-stage-immersive #video-stage-self.dragging[data-corner="barr"] { transform: none; }
 
 /* Grid of equal tiles. The column count is set inline by layoutVideoStageGrid()
    so tiles grow to fill the stage while staying near 16:9 — pure CSS can size
@@ -4429,8 +4537,18 @@ body.embed-tiny .room-chat-panel { display: none; }
 }
 .chat-msg:hover .chat-msg-tools,
 .chat-msg:focus-within .chat-msg-tools { opacity: 1; pointer-events: auto; }
-/* No hover on a touch screen, so the strip is simply always there. */
-@media (hover: none) { .chat-msg-tools { opacity: 1; pointer-events: auto; } }
+/* No hover on a touch screen. The strip used to be simply always there, which
+   in a conversation of any length is a column of chrome running down the side
+   of the words — so on touch it goes away entirely and the actions move behind
+   a long press on the row (openChatMessageMenu). The selection that a long
+   press would otherwise start has to go with it, or the sheet opens with half
+   the message highlighted behind it; the transcript is still copyable where
+   there IS a pointer, and the sheet offers the row's own actions where there
+   is not. */
+@media (hover: none) {
+  .chat-msg-tools { display: none; }
+  .chat-msg { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+}
 
 /* A separator carries the stamp for everything under it. That is what lets the
    messages themselves go unstamped. */
@@ -4654,9 +4772,9 @@ body.chat-resizing .room-chat-panel { transition: none; }
 .emoji-cell:hover, .emoji-cell:focus-visible { background: var(--bg-surface); outline: none; }
 .emoji-none { grid-column: 1 / -1; padding: 12px 4px; font-size: 12px; color: var(--text-muted); text-align: center; }
 
-/* On a phone the drawer covers the stage, so it gets the same scrim the roster
-   and header get — a tap outside dismisses it. */
-body.video-stage-immersive.chat-open .stage-panel-scrim { display: block; }
+/* The drawer's own scrim is published by `body.chat-overlay` where the scrim is
+   declared — it applies in every regime where the drawer covers the room, not
+   only over the video stage. */
 /* Which handles it hides is settled where the handles are declared: the right
    one IS the chat's, and it rides out on the drawer's edge rather than
    disappearing under it. */
@@ -4821,6 +4939,32 @@ html.is-desktop-app body.chat-side.chat-open:not(.embed-tiny) {
 .chat-reply-open { display: flex; align-items: center; border: none; background: none;
                    color: var(--text-muted); border-radius: 999px; padding: 0 2px; cursor: pointer; }
 .chat-reply-open:hover { color: var(--text); }
+.chat-edit-open { display: flex; align-items: center; border: none; background: none;
+                  color: var(--text-muted); border-radius: 999px; padding: 0 2px; cursor: pointer; }
+.chat-edit-open:hover { color: var(--text); }
+
+/* The composer is the message while this is up, so the strip has to say so
+   loudly enough that a pre-filled box does not read as a draft. Same shape as
+   the reply strip — it is the same slot — in a different colour from the
+   accent, because this one CHANGES something already said. */
+.chat-edit-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 6px 5px 8px;
+  border-left: 2px solid var(--green);
+  border-radius: 0 6px 6px 0;
+  background: var(--bg-raised);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.chat-edit-bar-label { flex-shrink: 0; font-weight: 600; color: var(--text); }
+.chat-edit-bar-hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-edit-bar-cancel { flex-shrink: 0; font-size: 13px; line-height: 1; padding: 0 2px; }
+
+/* Said once, at the end of the line it belongs to. */
+.chat-msg-edited { font-size: 11px; color: var(--text-muted); }
 
 /* `:shortcode` and `@name`. Docked over the composer for the same reason the
    emoji picker is: the drawer is too narrow for a popover at the caret. */
@@ -4983,6 +5127,70 @@ html.is-desktop-app body.chat-side.chat-open:not(.embed-tiny) {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: none; }
 }
+
+/* ── Chat: what a long press on a message offers ──────────────────
+   A bottom sheet, because that is what a phone does with "tell me about this
+   one": it comes up from the thumb rather than out of the row, and it is the
+   whole screen's attention while it is up. The backdrop is the element, so a
+   tap anywhere off the sheet dismisses it. */
+.chat-msg-menu {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+.chat-msg-menu-sheet {
+  width: min(520px, 100%);
+  max-height: 70vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 12px max(calc(env(safe-area-inset-bottom) + 12px), 12px);
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  animation: chat-msg-menu-in 0.16s ease;
+}
+@keyframes chat-msg-menu-in {
+  from { transform: translateY(12px); opacity: 0; }
+  to   { transform: none; opacity: 1; }
+}
+/* What is being acted on, quoted to one line: the sheet covers the row it came
+   from, so without this there is nothing on screen saying which. */
+.chat-msg-menu-title {
+  padding: 2px 6px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-msg-menu-body { display: flex; flex-direction: column; gap: 2px; }
+.chat-msg-menu-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 8px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-msg-menu-action:hover, .chat-msg-menu-action:active { background: var(--bg-raised); }
+.chat-msg-menu-icon { display: flex; align-items: center; color: var(--text-muted); }
+
+/* Who reacted — the chip's tooltip, for a screen that has no tooltips. */
+.chat-react-who { list-style: none; display: flex; flex-direction: column; gap: 2px; padding: 2px 8px 6px; }
+.chat-react-who-item { font-size: 14px; font-weight: 600; }
+.chat-react-who-me::after { content: ' (you)'; font-weight: 400; color: var(--text-muted); }
 
 /* ── Chat: the peek anchored to the name that sent it ─────────────
    With room beside the participants panel the message does not float over the

@@ -722,6 +722,10 @@
              something they never saw themselves choose. Built by
              renderChatReplyBar(). -->
         <div id="chat-reply-bar" class="chat-reply-bar hidden"></div>
+        <!-- Correcting your own line, for five minutes after sending it. The
+             composer IS the message while this is up: sending replaces the row
+             rather than adding one. Built by renderChatEditBar(). -->
+        <div id="chat-edit-bar" class="chat-edit-bar hidden"></div>
         <!-- `:shortcode` and `@name`, one menu for both. Above the composer
              rather than at the caret: the drawer is 280–720px wide and a
              popover at the caret has nowhere to be. Built by
@@ -748,6 +752,20 @@
                  placeholder="Search emoji…" aria-label="Search emoji" />
           <div id="emoji-tabs" class="emoji-tabs" role="tablist" aria-label="Emoji categories"></div>
           <div id="emoji-grid" class="emoji-grid"></div>
+        </div>
+      </div>
+
+      <!-- What a long press on a message offers. On a touch screen the reply
+           and react buttons are not hoverable, and leaving them permanently on
+           every row turns a busy transcript into a column of chrome — so they
+           move here, behind the gesture a phone already uses for exactly this.
+           The same sheet answers "who reacted?" for a reaction chip. Built by
+           openChatMessageMenu() / openChatReactionMenu(). -->
+      <div id="chat-msg-menu" class="chat-msg-menu hidden" role="dialog"
+           aria-modal="true" aria-label="Message actions">
+        <div class="chat-msg-menu-sheet">
+          <p id="chat-msg-menu-title" class="chat-msg-menu-title"></p>
+          <div id="chat-msg-menu-body" class="chat-msg-menu-body"></div>
         </div>
       </div>
 

@@ -290,3 +290,146 @@ test.describe('a message that is only emoji', () => {
     expect(await page.evaluate(() => chatEmojiOnlyCount('\u{1F468}‍\u{1F469}‍\u{1F467}'))).toBe(1);
   });
 });
+
+// --- Correcting what you said ------------------------------------------------
+//
+// A message stays yours for five minutes. The gesture is the up arrow, which
+// answered the last thing ANYONE said before this existed — so the fallback
+// matters as much as the new behaviour.
+
+test.describe('editing your own last message', () => {
+  const mine = (page, text, ageMs = 0) => page.evaluate(({ text, ageMs }) => {
+    handleHostMessage({ type: 'chat', id: 'me:1', peerId: 'me', text,
+                        at: Date.now() - ageMs });
+  }, { text, ageMs });
+
+  test('the up arrow loads your last message into the composer', async ({ page }) => {
+    await mine(page, 'teh answer');
+    await page.focus('#chat-input');
+    await page.keyboard.press('ArrowUp');
+    expect(await page.inputValue('#chat-input')).toBe('teh answer');
+    expect(await page.evaluate(() =>
+      document.getElementById('chat-edit-bar').classList.contains('hidden'))).toBe(false);
+  });
+
+  test('sending replaces the line rather than adding one', async ({ page }) => {
+    await mine(page, 'teh answer');
+    const seen = await page.evaluate(() => {
+      const out = [];
+      connections.get('the-host').data.send = (m) => out.push(m);
+      setChatEditing('me:1');
+      document.getElementById('chat-input').value = 'the answer';
+      submitChatInput();
+      // The host is the one that stamps it, exactly as for a new message.
+      handleHostMessage({ type: 'chat-edit', msgId: 'me:1', text: out[0].text,
+                          peerId: 'me', editedAt: Date.now() });
+      return {
+        wire: out[0],
+        rows: document.querySelectorAll('.chat-msg').length,
+        text: chatLog[0].text,
+        marked: !!document.querySelector('.chat-msg[data-msg-id="me:1"] .chat-msg-edited'),
+        box: document.getElementById('chat-input').value,
+        barGone: document.getElementById('chat-edit-bar').classList.contains('hidden'),
+      };
+    });
+    expect(seen.wire).toEqual({ type: 'chat-edit', msgId: 'me:1', text: 'the answer' });
+    expect(seen.rows).toBe(1);
+    expect(seen.text).toBe('the answer');
+    expect(seen.marked).toBe(true);
+    expect(seen.box).toBe('');
+    expect(seen.barGone).toBe(true);
+  });
+
+  test('Escape abandons the correction and takes its text with it', async ({ page }) => {
+    await mine(page, 'as written');
+    await page.focus('#chat-input');
+    await page.keyboard.press('ArrowUp');
+    await page.keyboard.press('Escape');
+    expect(await page.inputValue('#chat-input')).toBe('');
+    expect(await page.evaluate(() => chatLog[0].text)).toBe('as written');
+  });
+
+  test('past the window the arrow falls back to answering', async ({ page }) => {
+    await mine(page, 'said six minutes ago', 6 * 60 * 1000);
+    await page.focus('#chat-input');
+    await page.keyboard.press('ArrowUp');
+    expect(await page.inputValue('#chat-input')).toBe('');
+    expect(await page.textContent('#chat-reply-bar')).toContain('said six minutes ago');
+  });
+
+  test('with nothing of your own it still answers the last thing said', async ({ page }) => {
+    await say(page, 'other:1', 'somebody else');
+    await page.focus('#chat-input');
+    await page.keyboard.press('ArrowUp');
+    expect(await page.inputValue('#chat-input')).toBe('');
+    expect(await page.textContent('#chat-reply-bar')).toContain('somebody else');
+  });
+
+  test('somebody else\'s line is never offered', async ({ page }) => {
+    await say(page, 'other:1', 'not yours');
+    expect(await page.evaluate(() => setChatEditing('other:1'))).toBe(false);
+    expect(await page.evaluate(() =>
+      document.querySelector('.chat-msg[data-msg-id="other:1"] .chat-edit-open'))).toBe(null);
+  });
+
+  test('an edit for a message the sender did not write is dropped', async ({ page }) => {
+    await say(page, 'other:1', 'theirs');
+    const after = await page.evaluate(() => {
+      // 'me' naming somebody else's id: the host stamps peerId, so this is what
+      // a forged request looks like on the receiving side.
+      handleHostMessage({ type: 'chat-edit', msgId: 'other:1', text: 'rewritten',
+                          peerId: 'me', editedAt: Date.now() });
+      return chatLog[0].text;
+    });
+    expect(after).toBe('theirs');
+  });
+});
+
+test.describe('the host is where the five minutes are enforced', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.evaluate(() => {
+      isHost = true;
+      peer = { id: 'the-host', destroyed: false };
+      roomCode = 'the-host';
+      resetChatState();
+    });
+  });
+
+  test('an edit inside the window is fanned out to everyone', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const out = [];
+      connections.get('other').data.send = (m) => out.push(m);
+      fanOutChatMessage('other', 'other:1', 'teh thing', null);
+      fanOutChatEdit('other', 'other:1', 'the thing');
+      return { sent: out[out.length - 1], text: chatLog[0].text };
+    });
+    expect(seen.sent.type).toBe('chat-edit');
+    expect(seen.sent.text).toBe('the thing');
+    expect(seen.sent.peerId).toBe('other');
+    expect(typeof seen.sent.editedAt).toBe('number');
+    expect(seen.text).toBe('the thing');
+  });
+
+  test('an edit past the window changes nothing and goes nowhere', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const out = [];
+      fanOutChatMessage('other', 'other:1', 'long ago', null);
+      chatLog[0].at = Date.now() - 6 * 60 * 1000;   // the host's own clock is the judge
+      connections.get('other').data.send = (m) => out.push(m);
+      fanOutChatEdit('other', 'other:1', 'rewritten');
+      return { sent: out.length, text: chatLog[0].text };
+    });
+    expect(seen).toEqual({ sent: 0, text: 'long ago' });
+  });
+
+  test('one peer may not rewrite another\'s line', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const out = [];
+      fanOutChatMessage('other', 'other:1', 'theirs', null);
+      connections.get('other').data.send = (m) => out.push(m);
+      fanOutChatEdit('third', 'other:1', 'rewritten');
+      return { sent: out.length, text: chatLog[0].text };
+    });
+    expect(seen).toEqual({ sent: 0, text: 'theirs' });
+  });
+});

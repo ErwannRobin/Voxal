@@ -10,7 +10,7 @@ test.beforeEach(async ({ page }) => {
 test('helloMessage carries protocolVersion and appVersion', async ({ page }) => {
   const hello = await page.evaluate(() => helloMessage());
   expect(hello.type).toBe('hello');
-  expect(hello.protocolVersion).toBe(2);
+  expect(hello.protocolVersion).toBe(3);   // v3 added `chat-edit`
   expect(typeof hello.appVersion).toBe('string');
 });
 

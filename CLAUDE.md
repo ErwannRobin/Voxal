@@ -184,7 +184,7 @@ off↔on at all. See `docs/video-effects.md`.
 | `chat-width` | `CHAT_WIDTH_KEY` | Width of the chat drawer in px, set by dragging its separator (`#chat-resizer`). Clamped to `CHAT_WIDTH_MIN`–`CHAT_WIDTH_MAX` and to 90% of the window on read, so a narrower window never leaves the drawer hanging off |
 | `chat-collapsed` | `CHAT_COLLAPSED_KEY` | Present (`1`) only when the drawer was deliberately folded away. Absent means "never chosen" = expanded, which is what makes a desktop room open the chat on entry (`chatOpensOnEntry()` → `applyChatAutoOpen()`, called from `showScreen('room')`). Written by the collapse icon in the chat header and by the edge handle — never by leaving a room. A close that did not go through those still suppresses the auto-open for the rest of that room, via `_chatCollapsedHere` |
 | `emoji-recent` | `EMOJI_RECENT_KEY` | The emoji picker's Recent row, most recent first, capped at `EMOJI_RECENT_MAX`. Seeded from `CHAT_REACTIONS` rather than starting empty |
-| `self-video-corner` | `SELF_VIDEO_CORNER_KEY` | Which corner of the video stage the minimized self-view badge was dragged to: `tl` / `tr` / `bl` / `br` |
+| `self-video-corner` | `SELF_VIDEO_CORNER_KEY` | Where the minimized self-view badge was dragged: a corner of the stage (`tl` / `tr` / `bl` / `br`), or the band either side of the mic on a phone (`barl` / `barr`). A band slot exists only while `selfBadgeBarSlots()` measures room for it; a badge parked in one is drawn at a corner meanwhile, without losing the choice (`effectiveSelfBadgeCorner()`) |
 | `room-active` | `ROOM_ACTIVE_KEY` | Transient. Main window → preferences window: a call is live, so `settings.html` must not run its `getUserMedia` device-label probe (it would kill the call). Cleared on leave and on load |
 | `echo-test-request` | `ECHO_BRIDGE_REQUEST_KEY` | Transient. Desktop preferences window → main window: `{action:'start'\|'stop', at}` (see below) |
 | `echo-test-state` | `ECHO_BRIDGE_STATE_KEY` | Transient. Main window → preferences window: `{running, text, kind, at}` |
@@ -242,16 +242,38 @@ runs per frame. It is announced by `noteChatReactionApplied()` *after* the
 transcript re-renders — `applyChatReaction()` returns `'added'`/`'removed'`.
 
 The composer understands `@name` (matched against the roster, longest name
-first, never sent on the wire), a reply (`replyTo`; `↑` on an empty composer
-answers the last message), `:shortcode` (the emoji catalog's own Unicode names)
-and `+:shortcode` (react to the last message). A body that is nothing but emoji,
-up to `CHAT_JUMBO_MAX`, is printed large.
+first, never sent on the wire), a reply (`replyTo`), `:shortcode` (the emoji
+catalog's own Unicode names) and `+:shortcode` (react to the last message). A
+body that is nothing but emoji, up to `CHAT_JUMBO_MAX`, is printed large.
+
+`↑` on an empty composer reaches back for your own last message while it is
+still yours to correct — `CHAT_EDIT_WINDOW_MS` (5 min) — and falls through to
+answering the last thing anyone said when there is nothing of yours in the
+window. An edit goes out as `chat-edit` and the **host** enforces both rules: it
+stamped `at`, so it owns the clock, and it takes the sender id from the
+connection, so a peer can never rewrite somebody else's line. `editedAt` on the
+message is what prints "(edited)".
+
+On a touch screen (`@media (hover: none)`) the per-row reply/react strip is
+gone: a 450 ms press on a row opens a bottom sheet (`openChatMessageMenu()`)
+with Reply / React / Edit / Copy text, and a press on a reaction chip prints who
+reacted (`openChatReactionMenu()`) — the chip's `title` is a hover and a phone
+has none. `chatPeekViewport()` keeps a bubble from being drawn under the open
+drawer, and `fitChatPeekRunWidths()` squeezes a run onto ONE line before letting
+it wrap. `body.chat-overlay` (from `chatOverlaysRoom()`) is what publishes the
+scrim wherever the drawer covers the room, so tapping away from it works in
+landscape too; the scrim stops above the talk button, from `--stage-inset-bottom`
+on the immersive stage and `--room-bar-inset` (`publishRoomBarInset()`)
+everywhere else.
 
 ### Keyboard shortcuts in a room
 
-`⌘/Ctrl+K` opens the quick-actions palette; `⌘/Ctrl+E` camera, `⌘/Ctrl+⇧+E`
-screen, `⌘/Ctrl+B` the chat drawer. They are handled before the focused-text-field
-guard (a modifier combination means the same inside the composer), but
+`⌘/Ctrl+K` opens the quick-actions palette; `⌘/Ctrl+U` camera, `⌘/Ctrl+⇧+U`
+screen, `⌘/Ctrl+B` the chat drawer. (`⌘E` was the camera key and never reached
+the page — macOS takes it for "Use Selection for Find" — so each entry in
+`ROOM_ACCEL_SHORTCUTS` carries a LIST of keys: the first is printed, the rest
+still work.) They are handled before the focused-text-field guard (a modifier
+combination means the same inside the composer), but
 `matchesShortcut(e)` wins — a user who bound push-to-talk to one of them keeps
 it. The palette's contents come from the room's own buttons
 (`commandPaletteActions()`), so a control that is not on screen is not an action.

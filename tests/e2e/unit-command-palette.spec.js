@@ -46,7 +46,10 @@ test('it lists the room controls, with their own keys beside them', async ({ pag
   const keys = await page.evaluate(() =>
     Array.from(document.querySelectorAll('#command-palette-list .command-palette-keys')).map((el) => el.textContent));
   expect(keys).toContain('Enter');
-  expect(keys.some((k) => /E$/.test(k))).toBe(true);
+  // The camera and screen keys. `U`, not `E`: ⌘E is macOS's own "Use Selection
+  // for Find" and never reaches the page — see ROOM_ACCEL_SHORTCUTS.
+  expect(keys).toContain('Ctrl+U');
+  expect(keys).toContain('Ctrl+Shift+U');
 });
 
 test('a control the room does not offer is not an action', async ({ page }) => {
@@ -129,6 +132,28 @@ test.describe('the direct keys', () => {
       return { started, handled };
     });
     expect(ran).toEqual({ started: false, handled: false });
+  });
+
+  test('the camera answers to U — and still to E, for anyone who learned it', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const runs = [];
+      const real = window.startVideoShare;
+      window.startVideoShare = () => { runs.push('start'); };
+      const press = (key, shift) => {
+        const e = new KeyboardEvent('keydown', { key, ctrlKey: true, shiftKey: !!shift,
+                                                 bubbles: true, cancelable: true });
+        return handleRoomAccelShortcut(e);
+      };
+      const u = press('u');
+      const e = press('e');
+      window.startVideoShare = real;
+      return { u, e, runs: runs.length, label: shortcutLabelFor('camera') };
+    });
+    expect(seen.u).toBe(true);
+    expect(seen.e).toBe(true);
+    expect(seen.runs).toBe(2);
+    // Only the first key is printed: the palette teaches one binding, not two.
+    expect(seen.label).toBe('Ctrl+U');
   });
 
   test("push-to-talk keeps its own binding", async ({ page }) => {

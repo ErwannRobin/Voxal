@@ -88,7 +88,11 @@
 // app releases can share the same protocol version. Used for skew detection, not
 // (yet) to gate behavior — keep protocol changes additive/tolerant so mixed
 // rooms keep working.
-const PROTOCOL_VERSION = 2;
+// v3 added `chat-edit`. Additive and tolerant, as the rule above requires: a v2
+// host drops the message it does not know and the correction simply does not
+// land, rather than anything breaking — but the sender is then editing into a
+// room that will not change, which is exactly the skew the hint exists for.
+const PROTOCOL_VERSION = 3;
 
 const METERED_APP_STORE_KEY    = 'metered-app-name';
 const METERED_API_STORE_KEY    = 'metered-api-key';
@@ -199,6 +203,11 @@ const CHAT_TYPING_IDLE_MS     = 3000; // stop claiming to type after this much s
 // the reader can see the conversation paused without a stamp on every line.
 const CHAT_GROUP_MS  = 5 * 60 * 1000;
 const CHAT_BREAK_MS  = 15 * 60 * 1000;
+// How long your own message stays yours to correct. Long enough for the typo
+// you notice a moment after sending, short enough that nobody re-reads a
+// conversation and finds it says something else. The HOST enforces it — it
+// stamped `at`, so it is the only clock every peer already agrees with.
+const CHAT_EDIT_WINDOW_MS = 5 * 60 * 1000;
 // The reaction row a fresh install starts with. Not a whitelist — any emoji in
 // the vendored catalog can be sent (see isChatEmoji); these are only what the
 // picker offers before you have picked anything.
@@ -226,6 +235,11 @@ const CHAT_PEEK_TAIL_INSET  = 14;  // how close to a corner the tail may sit
 // of beside it, with the tail pointing back up into it, which is the same idea
 // in the only direction that is left. See chatPeekAnchorSide().
 const CHAT_PEEK_ANCHOR_BELOW_GAP = 8;
+// The narrowest a bubble may be squeezed to in order to keep a run on ONE line.
+// Below this it is a column of one word per row, which reads worse than the
+// wrap it was avoiding — so that is where "side by side" gives up. See
+// fitChatPeekRunWidths().
+const CHAT_PEEK_RUN_MIN_WIDTH = 108;
 // A reaction peeks too, and for less time: it is one glyph, and it is chasing a
 // message that is already on screen.
 const CHAT_REACT_PEEK_MS = 2600;
@@ -3244,6 +3258,7 @@ var _chatTyping  = new Map();  // peerId -> expiry timestamp
 var _chatUnread  = 0;
 var _chatSeq     = 0;
 var _chatReplyTo = null;       // id of the message the composer is answering, or null
+var _chatEditing = null;       // id of your own message the composer is correcting, or null
 var _chatTypingActive     = false;
 var _chatLastTypingSentAt = 0;
 var _chatTypingIdleTimer  = null;
@@ -3273,7 +3288,8 @@ function chatIdFromWire(id, senderId) {
 function serializeChatMessage(m) {
   var reactions = {};
   m.reactions.forEach(function(peers, emoji) { reactions[emoji] = Array.from(peers); });
-  return { id: m.id, peerId: m.peerId, text: m.text, at: m.at, replyTo: m.replyTo || null, reactions: reactions };
+  return { id: m.id, peerId: m.peerId, text: m.text, at: m.at, editedAt: m.editedAt || null,
+           replyTo: m.replyTo || null, reactions: reactions };
 }
 
 // The id of the message being answered. Unlike a message's OWN id this carries
@@ -3304,6 +3320,9 @@ function deserializeChatMessage(raw) {
     peerId: typeof raw.peerId === 'string' ? raw.peerId : '',
     text: text,
     at: typeof raw.at === 'number' ? raw.at : Date.now(),
+    // Absent on a message nobody has corrected, which is what the "(edited)"
+    // marker tests — never a zero.
+    editedAt: typeof raw.editedAt === 'number' ? raw.editedAt : null,
     replyTo: chatReplyToFromWire(raw.replyTo),
     reactions: reactions
   };
@@ -3401,6 +3420,47 @@ function noteChatReactionApplied(applied, msgId, emoji, peerId) {
   if (applied === 'added') showChatReactPeek(msgId, emoji, peerId);
 }
 
+// --- Chat: correcting what you said ------------------------------------------
+//
+// A message stays yours to correct for CHAT_EDIT_WINDOW_MS. Only the author may
+// edit it — enforced at the host, which is also the only clock the window can
+// honestly be measured against, since the host is what stamped `at` in the
+// first place. Everyone else applies what the host fans out.
+
+// Whether a message is still open to correction, from this device's point of
+// view. The host re-checks on arrival, so a peer whose clock has drifted is
+// merely offered the affordance, never allowed past it.
+function chatMessageEditable(m, now) {
+  if (!m || !peer || m.peerId !== peer.id) return false;
+  return ((typeof now === 'number' ? now : Date.now()) - m.at) <= CHAT_EDIT_WINDOW_MS;
+}
+
+// The newest message of your own that is still inside the window — what the up
+// arrow on an empty composer reaches for.
+function lastEditableChatMessage() {
+  if (!peer) return null;
+  var now = Date.now();
+  for (var i = chatLog.length - 1; i >= 0; i--) {
+    if (chatLog[i].peerId !== peer.id) continue;
+    return chatMessageEditable(chatLog[i], now) ? chatLog[i] : null;
+  }
+  return null;
+}
+
+// Returns true when the transcript changed. `peerId` is the host's stamp of who
+// asked, so a peer cannot rewrite somebody else's line by naming its id.
+function applyChatEdit(msgId, text, peerId, editedAt) {
+  if (!peerId || typeof msgId !== 'string') return false;
+  var body = chatTextFromWire(text);
+  if (!body) return false;
+  var m = chatMessageById(msgId);
+  if (!m || m.peerId !== peerId) return false;
+  if (m.text === body) return false;
+  m.text = body;
+  m.editedAt = typeof editedAt === 'number' ? editedAt : Date.now();
+  return true;
+}
+
 function chatMessageById(msgId) {
   for (var i = chatLog.length - 1; i >= 0; i--) { if (chatLog[i].id === msgId) return chatLog[i]; }
   return null;
@@ -3450,6 +3510,7 @@ function stopChatTypingSweep() {
 function resetChatState() {
   _chatCollapsedHere = false;
   _chatReplyTo = null;
+  _chatEditing = null;
   closeChatSuggest();
   chatLog = [];
   _chatIds.clear();
@@ -3464,6 +3525,7 @@ function resetChatState() {
   clearChatPeek();
   renderChat();
   renderChatReplyBar();
+  renderChatEditBar();
   updateChatUnreadBadge();
 }
 
@@ -3531,6 +3593,22 @@ function sendChatMessage(text, opts) {
   return true;
 }
 
+// A correction goes out the same way a message does: the host is asked, and the
+// transcript changes when the host says so. Nothing is applied locally first —
+// an edit the host refuses (the window has closed) must not be visible here and
+// nowhere else.
+function sendChatEdit(msgId, text) {
+  if (!inRoom || !peer) return false;
+  var body = typeof text === 'string' ? text.trim().slice(0, CHAT_TEXT_MAX) : '';
+  if (!body) return false;
+  var m = chatMessageById(msgId);
+  if (!chatMessageEditable(m)) return false;
+  if (m.text === body) return true;   // nothing to say, and the strip still closes
+  if (isHost) fanOutChatEdit(peer.id, msgId, body);
+  else _sendToHostData({ type: 'chat-edit', msgId: msgId, text: body });
+  return true;
+}
+
 function sendChatReaction(msgId, emoji) {
   if (!inRoom || !peer || !isChatEmoji(emoji)) return false;
   if (isHost) fanOutChatReaction(peer.id, msgId, emoji);
@@ -3577,6 +3655,27 @@ function fanOutChatMessage(senderId, id, text, replyTo) {
               replyTo: chatReplyToFromWire(replyTo) };
   connections.forEach(function(c) { if (c.data) sendDataIfOpen(c.data, out); });
   if (appendChatMessage(out)) { renderChat(); saveChatLog(); updateChatUnreadBadge(); }
+}
+
+// The host is where the edit window is actually enforced: it stamped `at`, so
+// it is the one clock every peer in the room has already agreed to. A request
+// for somebody else's message, or one that arrives late, is dropped silently —
+// there is nothing useful to tell the sender that they cannot see themselves.
+function fanOutChatEdit(senderId, msgId, text) {
+  if (!isHost) return;
+  var body = chatTextFromWire(text);
+  if (!body || typeof msgId !== 'string') return;
+  var m = chatMessageById(msgId);
+  if (!m || m.peerId !== senderId) return;
+  var now = Date.now();
+  if (now - m.at > CHAT_EDIT_WINDOW_MS) return;
+  var out = { type: 'chat-edit', msgId: msgId, text: body, peerId: senderId, editedAt: now };
+  connections.forEach(function(c) { if (c.data) sendDataIfOpen(c.data, out); });
+  if (applyChatEdit(msgId, body, senderId, now)) {
+    renderChat();
+    saveChatLog();
+    refreshChatPeekText(msgId);
+  }
 }
 
 function fanOutChatReaction(senderId, msgId, emoji) {
@@ -3627,6 +3726,11 @@ var ICON_ADD_REACTION = '<svg width="15" height="15" viewBox="0 0 24 24" fill="n
   + '<path d="M8.2 14.4s1.3 1.6 3.8 1.6 3.8-1.6 3.8-1.6"/>'
   + '<line x1="9" y1="10" x2="9.01" y2="10"/><line x1="15" y1="10" x2="15.01" y2="10"/>'
   + '<line x1="19" y1="2" x2="19" y2="8"/><line x1="16" y1="5" x2="22" y2="5"/></svg>';
+var ICON_EDIT_MESSAGE = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>';
+var ICON_COPY_MESSAGE = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>'
+  + '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 
 // A chat body is the one string in this app that arrives verbatim from another
 // person, so it never goes near innerHTML. The only markup it can produce is an
@@ -3862,6 +3966,16 @@ function renderChatMessage(m, opts) {
   body.className = 'chat-msg-body';
   renderChatText(body, m.text);
   line.appendChild(body);
+  // Corrected after the fact. Said once, quietly, at the end of the line: a
+  // transcript that silently changes under a reader is the thing to avoid, and
+  // a badge on its own row would cost every edited message a line of height.
+  if (m.editedAt) {
+    var edited = document.createElement('span');
+    edited.className = 'chat-msg-edited';
+    edited.textContent = ' (edited)';
+    edited.title = 'Edited ' + chatFullTimeLabel(m.editedAt);
+    line.appendChild(edited);
+  }
   row.appendChild(line);
 
   if (m.reactions.size) {
@@ -3898,6 +4012,19 @@ function renderChatMessage(m, opts) {
     reply.setAttribute('aria-label', 'Reply to this message');
     reply.innerHTML = ICON_REPLY;
     tools.appendChild(reply);
+    // Yours, and still inside the window: the line is open to correction. The
+    // button is absent rather than disabled once the window closes — a control
+    // that is only ever greyed out is a control nobody learns.
+    if (chatMessageEditable(m)) {
+      var edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'chat-edit-open';
+      edit.dataset.msgId = m.id;
+      edit.title = 'Edit';
+      edit.setAttribute('aria-label', 'Edit this message');
+      edit.innerHTML = ICON_EDIT_MESSAGE;
+      tools.appendChild(edit);
+    }
     var add = document.createElement('button');
     add.type = 'button';
     add.className = 'chat-react-open';
@@ -4042,9 +4169,11 @@ function renderChat() {
     prev = draft;
   });
   if (stick) list.scrollTop = list.scrollHeight;
-  // The message the composer is answering can be trimmed out of the log by the
-  // very render that is running, so the strip is re-derived with the list.
+  // The message the composer is answering — or correcting — can be trimmed out
+  // of the log by the very render that is running, so the strips are re-derived
+  // with the list.
   renderChatReplyBar();
+  renderChatEditBar();
   renderChatTyping();
 }
 
@@ -4065,6 +4194,94 @@ function setChatReplyTo(msgId) {
 }
 
 function clearChatReply() { setChatReplyTo(null); }
+
+// --- Chat: correcting your own message from the composer ---------------------
+//
+// The composer becomes the message: its text is loaded in, and sending replaces
+// the line rather than adding one. A strip over it says so — without that, the
+// box looks exactly like a fresh message that happens to be pre-filled.
+//
+// The window closes while you are in the box, so it is watched: a strip that
+// went on offering an edit the host would refuse is a promise the room cannot
+// keep.
+var _chatEditExpiry = null;
+
+function setChatEditing(msgId) {
+  var m = msgId ? chatMessageById(msgId) : null;
+  if (!chatMessageEditable(m)) { clearChatEdit(); return false; }
+  // Answering and correcting are two different things to be doing to a
+  // transcript; the composer can only be doing one of them.
+  _chatReplyTo = null;
+  _chatEditing = m.id;
+  var input = document.getElementById('chat-input');
+  if (input) {
+    input.value = m.text;
+    autoGrowChatInput(input);
+    try {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    } catch (_) {}
+  }
+  armChatEditExpiry(m);
+  renderChatReplyBar();
+  renderChatEditBar();
+  return true;
+}
+
+// Leaves the composer as it is: the caller decides whether the text in the box
+// was a correction being abandoned (clear it) or one just sent (already gone).
+function clearChatEdit(opts) {
+  if (_chatEditExpiry) { clearTimeout(_chatEditExpiry); _chatEditExpiry = null; }
+  var was = _chatEditing;
+  _chatEditing = null;
+  if (was && opts && opts.clearInput) {
+    var input = document.getElementById('chat-input');
+    if (input) { input.value = ''; autoGrowChatInput(input); }
+  }
+  renderChatEditBar();
+}
+
+function armChatEditExpiry(m) {
+  if (_chatEditExpiry) { clearTimeout(_chatEditExpiry); _chatEditExpiry = null; }
+  var left = CHAT_EDIT_WINDOW_MS - (Date.now() - m.at);
+  if (left <= 0) return;
+  _chatEditExpiry = setTimeout(function() {
+    _chatEditExpiry = null;
+    // The text stays in the box — it is what the person typed, and throwing it
+    // away because a timer ran out is worse than the edit not landing.
+    clearChatEdit();
+  }, left);
+}
+
+function renderChatEditBar() {
+  var bar = document.getElementById('chat-edit-bar');
+  if (!bar) return;
+  var src = _chatEditing ? chatMessageById(_chatEditing) : null;
+  if (!src) {
+    _chatEditing = null;
+    bar.classList.add('hidden');
+    bar.innerHTML = '';
+    return;
+  }
+  bar.innerHTML = '';
+  var label = document.createElement('span');
+  label.className = 'chat-edit-bar-label';
+  label.textContent = 'Editing your message';
+  var hint = document.createElement('span');
+  hint.className = 'chat-edit-bar-hint';
+  hint.textContent = 'Esc to cancel';
+  var drop = document.createElement('button');
+  drop.type = 'button';
+  drop.id = 'btn-chat-edit-cancel';
+  drop.className = 'btn-icon chat-edit-bar-cancel';
+  drop.title = 'Cancel edit';
+  drop.setAttribute('aria-label', 'Cancel edit');
+  drop.textContent = '✕';
+  bar.appendChild(label);
+  bar.appendChild(hint);
+  bar.appendChild(drop);
+  bar.classList.remove('hidden');
+}
 
 function renderChatReplyBar() {
   var bar = document.getElementById('chat-reply-bar');
@@ -4192,6 +4409,28 @@ function showChatPeek(m) {
   addChatPeek(host, el, CHAT_PEEK_MS);
 }
 
+// A message corrected while its own bubble is still up must not go on showing
+// the sentence it no longer is. The bubble is re-typeset in place rather than
+// replaced: it keeps its position, its tail and the rest of its seven seconds.
+function refreshChatPeekText(msgId) {
+  var host = document.getElementById('chat-peek');
+  if (!host || !msgId) return;
+  var m = chatMessageById(msgId);
+  if (!m) return;
+  var touched = false;
+  Array.prototype.slice.call(host.children).forEach(function(el) {
+    if (el._voxalPeekKind !== 'message' || el._voxalPeekMsgId !== msgId) return;
+    var body = el.querySelector('.chat-peek-body');
+    if (!body) return;
+    renderChatText(body, m.text);
+    el.classList.toggle('chat-peek-jumbo', chatIsJumbo(m.text));
+    touched = true;
+  });
+  // A longer or shorter line changes the bubble's box, and the run it belongs
+  // to was packed around the old one.
+  if (touched) layoutChatPeeks();
+}
+
 // A reaction peeks the same way a message does — at the name that sent it —
 // but as the bare glyph: a bubble around a thumbs-up is a bubble around a
 // gesture. It then flies to whatever is on screen of the message it belongs
@@ -4289,8 +4528,14 @@ function chatPeekAnchorSide(at, view) {
   };
   var right = room(at.list, 'right');
   var left  = room(at.list, 'left');
-  if (right >= CHAT_PEEK_ANCHOR_MIN_WIDTH && right >= left) return { side: 'right', space: room(at.name, 'right') };
-  if (left  >= CHAT_PEEK_ANCHOR_MIN_WIDTH) return { side: 'left', space: room(at.name, 'left') };
+  // `space` caps one bubble; `line` is what the whole run has to share. Beside
+  // the roster they are the same number — the run reaches to the same edge.
+  if (right >= CHAT_PEEK_ANCHOR_MIN_WIDTH && right >= left) {
+    return { side: 'right', space: room(at.name, 'right'), line: room(at.name, 'right') };
+  }
+  if (left  >= CHAT_PEEK_ANCHOR_MIN_WIDTH) {
+    return { side: 'left', space: room(at.name, 'left'), line: room(at.name, 'left') };
+  }
   // Nothing either side — a phone, whose roster is the whole width of the
   // screen. The one direction still free is DOWN: the bubble opens under the
   // name with the tail pointing back up into it, over whatever row is beneath.
@@ -4299,7 +4544,10 @@ function chatPeekAnchorSide(at, view) {
   var below = view.height - at.name.bottom - CHAT_PEEK_ANCHOR_BELOW_GAP - CHAT_PEEK_ANCHOR_EDGE;
   var across = view.width - 2 * CHAT_PEEK_ANCHOR_EDGE;
   if (below >= 32 && across >= CHAT_PEEK_ANCHOR_MIN_WIDTH) {
-    return { side: 'below', space: Math.min(CHAT_PEEK_ANCHOR_MAX_WIDTH, across) };
+    // One bubble is still capped at MAX_WIDTH, but the LINE is the whole width
+    // of the screen: that difference is what lets a message and the reaction
+    // chasing it sit side by side instead of one under the other.
+    return { side: 'below', space: Math.min(CHAT_PEEK_ANCHOR_MAX_WIDTH, across), line: across };
   }
   return null;
 }
@@ -4327,6 +4575,31 @@ function anchorChatPeekHost(host, on) {
   }
 }
 
+// The part of the window a bubble may be drawn in. The window itself, minus an
+// open chat drawer: the drawer is opaque and paints above the peek host, so a
+// bubble that reached under it was simply gone — and one that reached PART of
+// the way under it read as a bubble sliding behind the conversation, which is
+// what the drawer is there to show properly. Clipping the layout instead means
+// a sender whose row is still visible keeps an anchored bubble beside their
+// name, and one whose row the drawer covers has no anchor at all and falls back
+// (muted, see unanchorChatPeeks) rather than drawing on top of the transcript.
+function chatPeekViewport() {
+  var view = { width: window.innerWidth, height: window.innerHeight };
+  if (!chatPanelOpen()) return view;
+  var panel = document.querySelector('#screen-room .room-chat-panel');
+  if (!panel) return view;
+  // `offsetWidth`, not the client rect: the drawer is `position: fixed` (so
+  // `offsetParent` is null however visible it is) and it is slid in by a
+  // transform (so its rect is the one it is LEAVING on the frame the class
+  // changes). The width it takes is the same either way, and it is pinned to
+  // the window's right edge in every regime — docked and side included, where
+  // only the room's grid changes, not the panel's own placement.
+  var width = panel.offsetWidth;
+  if (!width) return view;
+  view.width = Math.max(0, view.width - width - CHAT_PEEK_ANCHOR_EDGE);
+  return view;
+}
+
 // Coordinates are the window's: the host fills it exactly, so a child's
 // left/top is the same number a getBoundingClientRect() reads back.
 function layoutChatPeeks() {
@@ -4335,7 +4608,7 @@ function layoutChatPeeks() {
   var items = Array.prototype.slice.call(host.children);
   if (!items.length) { unanchorChatPeeks(host, items); return; }
 
-  var view = { width: window.innerWidth, height: window.innerHeight };
+  var view = chatPeekViewport();
   var plans = [];
   for (var i = 0; i < items.length; i++) {
     var at = chatPeekAnchorFor(items[i]._voxalPeekPeerId);
@@ -4345,7 +4618,8 @@ function layoutChatPeeks() {
                at.name.bottom <= 0 || at.name.top >= view.height)) at = null;
     var fit = at ? chatPeekAnchorSide(at, view) : null;
     if (!fit) { unanchorChatPeeks(host, items); return; }
-    plans.push({ name: at.name, list: at.list, side: fit.side, space: fit.space });
+    plans.push({ name: at.name, list: at.list, side: fit.side, space: fit.space,
+                 line: fit.line !== undefined ? fit.line : fit.space });
   }
 
   anchorChatPeekHost(host, true);
@@ -4373,11 +4647,63 @@ function layoutChatPeeks() {
     else runs.push([n]);
   });
 
+  // Side by side before one under the other: a run is squeezed onto ONE line
+  // wherever the line can be made to hold it, and only wraps when even the
+  // narrowest bubbles would not fit. Done per run, before any measurement is
+  // taken, because it is a max-width change and every height depends on it.
+  runs.forEach(function(run) { fitChatPeekRunWidths(items, plans, run); });
+
   var bands = [];  // vertical space already spoken for, so two runs never overlap
   runs.forEach(function(run) { placeChatPeekRun(items, plans, run, view, bands); });
   // Placement first, flight second: a reaction's path is measured from where it
   // ended up, not from where it was appended.
   items.forEach(function(el) { if (el._voxalPeekKind === 'react') flyChatReactPeek(el); });
+}
+
+// Everything one person said on one line, if the line can be made to hold it.
+// Under the name only — see the guard below for why.
+//
+// The reason is a phone: a message and the reaction chasing it are one run, and
+// with every bubble allowed the full 320px the message eats the line and the
+// glyph is pushed under it — two rows of notification for one exchange. So the
+// run's natural widths are measured and, when they overrun, the WIDE ones give
+// way: a narrow item (a bare reaction glyph, a one-word answer) keeps what it
+// needs and the long bubble takes what is left. Max-min fair, which is the
+// allocation that shrinks nothing that was not already the problem.
+//
+// Nothing is squeezed past CHAT_PEEK_RUN_MIN_WIDTH — below that a bubble is a
+// column of one word per line, which is worse than wrapping the run. A run that
+// still does not fit at that floor falls through to placeChatPeekRun()'s
+// wrapping, which is the "impossible horizontally" case.
+function fitChatPeekRunWidths(items, plans, run) {
+  var plan = plans[run[0]];
+  var cap = Math.round(Math.min(CHAT_PEEK_ANCHOR_MAX_WIDTH, plan.space));
+  run.forEach(function(n) { items[n].style.maxWidth = cap + 'px'; });
+  if (run.length < 2) return;
+  // Only under the name — the phone's shape. Beside the roster there is real
+  // room to run into, and wrapping a long run onto a second line there is the
+  // right answer rather than shrinking three bubbles that each had space.
+  if (plan.side !== 'below') return;
+
+  var budget = plan.line - CHAT_PEEK_ANCHOR_HGAP * (run.length - 1);
+  if (!(budget > 0)) return;
+  var natural = run.map(function(n) { return items[n].offsetWidth; });
+  var total = natural.reduce(function(sum, w) { return sum + w; }, 0);
+  if (total <= budget) return;   // already one line; nothing to take from anyone
+
+  // Ascending, so the smallest claim is settled first and whatever it did not
+  // need is re-offered to the ones that are still over their share.
+  var order = run.map(function(_, i) { return i; })
+    .sort(function(a, b) { return natural[a] - natural[b]; });
+  var left = budget;
+  var pending = run.length;
+  order.forEach(function(i) {
+    var share = left / pending;
+    var give = natural[i] <= share ? natural[i] : Math.max(CHAT_PEEK_RUN_MIN_WIDTH, share);
+    items[run[i]].style.maxWidth = Math.round(give) + 'px';
+    left -= give;
+    pending--;
+  });
 }
 
 // One person's messages, side by side out of their name. Wrapping onto a second
@@ -4659,11 +4985,66 @@ function chatBesideRoom() {
   return !document.body.classList.contains('video-stage');
 }
 
+// Whether the open drawer is sitting ON the room rather than beside it. Measured
+// rather than derived from a breakpoint, because the three regimes that give the
+// drawer a column of its own — docked, beside the window on the Mac, and the
+// plain wide desktop where the room is a narrow centred column — cannot be told
+// apart by width alone. The answer decides one thing: whether there is a scrim,
+// i.e. whether tapping the room behind the drawer puts it away.
+//
+// It is what makes the gesture the same in landscape as in portrait. Before
+// this, only the immersive video stage published a scrim, so a phone turned on
+// its side — where the drawer covers just as much of the room — had a drawer
+// that could only be closed from the handle.
+function chatOverlaysRoom() {
+  if (!chatPanelOpen()) return false;
+  if (document.body.classList.contains('chat-docked')) return false;
+  if (document.body.classList.contains('chat-side')) return false;
+  var panel = document.querySelector('#screen-room .room-chat-panel');
+  var room  = document.getElementById('screen-room');
+  if (!panel || !room) return false;
+  // `offsetWidth`, never the client rect: the drawer is slid in and out by a
+  // transform, so its rect on the frame the class changes is still the one it
+  // is leaving. The width it WILL take is the same either way, and the panel is
+  // pinned to the window's right edge, which is all this needs.
+  var width = panel.offsetWidth;
+  if (!width) return false;
+  var r = room.getBoundingClientRect();
+  if (!r.width) return false;
+  return (window.innerWidth - width) < (r.right - 1);
+}
+
 // Docking decides WHERE an open chat goes, never whether it is open — that is
 // chatOpensOnEntry()'s call.
 function applyChatDock() {
   document.body.classList.toggle('chat-docked', chatDocked());
   document.body.classList.toggle('chat-side', chatBesideRoom());
+  // Read after the two above: both change where the drawer lands, and this is
+  // a measurement of where it landed.
+  var overlay = chatOverlaysRoom();
+  document.body.classList.toggle('chat-overlay', overlay);
+  // Measured only when something is going to read it. Both this and
+  // chatOverlaysRoom() force a layout, and applyChatDock() runs on every stage
+  // update — including the one that switches the room into the immersive
+  // stage, where a flush mid-change starts the header's slide-away transition
+  // from a state the user never saw. With the drawer shut neither measurement
+  // is taken and that update stays a pure class change.
+  if (overlay) publishRoomBarInset();
+}
+
+// How much of the bottom of the window the control stack occupies. The immersive
+// stage measures its own (`--stage-inset-bottom`, from a stage-relative box);
+// this is the same number for every other regime, and it exists so the scrim
+// behind an overlaying chat drawer can stop above the talk button there too. A
+// scrim that swallowed that tap would break the one rule this whole layout is
+// built around.
+function publishRoomBarInset() {
+  var root = document.documentElement.style;
+  var bar = document.querySelector('#screen-room .room-bottom-bar');
+  var box = bar ? bar.getBoundingClientRect() : null;
+  if (!box || !box.height) { root.removeProperty('--room-bar-inset'); return; }
+  root.setProperty('--room-bar-inset',
+    Math.max(0, Math.round(window.innerHeight - box.top)) + 'px');
 }
 
 // --- Chat: open by default on a desktop --------------------------------------
@@ -4749,12 +5130,28 @@ function toggleChatPanel(open, opts) {
     sendChatTyping(false);
     closeEmojiPicker();
   }
+  // The drawer is what the anchored layout is clipped against (chatPeekViewport),
+  // so opening or closing it changes where every bubble may be. Twice: now for
+  // the class, and again once the 0.25s slide has settled on its final edge.
+  layoutChatPeeks();
+  setTimeout(function() { applyChatDock(); layoutChatPeeks(); }, 300);
   updateChatUnreadBadge();
 }
 
 function submitChatInput() {
   var input = document.getElementById('chat-input');
   if (!input) return;
+  // Correcting a line replaces it; it never adds one, so none of what follows
+  // applies — a `+:tada` typed into an edit is the message becoming that text.
+  if (_chatEditing) {
+    var editing = _chatEditing;
+    if (!input.value.trim()) return;   // an empty edit is a delete, which this is not
+    sendChatEdit(editing, input.value);
+    clearChatEdit({ clearInput: true });
+    closeChatSuggest();
+    sendChatTyping(false);
+    return;
+  }
   // `+:tada` is a reaction, not a message. Checked before anything is sent, so
   // the line never lands in the transcript on its way to becoming a reaction.
   var quick = chatQuickReactionFor(input.value);
@@ -4804,9 +5201,159 @@ function chatQuickReactionFor(text) {
 function autoGrowChatInput(input) {
   input.style.height = 'auto';
   var wanted = input.scrollHeight;
-  var capped = Math.min(wanted, CHAT_INPUT_MAX_HEIGHT);
-  input.style.height = capped + 'px';
-  input.style.overflowY = wanted > CHAT_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
+  // A phone on its side is ~390px tall and the transcript is the only thing in
+  // the drawer that can give, so four lines of draft would be the conversation
+  // gone. The ceiling is the smaller of the fixed one and a share of the window
+  // — and it is enforced HERE rather than in CSS, because the same number is
+  // what decides whether the box scrolls.
+  var ceiling = Math.max(48, Math.min(CHAT_INPUT_MAX_HEIGHT, Math.round(window.innerHeight * 0.22)));
+  input.style.height = Math.min(wanted, ceiling) + 'px';
+  input.style.overflowY = wanted > ceiling ? 'auto' : 'hidden';
+}
+
+// --- Chat: the long press on a message ---------------------------------------
+//
+// A phone has no hover, so the reply and react buttons on every row were simply
+// always there — and in a conversation of any length that is a column of chrome
+// running down the side of the words. They move behind the gesture a phone
+// already means "tell me about this one": a long press.
+//
+// The same sheet answers the other question a touch screen cannot: a reaction
+// chip's `title` lists who reacted, and a title is a hover. Long-pressing the
+// chip prints that list instead.
+
+const CHAT_LONG_PRESS_MS   = 450;
+const CHAT_LONG_PRESS_SLOP = 10;   // px of travel that makes it a scroll, not a press
+
+var _chatPress = null;
+var _chatPressFired = false;   // swallow the click the press leaves behind
+
+function chatLongPressAvailable() {
+  // The gesture is what REPLACES the hover strip, so it is offered exactly
+  // where that strip is not: a pointer that cannot hover.
+  return typeof window.matchMedia === 'function' && window.matchMedia('(hover: none)').matches;
+}
+
+function _chatPressDown(e) {
+  if (!chatLongPressAvailable()) return;
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  var chip = e.target.closest('.chat-reaction');
+  var row  = e.target.closest('.chat-msg');
+  if (!chip && !row) return;
+  if (row && row.classList.contains('chat-msg-pending')) return;
+  _cancelChatPress();
+  _chatPress = {
+    pointerId: e.pointerId,
+    x: e.clientX,
+    y: e.clientY,
+    chip: chip || null,
+    msgId: chip ? chip.dataset.msgId : row.dataset.msgId,
+    emoji: chip ? chip.dataset.emoji : null,
+    timer: setTimeout(function() {
+      var p = _chatPress;
+      _chatPress = null;
+      if (!p) return;
+      // The click this press leaves behind is swallowed below. It may never
+      // arrive — the finger comes up on the sheet that just opened over the
+      // row, so the click lands on a common ancestor the list never sees — so
+      // the flag also expires on its own rather than eating the next real tap.
+      _chatPressFired = true;
+      setTimeout(function() { _chatPressFired = false; }, 700);
+      if (p.emoji) openChatReactionMenu(p.msgId, p.emoji);
+      else openChatMessageMenu(p.msgId);
+    }, CHAT_LONG_PRESS_MS)
+  };
+}
+
+function _chatPressMove(e) {
+  var p = _chatPress;
+  if (!p || (e.pointerId !== undefined && e.pointerId !== p.pointerId)) return;
+  if (Math.abs(e.clientX - p.x) <= CHAT_LONG_PRESS_SLOP &&
+      Math.abs(e.clientY - p.y) <= CHAT_LONG_PRESS_SLOP) return;
+  _cancelChatPress();   // the finger is scrolling the transcript
+}
+
+function _cancelChatPress() {
+  if (!_chatPress) return;
+  clearTimeout(_chatPress.timer);
+  _chatPress = null;
+}
+
+function chatMessageMenuOpen() {
+  var el = document.getElementById('chat-msg-menu');
+  return !!el && !el.classList.contains('hidden');
+}
+
+function closeChatMessageMenu() {
+  var el = document.getElementById('chat-msg-menu');
+  if (!el) return;
+  el.classList.add('hidden');
+  var body = document.getElementById('chat-msg-menu-body');
+  if (body) body.innerHTML = '';
+}
+
+function _openChatMenu(title) {
+  var el = document.getElementById('chat-msg-menu');
+  var head = document.getElementById('chat-msg-menu-title');
+  var body = document.getElementById('chat-msg-menu-body');
+  if (!el || !body) return null;
+  closeEmojiPicker();
+  if (head) head.textContent = title;
+  body.innerHTML = '';
+  el.classList.remove('hidden');
+  return body;
+}
+
+// The row's own actions, in the order a phone reaches for them.
+function openChatMessageMenu(msgId) {
+  var m = chatMessageById(msgId);
+  if (!m) return;
+  var body = _openChatMenu(chatAuthorName(m.peerId) + ' · ' + chatQuoteText(m));
+  if (!body) return;
+  var add = function(label, icon, run) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chat-msg-menu-action';
+    var glyph = document.createElement('span');
+    glyph.className = 'chat-msg-menu-icon';
+    glyph.innerHTML = icon;          // static, author-written markup
+    var text = document.createElement('span');
+    text.textContent = label;
+    b.appendChild(glyph);
+    b.appendChild(text);
+    b.addEventListener('click', function() { closeChatMessageMenu(); run(); });
+    body.appendChild(b);
+  };
+  add('Reply', ICON_REPLY, function() { setChatReplyTo(m.id); });
+  add('React', ICON_ADD_REACTION, function() { openEmojiPicker({ mode: 'react', msgId: m.id }); });
+  if (chatMessageEditable(m)) add('Edit', ICON_EDIT_MESSAGE, function() { setChatEditing(m.id); });
+  // The transcript is the one thing in this app worth copying, and taking the
+  // long press for a menu takes the selection gesture that used to do it. So
+  // the sheet hands it back — one message rather than a dragged range, which is
+  // what a finger was picking out anyway.
+  add('Copy text', ICON_COPY_MESSAGE, function() { copyTextToClipboard(m.text, 'Message copied!'); });
+}
+
+// Who reacted, which on a desktop is the chip's tooltip and on a phone was
+// nothing at all.
+function openChatReactionMenu(msgId, emoji) {
+  var m = chatMessageById(msgId);
+  var peers = m && m.reactions.get(emoji);
+  if (!peers || !peers.size) return;
+  var body = _openChatMenu(emoji + ' · ' + peers.size + (peers.size === 1 ? ' reaction' : ' reactions'));
+  if (!body) return;
+  var list = document.createElement('ul');
+  list.className = 'chat-react-who';
+  Array.from(peers).forEach(function(peerId) {
+    var li = document.createElement('li');
+    li.className = 'chat-react-who-item';
+    li.textContent = chatAuthorName(peerId);
+    var color = chatAuthorColor(peerId);
+    if (color) li.style.color = color;
+    if (peer && peerId === peer.id) li.classList.add('chat-react-who-me');
+    list.appendChild(li);
+  });
+  body.appendChild(list);
 }
 
 // --- Chat: the emoji picker --------------------------------------------------
@@ -5239,6 +5786,9 @@ function clampChatWidth(px) {
 
 function applyChatWidth(px) {
   document.documentElement.style.setProperty('--chat-width', clampChatWidth(px) + 'px');
+  // A narrower drawer hands space back to the bubbles, a wider one takes it —
+  // both are the clip chatPeekViewport() reads.
+  layoutChatPeeks();
 }
 
 function saveChatWidth(px) {
@@ -5467,12 +6017,24 @@ function initChatUI() {
     // Enter sends, Shift+Enter is a newline. The composer must never see the
     // push-to-talk key as a talk trigger — see the global handler's guard.
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitChatInput(); return; }
-    // Escape drops the reply before it drops anything else: the strip over the
-    // composer is the only thing on screen that the key could mean.
+    // Escape drops whichever strip is over the composer — they are mutually
+    // exclusive, so there is never a question of which the key meant. An
+    // abandoned edit takes its text with it: the box was the message, and
+    // leaving it there would look like a draft nobody typed.
+    if (e.key === 'Escape' && _chatEditing) {
+      e.preventDefault(); e.stopPropagation();
+      clearChatEdit({ clearInput: true });
+      return;
+    }
     if (e.key === 'Escape' && _chatReplyTo) { e.preventDefault(); e.stopPropagation(); clearChatReply(); return; }
-    // An empty composer, and the up arrow answers the last thing said — the
-    // one gesture every terminal and every messenger has trained into people.
+    // An empty composer and the up arrow reaches back for the last thing YOU
+    // said, while it is still yours to correct — the gesture Slack, Discord and
+    // every shell have trained into people. With nothing of your own in the
+    // window it falls through to answering the last thing anyone said, which is
+    // what the key did before editing existed.
     if (e.key === 'ArrowUp' && !input.value) {
+      var mine = lastEditableChatMessage();
+      if (mine) { e.preventDefault(); setChatEditing(mine.id); return; }
       var last = lastChatMessage();
       if (last) { e.preventDefault(); setChatReplyTo(last.id); }
     }
@@ -5513,14 +6075,45 @@ function initChatUI() {
     if (e.target.closest('.chat-reply-bar-cancel')) clearChatReply();
   });
 
+  var editBar = document.getElementById('chat-edit-bar');
+  if (editBar) editBar.addEventListener('click', function(e) {
+    if (e.target.closest('.chat-edit-bar-cancel')) clearChatEdit({ clearInput: true });
+  });
+
+  // The long press, on the same delegated list: the rows are replaced on every
+  // render, so nothing may be bound to one of them.
+  list.addEventListener('pointerdown', _chatPressDown);
+  list.addEventListener('pointermove', _chatPressMove, { passive: true });
+  list.addEventListener('pointerup', _cancelChatPress);
+  list.addEventListener('pointercancel', _cancelChatPress);
+  list.addEventListener('scroll', _cancelChatPress, { passive: true });
+  // The platform's own long-press menu would land on top of ours.
+  list.addEventListener('contextmenu', function(e) {
+    if (chatLongPressAvailable() && e.target.closest('.chat-msg')) e.preventDefault();
+  });
+
+  var msgMenu = document.getElementById('chat-msg-menu');
+  if (msgMenu) {
+    // The backdrop IS the element; a tap on the sheet inside it is not a
+    // dismissal, exactly as the command palette does it.
+    msgMenu.addEventListener('click', function(e) {
+      if (e.target === msgMenu) closeChatMessageMenu();
+    });
+  }
+
   // Reactions are delegated: the list is re-rendered whole on every change.
   list.addEventListener('click', function(e) {
+    // The click a long press leaves behind must not also toggle the reaction it
+    // was asking about.
+    if (_chatPressFired) { _chatPressFired = false; e.preventDefault(); e.stopPropagation(); return; }
     var chip = e.target.closest('.chat-reaction');
     if (chip) { sendChatReaction(chip.dataset.msgId, chip.dataset.emoji); return; }
     var quote = e.target.closest('.chat-quote');
     if (quote && quote.dataset.jumpTo) { jumpToChatMessage(quote.dataset.jumpTo); return; }
     var answer = e.target.closest('.chat-reply-open');
     if (answer) { setChatReplyTo(answer.dataset.msgId); return; }
+    var correct = e.target.closest('.chat-edit-open');
+    if (correct) { setChatEditing(correct.dataset.msgId); return; }
     var open = e.target.closest('.chat-react-open');
     if (open) {
       var already = emojiPickerOpen() && _emojiTarget && _emojiTarget.msgId === open.dataset.msgId;
@@ -5617,19 +6210,26 @@ function initChatUI() {
 //
 // Direct shortcuts, and why these:
 //   ⌘/Ctrl+K      the palette          — Slack, Linear, Notion, Discord
-//   ⌘/Ctrl+E      camera               — Google Meet's own camera key
-//   ⌘/Ctrl+⇧+E    screen share         — the same key, one modifier up
+//   ⌘/Ctrl+U      camera               — see below
+//   ⌘/Ctrl+⇧+U    screen share         — the same key, one modifier up
 //   ⌘/Ctrl+B      chat drawer          — "toggle the side panel" everywhere else
 // Everything else stays in the palette on purpose. A single letter cannot be a
 // shortcut here (Space is push-to-talk and any letter may be being typed into
 // the composer), and the combinations the browser has already taken — ⌘/Ctrl+
 // T, W, N, L, D, J, ⇧+J, ⇧+C — are not available to a page whatever it does
 // with the event.
+//
+// The camera used to be ⌘E, Google Meet's own key. It never arrived: on macOS
+// ⌘E is the system's "Use Selection for Find", taken above the page in both
+// WebKit and Chromium, so the room simply never saw the event. ⌘U is free
+// there. Each entry therefore carries a LIST of keys — the first is the one the
+// palette prints, the rest still work — so the old binding keeps working for
+// anyone who learned it on a platform where it did reach us.
 var ROOM_ACCEL_SHORTCUTS = [
-  { id: 'palette', key: 'k', shift: false },
-  { id: 'camera',  key: 'e', shift: false },
-  { id: 'screen',  key: 'e', shift: true  },
-  { id: 'chat',    key: 'b', shift: false }
+  { id: 'palette', keys: ['k'],      shift: false },
+  { id: 'camera',  keys: ['u', 'e'], shift: false },
+  { id: 'screen',  keys: ['u', 'e'], shift: true  },
+  { id: 'chat',    keys: ['b'],      shift: false }
 ];
 
 function isAppleKeyboard() {
@@ -5643,7 +6243,9 @@ function shortcutLabelFor(id) {
   var spec = null;
   ROOM_ACCEL_SHORTCUTS.forEach(function(s) { if (s.id === id) spec = s; });
   if (!spec) return '';
-  var key = spec.key.toUpperCase();
+  // The first key is the one the shortcut is CALLED; the rest are kept working
+  // and left unprinted, so the palette teaches one binding rather than two.
+  var key = spec.keys[0].toUpperCase();
   return isAppleKeyboard()
     ? '⌘' + (spec.shift ? '⇧' : '') + key
     : 'Ctrl+' + (spec.shift ? 'Shift+' : '') + key;
@@ -5846,7 +6448,7 @@ function handleRoomAccelShortcut(e) {
   var key = String(e.key || '').toLowerCase();
   var spec = null;
   ROOM_ACCEL_SHORTCUTS.forEach(function(s) {
-    if (s.key === key && !!s.shift === !!e.shiftKey) spec = s;
+    if (s.keys.indexOf(key) !== -1 && !!s.shift === !!e.shiftKey) spec = s;
   });
   if (!spec) return false;
   // Push-to-talk is the user's own binding and it wins: they chose it, and
@@ -11611,6 +12213,7 @@ function applyImmersiveStageInsets(gridEl) {
     if (ribbonWrap) ribbonWrap.style.removeProperty('padding-bottom');
     document.documentElement.style.removeProperty('--stage-inset-top');
     document.documentElement.style.removeProperty('--stage-inset-bottom');
+    applySelfBadgeCorner();
     return;
   }
   if (!stage) return;
@@ -11635,6 +12238,10 @@ function applyImmersiveStageInsets(gridEl) {
   // control stack) and the panel scrim (must stop above the talk button).
   document.documentElement.style.setProperty('--stage-inset-top', insetTop + 'px');
   document.documentElement.style.setProperty('--stage-inset-bottom', insetBottom + 'px');
+  // The slots beside the mic are measured from that same control stack, and a
+  // badge parked in one has to be handed back to a corner the moment the stack
+  // stops having room for it (a phone turned on its side).
+  applySelfBadgeCorner();
 }
 
 function layoutVideoStageGrid(gridEl, count) {
@@ -12013,6 +12620,27 @@ function initStagePanelHandles() {
     scrim._voxalWired = true;
     scrim.addEventListener('pointerdown', function() { closeStagePanels(); toggleChatPanel(false); });
   }
+  // The scrim deliberately stops above the control stack — dimming the talk
+  // button and swallowing its tap is the one thing this layout may not do. But
+  // that leaves the black band around the mic behaving differently from the
+  // video above it: a tap there did nothing, when everywhere else on the stage
+  // it dismisses. So the bar dismisses too, from its own background only —
+  // every actual control inside it is left alone.
+  var bar = document.querySelector('#screen-room .room-bottom-bar');
+  if (bar && !bar._voxalDismissWired) {
+    bar._voxalDismissWired = true;
+    bar.addEventListener('pointerdown', function(e) {
+      if (!document.body.classList.contains('video-stage-immersive')) return;
+      // The self-view can be parked in the band beside the mic. It lives inside
+      // the stage, which paints under this bar, so the press that should pick it
+      // up lands here instead — hand it on rather than lose the gesture.
+      if (selfBadgeAtPoint(e.clientX, e.clientY)) { _onSelfBadgePointerDown(e); return; }
+      if (!stagePanelOpen('header') && !stagePanelOpen('roster') && !chatPanelOpen()) return;
+      if (e.target.closest('button, a, input, textarea, select, label, kbd, [role="button"]')) return;
+      closeStagePanels();
+      toggleChatPanel(false);
+    });
+  }
 }
 
 // --- The minimized self-view badge --------------------------------------------
@@ -12023,7 +12651,19 @@ function initStagePanelHandles() {
 // recompute. Dragging is therefore a *pick a corner* gesture — the badge follows
 // the pointer, then snaps to whichever corner it was let go nearest.
 
-var SELF_BADGE_CORNERS = ['tl', 'tr', 'bl', 'br'];
+// The four corners of the stage, plus the two slots either side of the mic. On
+// a phone held upright the talk button is a circle in the middle of a wide black
+// band, and the space left and right of it is the only place a self-view can go
+// without covering somebody's face — so it is offered as somewhere to park,
+// exactly like a corner. There is no such space in landscape (the band is short
+// and the button fills it), which is what selfBadgeBarSlots() tests.
+var SELF_BADGE_CORNERS = ['tl', 'tr', 'bl', 'br', 'barl', 'barr'];
+var SELF_BADGE_BAR_SLOTS = ['barl', 'barr'];
+// The narrowest side band worth parking in. Below this the badge is either on
+// top of the talk button or too small to be a self-view.
+var SELF_BADGE_BAR_MIN_SIDE = 104;
+var SELF_BADGE_BAR_MAX_WIDTH = 150;
+var SELF_BADGE_BAR_GAP = 10;
 var _selfBadgeCorner = readSelfBadgeCorner();
 var _selfBadgeDrag = null;
 var _selfBadgeDragged = false;   // a drag just ended: swallow the click it produces
@@ -12041,16 +12681,76 @@ function setSelfBadgeCorner(corner) {
   _selfBadgeCorner = corner;
   try { localStorage.setItem(SELF_VIDEO_CORNER_KEY, corner); } catch (e) { /* ignore */ }
   var badge = document.getElementById('video-stage-self');
-  if (badge) badge.dataset.corner = corner;
+  if (badge) badge.dataset.corner = effectiveSelfBadgeCorner(selfBadgeBarSlots());
 }
 
 // Pure: the corner a badge dropped at `box` (stage-relative) belongs to. Decided
 // by the badge's centre, not its top-left, so the snap lands where it looks like
 // you let go rather than a half-badge earlier.
-function nearestBadgeCorner(box, stage) {
+//
+// `bar`, when the layout has the space for it (selfBadgeBarSlots), is the band
+// around the talk button: a badge let go down there parks BESIDE the mic rather
+// than in a bottom corner, which is where the corner rule would otherwise put
+// it — over the controls it was dropped next to.
+function nearestBadgeCorner(box, stage, bar) {
   var cx = box.left + (box.width || 0) / 2;
   var cy = box.top + (box.height || 0) / 2;
-  return (cy < (stage.height || 0) / 2 ? 't' : 'b') + (cx < (stage.width || 0) / 2 ? 'l' : 'r');
+  var right = cx >= (stage.width || 0) / 2;
+  if (bar && cy >= bar.top) return right ? 'barr' : 'barl';
+  return (cy < (stage.height || 0) / 2 ? 't' : 'b') + (right ? 'r' : 'l');
+}
+
+// The geometry of the band either side of the talk button, in the stage's own
+// coordinates — or null where there is no band worth speaking of: any layout
+// that is not the immersive phone stage, and a landscape one, where the button
+// fills the strip it sits in.
+function selfBadgeBarSlots() {
+  if (!document.body.classList.contains('video-stage-immersive')) return null;
+  var stage = document.getElementById('video-stage');
+  var ptt   = document.getElementById('ptt-btn');
+  var bar   = document.querySelector('#screen-room .room-bottom-bar');
+  if (!stage || !ptt || !bar) return null;
+  var s = stage.getBoundingClientRect();
+  var p = ptt.getBoundingClientRect();
+  var b = bar.getBoundingClientRect();
+  if (!s.width || !s.height || !p.width || !b.height) return null;
+  // The narrower of the two sides: the badge may be parked on either, so both
+  // have to hold it.
+  var side = Math.min(p.left - s.left, s.right - p.right) - SELF_BADGE_BAR_GAP;
+  if (side < SELF_BADGE_BAR_MIN_SIDE) return null;
+  return {
+    top: b.top - s.top,
+    centre: s.bottom - (p.top + p.height / 2),   // stage bottom → the mic's middle
+    width: Math.min(SELF_BADGE_BAR_MAX_WIDTH, side)
+  };
+}
+
+// Which corner the badge is ACTUALLY drawn at. A slot beside the mic exists only
+// while the layout has room for it, so a phone turned on its side must hand a
+// badge parked there back to a corner rather than leave it on the controls. The
+// stored choice is untouched: turning back upright returns it to the mic.
+function effectiveSelfBadgeCorner(slots) {
+  if (SELF_BADGE_BAR_SLOTS.indexOf(_selfBadgeCorner) === -1) return _selfBadgeCorner;
+  if (slots) return _selfBadgeCorner;
+  return _selfBadgeCorner === 'barl' ? 'bl' : 'br';
+}
+
+// Publishes both the effective corner and the measurements the two bar slots are
+// positioned from. Called from the stage's own layout pass, so it re-runs on
+// every resize and every change to the control stack's height.
+function applySelfBadgeCorner() {
+  var badge = document.getElementById('video-stage-self');
+  if (!badge) return;
+  var slots = selfBadgeBarSlots();
+  badge.dataset.corner = effectiveSelfBadgeCorner(slots);
+  var root = document.documentElement.style;
+  if (slots) {
+    root.setProperty('--stage-ptt-centre', Math.round(slots.centre) + 'px');
+    root.setProperty('--stage-bar-slot', Math.round(slots.width) + 'px');
+  } else {
+    root.removeProperty('--stage-ptt-centre');
+    root.removeProperty('--stage-bar-slot');
+  }
 }
 
 function _clampBadge(value, max) {
@@ -12059,6 +12759,16 @@ function _clampBadge(value, max) {
 }
 
 var SELF_BADGE_DRAG_SLOP = 3;   // px of movement before a press counts as a drag
+
+// Whether a point is on the self-view while it is parked beside the mic — the
+// one place the badge sits under something else that wants the same press.
+function selfBadgeAtPoint(x, y) {
+  var badge = document.getElementById('video-stage-self');
+  if (!badge || badge.classList.contains('hidden')) return false;
+  if (SELF_BADGE_BAR_SLOTS.indexOf(badge.dataset.corner) === -1) return false;
+  var b = badge.getBoundingClientRect();
+  return x >= b.left && x <= b.right && y >= b.top && y <= b.bottom;
+}
 
 function _onSelfBadgePointerDown(e) {
   var badge = document.getElementById('video-stage-self');
@@ -12077,6 +12787,9 @@ function _onSelfBadgePointerDown(e) {
     width: b.width,
     height: b.height,
     stage: { left: s.left, top: s.top, width: s.width, height: s.height },
+    // Measured once, at the start of the drag: the band cannot change shape
+    // while a finger is down on it.
+    bar: selfBadgeBarSlots(),
     left: b.left - s.left,
     top: b.top - s.top
   };
@@ -12124,8 +12837,10 @@ function _onSelfBadgePointerUp(e) {
   if (_selfBadgeDragged) {
     setSelfBadgeCorner(nearestBadgeCorner(
       { left: d.left, top: d.top, width: d.width, height: d.height },
-      { width: d.stage.width, height: d.stage.height }
+      { width: d.stage.width, height: d.stage.height },
+      d.bar
     ));
+    applySelfBadgeCorner();
   }
 }
 
@@ -12133,7 +12848,7 @@ function initSelfVideoBadge() {
   var badge = document.getElementById('video-stage-self');
   if (!badge || badge._voxalDragWired) return;
   badge._voxalDragWired = true;
-  badge.dataset.corner = _selfBadgeCorner;
+  applySelfBadgeCorner();
   badge.addEventListener('pointerdown', _onSelfBadgePointerDown);
   // The tile inside the badge carries the click-to-pin handler every tile has,
   // and a drag ends with a click. Swallow that one in the capture phase, or
@@ -15083,6 +15798,10 @@ function handleJoinerDataConnection(dataConn) {
       var chatText = chatTextFromWire(msg.text);
       var chatId   = chatIdFromWire(msg.id, joinerId);
       if (chatText && chatId) fanOutChatMessage(joinerId, chatId, chatText, msg.replyTo);
+    } else if (msg.type === 'chat-edit') {
+      // `joinerId` again: only the author may correct a line, and the host is
+      // the only party that knows who the author was.
+      fanOutChatEdit(joinerId, msg.msgId, msg.text);
     } else if (msg.type === 'chat-react') {
       fanOutChatReaction(joinerId, msg.msgId, msg.emoji);
     } else if (msg.type === 'chat-typing') {
@@ -15293,6 +16012,16 @@ function handleHostMessage(msg) {
       if (appendChatMessage(entry, { quiet: true })) backfilled++;
     });
     if (backfilled) { renderChat(); saveChatLog(); }
+    return;
+  }
+  if (msg.type === 'chat-edit') {
+    if (applyChatEdit(msg.msgId, msg.text, msg.peerId, msg.editedAt)) {
+      renderChat();
+      saveChatLog();
+      // The message being corrected may be the one the composer is quoting, or
+      // still up as a peek — both draw its text, so both are re-derived.
+      refreshChatPeekText(msg.msgId);
+    }
     return;
   }
   if (msg.type === 'chat-react') {
@@ -17641,6 +18370,9 @@ window.addEventListener('DOMContentLoaded', function() {
     // input handles the common case, but a palette nobody can dismiss is worse
     // than one that is dismissed twice.
     if (e.key === 'Escape' && commandPaletteOpen()) { e.preventDefault(); closeCommandPalette(); return; }
+    // Same rule for the message sheet: it opens from a gesture, so there may be
+    // no keyboard focus anywhere near it to dismiss it from.
+    if (e.key === 'Escape' && chatMessageMenuOpen()) { e.preventDefault(); closeChatMessageMenu(); return; }
     if (shouldIgnorePTTShortcuts()) return;
     if (recordingShortcut) { e.preventDefault(); if (!MODIFIER_CODES.includes(e.code)) { const s = shortcutFromEvent(e); if (s) applyNewShortcut(s); } return; }
     if (e.code === 'Space' && !e.repeat) {
