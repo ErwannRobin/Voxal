@@ -4733,6 +4733,203 @@ html.is-desktop-app body.chat-side.chat-open:not(.embed-tiny) {
   padding-right: min(var(--chat-width, 360px), 92vw);
 }
 
+/* A mention is a name, resolved on the reader's own roster — so "you" is
+   highlighted differently on every screen, which is the point. */
+.chat-mention {
+  color: var(--accent);
+  font-weight: 600;
+}
+.chat-mention-me {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 4px;
+  padding: 0 3px;
+}
+/* Addressed to you: a rule down the side rather than a wash over the row, so a
+   long message does not turn into a coloured block. */
+.chat-msg-mention {
+  border-left: 2px solid var(--accent);
+  padding-left: 7px;
+  margin-left: -9px;
+}
+
+/* Nothing but emoji: a gesture, printed at the size of one. */
+.chat-msg-jumbo .chat-msg-body { font-size: 30px; line-height: 1.15; }
+.chat-msg-jumbo .chat-msg-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* The quote above a reply — a button, because it is the way back to what is
+   being answered. */
+.chat-quote {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  margin-bottom: 2px;
+  padding: 2px 0 2px 7px;
+  border: none;
+  border-left: 2px solid var(--border);
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-quote:hover { border-left-color: var(--accent); }
+.chat-quote-author { font-weight: 600; flex-shrink: 0; }
+.chat-quote-body {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-quote-gone { font-style: italic; cursor: default; }
+
+/* Where a jump lands. Long enough to be seen after a smooth scroll. */
+@keyframes chat-msg-flash {
+  from { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+  to   { background: transparent; }
+}
+.chat-msg-flash {
+  animation: chat-msg-flash 1.2s ease-out;
+  border-radius: 6px;
+}
+
+/* The strip over the composer naming what is about to be answered. */
+.chat-reply-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 5px 6px 5px 8px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  background: var(--bg-raised);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.chat-reply-bar-label { flex-shrink: 0; }
+.chat-reply-bar-author { font-weight: 600; flex-shrink: 0; }
+.chat-reply-bar-body {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-reply-bar-cancel { flex-shrink: 0; font-size: 13px; line-height: 1; padding: 0 2px; }
+
+.chat-reply-open { display: flex; align-items: center; border: none; background: none;
+                   color: var(--text-muted); border-radius: 999px; padding: 0 2px; cursor: pointer; }
+.chat-reply-open:hover { color: var(--text); }
+
+/* `:shortcode` and `@name`. Docked over the composer for the same reason the
+   emoji picker is: the drawer is too narrow for a popover at the caret. */
+.chat-suggest {
+  flex-shrink: 0;
+  max-height: 190px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.chat-suggest-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-suggest-active { background: var(--bg-surface); }
+.chat-suggest-icon { flex-shrink: 0; width: 20px; font-size: 17px; line-height: 1; text-align: center; }
+.chat-suggest-label { flex-shrink: 0; }
+.chat-suggest-hint {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ── Quick actions (⌘/Ctrl+K) ─────────────────────────────────────
+   The one way to every room control, including the ones an immersive stage has
+   slid off screen. The outer element is the backdrop. */
+.command-palette {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: max(calc(env(safe-area-inset-top) + 14vh), 60px) 16px 16px;
+  background: rgba(0, 0, 0, 0.45);
+}
+.command-palette-box {
+  width: min(460px, 100%);
+  max-height: min(60vh, 420px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+}
+.command-palette-input {
+  flex-shrink: 0;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.command-palette-input:focus { outline: none; border-color: var(--accent); }
+.command-palette-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.command-palette-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.command-palette-active { background: var(--bg-raised); }
+/* Already on: the same accent the room's own control row uses when active. */
+.command-palette-on .command-palette-label { color: var(--accent); }
+/* Not an action — a key you hold. Listed so the keyboard's story is complete,
+   and visibly not clickable. */
+.command-palette-note { color: var(--text-muted); cursor: default; }
+.command-palette-keys {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.command-palette-rule { height: 1px; margin: 6px 4px; background: var(--border); }
+.command-palette-none { padding: 12px 6px; font-size: 12px; color: var(--text-muted); text-align: center; }
+
 /* ── Chat: the peek over the call ─────────────────────────────────
    The newest messages, briefly, while the panel is not on screen. Meant to be
    read on the way past, not parked on.
@@ -4854,9 +5051,96 @@ html.is-desktop-app body.chat-side.chat-open:not(.embed-tiny) {
 .chat-peek-item.peek-tail-right::before { right: -9px; border-left: 9px solid var(--border); }
 .chat-peek-item.peek-tail-right::after  { right: -8px; border-left: 8px solid var(--bg-surface); }
 
+/* Under the name — a phone, where there is nothing either side of the roster to
+   open into. Same tail, rotated: it sits on the bubble's top edge and
+   `--peek-tail-x` walks it along to land under the middle of the name. */
+.chat-peek-item.peek-tail-up::before,
+.chat-peek-item.peek-tail-up::after {
+  content: '';
+  position: absolute;
+  left: calc(var(--peek-tail-x, 18px) - 8px);
+  width: 0;
+  height: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+}
+.chat-peek-item.peek-tail-up::before { top: -9px; border-bottom: 9px solid var(--border); }
+.chat-peek-item.peek-tail-up::after  { top: -8px; border-bottom: 8px solid var(--bg-surface); }
+.chat-peek-anchored .chat-peek-item.peek-tail-up { transform-origin: center top; }
+
+/* A message that is only emoji peeks at the size it is printed at. */
+.chat-peek-jumbo .chat-peek-body { font-size: 26px; line-height: 1.15; }
+
+/* What the peeked message answers, above it: one line, muted, clipped. */
+.chat-peek-quote {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A reaction is the bare glyph: no bubble, no tail, no shadow. Anchored, the
+   name is dropped too — the position is already saying who. */
+.chat-peek-item.chat-peek-react {
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  font-size: 22px;
+  line-height: 1;
+  cursor: default;
+  /* Its own drop shadow, so the glyph stays readable over a bright video tile
+     where a border would have been doing that job. */
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.45));
+}
+.chat-peek-react .chat-peek-author { font-size: 12px; vertical-align: middle; }
+.chat-peek-anchored .chat-peek-react .chat-peek-author { display: none; }
+.chat-peek-react-glyph { display: inline-block; }
+
+/* The flight. One keyframe, three custom properties, and the browser
+   composites the whole thing — nothing here runs per frame. `--react-fly-m*`
+   is the halfway point, lifted, so the path reads as a throw rather than a
+   slide; the glyph shrinks as it lands so it arrives ON the message instead of
+   covering it. See flyChatReactPeek(). */
+@keyframes chat-react-fly {
+  0%   { opacity: 0; transform: translate(0, 0) scale(0.5); }
+  12%  { opacity: 1; transform: translate(0, 0) scale(1.25); }
+  22%  { opacity: 1; transform: translate(0, 0) scale(1); }
+  60%  { opacity: 1; transform: translate(var(--react-fly-mx, 0px), var(--react-fly-my, 0px)) scale(0.95); }
+  92%  { opacity: 1; transform: translate(var(--react-fly-x, 0px), var(--react-fly-y, 0px)) scale(0.7); }
+  100% { opacity: 0; transform: translate(var(--react-fly-x, 0px), var(--react-fly-y, 0px)) scale(0.55); }
+}
+.chat-peek-item.peek-react-fly {
+  animation: chat-react-fly 0.82s cubic-bezier(0.32, 0.72, 0.3, 1) forwards;
+  pointer-events: none;
+}
+
+/* What it landed on, when that was another peek. The transcript's own version
+   of this is .chat-msg-flash. */
+@keyframes chat-peek-hit {
+  0%, 100% { transform: none; }
+  40%      { transform: scale(1.04); }
+}
+.chat-peek-anchored .chat-peek-item.chat-peek-hit {
+  animation: chat-peek-hit 0.4s ease 0.55s;
+}
+
+/* Stacked over the stage, a peek is a second copy of a transcript that is
+   already on screen — see unanchorChatPeeks(). */
+.chat-peek.chat-peek-muted { display: none; }
+
 @media (prefers-reduced-motion: reduce) {
   .chat-peek-item,
   .chat-peek-anchored .chat-peek-item { animation: none; }
+  /* The flight is the only thing that says which message a reaction belongs to,
+     so it is shortened rather than removed: a cut, not a throw. */
+  .chat-peek-item.peek-react-fly {
+    animation: chat-react-fly 0.82s step-end forwards;
+  }
+  .chat-msg-flash { animation: none; }
 }
 
 /* The handle is the chat's only entry point, so it says whether the chat is

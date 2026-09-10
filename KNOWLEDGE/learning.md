@@ -1156,6 +1156,33 @@ seems too sharp".
   `videoStageMode()` about a pending window size, which is a second source of
   truth for the same question.
 
+- **A reaction cannot aim at a row that is about to be re-rendered.** The peek
+  that flies from the reactor's name to the reacted message measures its target
+  once, synchronously. Announcing it from inside `applyChatReaction()` put that
+  measurement *before* the `renderChat()` its own callers run, so the glyph flew
+  to a row that no longer existed a microsecond later — and the flash it left on
+  that row was thrown away with it. `applyChatReaction()` now returns
+  `'added'`/`'removed'` and the callers announce after rendering.
+
+- **A transform animation is not where the element is.** Any test that measures
+  a peek's placement has to read `offsetLeft`/`offsetTop`, never
+  `getBoundingClientRect()`: both the reaction's flight and the bubble's own
+  entrance are transform keyframes, so a rect read mid-animation is off by
+  whatever the animation is currently doing. The anchored host is pinned to all
+  four edges, so a child's offset box is already in window coordinates.
+
+- **A shortcode is a Unicode name, not a Slack alias.** `src/emoji-data.js` is
+  generated from Unicode's `emoji-test.txt`, so `:party_popper` finds 🎉 and
+  `:tada` finds nothing. Prefix matching picks the *shortest* name that starts
+  with what was typed, which is why `:par` is 🪂 (parachute) and not 🎉. Adding
+  aliases would mean a second dataset to keep in step with the catalog.
+
+- **The composer's blur must not race the suggestion it is being clicked on.**
+  A `mousedown` on a menu item blurs the textarea before the `click` fires, so
+  the menu is dismissed out from under the pointer. Two things fix it together:
+  the menu accepts on `mousedown` with `preventDefault()` (so the caret is never
+  lost), and the blur handler closes on a short timer rather than immediately.
+
 - **"26 hours ago" is not yesterday.** `unit-chat.spec.js`'s day-separator test
   seeded a message at `now - 26h` and expected a "Yesterday" label — which is
   two calendar days back whenever the suite runs between midnight and 02:00, so
