@@ -644,6 +644,12 @@ choice is geometry, not a breakpoint, and it is all-or-nothing across the set:
 one bubble that cannot be anchored puts all of them back in the stack, because a
 set split between the two shapes reads as two unrelated notifications.
 
+Anchored, everything one person said is one **run**, laid out along their name
+rather than down the screen: three messages from one person is one line coming
+out of that name, and only the bubble the run starts at carries a tail. A run
+wraps onto a second line when the window runs out before it does, and moves as
+a whole when it has to clear somebody else's.
+
 The chat is reached from a handle on the right edge — the chat icon, the unread
 count, and a drag — in **every** room, voice-only ones included. There is no
 button for it in the header. That handle is wired by `initChatUI()` rather than

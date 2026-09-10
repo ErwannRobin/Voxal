@@ -467,7 +467,13 @@ test.describe('the transcript on screen', () => {
     const labels = await page.evaluate(() => {
       resetChatState();
       const now = Date.now();
-      appendChatMessage({ id: 'other:1', peerId: 'other', text: 'yesterday', at: now - 26 * 3600 * 1000 }, { quiet: true });
+      // Anchored to yesterday midday, not to "26 hours ago": run between
+      // midnight and 02:00 the latter is two calendar days back and the
+      // separator reads as a date rather than "Yesterday".
+      const yesterday = new Date();
+      yesterday.setHours(12, 0, 0, 0);
+      yesterday.setDate(yesterday.getDate() - 1);
+      appendChatMessage({ id: 'other:1', peerId: 'other', text: 'yesterday', at: yesterday.getTime() }, { quiet: true });
       appendChatMessage({ id: 'other:2', peerId: 'other', text: 'after a pause', at: now - CHAT_BREAK_MS - 1000 }, { quiet: true });
       appendChatMessage({ id: 'other:3', peerId: 'other', text: 'right after', at: now }, { quiet: true });
       appendChatMessage({ id: 'other:4', peerId: 'other', text: 'and again', at: now + 1000 }, { quiet: true });
@@ -890,21 +896,57 @@ test.describe('the peek pinned to the name that sent it', () => {
     expect(lower.tailY).toBeGreaterThan(upper.tailY);
   });
 
-  test('a burst from one person stacks instead of piling up', async ({ page }) => {
+  test('a burst from one person runs along the name, not down the screen', async ({ page }) => {
     await say(page, 'other:1', 'one');
     await say(page, 'other:2', 'two');
-    const boxes = await page.evaluate(() =>
-      Array.from(document.querySelectorAll('#chat-peek .chat-peek-item'))
-        .map((el) => el.getBoundingClientRect())
-        .map((r) => ({ top: r.top, bottom: r.bottom })));
-    expect(boxes).toHaveLength(2);
-    const [a, b] = boxes.sort((x, y) => x.top - y.top);
-    expect(b.top).toBeGreaterThanOrEqual(a.bottom);
-    // Both still point at the same name, so both keep a tail.
-    const tails = await page.evaluate(() =>
-      Array.from(document.querySelectorAll('#chat-peek .chat-peek-item'))
-        .filter((el) => el.classList.contains('peek-tail-left') || el.classList.contains('peek-tail-right')).length);
-    expect(tails).toBe(2);
+    await say(page, 'other:3', 'three');
+    const seen = await page.evaluate(() => {
+      const els = Array.from(document.querySelectorAll('#chat-peek .chat-peek-item'));
+      const name = document.querySelector('#peer-item-other .peer-name').getBoundingClientRect();
+      return {
+        boxes: els.map((el) => {
+          const r = el.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+        }),
+        // Only the bubble the run starts at touches the name.
+        tails: els.map((el) => el.classList.contains('peek-tail-left') || el.classList.contains('peek-tail-right')),
+        nameRight: name.right,
+      };
+    });
+    expect(seen.boxes).toHaveLength(3);
+    // One line: every bubble overlaps the others vertically, and each starts
+    // after the one before it. Arrival order runs away from the name.
+    const [a, b, c] = seen.boxes;
+    expect(a.left).toBeCloseTo(seen.nameRight + 12, 0);
+    expect(b.left).toBeGreaterThanOrEqual(a.right);
+    expect(c.left).toBeGreaterThanOrEqual(b.right);
+    expect(b.top).toBeLessThan(a.bottom);
+    expect(c.top).toBeLessThan(a.bottom);
+    expect(seen.tails).toEqual([true, false, false]);
+  });
+
+  test('a run that outgrows the window wraps under itself rather than off it', async ({ page }) => {
+    const long = 'Can you hear me? I think my mic is cutting out again, one moment.';
+    await say(page, 'other:1', long);
+    await say(page, 'other:2', long);
+    await say(page, 'other:3', long);
+    const seen = await page.evaluate(() => {
+      const els = Array.from(document.querySelectorAll('#chat-peek .chat-peek-item'));
+      return {
+        boxes: els.map((el) => {
+          const r = el.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+        }),
+        width: window.innerWidth,
+      };
+    });
+    // Nothing hangs off the side, and the run did have to wrap.
+    seen.boxes.forEach((r) => {
+      expect(r.left).toBeGreaterThanOrEqual(0);
+      expect(r.right).toBeLessThanOrEqual(seen.width);
+    });
+    const tops = new Set(seen.boxes.map((r) => Math.round(r.top)));
+    expect(tops.size).toBeGreaterThan(1);
   });
 
   test('with no clear space beside the roster it goes back to the stack over the room', async ({ page }) => {

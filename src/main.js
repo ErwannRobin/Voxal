@@ -217,7 +217,8 @@ const CHAT_PEEK_ANCHOR_MIN_WIDTH = 200;
 const CHAT_PEEK_ANCHOR_MAX_WIDTH = 320;
 const CHAT_PEEK_ANCHOR_GAP  = 12;  // name → tail
 const CHAT_PEEK_ANCHOR_EDGE = 10;  // never flush against the room's own edge
-const CHAT_PEEK_ANCHOR_VGAP = 8;   // between two bubbles that would overlap
+const CHAT_PEEK_ANCHOR_HGAP = 8;   // between two bubbles from the same person
+const CHAT_PEEK_ANCHOR_VGAP = 8;   // between two runs that would overlap
 const CHAT_PEEK_TAIL_INSET  = 14;  // how close to a corner the tail may sit
 // Below this the chat cannot be a column beside the stage without squeezing the
 // tiles into nothing, so it stays the drawer it is everywhere else.
@@ -3915,37 +3916,86 @@ function layoutChatPeeks() {
     el.style.maxWidth = Math.round(Math.min(CHAT_PEEK_ANCHOR_MAX_WIDTH, plans[n].space)) + 'px';
   });
 
-  // Placed down the screen rather than in arrival order, so a bubble is only
-  // ever nudged away from a row ABOVE it: the bubbles then read in the same
-  // order as the names they came from.
+  // Placed down the screen rather than in arrival order, so a run is only ever
+  // nudged away from a name ABOVE it: the bubbles then read in the same order
+  // as the names they came from.
   var order = items.map(function(_, n) { return n; })
     .sort(function(a, b) { return plans[a].name.top - plans[b].name.top; });
 
-  var bands = [];  // vertical space already spoken for, so two bubbles never overlap
+  // Everything one person said is one run, laid out ALONG their name rather
+  // than down the screen: three messages from one person is one line coming out
+  // of that name, not three bubbles walking away from it. The sort above is
+  // stable and every bubble in a run shares a name.top, so a run is already a
+  // contiguous stretch of `order` — and inside it, arrival order.
+  var runs = [];
   order.forEach(function(n) {
-    var el = items[n];
-    var plan = plans[n];
-    var w = el.offsetWidth;
-    var h = el.offsetHeight;
-    var left = plan.side === 'right'
-      ? plan.name.right + CHAT_PEEK_ANCHOR_GAP
-      : plan.name.left - CHAT_PEEK_ANCHOR_GAP - w;
-    var centre = plan.name.top + plan.name.height / 2;
-    var top = clampChatPeekTop(centre - h / 2, h, view.height);
-    top = pushChatPeekClear(bands, top, h, view.height);
-    bands.push([top, top + h]);
+    var last = runs[runs.length - 1];
+    if (last && items[last[0]]._voxalPeekPeerId === items[n]._voxalPeekPeerId) last.push(n);
+    else runs.push([n]);
+  });
 
-    el.classList.toggle('peek-tail-left', plan.side === 'right');
-    el.classList.toggle('peek-tail-right', plan.side === 'left');
-    el.style.left = Math.round(left) + 'px';
-    el.style.top  = Math.round(top) + 'px';
-    // The tail keeps pointing at the name even when the bubble had to shuffle
-    // down out of an older one's way, so a burst of messages stays legible as
-    // "these came from that person".
-    var tail = centre - top;
-    if (tail < CHAT_PEEK_TAIL_INSET) tail = CHAT_PEEK_TAIL_INSET;
-    if (tail > h - CHAT_PEEK_TAIL_INSET) tail = Math.max(CHAT_PEEK_TAIL_INSET, h - CHAT_PEEK_TAIL_INSET);
-    el.style.setProperty('--peek-tail', Math.round(tail) + 'px');
+  var bands = [];  // vertical space already spoken for, so two runs never overlap
+  runs.forEach(function(run) { placeChatPeekRun(items, plans, run, view, bands); });
+}
+
+// One person's messages, side by side out of their name. Wrapping onto a second
+// line is the escape hatch for a window that runs out before the run does; the
+// block is then moved as a whole, so a wrapped line never parts from its own
+// first line to dodge somebody else's.
+function placeChatPeekRun(items, plans, run, view, bands) {
+  var plan = plans[run[0]];
+  var rightwards = plan.side === 'right';
+  var edge  = rightwards ? plan.name.right + CHAT_PEEK_ANCHOR_GAP
+                         : plan.name.left  - CHAT_PEEK_ANCHOR_GAP;
+  var limit = rightwards ? view.width - CHAT_PEEK_ANCHOR_EDGE : CHAT_PEEK_ANCHOR_EDGE;
+
+  var lines = [];
+  var line = null;
+  var cursor = edge;
+  run.forEach(function(n) {
+    var el = items[n];
+    var w = el.offsetWidth, h = el.offsetHeight;
+    var far = rightwards ? cursor + w : cursor - w;
+    if (!line || (line.entries.length && (rightwards ? far > limit : far < limit))) {
+      line = { height: 0, entries: [] };
+      lines.push(line);
+      cursor = edge;
+      far = rightwards ? cursor + w : cursor - w;
+    }
+    line.entries.push({ n: n, h: h, left: rightwards ? cursor : far });
+    if (h > line.height) line.height = h;
+    cursor = far + (rightwards ? CHAT_PEEK_ANCHOR_HGAP : -CHAT_PEEK_ANCHOR_HGAP);
+  });
+
+  var block = lines.reduce(function(sum, l) { return sum + l.height; }, 0) +
+              CHAT_PEEK_ANCHOR_VGAP * (lines.length - 1);
+  // The FIRST line is what sits on the name; anything that wrapped hangs below.
+  var centre = plan.name.top + plan.name.height / 2;
+  var top = clampChatPeekTop(centre - lines[0].height / 2, block, view.height);
+  top = pushChatPeekClear(bands, top, block, view.height);
+  bands.push([top, top + block]);
+
+  lines.forEach(function(l, i) {
+    l.entries.forEach(function(entry, j) {
+      var el = items[entry.n];
+      var y = top + (l.height - entry.h) / 2;
+      // Only the bubble the run starts at touches the name; the rest continue
+      // the line, and a tail on one of those would point at the bubble before
+      // it rather than at the person.
+      var tailed = i === 0 && j === 0;
+      el.classList.toggle('peek-tail-left', tailed && rightwards);
+      el.classList.toggle('peek-tail-right', tailed && !rightwards);
+      el.style.left = Math.round(entry.left) + 'px';
+      el.style.top  = Math.round(y) + 'px';
+      if (!tailed) { el.style.removeProperty('--peek-tail'); return; }
+      // The tail keeps pointing at the name even when the run had to shuffle
+      // down out of another one's way.
+      var tail = centre - y;
+      if (tail < CHAT_PEEK_TAIL_INSET) tail = CHAT_PEEK_TAIL_INSET;
+      if (tail > entry.h - CHAT_PEEK_TAIL_INSET) tail = Math.max(CHAT_PEEK_TAIL_INSET, entry.h - CHAT_PEEK_TAIL_INSET);
+      el.style.setProperty('--peek-tail', Math.round(tail) + 'px');
+    });
+    top += l.height + CHAT_PEEK_ANCHOR_VGAP;
   });
 }
 
@@ -3954,9 +4004,9 @@ function clampChatPeekTop(top, h, limit) {
   return top < 0 ? 0 : top;
 }
 
-// Slide down past anything already placed. Two people talking at once are two
-// rows apart in the roster, so this normally does nothing; it earns its keep on
-// a burst from one person, where every bubble wants the same centre line.
+// Slide down past anything already placed. One person's messages are one run
+// and are never each other's problem; this is for two people whose roster rows
+// are closer together than the bubbles coming out of them are tall.
 function pushChatPeekClear(bands, top, h, limit) {
   for (var pass = 0; pass <= bands.length; pass++) {
     var moved = false;

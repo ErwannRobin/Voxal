@@ -1058,6 +1058,14 @@ seems too sharp".
   from someone ABOVE the previous sender gets pushed down past them, and the
   bubbles end up in the reverse of the order the names are in.
 
+- **What shares an anchor should share a line.** Two bubbles pointing at the
+  same name are not two things to keep apart — they are one run, and pushing the
+  second one down walks it away from the name it belongs to and towards the next
+  person's. They go side by side out of the name instead, with a tail only on
+  the one that starts the run: a tail on the second would point at the first
+  bubble rather than at the person. Collision avoidance then works on the run,
+  not the bubble, so a wrapped line never parts from its own first line.
+
 - **`textContent` cannot see what CSS hid.** The anchored peek drops the sender's
   name (the tail says it) by hiding the span, not by leaving it unrendered — the
   stacked shape still needs it. A test asserting what the bubble *shows* has to
@@ -1147,3 +1155,10 @@ seems too sharp".
   back with the landscape width. Chasing that would mean teaching
   `videoStageMode()` about a pending window size, which is a second source of
   truth for the same question.
+
+- **"26 hours ago" is not yesterday.** `unit-chat.spec.js`'s day-separator test
+  seeded a message at `now - 26h` and expected a "Yesterday" label — which is
+  two calendar days back whenever the suite runs between midnight and 02:00, so
+  it went red purely on the clock. A test about calendar days has to be anchored
+  to one (yesterday midday), never to an offset in hours.
+
