@@ -717,13 +717,25 @@
         </div>
         <div id="chat-messages" class="chat-messages" role="log" aria-live="polite" aria-relevant="additions"></div>
         <p id="chat-typing" class="chat-typing hidden" aria-live="polite"></p>
+        <!-- What the composer is about to answer. The strip IS the state: with
+             a reply pending and nothing on screen, the sender would be quoting
+             something they never saw themselves choose. Built by
+             renderChatReplyBar(). -->
+        <div id="chat-reply-bar" class="chat-reply-bar hidden"></div>
+        <!-- `:shortcode` and `@name`, one menu for both. Above the composer
+             rather than at the caret: the drawer is 280–720px wide and a
+             popover at the caret has nowhere to be. Built by
+             renderChatSuggest(). -->
+        <div id="chat-suggest" class="chat-suggest hidden" role="listbox" aria-label="Suggestions"></div>
         <div class="room-chat-composer">
           <button id="btn-emoji" class="chat-emoji-btn" type="button" title="Emoji"
                   aria-label="Insert emoji" aria-haspopup="dialog" aria-expanded="false">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
           </button>
           <textarea id="chat-input" class="chat-input" rows="1" maxlength="2000"
-                    placeholder="Message the room…" aria-label="Message"></textarea>
+                    placeholder="Message the room…" aria-label="Message"
+                    autocomplete="off" role="combobox" aria-expanded="false"
+                    aria-controls="chat-suggest"></textarea>
           <button id="btn-chat-send" class="btn btn-primary btn-sm chat-send" type="button">Send</button>
         </div>
 
@@ -736,6 +748,22 @@
                  placeholder="Search emoji…" aria-label="Search emoji" />
           <div id="emoji-tabs" class="emoji-tabs" role="tablist" aria-label="Emoji categories"></div>
           <div id="emoji-grid" class="emoji-grid"></div>
+        </div>
+      </div>
+
+      <!-- Quick actions (⌘/Ctrl+K). One way to every room control, including
+           the ones that are behind an edge handle or off the bottom of an
+           immersive stage. The outer element is the backdrop; a click on it
+           closes. Built by renderCommandPalette(). -->
+      <div id="command-palette" class="command-palette hidden" role="dialog"
+           aria-modal="true" aria-label="Quick actions">
+        <div class="command-palette-box">
+          <input id="command-palette-input" class="command-palette-input" type="text"
+                 autocomplete="off" placeholder="Camera, chat, participants…"
+                 aria-label="Search actions" role="combobox"
+                 aria-controls="command-palette-list" aria-expanded="true" />
+          <div id="command-palette-list" class="command-palette-list" role="listbox"
+               aria-label="Actions"></div>
         </div>
       </div>
 

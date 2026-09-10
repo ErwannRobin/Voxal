@@ -632,17 +632,56 @@ pushes the drawer back over a call. While it is shut, a new message surfaces for
 a few seconds over the call (`#chat-peek`) and the count rides on the edge
 handle.
 
-That peek has two shapes, chosen by `layoutChatPeeks()` on every pass rather
+That peek has three shapes, chosen by `layoutChatPeeks()` on every pass rather
 than once at arrival. Where there is clear space beside the participants panel —
 a desktop, in short — the bubble opens at the last character of the sender's
 name, over whatever else the roster row holds, with a comic-strip tail running
 back into that name; the name itself is left out of the bubble, because the tail
-has already said it. Where there is no such space — a phone, whose roster is the
-whole width of the screen — it falls back to the original stack low over the
-stage, and there the name comes back, since nothing else says who sent it. The
-choice is geometry, not a breakpoint, and it is all-or-nothing across the set:
-one bubble that cannot be anchored puts all of them back in the stack, because a
-set split between the two shapes reads as two unrelated notifications.
+has already said it. Where there is no space either side — a phone, whose roster
+is the whole width of the screen — the bubble opens **under** the name instead,
+with the tail pointing back up into it (`peek-tail-up`, `--peek-tail-x`): the
+same idea in the one direction still free, which is what gives a phone the
+anchored shape rather than an anonymous stack. Only when there is nothing on
+screen to point at at all — the sender has no visible roster row — does it fall
+back to the original stack low over the stage, and there the name comes back,
+since nothing else says who sent it. The choice is geometry, not a breakpoint,
+and it is all-or-nothing across the set: one bubble that cannot be anchored puts
+all of them back in the stack, because a set split between shapes reads as two
+unrelated notifications.
+
+The peek is **not** the panel's stand-in, so it is no longer suppressed while
+the chat is open: anchored, it is the only thing that says which person in the
+room is talking, which the transcript cannot. The *stacked* shape is the one
+that would only be a second copy of the transcript, and that is what stands down
+(`.chat-peek-muted`, set by `unanchorChatPeeks()`).
+
+A **reaction** peeks the same way, as the bare glyph with no bubble and no tail,
+and then flies to the message it belongs to — the peek of that message if it is
+still up, the row in the panel if the panel is open, otherwise the name of
+whoever wrote it. That flight is the whole "which message?" answer, and it costs
+one CSS keyframe: `flyChatReactPeek()` measures the distance once, hands it to
+`--react-fly-x/y` (plus a lifted midpoint, so it reads as a throw), and the
+compositor does the rest. It is announced *after* the transcript re-renders —
+`applyChatReaction()` now returns `'added'`/`'removed'` and the callers call
+`noteChatReactionApplied()` — because a render that came after would replace the
+row the glyph had just aimed at.
+
+The composer speaks four more things:
+
+- **`@name`** — a mention is matched against the roster, longest name first,
+  never parsed as "@ plus one word": display names contain spaces. Nothing about
+  it goes on the wire, so `@you` is resolved on each reader's own roster and is
+  correctly different on every screen. `chatMentionNames()` is memoised and
+  invalidated by `updatePeerList()`.
+- **A reply** — `replyTo` on the wire, a quote above the message that jumps back
+  to the original, and a strip over the composer while it is pending. `↑` on an
+  empty composer answers the last message; `Esc` drops it.
+- **`:shortcode`** — the emoji catalog's own Unicode names with spaces folded to
+  underscores, so there is no second dataset. Suggested from two characters in.
+- **`+:shortcode`** — reacts to the last message instead of sending anything.
+
+A message that is nothing but emoji (up to `CHAT_JUMBO_MAX`) is printed large,
+in the transcript and in the peek.
 
 Anchored, everything one person said is one **run**, laid out along their name
 rather than down the screen: three messages from one person is one line coming
@@ -661,8 +700,33 @@ header from the top. The chat borrows `STAGE_PANELS`' drag gesture through
 `CHAT_DRAG_PANEL` without joining it — see [[chat-drawer-not-a-stage-panel]] in
 `learning.md`.
 
+## ⌨️ Quick actions (⌘/Ctrl+K)
+
+One key to every room control, because they are not all on screen at once: the
+participants are behind an edge handle on a phone, the chat is a drawer, and the
+camera row is off the bottom of an immersive stage. `commandPaletteActions()`
+reads the room's own **buttons** rather than re-deriving what is available, so a
+control the room does not offer is not an action.
+
+Direct keys, and why these: `⌘/Ctrl+K` the palette (Slack, Linear, Notion,
+Discord), `⌘/Ctrl+E` camera (Google Meet's own), `⌘/Ctrl+⇧+E` screen share,
+`⌘/Ctrl+B` the chat drawer. They are handled *before* the focused-text-field
+guard, since a modifier combination means the same thing inside the composer as
+out of it — but `matchesShortcut(e)` is checked first, so a user who bound
+push-to-talk to one of them keeps their own binding. Everything else stays in
+the palette: a single letter cannot be a shortcut here (Space is push-to-talk
+and any letter may be being typed), and `⌘/Ctrl+`​`T W N L D J ⇧J ⇧C` belong to
+the browser whatever the page does with the event.
+
+Hands-free and push-to-talk are listed at the bottom as their own group. The
+push-to-talk row is a `note`, not an action — a key you hold cannot be a menu
+item — and the arrow keys skip it.
+
 Deliberately left for later:
 
+- **A palette outside a room.** Everything it offers today is a room control.
+- **User-rebindable accelerators.** Only push-to-talk is rebindable; the rest
+  are fixed, which is what lets the palette print them.
 - **Skin-tone variants.** Dropping them is what keeps the catalog at 43 KB. A
   tone picker would need the modifier sequences back plus a stored preference,
   and a reaction's identity would stop being a single string.

@@ -387,7 +387,7 @@ test.describe('sending', () => {
       resendPendingChat();
       return out;
     });
-    expect(sent).toEqual([{ type: 'chat', id: 'me:1', text: 'in flight' }]);
+    expect(sent).toEqual([{ type: 'chat', id: 'me:1', text: 'in flight', replyTo: null }]);
   });
 
   test('a body longer than the cap is clamped, not dropped', async ({ page }) => {
@@ -744,12 +744,34 @@ test.describe('the peek over the call', () => {
     expect(await peeks(page)).toEqual(['Alice over here']);
   });
 
-  test('nothing peeks while the panel is showing the same thing', async ({ page }) => {
+  // The peek is not the panel's stand-in: anchored, it says WHO in the room is
+  // talking, which the transcript cannot. So it surfaces either way.
+  test('a message still peeks while the panel is open', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
     await page.evaluate(() => {
+      updatePeerList();
       toggleChatPanel(true);
       handleHostMessage({ type: 'chat', id: 'other:1', peerId: 'other', text: 'seen', at: Date.now() });
     });
-    expect(await peeks(page)).toEqual([]);
+    expect(await peeks(page)).toEqual(['Alice seen']);
+    expect(await page.evaluate(() =>
+      document.getElementById('chat-peek').classList.contains('chat-peek-anchored'))).toBe(true);
+  });
+
+  // The stacked shape is the one that IS only a second copy of the transcript,
+  // so that is the one that stands down while the panel is open.
+  test('the stack over the room stands down while the panel is open', async ({ page }) => {
+    const muted = await page.evaluate(() => {
+      toggleChatPanel(true);
+      handleHostMessage({ type: 'chat', id: 'other:1', peerId: 'other', text: 'seen', at: Date.now() });
+      // Nothing on screen to point at: the sender is gone from the roster.
+      connections.delete('other');
+      updatePeerList();
+      const host = document.getElementById('chat-peek');
+      return { anchored: host.classList.contains('chat-peek-anchored'),
+               hidden: host.classList.contains('chat-peek-muted') };
+    });
+    expect(muted).toEqual({ anchored: false, hidden: true });
   });
 
   test('your own message never peeks', async ({ page }) => {
@@ -864,8 +886,9 @@ test.describe('the peek pinned to the name that sent it', () => {
   });
 
   test('stacked, the name is back — nothing else there says who sent it', async ({ page }) => {
-    await page.setViewportSize({ width: 420, height: 720 });
-    await page.evaluate(() => { updatePeerList(); });
+    // Genuinely nothing to point at: the roster is off screen, so neither
+    // side of it nor under the name is available and the stack is all there is.
+    await page.evaluate(() => { document.getElementById('room-peers-panel').style.display = 'none'; });
     await say(page, 'other:1', 'over here');
     const seen = await page.evaluate(() => {
       const el = document.querySelector('#chat-peek .chat-peek-item');
@@ -949,21 +972,39 @@ test.describe('the peek pinned to the name that sent it', () => {
     expect(tops.size).toBeGreaterThan(1);
   });
 
-  test('with no clear space beside the roster it goes back to the stack over the room', async ({ page }) => {
+  // A phone: the roster is the full width of the screen, so there is nothing
+  // either side to open into — but there is still the name itself, and the
+  // bubble opens under it with the tail pointing back up.
+  test('with no clear space beside the roster the bubble opens under the name', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 720 });
     await page.evaluate(() => { updatePeerList(); });
     await say(page, 'other:1', 'no room here');
     const seen = await page.evaluate(() => {
       const host = document.getElementById('chat-peek');
       const el = host.querySelector('.chat-peek-item');
+      const name = document.querySelector('#peer-item-other .peer-name').getBoundingClientRect();
+      const b = el.getBoundingClientRect();
       return {
         anchored: host.classList.contains('chat-peek-anchored'),
-        tailed: el.classList.contains('peek-tail-left') || el.classList.contains('peek-tail-right'),
-        // Nothing left over from an anchored pass.
-        placed: !!el.style.left,
+        up: el.classList.contains('peek-tail-up'),
+        sideways: el.classList.contains('peek-tail-left') || el.classList.contains('peek-tail-right'),
+        belowName: b.top >= name.bottom,
+        onScreen: b.left >= 0 && b.right <= window.innerWidth,
+        // The tail walks along the bubble's top edge to land under the name.
+        tailX: b.left + parseFloat(getComputedStyle(el).getPropertyValue('--peek-tail-x')),
+        nameLeft: name.left,
+        nameRight: name.right,
       };
     });
-    expect(seen).toEqual({ anchored: false, tailed: false, placed: false });
+    expect(seen.anchored).toBe(true);
+    expect(seen.up).toBe(true);
+    expect(seen.sideways).toBe(false);
+    expect(seen.belowName).toBe(true);
+    expect(seen.onScreen).toBe(true);
+    // The point lands ON the name — dead centre where the bubble is wide
+    // enough, and as close to it as the corner inset allows when it is not.
+    expect(seen.tailX).toBeGreaterThanOrEqual(seen.nameLeft);
+    expect(seen.tailX).toBeLessThanOrEqual(seen.nameRight);
   });
 
   test('a sender with no row on screen puts the whole set back in the stack', async ({ page }) => {

@@ -180,7 +180,7 @@ off↔on at all. See `docs/video-effects.md`.
 | `edge-sharpness` | `VideoEffects.SHARPNESS_KEY` | How hard the cut-out's edge is, `0`–`1` (default `0.5`, stored as an absence). Settings → Video → Edge sharpness. One preference drives the feather, the smoothstep window and the dilate together via `_edgeProfile()` — moving one without the others is a hard edge with a wasted uniform. Applied live by `Processor.applyEdge()`; uniforms only, so no track swap |
 | `detection-quality` | `VideoEffects.QUALITY_KEY` | `battery` / `balanced` (default, stored as an absence) / `high` — the segmentation-rate ladder, i.e. how often you are picked out of the frame again. Settings → Video → Detection accuracy. The adaptive step-down under load still applies on every rung. Applied live by `Processor.applyQuality()` |
 | `light-adapt` | `VideoEffects.LIGHT_ADAPT_KEY` | Absent (on) / `off` — brighten the segmenter's own downscaled copy of the frame in a dim or backlit room, never the published picture. Settings → Video → Adapt to low light. Applied live by `Processor.applyLightAdapt()` |
-| `chat-log` | `CHAT_LOG_KEY` | The room's chat transcript: `{roomCode, savedAt, messages}`, capped at `CHAT_LOG_MAX` (200) and sharing the rejoin snapshot's `REJOIN_TTL_MS`. Restored by `loadChatLog(code)` only when `roomCode` matches the room being joined, and cleared wherever `clearRejoinSnapshot()` is |
+| `chat-log` | `CHAT_LOG_KEY` | The room's chat transcript: `{roomCode, savedAt, messages}` (a message carries `replyTo`), capped at `CHAT_LOG_MAX` (200) and sharing the rejoin snapshot's `REJOIN_TTL_MS`. Restored by `loadChatLog(code)` only when `roomCode` matches the room being joined, and cleared wherever `clearRejoinSnapshot()` is |
 | `chat-width` | `CHAT_WIDTH_KEY` | Width of the chat drawer in px, set by dragging its separator (`#chat-resizer`). Clamped to `CHAT_WIDTH_MIN`–`CHAT_WIDTH_MAX` and to 90% of the window on read, so a narrower window never leaves the drawer hanging off |
 | `chat-collapsed` | `CHAT_COLLAPSED_KEY` | Present (`1`) only when the drawer was deliberately folded away. Absent means "never chosen" = expanded, which is what makes a desktop room open the chat on entry (`chatOpensOnEntry()` → `applyChatAutoOpen()`, called from `showScreen('room')`). Written by the collapse icon in the chat header and by the edge handle — never by leaving a room. A close that did not go through those still suppresses the auto-open for the rest of that room, via `_chatCollapsedHere` |
 | `emoji-recent` | `EMOJI_RECENT_KEY` | The emoji picker's Recent row, most recent first, capped at `EMOJI_RECENT_MAX`. Seeded from `CHAT_REACTIONS` rather than starting empty |
@@ -225,6 +225,36 @@ everything that reads it lives in `main.js`. Two constraints: such a script must
 declared in `main.js` — classic scripts share one global lexical scope, so a
 duplicate declaration is a load-time `SyntaxError`. That is why the background
 mode's key is reached as `VideoEffects.STORAGE_KEY` rather than re-declared.
+
+### Chat over the call
+
+A message that arrives surfaces briefly beside the person who sent it
+(`showChatPeek()`), whether or not the chat panel is open — anchored, the bubble
+is the only thing that says *which person in the room* is talking. `layoutChatPeeks()`
+picks the shape every pass: beside the name where there is space, **under** the
+name where there is not (a phone), and the old stack over the stage only when
+there is no roster row to point at — that last shape stands down while the panel
+is open, since it would be a second copy of the transcript.
+
+A reaction peeks as the bare glyph and then **flies** to the message it belongs
+to (`flyChatReactPeek()`): one CSS keyframe fed a measured distance, so nothing
+runs per frame. It is announced by `noteChatReactionApplied()` *after* the
+transcript re-renders — `applyChatReaction()` returns `'added'`/`'removed'`.
+
+The composer understands `@name` (matched against the roster, longest name
+first, never sent on the wire), a reply (`replyTo`; `↑` on an empty composer
+answers the last message), `:shortcode` (the emoji catalog's own Unicode names)
+and `+:shortcode` (react to the last message). A body that is nothing but emoji,
+up to `CHAT_JUMBO_MAX`, is printed large.
+
+### Keyboard shortcuts in a room
+
+`⌘/Ctrl+K` opens the quick-actions palette; `⌘/Ctrl+E` camera, `⌘/Ctrl+⇧+E`
+screen, `⌘/Ctrl+B` the chat drawer. They are handled before the focused-text-field
+guard (a modifier combination means the same inside the composer), but
+`matchesShortcut(e)` wins — a user who bound push-to-talk to one of them keeps
+it. The palette's contents come from the room's own buttons
+(`commandPaletteActions()`), so a control that is not on screen is not an action.
 
 ### Theme
 Applied before first paint via inline `<script>` at the top of both HTML files. `data-theme` on `<html>`. Dark is the default; light overrides via `html[data-theme="light"]`; system uses `@media (prefers-color-scheme: light) { html[data-theme="system"] }`.

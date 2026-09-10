@@ -53,8 +53,9 @@
  *   log-entries          { peerId, entries,     target -> host (relayed to requester); dev only
  *                          from }
  *   log-session-end      { peerId, reason, from } target -> host (relayed to requester); dev only
- *   chat         { id, text }                   peer -> host; host stamps the sender and fans out
- *   chat         { id, peerId, text, at }       host -> ALL, the sender included (the echo is its ack)
+ *   chat         { id, text, replyTo }          peer -> host; host stamps the sender and fans out
+ *   chat         { id, peerId, text, at,        host -> ALL, the sender included (the echo is its ack)
+ *                  replyTo }                    `replyTo` is the id of the message being answered
  *   chat-history { messages:[...] }             host -> joiner (reply to hello) — the transcript so far
  *   chat-react   { msgId, emoji }               peer -> host; relayed to all as { msgId, emoji, peerId }
  *   chat-typing  { active }                     peer -> host; relayed to all others as { peerId, active }
@@ -220,6 +221,29 @@ const CHAT_PEEK_ANCHOR_EDGE = 10;  // never flush against the room's own edge
 const CHAT_PEEK_ANCHOR_HGAP = 8;   // between two bubbles from the same person
 const CHAT_PEEK_ANCHOR_VGAP = 8;   // between two runs that would overlap
 const CHAT_PEEK_TAIL_INSET  = 14;  // how close to a corner the tail may sit
+// Nothing either side of the roster — a phone, where the participants panel is
+// the whole width of the screen. The bubble then opens UNDER the name instead
+// of beside it, with the tail pointing back up into it, which is the same idea
+// in the only direction that is left. See chatPeekAnchorSide().
+const CHAT_PEEK_ANCHOR_BELOW_GAP = 8;
+// A reaction peeks too, and for less time: it is one glyph, and it is chasing a
+// message that is already on screen.
+const CHAT_REACT_PEEK_MS = 2600;
+// How long the glyph takes to travel from the name that sent it to the message
+// it lands on. One transform animation, so the whole flight is composited.
+const CHAT_REACT_FLY_MS  = 820;
+// A message that is nothing but emoji is printed large — up to this many. Past
+// it, it is a sentence written in emoji and reads better at the normal size.
+const CHAT_JUMBO_MAX = 3;
+// `@` in the composer. Names are matched against the roster rather than parsed
+// out of the text, because a display name may contain spaces (see
+// chatMentionNames()); the cap keeps that scan bounded in a big room.
+const CHAT_MENTION_MAX_NAMES = 60;
+const CHAT_MENTION_SUGGEST_MAX = 8;
+// `:` in the composer. Two characters before anything is suggested, so a colon
+// typed in a sentence does not open a menu on its own.
+const EMOJI_SHORTCODE_MIN = 2;
+const EMOJI_SHORTCODE_SUGGEST_MAX = 8;
 // Below this the chat cannot be a column beside the stage without squeezing the
 // tiles into nothing, so it stays the drawer it is everywhere else.
 const CHAT_DOCK_MIN_WIDTH = 1100;
@@ -3219,6 +3243,7 @@ var _chatPending = new Map();  // id -> { id, text } sent but not yet echoed bac
 var _chatTyping  = new Map();  // peerId -> expiry timestamp
 var _chatUnread  = 0;
 var _chatSeq     = 0;
+var _chatReplyTo = null;       // id of the message the composer is answering, or null
 var _chatTypingActive     = false;
 var _chatLastTypingSentAt = 0;
 var _chatTypingIdleTimer  = null;
@@ -3248,7 +3273,15 @@ function chatIdFromWire(id, senderId) {
 function serializeChatMessage(m) {
   var reactions = {};
   m.reactions.forEach(function(peers, emoji) { reactions[emoji] = Array.from(peers); });
-  return { id: m.id, peerId: m.peerId, text: m.text, at: m.at, reactions: reactions };
+  return { id: m.id, peerId: m.peerId, text: m.text, at: m.at, replyTo: m.replyTo || null, reactions: reactions };
+}
+
+// The id of the message being answered. Unlike a message's OWN id this carries
+// no sender prefix to check — it names somebody else's message by definition —
+// so the only thing that can be enforced here is the shape.
+function chatReplyToFromWire(id) {
+  if (typeof id !== 'string' || !id || id.length > CHAT_ID_MAX) return null;
+  return id;
 }
 
 function deserializeChatMessage(raw) {
@@ -3259,7 +3292,10 @@ function deserializeChatMessage(raw) {
   var reactions = new Map();
   var src = (raw.reactions && typeof raw.reactions === 'object') ? raw.reactions : {};
   Object.keys(src).forEach(function(emoji) {
-    if (CHAT_REACTIONS.indexOf(emoji) === -1) return;
+    // The same admission test the live path uses (isChatEmoji), not the seed
+    // row: a restored transcript must come back with the reactions it was
+    // saved with, and any emoji in the catalog may be one.
+    if (!isChatEmoji(emoji)) return;
     var peers = src[emoji];
     if (Array.isArray(peers) && peers.length) reactions.set(emoji, new Set(peers));
   });
@@ -3268,6 +3304,7 @@ function deserializeChatMessage(raw) {
     peerId: typeof raw.peerId === 'string' ? raw.peerId : '',
     text: text,
     at: typeof raw.at === 'number' ? raw.at : Date.now(),
+    replyTo: chatReplyToFromWire(raw.replyTo),
     reactions: reactions
   };
 }
@@ -3292,10 +3329,21 @@ function appendChatMessage(raw, opts) {
   chatLog.push(m);
   trimChatLog();
   var mine = !!(peer && m.peerId === peer.id);
-  if (!(opts && opts.quiet) && !mine && !chatPanelOpen()) {
-    _chatUnread++;
-    playChatPing();
+  if (!(opts && opts.quiet) && !mine) {
+    // The peek is no longer the panel's stand-in. Anchored, it is a bubble at
+    // the name that just spoke — which is worth having whether or not the
+    // transcript is also on screen, because the transcript cannot say WHO in
+    // the room the voice belongs to. layoutChatPeeks() is what withholds it
+    // when it would only be a second copy of the panel (see peekWouldDuplicate).
     showChatPeek(m);
+    if (!chatPanelOpen()) {
+      _chatUnread++;
+      playChatPing();
+    } else if (chatMessageMentionsMe(m.text)) {
+      // Named, with the panel open: no badge to add, but being addressed by
+      // name is worth a sound even while you are looking at the conversation.
+      playChatPing();
+    }
   }
   return true;
 }
@@ -3324,21 +3372,42 @@ function isChatEmoji(ch) {
 // Toggle, not set: the same peer sending the same emoji twice takes it back. A
 // reaction for a message we no longer hold (trimmed, or never received) is
 // dropped — there is nothing to attach it to.
+//
+// Returns 'added' / 'removed' / false. Both of the first two mean "re-render",
+// which is why the callers can keep testing this for truth; the distinction is
+// for the peek, which announces an added reaction and not a retracted one.
 function applyChatReaction(msgId, emoji, peerId) {
   if (!peerId || typeof msgId !== 'string') return false;
   if (!isChatEmoji(emoji)) return false;
-  var m = null;
-  for (var i = chatLog.length - 1; i >= 0; i--) { if (chatLog[i].id === msgId) { m = chatLog[i]; break; } }
+  var m = chatMessageById(msgId);
   if (!m) return false;
   var set = m.reactions.get(emoji);
   if (!set) { set = new Set(); m.reactions.set(emoji, set); }
   if (set.has(peerId)) {
     set.delete(peerId);
     if (!set.size) m.reactions.delete(emoji);
-  } else {
-    set.add(peerId);
+    return 'removed';
   }
-  return true;
+  set.add(peerId);
+  return 'added';
+}
+
+// Announced only once the transcript has been re-rendered around it: the glyph
+// aims at the row it belongs to, and a render that came after would replace the
+// row it had just measured. Only an ADDED reaction is announced — taking one
+// back is a correction, and a correction that flies across the screen reads as
+// a second reaction.
+function noteChatReactionApplied(applied, msgId, emoji, peerId) {
+  if (applied === 'added') showChatReactPeek(msgId, emoji, peerId);
+}
+
+function chatMessageById(msgId) {
+  for (var i = chatLog.length - 1; i >= 0; i--) { if (chatLog[i].id === msgId) return chatLog[i]; }
+  return null;
+}
+
+function lastChatMessage() {
+  return chatLog.length ? chatLog[chatLog.length - 1] : null;
 }
 
 // A typing flag expires on its own, so a peer that vanishes mid-sentence does
@@ -3380,6 +3449,8 @@ function stopChatTypingSweep() {
 
 function resetChatState() {
   _chatCollapsedHere = false;
+  _chatReplyTo = null;
+  closeChatSuggest();
   chatLog = [];
   _chatIds.clear();
   _chatPending.clear();
@@ -3392,6 +3463,7 @@ function resetChatState() {
   stopChatTypingSweep();
   clearChatPeek();
   renderChat();
+  renderChatReplyBar();
   updateChatUnreadBadge();
 }
 
@@ -3437,19 +3509,23 @@ function chatMessageId() {
   return (peer && peer.id ? peer.id : 'self') + ':' + (++_chatSeq);
 }
 
-function sendChatMessage(text) {
+function sendChatMessage(text, opts) {
   if (!inRoom || !peer) return false;
   var body = typeof text === 'string' ? text.trim().slice(0, CHAT_TEXT_MAX) : '';
   if (!body) return false;
+  // A reply to a message that has since been trimmed out of the log is sent as
+  // a plain message: the quote it would draw has nothing to quote.
+  var replyTo = (opts && opts.replyTo) || null;
+  if (replyTo && !chatMessageById(replyTo)) replyTo = null;
   sendChatTyping(false);
   var id = chatMessageId();
   if (isHost) {
-    fanOutChatMessage(peer.id, id, body);
+    fanOutChatMessage(peer.id, id, body, replyTo);
   } else {
     // Held until the host echoes it back. Rendered dimmed meanwhile, and
     // re-sent if the host dies before the echo arrives.
-    _chatPending.set(id, { id: id, text: body });
-    _sendToHostData({ type: 'chat', id: id, text: body });
+    _chatPending.set(id, { id: id, text: body, replyTo: replyTo });
+    _sendToHostData({ type: 'chat', id: id, text: body, replyTo: replyTo });
     renderChat();
   }
   return true;
@@ -3484,8 +3560,8 @@ function sendChatTyping(active) {
 function resendPendingChat() {
   if (!inRoom || !peer || !_chatPending.size) return;
   Array.from(_chatPending.values()).forEach(function(p) {
-    if (isHost) fanOutChatMessage(peer.id, p.id, p.text);
-    else _sendToHostData({ type: 'chat', id: p.id, text: p.text });
+    if (isHost) fanOutChatMessage(peer.id, p.id, p.text, p.replyTo || null);
+    else _sendToHostData({ type: 'chat', id: p.id, text: p.text, replyTo: p.replyTo || null });
   });
 }
 
@@ -3495,9 +3571,10 @@ function resendPendingChat() {
 // sender id — so a peer cannot post under someone else's name — and the
 // timestamp, then sends one identical object to everybody.
 
-function fanOutChatMessage(senderId, id, text) {
+function fanOutChatMessage(senderId, id, text, replyTo) {
   if (!isHost) return;
-  var out = { type: 'chat', id: id, peerId: senderId, text: text, at: Date.now() };
+  var out = { type: 'chat', id: id, peerId: senderId, text: text, at: Date.now(),
+              replyTo: chatReplyToFromWire(replyTo) };
   connections.forEach(function(c) { if (c.data) sendDataIfOpen(c.data, out); });
   if (appendChatMessage(out)) { renderChat(); saveChatLog(); updateChatUnreadBadge(); }
 }
@@ -3507,7 +3584,12 @@ function fanOutChatReaction(senderId, msgId, emoji) {
   if (typeof msgId !== 'string' || !isChatEmoji(emoji)) return;
   var out = { type: 'chat-react', msgId: msgId, emoji: emoji, peerId: senderId };
   connections.forEach(function(c) { if (c.data) sendDataIfOpen(c.data, out); });
-  if (applyChatReaction(msgId, emoji, senderId)) { renderChat(); saveChatLog(); }
+  var applied = applyChatReaction(msgId, emoji, senderId);
+  if (applied) {
+    renderChat();
+    saveChatLog();
+    noteChatReactionApplied(applied, msgId, emoji, senderId);
+  }
 }
 
 function fanOutChatTyping(senderId, active) {
@@ -3538,6 +3620,8 @@ function chatTimeLabel(at) {
 
 // Static, author-written markup — the only innerHTML the chat uses, and never
 // on anything that came off the wire.
+var ICON_REPLY = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>';
 var ICON_ADD_REACTION = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
   + '<path d="M21.5 12a9.5 9.5 0 1 1-6.6-9.04"/>'
   + '<path d="M8.2 14.4s1.3 1.6 3.8 1.6 3.8-1.6 3.8-1.6"/>'
@@ -3558,23 +3642,184 @@ function chatSafeHref(raw) {
   } catch (_) { return null; }
 }
 
-function renderChatText(target, text) {
+// --- Chat: mentions ----------------------------------------------------------
+//
+// A mention is not a token in the text — it is a NAME. Display names in this app
+// may contain spaces, punctuation, an emoji, so "@" followed by one word is the
+// wrong thing to look for. Instead the text is matched against the names that
+// are actually in the room right now, longest first, so "@Ana Lucia" wins over
+// "@Ana". Two things follow, both wanted: nothing can be highlighted that is not
+// somebody present, and a name that leaves the room stops lighting up.
+//
+// Nothing about a mention goes on the wire. It is derived on every render from
+// the roster the reader holds, which is what makes "@me" mean the READER — the
+// same message is highlighted differently on each screen, correctly.
+
+var _chatMentionCache = null;
+
+// Every rendered body asks for this list, and a transcript is up to 200 bodies.
+// The roster is rebuilt wholesale on every change, so that rebuild is the one
+// place the cache can go stale — see updatePeerList().
+function invalidateChatMentions() { _chatMentionCache = null; }
+
+function chatMentionNames() {
+  if (_chatMentionCache) return _chatMentionCache;
+  var out = [];
+  var seen = new Set();
+  var push = function(name, peerId, self) {
+    name = String(name || '').trim();
+    if (!name || seen.has(name.toLowerCase())) return;
+    seen.add(name.toLowerCase());
+    out.push({ name: name, peerId: peerId || '', self: !!self });
+  };
+  if (peer) push(pseudoForPeer(), peer.id, true);
+  connections.forEach(function(conn, id) { push(conn.pseudo || shortId(id), id, false); });
+  // Longest first: the scan takes the first match it finds, so the order IS the
+  // precedence.
+  out.sort(function(a, b) { return b.name.length - a.name.length; });
+  _chatMentionCache = out.slice(0, CHAT_MENTION_MAX_NAMES);
+  return _chatMentionCache;
+}
+
+// The name mentioned at `at` (the index of the '@'), or null. The character
+// after the name has to be a boundary, or "@Ann" would light up inside "@Anna".
+function chatMentionAt(text, at, names) {
+  for (var i = 0; i < names.length; i++) {
+    var name = names[i].name;
+    if (text.substr(at + 1, name.length).toLowerCase() !== name.toLowerCase()) continue;
+    var after = text.charAt(at + 1 + name.length);
+    if (after && /[A-Za-z0-9_]/.test(after)) continue;
+    return names[i];
+  }
+  return null;
+}
+
+function chatMessageMentionsMe(text) {
+  var names = chatMentionNames().filter(function(n) { return n.self; });
+  if (!names.length) return false;
+  var s = String(text || '');
+  for (var at = s.indexOf('@'); at !== -1; at = s.indexOf('@', at + 1)) {
+    if (at > 0 && /[A-Za-z0-9@._-]/.test(s.charAt(at - 1))) continue;  // an email address is not a mention
+    if (chatMentionAt(s, at, names)) return true;
+  }
+  return false;
+}
+
+// --- Chat: a message that is only emoji --------------------------------------
+//
+// Printed large, the way every messenger prints one: a thumbs-up is a gesture,
+// not a sentence, and at 13px it reads as a typo. Past CHAT_JUMBO_MAX glyphs it
+// is a sentence written in emoji again, and goes back to the normal size.
+//
+// Both regexes are built inside a try: unicode property escapes are old enough
+// to rely on everywhere this app runs, and the cost of being wrong about that
+// is a message at the normal size — never a page that fails to parse.
+
+var _emojiOnlyRe = (function() {
+  try { return new RegExp('^(?:\\p{Extended_Pictographic}|\\p{Emoji_Component}|\\uFE0F|\\u200D|\\s)+$', 'u'); }
+  catch (_) { return null; }
+})();
+var _emojiPieceRe = (function() {
+  try { return new RegExp('\\p{Extended_Pictographic}', 'gu'); }
+  catch (_) { return null; }
+})();
+
+// How many glyphs a message is, if it is nothing but emoji; 0 if it is not.
+// Counted as GRAPHEMES where the engine can segment them, because a ZWJ family
+// and a flag are each one thing on screen however many code points they are.
+function chatEmojiOnlyCount(text) {
+  if (!_emojiOnlyRe) return 0;
+  var s = String(text || '').trim();
+  if (!s || s.length > 64) return 0;   // a long one is a wall of emoji, not a gesture
+  if (!_emojiOnlyRe.test(s)) return 0;
+  try {
+    if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+      var n = 0;
+      var seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s);
+      Array.from(seg).forEach(function(part) { if (part.segment.trim()) n++; });
+      return n;
+    }
+  } catch (_) {}
+  if (!_emojiPieceRe) return 0;
+  var m = s.match(_emojiPieceRe);
+  return m ? m.length : 0;
+}
+
+function chatIsJumbo(text) {
+  var n = chatEmojiOnlyCount(text);
+  return n > 0 && n <= CHAT_JUMBO_MAX;
+}
+
+// --- Chat: a body on screen --------------------------------------------------
+
+// Links first, then mentions inside whatever is left over: a URL with an '@' in
+// it (a mailto-shaped path, a user page) must stay one link rather than being
+// cut in half by a name that happens to be in the room.
+function chatTextTokens(text, names) {
+  var out = [];
   CHAT_URL_RE.lastIndex = 0;
   var last = 0;
   var match;
   while ((match = CHAT_URL_RE.exec(text)) !== null) {
     var href = chatSafeHref(match[0]);
     if (!href) continue;  // not a link we are willing to make — leave it as text
-    if (match.index > last) target.appendChild(document.createTextNode(text.slice(last, match.index)));
-    var a = document.createElement('a');
-    a.href = href;
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-    a.textContent = match[0];
-    target.appendChild(a);
+    if (match.index > last) pushChatPlainTokens(out, text.slice(last, match.index), names);
+    out.push({ kind: 'link', text: match[0], href: href });
     last = match.index + match[0].length;
   }
-  if (last < text.length) target.appendChild(document.createTextNode(text.slice(last)));
+  if (last < text.length) pushChatPlainTokens(out, text.slice(last), names);
+  return out;
+}
+
+function pushChatPlainTokens(out, chunk, names) {
+  if (!chunk) return;
+  if (!names.length) { out.push({ kind: 'text', text: chunk }); return; }
+  var emitted = 0;
+  var i = 0;
+  while (i < chunk.length) {
+    var at = chunk.indexOf('@', i);
+    if (at === -1) break;
+    // Preceded by a word character, this is the '@' of an address, not a name.
+    var before = at > 0 ? chunk.charAt(at - 1) : '';
+    var hit = (before && /[A-Za-z0-9@._-]/.test(before)) ? null : chatMentionAt(chunk, at, names);
+    if (!hit) { i = at + 1; continue; }
+    if (at > emitted) out.push({ kind: 'text', text: chunk.slice(emitted, at) });
+    out.push({ kind: 'mention', text: chunk.substr(at, hit.name.length + 1), self: hit.self, peerId: hit.peerId });
+    emitted = i = at + hit.name.length + 1;
+  }
+  if (emitted < chunk.length) out.push({ kind: 'text', text: chunk.slice(emitted) });
+}
+
+function renderChatText(target, text, opts) {
+  var names = (opts && opts.mentions === false) ? [] : chatMentionNames();
+  chatTextTokens(String(text), names).forEach(function(tok) {
+    if (tok.kind === 'link') {
+      var a = document.createElement('a');
+      a.href = tok.href;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = tok.text;
+      target.appendChild(a);
+      return;
+    }
+    if (tok.kind === 'mention') {
+      var span = document.createElement('span');
+      span.className = 'chat-mention' + (tok.self ? ' chat-mention-me' : '');
+      span.textContent = tok.text;
+      target.appendChild(span);
+      return;
+    }
+    target.appendChild(document.createTextNode(tok.text));
+  });
+}
+
+// A one-line stand-in for a message, for the places that quote one: the reply
+// strip over the composer, and the quote above a reply in the transcript. Emoji
+// and links come through as their own text — a quote is a reminder, not a
+// second rendering of the message.
+function chatQuoteText(m) {
+  var text = String(m && m.text || '').replace(/\s+/g, ' ').trim();
+  return text.length > 90 ? text.slice(0, 89) + '…' : text;
 }
 
 // One row is one line: name then text, with everything periodic (the time, the
@@ -3584,12 +3829,21 @@ function renderChatMessage(m, opts) {
   var pending = !!(opts && opts.pending);
   var grouped = !!(opts && opts.grouped);
   var mine = !!(peer && m.peerId === peer.id);
+  var jumbo = chatIsJumbo(m.text);
   var row = document.createElement('div');
   row.className = 'chat-msg'
     + (mine ? ' chat-msg-self' : '')
     + (pending ? ' chat-msg-pending' : '')
-    + (grouped ? ' chat-msg-grouped' : '');
+    + (grouped ? ' chat-msg-grouped' : '')
+    + (jumbo ? ' chat-msg-jumbo' : '')
+    + ((!mine && chatMessageMentionsMe(m.text)) ? ' chat-msg-mention' : '');
   row.dataset.msgId = m.id;
+
+  // What this message is answering, above it and pointing back at it. A quote
+  // for a message that is no longer held (trimmed, or joined after it was sent)
+  // says so rather than disappearing: the reply reads as a non-sequitur
+  // otherwise.
+  if (m.replyTo) row.appendChild(renderChatQuote(m.replyTo));
 
   var line = document.createElement('div');
   line.className = 'chat-msg-line';
@@ -3636,6 +3890,14 @@ function renderChatMessage(m, opts) {
   if (!pending) {
     var tools = document.createElement('div');
     tools.className = 'chat-msg-tools';
+    var reply = document.createElement('button');
+    reply.type = 'button';
+    reply.className = 'chat-reply-open';
+    reply.dataset.msgId = m.id;
+    reply.title = 'Reply';
+    reply.setAttribute('aria-label', 'Reply to this message');
+    reply.innerHTML = ICON_REPLY;
+    tools.appendChild(reply);
     var add = document.createElement('button');
     add.type = 'button';
     add.className = 'chat-react-open';
@@ -3649,6 +3911,62 @@ function renderChatMessage(m, opts) {
     row.appendChild(tools);
   }
   return row;
+}
+
+// The quote above a reply. A button, not a decoration: it is the way back to
+// what is being answered.
+function renderChatQuote(replyTo) {
+  var src = chatMessageById(replyTo);
+  var el = document.createElement('button');
+  el.type = 'button';
+  el.className = 'chat-quote';
+  el.dataset.jumpTo = replyTo;
+  if (!src) {
+    el.classList.add('chat-quote-gone');
+    el.disabled = true;
+    el.textContent = 'Message no longer available';
+    return el;
+  }
+  var who = document.createElement('span');
+  who.className = 'chat-quote-author';
+  who.textContent = chatAuthorName(src.peerId);
+  var color = chatAuthorColor(src.peerId);
+  if (color) who.style.color = color;
+  var body = document.createElement('span');
+  body.className = 'chat-quote-body';
+  body.textContent = chatQuoteText(src);
+  el.appendChild(who);
+  el.appendChild(body);
+  el.title = 'Go to this message';
+  return el;
+}
+
+// Scroll the answered message into view and flash it, rather than only moving
+// the viewport: in a column of near-identical rows a silent jump leaves the
+// reader hunting for which line they were sent to.
+function jumpToChatMessage(msgId) {
+  var list = document.getElementById('chat-messages');
+  if (!list) return false;
+  var row = chatRowFor(list, msgId);
+  if (!row) return false;
+  try { row.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) { row.scrollIntoView(); }
+  row.classList.remove('chat-msg-flash');
+  // Reading offsetWidth restarts the animation on a row that is flashed twice.
+  void row.offsetWidth;
+  row.classList.add('chat-msg-flash');
+  setTimeout(function() { row.classList.remove('chat-msg-flash'); }, 1200);
+  return true;
+}
+
+// Found by scanning, not by a selector: a message id is a peer id and a counter
+// joined by ':', and building a selector out of a value that came off the wire
+// is a step this never has to take.
+function chatRowFor(list, msgId) {
+  var rows = list ? list.querySelectorAll('.chat-msg') : [];
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].dataset.msgId === msgId) return rows[i];
+  }
+  return null;
 }
 
 // A separator carries the stamp for everything under it, which is what lets the
@@ -3708,19 +4026,83 @@ function renderChat() {
   chatLog.forEach(function(m) {
     var broke = !prev || !chatSameDay(prev.at, m.at) || (m.at - prev.at) > CHAT_BREAK_MS;
     if (broke) list.appendChild(renderChatBreak(m.at));
-    var grouped = !broke && !!prev && prev.peerId === m.peerId && (m.at - prev.at) <= CHAT_GROUP_MS;
+    // A reply draws a quote above itself, and a quote with no name over it
+    // belongs to whoever spoke last — which is exactly who it is not. So a
+    // reply always names its author, even mid-run.
+    var grouped = !broke && !m.replyTo && !!prev && prev.peerId === m.peerId && (m.at - prev.at) <= CHAT_GROUP_MS;
     list.appendChild(renderChatMessage(m, { grouped: grouped }));
     prev = m;
   });
   _chatPending.forEach(function(p) {
     var at = Date.now();
-    var grouped = !!prev && !!peer && prev.peerId === peer.id && (at - prev.at) <= CHAT_GROUP_MS;
-    var draft = { id: p.id, peerId: peer ? peer.id : '', text: p.text, at: at, reactions: new Map() };
+    var grouped = !p.replyTo && !!prev && !!peer && prev.peerId === peer.id && (at - prev.at) <= CHAT_GROUP_MS;
+    var draft = { id: p.id, peerId: peer ? peer.id : '', text: p.text, at: at,
+                  replyTo: p.replyTo || null, reactions: new Map() };
     list.appendChild(renderChatMessage(draft, { pending: true, grouped: grouped }));
     prev = draft;
   });
   if (stick) list.scrollTop = list.scrollHeight;
+  // The message the composer is answering can be trimmed out of the log by the
+  // very render that is running, so the strip is re-derived with the list.
+  renderChatReplyBar();
   renderChatTyping();
+}
+
+// --- Chat: answering a message -----------------------------------------------
+//
+// The composer grows a strip naming what it is about to answer. The strip IS
+// the state: `_chatReplyTo` with nothing on screen would be a message that
+// quotes something the sender never saw themselves choose.
+
+function setChatReplyTo(msgId) {
+  var next = (msgId && chatMessageById(msgId)) ? msgId : null;
+  _chatReplyTo = next;
+  renderChatReplyBar();
+  if (next) {
+    var input = document.getElementById('chat-input');
+    if (input) { try { input.focus(); } catch (_) {} }
+  }
+}
+
+function clearChatReply() { setChatReplyTo(null); }
+
+function renderChatReplyBar() {
+  var bar = document.getElementById('chat-reply-bar');
+  if (!bar) return;
+  var src = _chatReplyTo ? chatMessageById(_chatReplyTo) : null;
+  // The message being answered can be trimmed out from under the composer
+  // while it is being typed at. Dropping the strip is the honest outcome: the
+  // send path drops the reference for the same reason.
+  if (!src) {
+    _chatReplyTo = null;
+    bar.classList.add('hidden');
+    bar.innerHTML = '';
+    return;
+  }
+  bar.innerHTML = '';
+  var label = document.createElement('span');
+  label.className = 'chat-reply-bar-label';
+  label.textContent = 'Replying to ';
+  var who = document.createElement('span');
+  who.className = 'chat-reply-bar-author';
+  who.textContent = chatAuthorName(src.peerId);
+  var color = chatAuthorColor(src.peerId);
+  if (color) who.style.color = color;
+  var body = document.createElement('span');
+  body.className = 'chat-reply-bar-body';
+  body.textContent = chatQuoteText(src);
+  var drop = document.createElement('button');
+  drop.type = 'button';
+  drop.id = 'btn-chat-reply-cancel';
+  drop.className = 'btn-icon chat-reply-bar-cancel';
+  drop.title = 'Cancel reply';
+  drop.setAttribute('aria-label', 'Cancel reply');
+  drop.textContent = '\u2715';
+  bar.appendChild(label);
+  bar.appendChild(who);
+  bar.appendChild(body);
+  bar.appendChild(drop);
+  bar.classList.remove('hidden');
 }
 
 function renderChatTyping() {
@@ -3776,11 +4158,13 @@ function showChatPeek(m) {
   var host = document.getElementById('chat-peek');
   if (!host || !inRoom) return;
   var el = document.createElement('div');
-  el.className = 'chat-peek-item';
+  el.className = 'chat-peek-item' + (chatIsJumbo(m.text) ? ' chat-peek-jumbo' : '');
   // Which roster row this bubble points at. Kept as the peer id, not the
   // element: updatePeerList() throws the whole list away and rebuilds it, so an
   // element captured here would be detached within a heartbeat.
   el._voxalPeekPeerId = m.peerId;
+  el._voxalPeekKind   = 'message';
+  el._voxalPeekMsgId  = m.id;
   var line = document.createElement('span');
   line.className = 'chat-peek-line';
   var author = document.createElement('span');
@@ -3789,14 +4173,58 @@ function showChatPeek(m) {
   var color = chatAuthorColor(m.peerId);
   if (color) author.style.color = color;
   line.appendChild(author);
+  // What this one answers, in a single quoted line above the body — the same
+  // thing the transcript shows, at the size a glance can take.
+  if (m.replyTo) {
+    var src = chatMessageById(m.replyTo);
+    if (src) {
+      var quote = document.createElement('span');
+      quote.className = 'chat-peek-quote';
+      quote.textContent = '↱ ' + chatAuthorName(src.peerId) + ': ' + chatQuoteText(src);
+      el.appendChild(quote);
+    }
+  }
   var body = document.createElement('span');
   body.className = 'chat-peek-body';
   renderChatText(body, m.text);
   line.appendChild(body);
   el.appendChild(line);
+  addChatPeek(host, el, CHAT_PEEK_MS);
+}
+
+// A reaction peeks the same way a message does — at the name that sent it —
+// but as the bare glyph: a bubble around a thumbs-up is a bubble around a
+// gesture. It then flies to whatever is on screen of the message it belongs
+// to, which is what says WHICH message was reacted to without a word of text.
+// See flyChatReactPeek().
+function showChatReactPeek(msgId, emoji, peerId) {
+  var host = document.getElementById('chat-peek');
+  if (!host || !inRoom) return;
+  // Your own reaction is one you just made; it does not need announcing back.
+  if (peer && peerId === peer.id) return;
+  var el = document.createElement('div');
+  el.className = 'chat-peek-item chat-peek-react';
+  el._voxalPeekPeerId = peerId;
+  el._voxalPeekKind   = 'react';
+  el._voxalPeekMsgId  = msgId;
+  var glyph = document.createElement('span');
+  glyph.className = 'chat-peek-react-glyph';
+  glyph.textContent = emoji;
+  el.appendChild(glyph);
+  var who = document.createElement('span');
+  // The stacked shape has nothing pointing at a roster row, so there the name
+  // is the only thing that says who reacted — same rule as a message's.
+  who.className = 'chat-peek-author';
+  who.textContent = ' ' + chatAuthorName(peerId);
+  el.appendChild(who);
+  el.setAttribute('aria-label', chatAuthorName(peerId) + ' reacted ' + emoji);
+  addChatPeek(host, el, CHAT_REACT_PEEK_MS);
+}
+
+function addChatPeek(host, el, ttl) {
   host.appendChild(el);
   while (host.children.length > CHAT_PEEK_MAX) dropChatPeek(host.firstChild);
-  var timer = setTimeout(function() { dropChatPeek(el); }, CHAT_PEEK_MS);
+  var timer = setTimeout(function() { dropChatPeek(el); }, ttl);
   _chatPeekTimers.add(timer);
   el._voxalPeekTimer = timer;
   watchChatPeekLayout(true);
@@ -3816,7 +4244,7 @@ function clearChatPeek() {
   var host = document.getElementById('chat-peek');
   _chatPeekTimers.forEach(function(t) { clearTimeout(t); });
   _chatPeekTimers.clear();
-  if (host) { host.innerHTML = ''; anchorChatPeekHost(host, false); }
+  if (host) { host.innerHTML = ''; anchorChatPeekHost(host, false); host.classList.remove('chat-peek-muted'); }
   watchChatPeekLayout(false);
 }
 
@@ -3863,6 +4291,16 @@ function chatPeekAnchorSide(at, view) {
   var left  = room(at.list, 'left');
   if (right >= CHAT_PEEK_ANCHOR_MIN_WIDTH && right >= left) return { side: 'right', space: room(at.name, 'right') };
   if (left  >= CHAT_PEEK_ANCHOR_MIN_WIDTH) return { side: 'left', space: room(at.name, 'left') };
+  // Nothing either side — a phone, whose roster is the whole width of the
+  // screen. The one direction still free is DOWN: the bubble opens under the
+  // name with the tail pointing back up into it, over whatever row is beneath.
+  // It is the same idea, turned ninety degrees, and it is what gives a phone
+  // the anchored shape instead of the anonymous stack over the stage.
+  var below = view.height - at.name.bottom - CHAT_PEEK_ANCHOR_BELOW_GAP - CHAT_PEEK_ANCHOR_EDGE;
+  var across = view.width - 2 * CHAT_PEEK_ANCHOR_EDGE;
+  if (below >= 32 && across >= CHAT_PEEK_ANCHOR_MIN_WIDTH) {
+    return { side: 'below', space: Math.min(CHAT_PEEK_ANCHOR_MAX_WIDTH, across) };
+  }
   return null;
 }
 
@@ -3876,6 +4314,7 @@ function chatPeekAnchorSide(at, view) {
 var _chatPeekHome = null;
 
 function anchorChatPeekHost(host, on) {
+  if (on) host.classList.remove('chat-peek-muted');
   if (on) {
     if (host.parentNode && host.parentNode !== document.body) {
       _chatPeekHome = host.parentNode;
@@ -3936,18 +4375,34 @@ function layoutChatPeeks() {
 
   var bands = [];  // vertical space already spoken for, so two runs never overlap
   runs.forEach(function(run) { placeChatPeekRun(items, plans, run, view, bands); });
+  // Placement first, flight second: a reaction's path is measured from where it
+  // ended up, not from where it was appended.
+  items.forEach(function(el) { if (el._voxalPeekKind === 'react') flyChatReactPeek(el); });
 }
 
 // One person's messages, side by side out of their name. Wrapping onto a second
 // line is the escape hatch for a window that runs out before the run does; the
 // block is then moved as a whole, so a wrapped line never parts from its own
 // first line to dodge somebody else's.
+//
+// `below` is the phone's shape: the same run, laid rightwards from the name's
+// own left edge and hanging under the row instead of reaching past it. It is
+// the only case where the line has to be shifted after packing — the block may
+// start anywhere across the screen, so it can run out of window on the right
+// and has to slide back left to fit.
 function placeChatPeekRun(items, plans, run, view, bands) {
   var plan = plans[run[0]];
-  var rightwards = plan.side === 'right';
-  var edge  = rightwards ? plan.name.right + CHAT_PEEK_ANCHOR_GAP
-                         : plan.name.left  - CHAT_PEEK_ANCHOR_GAP;
-  var limit = rightwards ? view.width - CHAT_PEEK_ANCHOR_EDGE : CHAT_PEEK_ANCHOR_EDGE;
+  var below = plan.side === 'below';
+  var rightwards = below || plan.side === 'right';
+  var edge, limit;
+  if (below) {
+    edge  = CHAT_PEEK_ANCHOR_EDGE;
+    limit = view.width - CHAT_PEEK_ANCHOR_EDGE;
+  } else {
+    edge  = rightwards ? plan.name.right + CHAT_PEEK_ANCHOR_GAP
+                       : plan.name.left  - CHAT_PEEK_ANCHOR_GAP;
+    limit = rightwards ? view.width - CHAT_PEEK_ANCHOR_EDGE : CHAT_PEEK_ANCHOR_EDGE;
+  }
 
   var lines = [];
   var line = null;
@@ -3957,21 +4412,35 @@ function placeChatPeekRun(items, plans, run, view, bands) {
     var w = el.offsetWidth, h = el.offsetHeight;
     var far = rightwards ? cursor + w : cursor - w;
     if (!line || (line.entries.length && (rightwards ? far > limit : far < limit))) {
-      line = { height: 0, entries: [] };
+      line = { height: 0, width: 0, entries: [] };
       lines.push(line);
       cursor = edge;
       far = rightwards ? cursor + w : cursor - w;
     }
-    line.entries.push({ n: n, h: h, left: rightwards ? cursor : far });
+    line.entries.push({ n: n, h: h, w: w, left: rightwards ? cursor : far });
     if (h > line.height) line.height = h;
+    line.width = Math.abs(far - edge);
     cursor = far + (rightwards ? CHAT_PEEK_ANCHOR_HGAP : -CHAT_PEEK_ANCHOR_HGAP);
   });
+
+  // Under the name, the block starts at the name rather than at the screen's
+  // edge — but never so far right that its own end falls off the screen.
+  if (below) {
+    lines.forEach(function(l) {
+      var start = Math.max(CHAT_PEEK_ANCHOR_EDGE,
+                           Math.min(plan.name.left, view.width - CHAT_PEEK_ANCHOR_EDGE - l.width));
+      var shift = start - edge;
+      l.entries.forEach(function(entry) { entry.left += shift; });
+    });
+  }
 
   var block = lines.reduce(function(sum, l) { return sum + l.height; }, 0) +
               CHAT_PEEK_ANCHOR_VGAP * (lines.length - 1);
   // The FIRST line is what sits on the name; anything that wrapped hangs below.
   var centre = plan.name.top + plan.name.height / 2;
-  var top = clampChatPeekTop(centre - lines[0].height / 2, block, view.height);
+  var wanted = below ? plan.name.bottom + CHAT_PEEK_ANCHOR_BELOW_GAP
+                     : centre - lines[0].height / 2;
+  var top = clampChatPeekTop(wanted, block, view.height);
   top = pushChatPeekClear(bands, top, block, view.height);
   bands.push([top, top + block]);
 
@@ -3981,22 +4450,119 @@ function placeChatPeekRun(items, plans, run, view, bands) {
       var y = top + (l.height - entry.h) / 2;
       // Only the bubble the run starts at touches the name; the rest continue
       // the line, and a tail on one of those would point at the bubble before
-      // it rather than at the person.
-      var tailed = i === 0 && j === 0;
-      el.classList.toggle('peek-tail-left', tailed && rightwards);
-      el.classList.toggle('peek-tail-right', tailed && !rightwards);
+      // it rather than at the person. A reaction never grows one at all: it is
+      // a bare glyph, and a bare glyph with a tail is a bubble again.
+      var tailed = i === 0 && j === 0 && el._voxalPeekKind !== 'react';
+      el.classList.toggle('peek-tail-left',  tailed && !below && rightwards);
+      el.classList.toggle('peek-tail-right', tailed && !below && !rightwards);
+      el.classList.toggle('peek-tail-up',    tailed && below);
       el.style.left = Math.round(entry.left) + 'px';
       el.style.top  = Math.round(y) + 'px';
-      if (!tailed) { el.style.removeProperty('--peek-tail'); return; }
+      if (!tailed) {
+        el.style.removeProperty('--peek-tail');
+        el.style.removeProperty('--peek-tail-x');
+        return;
+      }
+      if (below) {
+        // Sideways along the bubble's own top edge, to land under the middle of
+        // the name however far the block had to slide to fit.
+        var tailX = (plan.name.left + plan.name.width / 2) - entry.left;
+        el.style.removeProperty('--peek-tail');
+        el.style.setProperty('--peek-tail-x', Math.round(clampChatPeekTail(tailX, entry.w)) + 'px');
+        return;
+      }
       // The tail keeps pointing at the name even when the run had to shuffle
       // down out of another one's way.
-      var tail = centre - y;
-      if (tail < CHAT_PEEK_TAIL_INSET) tail = CHAT_PEEK_TAIL_INSET;
-      if (tail > entry.h - CHAT_PEEK_TAIL_INSET) tail = Math.max(CHAT_PEEK_TAIL_INSET, entry.h - CHAT_PEEK_TAIL_INSET);
-      el.style.setProperty('--peek-tail', Math.round(tail) + 'px');
+      el.style.removeProperty('--peek-tail-x');
+      el.style.setProperty('--peek-tail', Math.round(clampChatPeekTail(centre - y, entry.h)) + 'px');
     });
     top += l.height + CHAT_PEEK_ANCHOR_VGAP;
   });
+}
+
+// Keep the tail off the bubble's own corners, where it would draw half over the
+// border radius and stop reading as a point.
+function clampChatPeekTail(offset, extent) {
+  if (offset < CHAT_PEEK_TAIL_INSET) return CHAT_PEEK_TAIL_INSET;
+  if (offset > extent - CHAT_PEEK_TAIL_INSET) return Math.max(CHAT_PEEK_TAIL_INSET, extent - CHAT_PEEK_TAIL_INSET);
+  return offset;
+}
+
+// --- Chat: a reaction's flight to the message it belongs to -------------------
+//
+// The glyph opens at the name that sent it and then travels to the message it
+// reacted to, which is the whole answer to "which message?" — no text, no
+// second bubble, and the two ends of the line are the two things that matter.
+//
+// What it aims at, in order of how directly it answers that question:
+//
+//   1. the peek bubble for that message, if it is still on screen;
+//   2. the message's row in the chat panel, if the panel is open;
+//   3. the NAME of whoever wrote it, which is always there while they are in
+//      the room — the reaction then reads as "that person's message".
+//
+// Nothing here runs per frame: the path is one transform keyframe with the
+// distance handed to it as a custom property, so the browser composites it and
+// this function is called exactly once per reaction.
+function flyChatReactPeek(el) {
+  if (el._voxalFlying) return;
+  var target = chatReactFlyTarget(el._voxalPeekMsgId, el._voxalPeekPeerId);
+  if (!target) return;
+  var from = el.getBoundingClientRect();
+  if (!from.width || !from.height) return;
+  var dx = (target.left + target.width / 2)  - (from.left + from.width / 2);
+  var dy = (target.top  + target.height / 2) - (from.top  + from.height / 2);
+  if (!isFinite(dx) || !isFinite(dy)) return;
+  el._voxalFlying = true;
+  el.style.setProperty('--react-fly-x', Math.round(dx) + 'px');
+  el.style.setProperty('--react-fly-y', Math.round(dy) + 'px');
+  // Halfway, lifted: a straight line between two points on a busy screen is
+  // hard to follow, and one control point is enough to make it a throw.
+  el.style.setProperty('--react-fly-mx', Math.round(dx / 2) + 'px');
+  el.style.setProperty('--react-fly-my', Math.round(dy / 2 - 26) + 'px');
+  el.classList.add('peek-react-fly');
+  if (target.flash) target.flash();
+  // Gone when it lands, whatever its own TTL said: an emoji parked on top of
+  // the message it hit is not a reaction any more, it is a sticker.
+  setTimeout(function() { dropChatPeek(el); }, CHAT_REACT_FLY_MS);
+}
+
+function chatReactFlyTarget(msgId, reactorId) {
+  var host = document.getElementById('chat-peek');
+  var peeks = host ? Array.prototype.slice.call(host.children) : [];
+  for (var i = 0; i < peeks.length; i++) {
+    if (peeks[i]._voxalPeekKind !== 'message' || peeks[i]._voxalPeekMsgId !== msgId) continue;
+    var bubble = peeks[i];
+    return withChatFlash(bubble.getBoundingClientRect(), function() {
+      bubble.classList.remove('chat-peek-hit');
+      void bubble.offsetWidth;
+      bubble.classList.add('chat-peek-hit');
+    });
+  }
+  if (chatPanelOpen()) {
+    var row = chatRowFor(document.getElementById('chat-messages'), msgId);
+    if (row && row.offsetParent) {
+      var rect = row.getBoundingClientRect();
+      if (rect.width && rect.height) {
+        return withChatFlash(rect, function() {
+          row.classList.remove('chat-msg-flash');
+          void row.offsetWidth;
+          row.classList.add('chat-msg-flash');
+          setTimeout(function() { row.classList.remove('chat-msg-flash'); }, 1200);
+        });
+      }
+    }
+  }
+  var src = chatMessageById(msgId);
+  // Not at the reactor's own name: a glyph that flies nowhere is a glyph that
+  // did not fly.
+  if (!src || !src.peerId || src.peerId === reactorId) return null;
+  var at = chatPeekAnchorFor(src.peerId);
+  return at ? withChatFlash(at.name, null) : null;
+}
+
+function withChatFlash(rect, flash) {
+  return { left: rect.left, top: rect.top, width: rect.width, height: rect.height, flash: flash };
 }
 
 function clampChatPeekTop(top, h, limit) {
@@ -4023,12 +4589,19 @@ function pushChatPeekClear(bands, top, h, limit) {
 
 function unanchorChatPeeks(host, items) {
   anchorChatPeekHost(host, false);
+  // The stack over the stage is the anonymous shape: it says WHAT was said and
+  // not who is saying it in the room. That is worth having when the transcript
+  // is not on screen, and it is nothing but a second copy of the transcript
+  // when it is — so with the panel open the fallback shape stands down and only
+  // the anchored one is ever shown. See appendChatMessage().
+  host.classList.toggle('chat-peek-muted', chatPanelOpen());
   items.forEach(function(el) {
-    el.classList.remove('peek-tail-left', 'peek-tail-right');
+    el.classList.remove('peek-tail-left', 'peek-tail-right', 'peek-tail-up');
     el.style.left = '';
     el.style.top = '';
     el.style.maxWidth = '';
     el.style.removeProperty('--peek-tail');
+    el.style.removeProperty('--peek-tail-x');
   });
 }
 
@@ -4182,10 +4755,46 @@ function toggleChatPanel(open, opts) {
 function submitChatInput() {
   var input = document.getElementById('chat-input');
   if (!input) return;
-  if (sendChatMessage(input.value)) {
+  // `+:tada` is a reaction, not a message. Checked before anything is sent, so
+  // the line never lands in the transcript on its way to becoming a reaction.
+  var quick = chatQuickReactionFor(input.value);
+  if (quick) {
+    var target = lastChatMessage();
+    if (target) {
+      sendChatReaction(target.id, quick);
+      noteRecentEmoji(quick);
+      input.value = '';
+      autoGrowChatInput(input);
+      sendChatTyping(false);
+      closeChatSuggest();
+      return;
+    }
+    // Nothing to react to yet: fall through and send it as what it looks like.
+  }
+  if (sendChatMessage(input.value, { replyTo: _chatReplyTo })) {
     input.value = '';
     autoGrowChatInput(input);
+    clearChatReply();
+    closeChatSuggest();
   }
+}
+
+// The `+:shortcode` shortcut: react to the last message without leaving the
+// composer or opening the picker. Accepts the emoji itself too (`+👍`), because
+// the phone keyboard offers that and not a shortcode.
+//
+// Returns the emoji, or null when the line is an ordinary message that merely
+// starts with a plus.
+function chatQuickReactionFor(text) {
+  var s = String(text || '').trim();
+  if (s.charAt(0) !== '+' || s.length < 2) return null;
+  var rest = s.slice(1).trim();
+  if (!rest) return null;
+  if (isChatEmoji(rest)) return rest;
+  var code = /^:?([a-z0-9_+\-]{1,64}):?$/i.exec(rest);
+  if (!code) return null;
+  var hit = emojiForShortcode(code[1]);
+  return hit || null;
 }
 
 // The composer is one line until it needs more. `overflow-y` is toggled rather
@@ -4276,6 +4885,9 @@ function emojiPickerOpen() {
 function openEmojiPicker(target) {
   var el = document.getElementById('emoji-picker');
   if (!el) return;
+  // The picker floats over the composer; the shortcode menu docks above it.
+  // Two ways to pick an emoji, on top of each other, is one too many.
+  closeChatSuggest();
   _emojiTarget = target;
   el.classList.remove('hidden');
   el.dataset.mode = target.mode;
@@ -4395,6 +5007,207 @@ function insertIntoComposer(text) {
   autoGrowChatInput(input);
   try { input.focus(); } catch (_) {}
   sendChatTyping(true);
+}
+
+// --- Chat: typing a shortcode, typing a name ---------------------------------
+//
+// Two menus, one mechanism: what is being typed just before the caret decides
+// which list to offer, and accepting one rewrites exactly that stretch of text.
+// `:` offers emoji by name, `@` offers the people in the room.
+//
+// The list is built off the SAME catalog the picker uses, so there is no second
+// emoji dataset to keep in step — a shortcode is just the emoji's own name with
+// its spaces folded to underscores.
+
+var _emojiShortcodes = null;
+
+function emojiShortcodeIndex() {
+  if (_emojiShortcodes) return _emojiShortcodes;
+  var out = [];
+  var seen = new Set();
+  emojiCatalog().forEach(function(g) {
+    g.items.forEach(function(it) {
+      var code = it[2].replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      // Two emoji can fold to one shortcode (skin tones, gendered pairs). The
+      // first through wins, which is catalog order — the order the picker shows
+      // them in, so the menu agrees with the grid.
+      if (!code || seen.has(code)) return;
+      seen.add(code);
+      out.push([it[0], code, it[1]]);
+    });
+  });
+  _emojiShortcodes = out;
+  return out;
+}
+
+function foldEmojiShortcode(raw) {
+  return String(raw || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+// Exact name first, then the shortest thing it is the start of: `:tada` should
+// find 🎉 without anyone having typed `party_popper`.
+function emojiForShortcode(code) {
+  var want = foldEmojiShortcode(code);
+  if (!want) return null;
+  var idx = emojiShortcodeIndex();
+  var i;
+  for (i = 0; i < idx.length; i++) { if (idx[i][1] === want) return idx[i][0]; }
+  var best = null;
+  for (i = 0; i < idx.length; i++) {
+    if (idx[i][1].indexOf(want) !== 0) continue;
+    if (!best || idx[i][1].length < best[1].length) best = idx[i];
+  }
+  return best ? best[0] : null;
+}
+
+function emojiShortcodeMatches(query, max) {
+  var want = foldEmojiShortcode(query);
+  if (!want) return [];
+  var starts = [];
+  var contains = [];
+  var idx = emojiShortcodeIndex();
+  for (var i = 0; i < idx.length; i++) {
+    var at = idx[i][1].indexOf(want);
+    if (at === 0) starts.push(idx[i]);
+    else if (at > 0 && contains.length < max) contains.push(idx[i]);
+    if (starts.length >= max) break;
+  }
+  // Shortest first among the prefix hits: `:smi` should offer "smile" before
+  // "smiling face with hearts".
+  starts.sort(function(a, b) { return a[1].length - b[1].length; });
+  return starts.concat(contains).slice(0, max);
+}
+
+// { kind, from, to, items, index } — `from`/`to` are the stretch of the
+// composer the accepted item replaces.
+var _chatSuggest = null;
+
+function chatSuggestOpen() { return !!_chatSuggest; }
+
+// What is being typed immediately before the caret, if it is a trigger. Both
+// triggers must start a word: an address has an '@' in the middle of one and a
+// time of day has a ':'.
+function chatSuggestQueryAt(value, caret) {
+  var head = value.slice(0, caret);
+  var emoji = /(^|\s)(:)([a-z0-9_+\-]*)$/i.exec(head);
+  if (emoji) {
+    return { kind: 'emoji', from: caret - (emoji[3].length + 1), to: caret, query: emoji[3] };
+  }
+  var mention = /(^|\s)@([^\s@]{0,40})$/.exec(head);
+  if (mention) {
+    return { kind: 'mention', from: caret - (mention[2].length + 1), to: caret, query: mention[2] };
+  }
+  return null;
+}
+
+function chatSuggestItemsFor(hit) {
+  if (hit.kind === 'emoji') {
+    // A colon on its own is a colon. Two characters is where a menu stops being
+    // in the way and starts being an answer.
+    if (hit.query.length < EMOJI_SHORTCODE_MIN) return [];
+    return emojiShortcodeMatches(hit.query, EMOJI_SHORTCODE_SUGGEST_MAX).map(function(it) {
+      return { icon: it[0], label: ':' + it[1] + ':', hint: it[2], insert: it[0] };
+    });
+  }
+  var q = hit.query.toLowerCase();
+  return chatMentionNames()
+    .filter(function(n) { return !n.self && (!q || n.name.toLowerCase().indexOf(q) !== -1); })
+    // Back to roster order: chatMentionNames() sorts longest-first for matching,
+    // which is not an order anybody reads a list of people in.
+    .sort(function(a, b) { return a.name.localeCompare(b.name); })
+    .slice(0, CHAT_MENTION_SUGGEST_MAX)
+    .map(function(n) {
+      return { icon: '@', label: n.name, hint: '', insert: '@' + n.name };
+    });
+}
+
+function updateChatSuggest() {
+  var input = document.getElementById('chat-input');
+  if (!input) return;
+  var caret = typeof input.selectionStart === 'number' ? input.selectionStart : input.value.length;
+  // Only with the caret at one end of the selection: a menu that rewrites a
+  // range the user has highlighted would eat the highlight.
+  if (input.selectionEnd !== caret) { closeChatSuggest(); return; }
+  var hit = chatSuggestQueryAt(input.value, caret);
+  if (!hit) { closeChatSuggest(); return; }
+  var items = chatSuggestItemsFor(hit);
+  if (!items.length) { closeChatSuggest(); return; }
+  _chatSuggest = { kind: hit.kind, from: hit.from, to: hit.to, items: items, index: 0 };
+  renderChatSuggest();
+}
+
+function closeChatSuggest() {
+  _chatSuggest = null;
+  var el = document.getElementById('chat-suggest');
+  if (el) { el.classList.add('hidden'); el.innerHTML = ''; }
+  var input = document.getElementById('chat-input');
+  if (input) {
+    input.removeAttribute('aria-activedescendant');
+    input.setAttribute('aria-expanded', 'false');
+  }
+}
+
+function renderChatSuggest() {
+  var el = document.getElementById('chat-suggest');
+  if (!el || !_chatSuggest) return;
+  el.innerHTML = '';
+  el.dataset.kind = _chatSuggest.kind;
+  _chatSuggest.items.forEach(function(item, i) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.id = 'chat-suggest-' + i;
+    b.className = 'chat-suggest-item' + (i === _chatSuggest.index ? ' chat-suggest-active' : '');
+    b.dataset.index = String(i);
+    b.setAttribute('role', 'option');
+    b.setAttribute('aria-selected', String(i === _chatSuggest.index));
+    var icon = document.createElement('span');
+    icon.className = 'chat-suggest-icon';
+    icon.textContent = item.icon;
+    var label = document.createElement('span');
+    label.className = 'chat-suggest-label';
+    label.textContent = item.label;
+    b.appendChild(icon);
+    b.appendChild(label);
+    if (item.hint) {
+      var hint = document.createElement('span');
+      hint.className = 'chat-suggest-hint';
+      hint.textContent = item.hint;
+      b.appendChild(hint);
+    }
+    el.appendChild(b);
+  });
+  el.classList.remove('hidden');
+  var input = document.getElementById('chat-input');
+  if (input) {
+    input.setAttribute('aria-activedescendant', 'chat-suggest-' + _chatSuggest.index);
+    input.setAttribute('aria-expanded', 'true');
+  }
+  var active = el.children[_chatSuggest.index];
+  if (active && active.scrollIntoView) { try { active.scrollIntoView({ block: 'nearest' }); } catch (_) {} }
+}
+
+function moveChatSuggest(delta) {
+  if (!_chatSuggest) return;
+  var n = _chatSuggest.items.length;
+  _chatSuggest.index = ((_chatSuggest.index + delta) % n + n) % n;
+  renderChatSuggest();
+}
+
+function acceptChatSuggest(index) {
+  var input = document.getElementById('chat-input');
+  if (!_chatSuggest || !input) return false;
+  var item = _chatSuggest.items[typeof index === 'number' ? index : _chatSuggest.index];
+  if (!item) return false;
+  var text = item.insert + ' ';
+  input.value = input.value.slice(0, _chatSuggest.from) + text + input.value.slice(_chatSuggest.to);
+  var caret = _chatSuggest.from + text.length;
+  try { input.setSelectionRange(caret, caret); } catch (_) {}
+  if (_chatSuggest.kind === 'emoji') noteRecentEmoji(item.insert);
+  closeChatSuggest();
+  autoGrowChatInput(input);
+  try { input.focus(); } catch (_) {}
+  sendChatTyping(true);
+  return true;
 }
 
 // --- Chat: the drawer's own width --------------------------------------------
@@ -4633,27 +5446,81 @@ function initChatUI() {
   // — without this the bubble is a button that does nothing on a desktop.
   initStagePanelHandles();
 
+  initCommandPalette();
+
   var close = document.getElementById('btn-chat-close');
   if (close) close.addEventListener('click', function() { toggleChatPanel(false, { remember: true }); });
   var send = document.getElementById('btn-chat-send');
   if (send) send.addEventListener('click', submitChatInput);
 
   input.addEventListener('keydown', function(e) {
+    // The suggestion menu gets the arrows, Enter, Tab and Escape first — while
+    // it is open those keys are steering it, not the composer.
+    if (chatSuggestOpen()) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); moveChatSuggest(1); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); moveChatSuggest(-1); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        if (acceptChatSuggest()) { e.preventDefault(); return; }
+      }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeChatSuggest(); return; }
+    }
     // Enter sends, Shift+Enter is a newline. The composer must never see the
     // push-to-talk key as a talk trigger — see the global handler's guard.
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitChatInput(); }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitChatInput(); return; }
+    // Escape drops the reply before it drops anything else: the strip over the
+    // composer is the only thing on screen that the key could mean.
+    if (e.key === 'Escape' && _chatReplyTo) { e.preventDefault(); e.stopPropagation(); clearChatReply(); return; }
+    // An empty composer, and the up arrow answers the last thing said — the
+    // one gesture every terminal and every messenger has trained into people.
+    if (e.key === 'ArrowUp' && !input.value) {
+      var last = lastChatMessage();
+      if (last) { e.preventDefault(); setChatReplyTo(last.id); }
+    }
   });
   input.addEventListener('input', function() {
     autoGrowChatInput(input);
+    updateChatSuggest();
     if (input.value.trim()) sendChatTyping(true); else sendChatTyping(false);
   });
-  input.addEventListener('blur', function() { sendChatTyping(false); });
+  // A caret moved with the arrows or the mouse changes what is "just before the
+  // caret", which is the whole input to the menu.
+  input.addEventListener('click', updateChatSuggest);
+  input.addEventListener('keyup', function(e) {
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') updateChatSuggest();
+  });
+  input.addEventListener('blur', function() {
+    sendChatTyping(false);
+    // Late enough for a click on the menu to land first — a mousedown on a
+    // suggestion blurs the composer before the click fires.
+    setTimeout(closeChatSuggest, 120);
+  });
   autoGrowChatInput(input);
+
+  var suggest = document.getElementById('chat-suggest');
+  if (suggest) {
+    // mousedown, not click: the composer must not lose the caret before the
+    // insertion is made against it.
+    suggest.addEventListener('mousedown', function(e) {
+      var item = e.target.closest('.chat-suggest-item');
+      if (!item) return;
+      e.preventDefault();
+      acceptChatSuggest(Number(item.dataset.index));
+    });
+  }
+
+  var replyBar = document.getElementById('chat-reply-bar');
+  if (replyBar) replyBar.addEventListener('click', function(e) {
+    if (e.target.closest('.chat-reply-bar-cancel')) clearChatReply();
+  });
 
   // Reactions are delegated: the list is re-rendered whole on every change.
   list.addEventListener('click', function(e) {
     var chip = e.target.closest('.chat-reaction');
     if (chip) { sendChatReaction(chip.dataset.msgId, chip.dataset.emoji); return; }
+    var quote = e.target.closest('.chat-quote');
+    if (quote && quote.dataset.jumpTo) { jumpToChatMessage(quote.dataset.jumpTo); return; }
+    var answer = e.target.closest('.chat-reply-open');
+    if (answer) { setChatReplyTo(answer.dataset.msgId); return; }
     var open = e.target.closest('.chat-react-open');
     if (open) {
       var already = emojiPickerOpen() && _emojiTarget && _emojiTarget.msgId === open.dataset.msgId;
@@ -4732,6 +5599,312 @@ function initChatUI() {
 
   renderChat();
   updateChatUnreadBadge();
+}
+
+// --- The quick-actions palette ------------------------------------------------
+//
+// Cmd/Ctrl+K, the convention every tool the user already has open uses for
+// exactly this. It exists because the room's controls do not all fit on every
+// screen at once: the participants list is behind an edge handle on a phone,
+// the chat is a drawer, and the camera row is off the bottom of an immersive
+// stage. One key gets to all of them, in one place, with their own shortcuts
+// printed beside them so the palette teaches its way out of being needed.
+//
+// Which actions exist is read off the room's own BUTTONS rather than
+// re-derived: a control that is not on screen (video mode off, screen share on
+// a phone) is not an action, and asking the button is how that stays true
+// without a second copy of the rules.
+//
+// Direct shortcuts, and why these:
+//   ⌘/Ctrl+K      the palette          — Slack, Linear, Notion, Discord
+//   ⌘/Ctrl+E      camera               — Google Meet's own camera key
+//   ⌘/Ctrl+⇧+E    screen share         — the same key, one modifier up
+//   ⌘/Ctrl+B      chat drawer          — "toggle the side panel" everywhere else
+// Everything else stays in the palette on purpose. A single letter cannot be a
+// shortcut here (Space is push-to-talk and any letter may be being typed into
+// the composer), and the combinations the browser has already taken — ⌘/Ctrl+
+// T, W, N, L, D, J, ⇧+J, ⇧+C — are not available to a page whatever it does
+// with the event.
+var ROOM_ACCEL_SHORTCUTS = [
+  { id: 'palette', key: 'k', shift: false },
+  { id: 'camera',  key: 'e', shift: false },
+  { id: 'screen',  key: 'e', shift: true  },
+  { id: 'chat',    key: 'b', shift: false }
+];
+
+function isAppleKeyboard() {
+  var s = (navigator.platform || '') + ' ' + (navigator.userAgent || '');
+  return /Mac|iPhone|iPad|iPod/i.test(s);
+}
+
+// Written the way the platform writes it: a Mac stacks glyphs, everything else
+// spells the modifiers out and joins them with '+'.
+function shortcutLabelFor(id) {
+  var spec = null;
+  ROOM_ACCEL_SHORTCUTS.forEach(function(s) { if (s.id === id) spec = s; });
+  if (!spec) return '';
+  var key = spec.key.toUpperCase();
+  return isAppleKeyboard()
+    ? '⌘' + (spec.shift ? '⇧' : '') + key
+    : 'Ctrl+' + (spec.shift ? 'Shift+' : '') + key;
+}
+
+// A control is offered when it is on screen and usable. `el.offsetParent` is
+// not consulted: the palette can be opened over an immersive stage where the
+// whole control row is slid away, and those actions are exactly the ones it is
+// there to reach.
+function roomActionAvailable(id) {
+  var el = document.getElementById(id);
+  return !!el && !el.classList.contains('hidden') && !el.disabled;
+}
+
+function commandPaletteActions() {
+  var out = [];
+  if (roomActionAvailable('btn-share-camera')) {
+    out.push({
+      id: 'camera',
+      label: localVideoActive ? 'Turn camera off' : 'Turn camera on',
+      hint: 'Camera',
+      on: localVideoActive,
+      keys: shortcutLabelFor('camera'),
+      run: function() { if (localVideoActive) stopVideoShare(); else startVideoShare(); }
+    });
+  }
+  if (roomActionAvailable('btn-share-screen')) {
+    out.push({
+      id: 'screen',
+      label: localScreenActive ? 'Stop sharing your screen' : 'Share your screen',
+      hint: 'Screen',
+      on: localScreenActive,
+      keys: shortcutLabelFor('screen'),
+      run: function() { if (localScreenActive) stopScreenShare(); else startScreenShare(); }
+    });
+  }
+  out.push({
+    id: 'chat',
+    label: chatPanelOpen() ? 'Hide the chat' : 'Show the chat',
+    hint: 'Chat',
+    on: chatPanelOpen(),
+    keys: shortcutLabelFor('chat'),
+    run: function() { toggleChatPanel(!chatPanelOpen(), { remember: true }); }
+  });
+  // Only where the roster is something you have to go and get. Everywhere else
+  // it is a column that is already on screen, and "show participants" would be
+  // an action that visibly does nothing.
+  if (videoStageMode() === 'immersive') {
+    out.push({
+      id: 'roster',
+      label: stagePanelOpen('roster') ? 'Hide the participants' : 'Show the participants',
+      hint: 'Participants',
+      on: stagePanelOpen('roster'),
+      run: function() { setStagePanel('roster', !stagePanelOpen('roster')); }
+    });
+  }
+  // The two that already have keys of their own, kept at the bottom as their
+  // own group: the palette is where you find out they exist.
+  out.push({
+    id: 'freehand',
+    label: freeHandMode ? 'Stop hands-free' : 'Go hands-free',
+    hint: 'Audio',
+    on: freeHandMode,
+    keys: 'Enter',
+    group: 'audio',
+    run: function() { setFreeHand(!freeHandMode); }
+  });
+  out.push({
+    id: 'talk',
+    label: 'Hold to talk',
+    hint: 'Audio',
+    keys: displayShortcut(shortcutStr) || 'Space',
+    group: 'audio',
+    // Nothing to run: a key you hold cannot be a menu item. It is here so the
+    // list of what the keyboard does in a room is complete.
+    note: true
+  });
+  return out;
+}
+
+var _paletteItems = [];
+var _paletteIndex = 0;
+
+function commandPaletteOpen() {
+  var el = document.getElementById('command-palette');
+  return !!el && !el.classList.contains('hidden');
+}
+
+function openCommandPalette() {
+  var el = document.getElementById('command-palette');
+  if (!el || !inRoom || IS_TINY_EMBED) return;
+  el.classList.remove('hidden');
+  var input = document.getElementById('command-palette-input');
+  if (input) input.value = '';
+  renderCommandPalette('');
+  // The focus is the point: while it is here the composer does not have it and
+  // push-to-talk is correctly out of the way (shouldIgnorePTTShortcuts). Taken
+  // now AND on a timer — now so the very next keystroke lands in the box, on a
+  // timer because a panel animating in can steal it back.
+  if (input) {
+    try { input.focus(); input.select(); } catch (_) {}
+    setTimeout(function() { try { input.focus(); input.select(); } catch (_) {} }, 30);
+  }
+}
+
+function closeCommandPalette() {
+  var el = document.getElementById('command-palette');
+  if (!el || el.classList.contains('hidden')) return;
+  el.classList.add('hidden');
+  _paletteItems = [];
+  _paletteIndex = 0;
+}
+
+function toggleCommandPalette() {
+  if (commandPaletteOpen()) closeCommandPalette(); else openCommandPalette();
+}
+
+function renderCommandPalette(query) {
+  var list = document.getElementById('command-palette-list');
+  if (!list) return;
+  var q = String(query || '').trim().toLowerCase();
+  _paletteItems = commandPaletteActions().filter(function(a) {
+    return !q || a.label.toLowerCase().indexOf(q) !== -1 || (a.hint || '').toLowerCase().indexOf(q) !== -1;
+  });
+  if (_paletteIndex >= _paletteItems.length) _paletteIndex = 0;
+  // Never park the highlight on the row that cannot be run.
+  if (_paletteItems[_paletteIndex] && _paletteItems[_paletteIndex].note) _paletteIndex = firstRunnablePaletteIndex();
+  list.innerHTML = '';
+  if (!_paletteItems.length) {
+    var none = document.createElement('p');
+    none.className = 'command-palette-none';
+    none.textContent = 'Nothing matches that.';
+    list.appendChild(none);
+    return;
+  }
+  var lastGroup = null;
+  _paletteItems.forEach(function(action, i) {
+    if ((action.group || '') !== lastGroup && i > 0) {
+      var rule = document.createElement('div');
+      rule.className = 'command-palette-rule';
+      list.appendChild(rule);
+    }
+    lastGroup = action.group || '';
+    var row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'command-palette-item'
+      + (i === _paletteIndex ? ' command-palette-active' : '')
+      + (action.on ? ' command-palette-on' : '')
+      + (action.note ? ' command-palette-note' : '');
+    row.dataset.index = String(i);
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-selected', String(i === _paletteIndex));
+    if (action.note) row.tabIndex = -1;
+    var label = document.createElement('span');
+    label.className = 'command-palette-label';
+    label.textContent = action.label;
+    row.appendChild(label);
+    if (action.keys) {
+      var keys = document.createElement('kbd');
+      keys.className = 'command-palette-keys';
+      keys.textContent = action.keys;
+      row.appendChild(keys);
+    }
+    list.appendChild(row);
+  });
+}
+
+function firstRunnablePaletteIndex() {
+  for (var i = 0; i < _paletteItems.length; i++) { if (!_paletteItems[i].note) return i; }
+  return 0;
+}
+
+function moveCommandPalette(delta) {
+  var n = _paletteItems.length;
+  if (!n) return;
+  var i = _paletteIndex;
+  for (var step = 0; step < n; step++) {
+    i = ((i + delta) % n + n) % n;
+    if (!_paletteItems[i].note) break;
+  }
+  _paletteIndex = i;
+  renderCommandPalette(document.getElementById('command-palette-input').value);
+}
+
+function runCommandPalette(index) {
+  var action = _paletteItems[typeof index === 'number' ? index : _paletteIndex];
+  if (!action || action.note || typeof action.run !== 'function') return;
+  closeCommandPalette();
+  action.run();
+}
+
+// The one key the palette itself needs, plus the direct toggles. Returns true
+// when it consumed the event, so the caller stops.
+function handleRoomAccelShortcut(e) {
+  // ⌘ on a Mac and Ctrl everywhere else — not "either one". Ctrl+E on macOS is
+  // the system's own "move to end of line" inside a text field, and taking it
+  // would break the composer for anyone who uses it.
+  var accel = isAppleKeyboard() ? (e.metaKey && !e.ctrlKey) : (e.ctrlKey && !e.metaKey);
+  if (!accel || e.altKey) return false;
+  var key = String(e.key || '').toLowerCase();
+  var spec = null;
+  ROOM_ACCEL_SHORTCUTS.forEach(function(s) {
+    if (s.key === key && !!s.shift === !!e.shiftKey) spec = s;
+  });
+  if (!spec) return false;
+  // Push-to-talk is the user's own binding and it wins: they chose it, and
+  // nothing here is worth taking the talk key away from them.
+  if (matchesShortcut(e)) return false;
+  if (spec.id === 'palette') {
+    if (!inRoom || IS_TINY_EMBED) return false;
+    e.preventDefault();
+    toggleCommandPalette();
+    return true;
+  }
+  if (!inRoom) return false;
+  if (spec.id === 'chat') {
+    if (IS_TINY_EMBED) return false;
+    e.preventDefault();
+    toggleChatPanel(!chatPanelOpen(), { remember: true });
+    return true;
+  }
+  if (spec.id === 'camera') {
+    if (!roomActionAvailable('btn-share-camera')) return false;
+    e.preventDefault();
+    if (localVideoActive) stopVideoShare(); else startVideoShare();
+    return true;
+  }
+  if (spec.id === 'screen') {
+    if (!roomActionAvailable('btn-share-screen')) return false;
+    e.preventDefault();
+    if (localScreenActive) stopScreenShare(); else startScreenShare();
+    return true;
+  }
+  return false;
+}
+
+function initCommandPalette() {
+  var el = document.getElementById('command-palette');
+  if (!el || el._voxalWired) return;
+  el._voxalWired = true;
+  var input = document.getElementById('command-palette-input');
+  var list  = document.getElementById('command-palette-list');
+  if (input) {
+    input.addEventListener('input', function() { _paletteIndex = 0; renderCommandPalette(input.value); });
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); moveCommandPalette(1); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); moveCommandPalette(-1); return; }
+      if (e.key === 'Enter')     { e.preventDefault(); runCommandPalette(); return; }
+      if (e.key === 'Escape')    { e.preventDefault(); e.stopPropagation(); closeCommandPalette(); }
+    });
+  }
+  if (list) {
+    list.addEventListener('click', function(e) {
+      var row = e.target.closest('.command-palette-item');
+      if (row) runCommandPalette(Number(row.dataset.index));
+    });
+  }
+  // The backdrop is the element itself; a click on the box must not close it.
+  el.addEventListener('click', function(e) {
+    if (e.target === el) closeCommandPalette();
+  });
 }
 
 function rejoinCandidates(snapshot) {
@@ -7615,6 +8788,9 @@ function updatePeerList() {
   }
 
   if (window._updateTinyPeersToggle) window._updateTinyPeersToggle();
+  // Who is in the room is what a mention is matched against, and it just
+  // changed.
+  invalidateChatMentions();
   // The rows a peek points at were just thrown away and rebuilt, so anything on
   // screen is pointing at a detached element until this runs.
   layoutChatPeeks();
@@ -13022,6 +14198,7 @@ function leaveRoom() {
   stopPeerHeartbeatSweep();
   knownPeerIds.clear();
   resetChatState();
+  closeCommandPalette();   // every action in it is a room action
   releaseAudioFocus();
   nativePTTLeave();
   stopKeepAlive();
@@ -13905,7 +15082,7 @@ function handleJoinerDataConnection(dataConn) {
       // `joinerId`, never msg.peerId: the sender field is the host's to stamp.
       var chatText = chatTextFromWire(msg.text);
       var chatId   = chatIdFromWire(msg.id, joinerId);
-      if (chatText && chatId) fanOutChatMessage(joinerId, chatId, chatText);
+      if (chatText && chatId) fanOutChatMessage(joinerId, chatId, chatText, msg.replyTo);
     } else if (msg.type === 'chat-react') {
       fanOutChatReaction(joinerId, msg.msgId, msg.emoji);
     } else if (msg.type === 'chat-typing') {
@@ -14119,7 +15296,12 @@ function handleHostMessage(msg) {
     return;
   }
   if (msg.type === 'chat-react') {
-    if (applyChatReaction(msg.msgId, msg.emoji, msg.peerId)) { renderChat(); saveChatLog(); }
+    var reacted = applyChatReaction(msg.msgId, msg.emoji, msg.peerId);
+    if (reacted) {
+      renderChat();
+      saveChatLog();
+      noteChatReactionApplied(reacted, msg.msgId, msg.emoji, msg.peerId);
+    }
     return;
   }
   if (msg.type === 'chat-typing') {
@@ -16451,6 +17633,14 @@ window.addEventListener('DOMContentLoaded', function() {
       }
       return; // don't process PTT or shortcuts while modal is open
     }
+    // Before the text-field guard, deliberately: these are modifier
+    // combinations, so they mean the same thing with the composer focused as
+    // without it — which is what makes ⌘K reachable from inside the chat.
+    if (!recordingShortcut && handleRoomAccelShortcut(e)) return;
+    // Escape closes the palette from wherever the focus ended up — its own
+    // input handles the common case, but a palette nobody can dismiss is worse
+    // than one that is dismissed twice.
+    if (e.key === 'Escape' && commandPaletteOpen()) { e.preventDefault(); closeCommandPalette(); return; }
     if (shouldIgnorePTTShortcuts()) return;
     if (recordingShortcut) { e.preventDefault(); if (!MODIFIER_CODES.includes(e.code)) { const s = shortcutFromEvent(e); if (s) applyNewShortcut(s); } return; }
     if (e.code === 'Space' && !e.repeat) {
