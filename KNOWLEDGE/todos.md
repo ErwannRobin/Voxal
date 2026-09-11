@@ -599,9 +599,9 @@ a link must describe the room, not how the sender's window happened to be opened
 Shipped: a right-hand drawer with plain text + autolinked URLs, typing
 indicators, six emoji reactions, an unread badge and a ping. Four message types
 on the existing star signaling (`chat`, `chat-history`, `chat-react`,
-`chat-typing`), `PROTOCOL_VERSION` bumped to 2. The transcript is in memory,
-mirrored to `localStorage` under `chat-log` with the rejoin snapshot's key and
-TTL, and capped at 200 messages. Covered by `tests/e2e/unit-chat.spec.js` (30
+`chat-typing`), `PROTOCOL_VERSION` bumped to 2 — and a fifth, `chat-edit`, at
+version 3. The transcript is in memory, mirrored to `localStorage` under
+`chat-log` with the rejoin snapshot's key and TTL, and capped at 200 messages. Covered by `tests/e2e/unit-chat.spec.js` (30
 cases) and four `@mesh` tests.
 
 The transcript is dense on purpose: the name and its message are one line, a
@@ -666,6 +666,17 @@ compositor does the rest. It is announced *after* the transcript re-renders —
 `noteChatReactionApplied()` — because a render that came after would replace the
 row the glyph had just aimed at.
 
+A message is **yours to correct for five minutes** (`CHAT_EDIT_WINDOW_MS`).
+`↑` on an empty composer loads your own last message back into the box — the
+gesture Slack, Discord and every shell already have — with a strip over it
+saying so, and sending replaces the row rather than adding one. With nothing of
+your own still inside the window the key falls through to answering the last
+thing anyone said, which is what it did before. The window is enforced at the
+**host**: it stamped `at`, so it is the only clock every peer has already agreed
+to, and it is also what proves the editor is the author (`fanOutChatEdit()`
+takes the sender id from the connection, never from the packet). The wire type
+is `chat-edit`; the message carries `editedAt`, which is what prints "(edited)".
+
 The composer speaks four more things:
 
 - **`@name`** — a mention is matched against the roster, longest name first,
@@ -689,6 +700,73 @@ out of that name, and only the bubble the run starts at carries a tail. A run
 wraps onto a second line when the window runs out before it does, and moves as
 a whole when it has to clear somebody else's.
 
+### On a phone
+
+Everything here follows from a screen with no hover, no spare width and —
+turned on its side — no spare height:
+
+- **The row's actions live behind a long press.** `.chat-msg-tools` used to be
+  permanently visible under `@media (hover: none)`, which in a conversation of
+  any length is a column of chrome running down the side of the words. On touch
+  the strip is gone and a 450 ms press on the row opens a bottom sheet with
+  Reply / React / Edit / Copy text (`openChatMessageMenu()`). Text selection in
+  the transcript is turned off on touch with it — the press would otherwise open
+  the sheet over a half-highlighted message — which is why Copy is in the sheet;
+  the transcript stays selectable wherever there is a pointer. A press on a
+  **reaction chip** answers the other question a touch screen cannot ask: the
+  chip's `title` lists who reacted, and a title is a hover, so the same sheet
+  prints the names (`openChatReactionMenu()`).
+- **A run peeks sideways before it stacks.** `fitChatPeekRunWidths()` measures a
+  run's natural widths and, when they overrun the line, takes the space back
+  from the WIDE ones (max-min fair, floored at `CHAT_PEEK_RUN_MIN_WIDTH`), so a
+  message and the reaction chasing it sit side by side instead of the glyph
+  being pushed under a bubble that took all 320px. Wrapping is what happens when
+  even that does not fit — the "impossible horizontally" case. It applies to the
+  **under-the-name** shape only: beside the roster there is real room to run
+  into, and wrapping a long run onto a second line there is still the right
+  answer rather than squeezing three bubbles that each had space.
+- **Nothing is drawn under the open drawer.** `chatPeekViewport()` clips the
+  anchored layout to the window minus the drawer, so a sender whose row is still
+  visible keeps an anchored bubble and one the drawer covers has no anchor at
+  all — and falls back to the stacked shape, which is already muted while the
+  panel is open.
+- **A tap anywhere off the drawer puts it away, in every regime.** The scrim was
+  published only by the immersive video stage, so a phone turned on its side had
+  a drawer that could only be closed from its handle. `chatOverlaysRoom()`
+  measures whether the drawer is sitting ON the room (rather than docked, or
+  beside the Mac's own window) and publishes `body.chat-overlay`, which is what
+  the scrim now reads. The scrim still stops above the talk button — in the
+  immersive stage from `--stage-inset-bottom`, everywhere else from
+  `--room-bar-inset` (`publishRoomBarInset()`). The black band around the mic
+  dismisses too, from its own background only.
+- **In landscape the drawer gets a column instead of covering the mic.** The
+  landscape reflow puts the talk button in the right-hand third — the same edge
+  the drawer comes from — so an overlaying drawer hid the one control this app
+  is for. The strip is reserved on `body` (the mechanism `body.chat-side`
+  already uses), capped at 42vw, and the room's grid compresses into what is
+  left. With the strip reserved there is nothing behind the drawer, so no scrim
+  is published there either. Everything in the panel that asserted a height in
+  pixels (the emoji grid's 190px floor above all) is relative to the viewport
+  under `@media (max-height: 600px)`, and the composer's ceiling is a share of
+  the window height, enforced in `autoGrowChatInput()` so it still decides
+  whether the box scrolls. In landscape **video** mode the control stack itself
+  becomes a row — the mic with the buttons beside it rather than under it — so
+  the tiles, the self-view badge and the scrim all get back the third of the
+  screen it was taking (they are all measured from `--stage-inset-bottom`,
+  which is measured from that stack).
+- **The self-view can park beside the mic.** On an upright phone the talk button
+  is a circle in the middle of a wide black band, and that band is the only part
+  of the screen that is not somebody's face — so `barl` / `barr` join the four
+  corners as places to drop the badge (`selfBadgeBarSlots()` measures the band;
+  `nearestBadgeCorner()` takes it as a third argument). Whether the slots exist
+  is measured, never inferred from orientation: below
+  `SELF_BADGE_BAR_MIN_SIDE` there is no band, and a badge parked in one is
+  handed back to a bottom corner without losing the stored choice
+  (`effectiveSelfBadgeCorner()`), so turning the phone back returns it. The
+  badge lives inside the stage, which paints under the control bar, so the bar
+  forwards a press that lands on it (`selfBadgeAtPoint()`) rather than losing
+  the gesture.
+
 The chat is reached from a handle on the right edge — the chat icon, the unread
 count, and a drag — in **every** room, voice-only ones included. There is no
 button for it in the header. That handle is wired by `initChatUI()` rather than
@@ -709,8 +787,14 @@ reads the room's own **buttons** rather than re-deriving what is available, so a
 control the room does not offer is not an action.
 
 Direct keys, and why these: `⌘/Ctrl+K` the palette (Slack, Linear, Notion,
-Discord), `⌘/Ctrl+E` camera (Google Meet's own), `⌘/Ctrl+⇧+E` screen share,
-`⌘/Ctrl+B` the chat drawer. They are handled *before* the focused-text-field
+Discord), `⌘/Ctrl+U` camera, `⌘/Ctrl+⇧+U` screen share, `⌘/Ctrl+B` the chat
+drawer. The camera was `⌘E` (Google Meet's own key) and never arrived: on macOS
+`⌘E` is the system's "Use Selection for Find", taken above the page in both
+WebKit and Chromium, so the room never saw the event. Each entry now carries a
+LIST of keys — the first is the one the palette prints, the rest still work — so
+`⌘/Ctrl+E` keeps working for anyone who learned it where it did reach us.
+
+They are handled *before* the focused-text-field
 guard, since a modifier combination means the same thing inside the composer as
 out of it — but `matchesShortcut(e)` is checked first, so a user who bound
 push-to-talk to one of them keeps their own binding. Everything else stays in

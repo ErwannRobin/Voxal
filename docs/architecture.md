@@ -54,16 +54,18 @@ For a detailed breakdown of election, retries, settle windows, and split-brain s
 | `room-published` | host → all | `{ roomId, secret? }` |
 | `video-offer` | peer → host (relay) | `{ peerId, topology: 'p2p'\|'sfu', providerRef? }` — see [Video routing](video-routing.md) |
 | `video-stop` | peer → host (relay) | `{ peerId }` |
-| `chat` | peer → host → **all, sender included** | in `{ id, text, replyTo }`; out `{ id, peerId, text, at, replyTo }` — the host stamps the sender and the time; the echo back to the sender is its ack. `replyTo` is the id of the message being answered, or `null` |
+| `chat` | peer → host → **all, sender included** | in `{ id, text, replyTo }`; out `{ id, peerId, text, at, replyTo }` — the host stamps the sender and the time; the echo back to the sender is its ack. `replyTo` is the id of the message being answered, or `null`. A stored message also carries `editedAt` (see `chat-edit`) |
 | `chat-history` | host → joiner | `{ messages }` — the transcript so far, served from the host's own replica |
+| `chat-edit` | peer → host → **all, sender included** | in `{ msgId, text }`; out `{ msgId, text, peerId, editedAt }` — the author correcting their own line, up to `CHAT_EDIT_WINDOW_MS` (5 min) after sending. The host is the authority on both rules: it stamped `at`, so it owns the clock, and it takes the sender from the connection, so a peer can never rewrite somebody else's message. A request it refuses is dropped silently |
 | `chat-react` | peer → host (relay) | `{ msgId, emoji, peerId }` — toggles that peer's reaction |
 | `chat-typing` | peer → host (relay to others) | `{ peerId, active }` — transient, never stored |
 
 ## Protocol versioning & updates
 
 The `hello` and `peer-list` messages carry a `protocolVersion` (integer, bump on
-wire-protocol changes — currently `2`, bumped when chat was added) and `appVersion` (display string). Peers
-record each other's versions and warn on skew; if any peer is on a *newer*
+wire-protocol changes — currently `3`: `2` when chat was added, `3` when
+`chat-edit` was) and `appVersion` (display string). Peers record each other's
+versions and warn on skew; if any peer is on a *newer*
 protocol, the client shows a one-time "refresh to update" hint.
 
 Because the protocol lives entirely in `src/` (the web bundle the native shells
