@@ -120,6 +120,7 @@ Room flow (high level):
 - [Release workflow and signing](docs/release.md)
 - [Required checks — no merge on red tests](docs/required-checks.md)
 - [iframe embed parameters and bridge](docs/iframe-embed.md)
+- [LLM integration prompts — ready-made prompts for coding agents](docs/prompts.md)
 - [Ring a friend — design proposal (not implemented)](docs/ring-a-friend.md)
 - [Recent daily updates](docs/updates/2026-06-15.md)
 
