@@ -12,6 +12,8 @@ import { seedRoom } from './_helpers.js';
 
 const PHONE = { width: 390, height: 844 };
 const DESKTOP = { width: 1280, height: 800 };
+// A phone turned on its side: wide, and short enough for the landscape regime.
+const LANDSCAPE = { width: 844, height: 390 };
 
 async function enterRoom(page, cfg = {}) {
   await seedRoom(page, { selfId: 'self', isHost: true, roomCode: 'room1', ...cfg });
@@ -38,6 +40,14 @@ async function fakeMobileUA(page) {
     });
   });
 }
+
+// Is any part of the element inside the viewport? The sliding panels and the
+// header are moved with `transform`, so they are always laid out — off-screen is
+// the only thing that says "put away".
+const onScreen = (page, sel) => page.evaluate((s) => {
+  const b = document.querySelector(s).getBoundingClientRect();
+  return b.left < window.innerWidth && b.right > 0 && b.top < window.innerHeight && b.bottom > 0;
+}, sel);
 
 test.describe('videoStageMode — which shape of stage applies where', () => {
   test('a wide web viewport gets the desktop grid', async ({ page }) => {
@@ -198,16 +208,41 @@ test.describe('body.video-stage-immersive', () => {
     }, sel);
     expect(await visible('#ptt-btn')).toBe(true);
     expect(await visible('.room-controls')).toBe(true);
+  });
 
-    // Visible is not enough — the scrim behind an open panel must stop above the
-    // control stack, or it swallows the tap it does not dim.
-    const hit = await page.evaluate(() => {
-      const b = document.getElementById('ptt-btn').getBoundingClientRect();
-      const el = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
-      return { isPtt: el === document.getElementById('ptt-btn') || document.getElementById('ptt-btn').contains(el),
-               got: el && el.id };
+  // The scrim used to stop above the control stack so that it neither dimmed the
+  // talk button nor swallowed its tap. That left a hard horizontal edge two
+  // thirds of the way down the screen — a grey box lying on the video rather
+  // than the room standing back. It now covers the lot, and the bar is lifted
+  // OVER it instead: same two guarantees, no box.
+  test('the scrim covers the whole screen, and the bar is above it', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
     });
-    expect(hit.isPtt).toBe(true);
+    await page.evaluate(() => setStagePanel('roster', true));
+    await page.waitForTimeout(350);   // let the panel finish sliding in
+
+    const seen = await page.evaluate(() => {
+      const scrim = document.getElementById('stage-panel-scrim');
+      const b = scrim.getBoundingClientRect();
+      const bar = document.querySelector('.room-bottom-bar');
+      // A point on the bar clear of the panel that is sliding over it: the only
+      // thing that could be between it and the finger is the scrim.
+      const row = document.querySelector('.room-controls').getBoundingClientRect();
+      const panelRight = document.querySelector('#screen-room .room-peers-panel')
+        .getBoundingClientRect().right;
+      const el = document.elementFromPoint(panelRight + 20, row.top + row.height / 2);
+      return {
+        covers: Math.round(b.top) === 0 && Math.round(b.bottom) === Math.round(window.innerHeight),
+        scrimZ: +getComputedStyle(scrim).zIndex,
+        barZ: +getComputedStyle(bar).zIndex,
+        onScrim: el === scrim,
+      };
+    });
+    expect(seen.covers).toBe(true);
+    expect(seen.barZ).toBeGreaterThan(seen.scrimZ);
+    expect(seen.onScrim).toBe(false);
   });
 });
 
@@ -256,12 +291,48 @@ test.describe('the room keeps its colours in video mode', () => {
     expect(await page.evaluate(() => document.body.classList.contains('video-stage-immersive'))).toBe(true);
   }
 
-  test('the talk button is identical with and without video', async ({ page }) => {
+  // The RING is what makes the talk button the talk button — on the home
+  // screen, in a voice room, on somebody's face. It, and the size, are what may
+  // never change. The fill is the one thing that has to: with the slab gone the
+  // button stands directly on the picture, and an opaque disc there is a hole
+  // punched in the frame.
+  test('the talk button keeps its ring and its size, and only the fill turns to glass', async ({ page }) => {
     await enterAudioRoom(page);
-    const props = ['backgroundColor', 'borderTopColor', 'width', 'height'];
+    const props = ['backgroundColor', 'borderTopColor', 'width', 'height', 'backdropFilter'];
     const audioOnly = await pickSettled(page, '#ptt-btn', props);
+    expect(audioOnly.backdropFilter).toBe('none');
     await turnCameraOn(page);
-    expect(await pickSettled(page, '#ptt-btn', props)).toEqual(audioOnly);
+    const onVideo = await pickSettled(page, '#ptt-btn', props);
+
+    expect(onVideo.borderTopColor).toBe(audioOnly.borderTopColor);
+    expect(onVideo.width).toBe(audioOnly.width);
+    expect(onVideo.height).toBe(audioOnly.height);
+    expect(onVideo.backgroundColor).not.toBe(audioOnly.backgroundColor);
+    expect(onVideo.backgroundColor).toContain('rgba');   // translucent
+    expect(onVideo.backdropFilter).not.toBe('none');
+  });
+
+  // There is no slab any more — no plank the width of the screen backing two
+  // controls and a line of text. The bar paints NOTHING; every control on it
+  // carries the glass itself, and the video runs unbroken between them.
+  test('the bar itself paints nothing at all', async ({ page }) => {
+    await enterAudioRoom(page);
+    await turnCameraOn(page);
+    const seen = await page.evaluate(() => {
+      const bar = document.querySelector('.room-bottom-bar');
+      const slab = getComputedStyle(bar, '::before');
+      const own = getComputedStyle(bar);
+      return {
+        slabContent: slab.content,
+        slabBlur: slab.backdropFilter || slab.webkitBackdropFilter,
+        barBg: own.backgroundColor,
+        barBlur: own.backdropFilter || own.webkitBackdropFilter,
+      };
+    });
+    expect(seen.slabContent).toBe('none');    // the pseudo-element is not drawn
+    expect(seen.slabBlur).toBe('none');
+    expect(seen.barBg).toBe('rgba(0, 0, 0, 0)');
+    expect(seen.barBlur).toBe('none');
   });
 
   test('the status line keeps its own colour', async ({ page }) => {
@@ -303,6 +374,104 @@ test.describe('the room keeps its colours in video mode', () => {
     const audioOnly = await pickSettled(page, '#btn-freehand', ['backgroundColor', 'color']);
     await turnCameraOn(page);
     expect(await pickSettled(page, '#btn-freehand', ['backgroundColor', 'color'])).not.toEqual(audioOnly);
+  });
+
+  // The mic is the control people reach for without looking, and it has to be
+  // under the same thumb in both kinds of room. The hint above the control row
+  // is what used to break that: hidden with `display` in video mode, it took its
+  // line with it and the mic dropped by the whole height of it.
+  test('the mic is on the same pixel with and without video', async ({ page }) => {
+    await enterAudioRoom(page);
+    const mic = () => page.evaluate(() => {
+      const b = document.getElementById('ptt-btn').getBoundingClientRect();
+      return { x: Math.round(b.left), y: Math.round(b.top),
+               w: Math.round(b.width), h: Math.round(b.height) };
+    });
+    const audioOnly = await mic();
+    await turnCameraOn(page);
+    expect(await mic()).toEqual(audioOnly);
+    // …and still there once the chrome has been put away.
+    await page.evaluate(() => setStageChrome(true));
+    await page.waitForTimeout(350);
+    expect(await mic()).toEqual(audioOnly);
+  });
+
+  // A voice room's bar IS the bottom of the page, and the rule is what separates
+  // the talk button from its controls. The dock already has an edge of its own,
+  // and a second line across the middle of a panel lying on somebody's face is a
+  // scratch. Colour only, so the row keeps its box — see the test above.
+  test('the rule across the control row goes in video mode and stays in voice', async ({ page }) => {
+    await enterAudioRoom(page);
+    const rule = () => page.evaluate(() => {
+      const st = getComputedStyle(document.querySelector('.room-controls'));
+      return { color: st.borderTopColor, width: st.borderTopWidth };
+    });
+    const voice = await rule();
+    expect(voice.color).not.toBe('rgba(0, 0, 0, 0)');
+    expect(voice.width).toBe('1px');
+
+    await turnCameraOn(page);
+    const video = await rule();
+    expect(video.color).toBe('rgba(0, 0, 0, 0)');
+    expect(video.width).toBe('1px');   // the box is unchanged, only the ink
+  });
+});
+
+// One tap and the room is nothing but the picture and the mic. What is left
+// standing has to look like it belongs on a photograph.
+test.describe('clean mode leaves the mic on the picture', () => {
+  test.use({ viewport: PHONE });
+
+  const twoCameras = (page) => enterRoom(page, {
+    knownPeerIds: ['p1', 'p2'],
+    connections: [
+      { id: 'p1', pseudo: 'Alice', open: true, videoActive: true },
+      { id: 'p2', pseudo: 'Bob', open: true, videoActive: true },
+    ],
+  });
+
+  test.beforeEach(async ({ page }) => { await page.goto('/'); });
+
+  // The button is already glass with the chrome up — that is what every control
+  // on this stage is now. Clean mode simply takes the chips beside it away, so
+  // the button must come through the toggle completely unchanged.
+  test('the button is glass throughout, and the toggle does not touch it', async ({ page }) => {
+    await twoCameras(page);
+    const glass = () => page.evaluate(() => {
+      const st = getComputedStyle(document.getElementById('ptt-btn'));
+      return { bg: st.backgroundColor, blur: st.backdropFilter || st.webkitBackdropFilter,
+               border: st.borderTopColor };
+    });
+    const withChrome = await glass();
+    expect(withChrome.bg).toContain('rgba');      // translucent, not a solid disc
+    expect(withChrome.blur).not.toBe('none');
+
+    await page.evaluate(() => setStageChrome(true));
+    await page.waitForTimeout(250);
+    expect(await glass()).toEqual(withChrome);
+
+    // …and the thing that DID go is the row beside it.
+    expect(await page.evaluate(() =>
+      getComputedStyle(document.querySelector('.room-controls')).visibility)).toBe('hidden');
+  });
+
+  // The button already says whether the room can hear you — a green ring, an
+  // accent fill, or neither. A line of red text under it on somebody's face is
+  // the thing clean mode was asked to get rid of.
+  test('the red status line goes too, without moving the mic', async ({ page }) => {
+    await twoCameras(page);
+    await page.evaluate(() => { document.getElementById('ptt-status').textContent = '\u25cf Live'; });
+    const micY = () => page.evaluate(() =>
+      Math.round(document.getElementById('ptt-btn').getBoundingClientRect().top));
+    const before = await micY();
+    expect(await page.evaluate(() =>
+      getComputedStyle(document.getElementById('ptt-status')).visibility)).toBe('visible');
+
+    await page.evaluate(() => setStageChrome(true));
+    await page.waitForTimeout(250);
+    expect(await page.evaluate(() =>
+      getComputedStyle(document.getElementById('ptt-status')).visibility)).toBe('hidden');
+    expect(await micY()).toBe(before);   // ink, never space
   });
 });
 
@@ -358,19 +527,39 @@ test.describe('tap the video to put the chrome away', () => {
     return st.display !== 'none' && st.visibility !== 'hidden';
   }, sel);
 
-  test('the control row and the handles go, and the video takes the space', async ({ page }) => {
+  // Everything that is chrome goes together: the control row, the edge handles,
+  // and the room header — which is now part of the chrome rather than a panel
+  // with a gesture of its own. The talk button is the one thing left standing.
+  test('the control row, the handles and the header all go together', async ({ page }) => {
     await twoCameras(page);
-    const stageTop = () => page.evaluate(() =>
-      document.querySelectorAll('#video-stage-grid .video-tile')[0].getBoundingClientRect().top);
     expect(await shown(page, '.room-controls')).toBe(true);
-    expect(await shown(page, '#stage-handle-header')).toBe(true);
-    const before = await stageTop();
+    expect(await shown(page, '.stage-handle-left')).toBe(true);
+    expect(await onScreen(page, '#screen-room .room-header')).toBe(true);
 
     await tapVideo(page);
     expect(await shown(page, '.room-controls')).toBe(false);
-    expect(await shown(page, '#stage-handle-header')).toBe(false);
+    expect(await shown(page, '.stage-handle-left')).toBe(false);
+    await expect.poll(() => onScreen(page, '#screen-room .room-header')).toBe(false);
     expect(await shown(page, '#ptt-btn')).toBe(true);
-    expect(await stageTop()).toBeLessThan(before);
+  });
+
+  // The header LIES ON the picture, exactly as the dock does. Nothing is
+  // reserved for it, so the tiles are on the same pixels whether it is there or
+  // not — putting the chrome away reveals what was behind it, it does not
+  // re-lay-out the stage.
+  test('the tiles never move when the header comes and goes', async ({ page }) => {
+    await twoCameras(page);
+    const tiles = () => page.evaluate(() =>
+      [...document.querySelectorAll('#video-stage-grid .video-tile')]
+        .map((e) => { const b = e.getBoundingClientRect();
+                      return { y: Math.round(b.top), h: Math.round(b.height) }; }));
+    const before = await tiles();
+    await tapVideo(page);
+    await page.waitForTimeout(350);   // let the header finish sliding out
+    expect(await tiles()).toEqual(before);
+    await tapVideo(page);
+    await page.waitForTimeout(350);
+    expect(await tiles()).toEqual(before);
   });
 
   // The row loses its ink, not its space: the bar is anchored to the bottom of
@@ -389,16 +578,32 @@ test.describe('tap the video to put the chrome away', () => {
 
   // The bar keeps its full height while the chrome is away, so the band it
   // covers is not part of the stage and its taps would otherwise go nowhere.
-  test('a tap on the invisible bar brings the chrome back', async ({ page }) => {
+  // The bar covers a band at the bottom that is NOT part of #video-stage, so a
+  // tap there is one the stage never sees. It hands it on — and BOTH ways now.
+  // While the controls sat on a translucent plank the bar was a control surface
+  // and a missed button had no business putting the chrome away; the plank is
+  // gone, so what is under that thumb is the picture and it behaves like it.
+  test('a tap on the bar toggles the chrome, in both directions', async ({ page }) => {
     await twoCameras(page);
-    await tapVideo(page);
-    expect(await hidden(page)).toBe(true);
     const where = await page.evaluate(() => {
       const bar = document.querySelector('.room-bottom-bar').getBoundingClientRect();
       const row = document.querySelector('.room-controls').getBoundingClientRect();
       return { x: bar.left + 8, y: row.top + row.height / 2 };
     });
+    // Shown → away.
+    expect(await hidden(page)).toBe(false);
     await page.mouse.click(where.x, where.y);
+    expect(await hidden(page)).toBe(true);
+    // …and back.
+    await page.mouse.click(where.x, where.y);
+    expect(await hidden(page)).toBe(false);
+  });
+
+  // The controls themselves are still controls: pressing one must not also put
+  // the chrome away underneath it.
+  test('a tap on a control on the bar is not a tap on the picture', async ({ page }) => {
+    await twoCameras(page);
+    await page.locator('#btn-freehand').click();
     expect(await hidden(page)).toBe(false);
   });
 
@@ -452,19 +657,30 @@ test.describe('sliding panels', () => {
     connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
   });
 
-  const onScreen = (page, sel) => page.evaluate((s) => {
-    const b = document.querySelector(s).getBoundingClientRect();
-    return b.left < window.innerWidth && b.right > 0 && b.top < window.innerHeight && b.bottom > 0;
-  }, sel);
-
-  test('both panels start off-screen, and their handles are on it', async ({ page }) => {
+  // The roster is the panel; the header is NOT one of them any more — it comes
+  // and goes with the chrome, so a stage that has just opened shows it.
+  test('the roster starts off-screen and its handle is on it', async ({ page }) => {
     await withVideo(page);
-    expect(await onScreen(page, '#screen-room .room-header')).toBe(false);
     expect(await onScreen(page, '#screen-room .room-peers-panel')).toBe(false);
-    for (const id of ['#stage-handle-header', '#stage-handle-roster', '#stage-handle-chat']) {
+    for (const id of ['#stage-handle-roster', '#stage-handle-chat']) {
       expect(await page.evaluate((s) =>
         getComputedStyle(document.querySelector(s)).display, id)).toBe('flex');
     }
+  });
+
+  // The handle it used to need had to live at the very top of the screen, which
+  // on a PWA and in the native apps is under the system status bar — where the
+  // OS takes the gesture and Settings, the room code and Leave can never be
+  // reached at all. There is no handle now: the header is chrome.
+  test('the header is on screen with the chrome, and has no handle of its own', async ({ page }) => {
+    await withVideo(page);
+    expect(await onScreen(page, '#screen-room .room-header')).toBe(true);
+    expect(await page.evaluate(() => !!document.getElementById('stage-handle-header'))).toBe(false);
+
+    await page.evaluate(() => setStageChrome(true));
+    await expect.poll(() => onScreen(page, '#screen-room .room-header')).toBe(false);
+    await page.evaluate(() => setStageChrome(false));
+    await expect.poll(() => onScreen(page, '#screen-room .room-header')).toBe(true);
   });
 
   test('an audio-only room keeps both in their normal place', async ({ page }) => {
@@ -475,17 +691,7 @@ test.describe('sliding panels', () => {
     expect(await onScreen(page, '#screen-room .room-header')).toBe(true);
     expect(await onScreen(page, '#screen-room .room-peers-panel')).toBe(true);
     expect(await page.evaluate(() =>
-      getComputedStyle(document.getElementById('stage-handle-header')).display)).toBe('none');
-  });
-
-  test('tapping a handle slides its panel in, and again slides it out', async ({ page }) => {
-    await withVideo(page);
-    await page.locator('#stage-handle-header').click();
-    await expect.poll(() => onScreen(page, '#screen-room .room-header')).toBe(true);
-    expect(await page.locator('#stage-handle-header').getAttribute('aria-expanded')).toBe('true');
-
-    await page.locator('#stage-handle-header').click();
-    await expect.poll(() => onScreen(page, '#screen-room .room-header')).toBe(false);
+      getComputedStyle(document.getElementById('stage-handle-roster')).display)).toBe('none');
   });
 
   test('the roster handle slides the participant list in from the left', async ({ page }) => {
@@ -552,34 +758,25 @@ test.describe('sliding panels', () => {
     expect(seen).toEqual({ text: '1', hidden: false });
   });
 
-  // They are alternatives — two panels open at once on a phone would overlap.
-  test('opening one panel closes the other', async ({ page }) => {
-    await withVideo(page);
-    await page.evaluate(() => setStagePanel('header', true));
-    await page.evaluate(() => setStagePanel('roster', true));
-    expect(await page.evaluate(() => stagePanelOpen('header'))).toBe(false);
-    expect(await page.evaluate(() => stagePanelOpen('roster'))).toBe(true);
-  });
-
   test('a drag past the commit threshold opens the panel; a short one snaps back', async ({ page }) => {
     await withVideo(page);
-    const handle = page.locator('#stage-handle-header');
+    const handle = page.locator('#stage-handle-roster');
     const box = await handle.boundingBox();
     const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 
     // A few pixels: under the threshold, so it must snap back closed.
     await page.mouse.move(from.x, from.y);
     await page.mouse.down();
-    await page.mouse.move(from.x, from.y + 10, { steps: 3 });
+    await page.mouse.move(from.x + 10, from.y, { steps: 3 });
     await page.mouse.up();
-    expect(await page.evaluate(() => stagePanelOpen('header'))).toBe(false);
+    expect(await page.evaluate(() => stagePanelOpen('roster'))).toBe(false);
 
     // Well past it: opens.
     await page.mouse.move(from.x, from.y);
     await page.mouse.down();
-    await page.mouse.move(from.x, from.y + 200, { steps: 8 });
+    await page.mouse.move(from.x + 220, from.y, { steps: 8 });
     await page.mouse.up();
-    expect(await page.evaluate(() => stagePanelOpen('header'))).toBe(true);
+    expect(await page.evaluate(() => stagePanelOpen('roster'))).toBe(true);
   });
 
   test('leaving the stage never strands a panel open', async ({ page }) => {
@@ -590,6 +787,133 @@ test.describe('sliding panels', () => {
       updatePeerList();
     });
     expect(await page.evaluate(() => stagePanelOpen('roster'))).toBe(false);
+  });
+});
+
+// A phone turned on its side. The stage is `inset: 0` on the room, so anything
+// that narrows the room narrows the picture — and from 640px up the room is a
+// 480px column centred on the page. Sideways that put the video in a letterbox
+// with app background either side and the drag handles out on the window's
+// edges, detached from the panels they belong to.
+test.describe('the immersive stage held sideways', () => {
+  test.use({ viewport: LANDSCAPE });
+
+  const withVideo = (page) => enterRoom(page, {
+    knownPeerIds: ['p1', 'p2'],
+    connections: [
+      { id: 'p1', pseudo: 'Alice', open: true, videoActive: true },
+      { id: 'p2', pseudo: 'Bob', open: true, videoActive: true },
+    ],
+  });
+
+  test.beforeEach(async ({ page }) => { await page.goto('/'); });
+
+  test('the stage takes the whole window, not a column in the middle of it', async ({ page }) => {
+    await withVideo(page);
+    const seen = await page.evaluate(() => {
+      const b = document.getElementById('video-stage').getBoundingClientRect();
+      return { left: Math.round(b.left), right: Math.round(b.right), w: window.innerWidth };
+    });
+    expect(seen.left).toBe(0);
+    expect(seen.right).toBe(seen.w);
+  });
+
+  // Each handle sits on the edge of the picture it pulls its panel over. While
+  // the room was a column they sat on the window's edges instead, a couple of
+  // hundred pixels from anything they were attached to.
+  test('the edge handles are on the edges of the picture', async ({ page }) => {
+    await withVideo(page);
+    const seen = await page.evaluate(() => {
+      const stage = document.getElementById('video-stage').getBoundingClientRect();
+      const l = document.getElementById('stage-handle-roster').getBoundingClientRect();
+      const r = document.getElementById('stage-handle-chat').getBoundingClientRect();
+      return { gapLeft: Math.round(l.left - stage.left), gapRight: Math.round(stage.right - r.right) };
+    });
+    expect(seen.gapLeft).toBe(0);
+    expect(seen.gapRight).toBe(0);
+  });
+
+  // The thumb goes to the middle of the SCREEN, not to the middle of a group.
+  // Laid out as a plain centred row, the mic and the button beside it are
+  // centred together and the mic ends up left of the line.
+  test('the mic is on the centre line, whatever is beside it', async ({ page }) => {
+    await withVideo(page);
+    const centres = await page.evaluate(() => {
+      const b = document.getElementById('ptt-btn').getBoundingClientRect();
+      return { mic: Math.round(b.left + b.width / 2), screen: Math.round(window.innerWidth / 2) };
+    });
+    expect(Math.abs(centres.mic - centres.screen)).toBeLessThanOrEqual(1);
+  });
+
+  // Sideways carries the same glass as upright — it used to be the only place
+  // without a slab, and now there is no slab anywhere. Asserted here too because
+  // the landscape block is a separate cascade and could drop it silently.
+  test('the controls wear the glass here as well', async ({ page }) => {
+    await withVideo(page);
+    const seen = await page.evaluate(() => {
+      const chip = (sel) => {
+        const st = getComputedStyle(document.querySelector(sel));
+        return { bg: st.backgroundColor, blur: st.backdropFilter || st.webkitBackdropFilter };
+      };
+      return { mic: chip('#ptt-btn'), btn: chip('#btn-freehand'),
+               slab: getComputedStyle(document.querySelector('.room-bottom-bar'), '::before').content };
+    });
+    expect(seen.slab).toBe('none');
+    for (const c of [seen.mic, seen.btn]) {
+      expect(c.bg).toContain('rgba');
+      expect(c.blur).not.toBe('none');
+    }
+  });
+
+  // Sideways there is no voice layout to match, so both lines go entirely:
+  // reserved, the sentence lifts the mic off the bottom of a 390px screen and
+  // its width shoves the buttons a hundred pixels out from the mic.
+  test('the hint and the status line take no room at all', async ({ page }) => {
+    await withVideo(page);
+    expect(await page.evaluate(() => ({
+      hint: getComputedStyle(document.getElementById('ptt-hint')).display,
+      status: getComputedStyle(document.getElementById('ptt-status')).display,
+    }))).toEqual({ hint: 'none', status: 'none' });
+  });
+});
+
+// A phone has no Space bar to hold and no shortcut to edit, and "installed to
+// the home screen" is the plain web build — so the hint has to follow the
+// DEVICE, not the wrapper it happens to be running in.
+test.describe('the talk hint on a touch screen', () => {
+  test.use({ viewport: PHONE });
+
+  const hint = (page) => page.evaluate(() => ({
+    text: document.getElementById('ptt-hint').textContent.replace(/\s+/g, ' ').trim(),
+    kbd: !!document.querySelector('#ptt-hint kbd'),
+    pencil: !!document.querySelector('#ptt-hint .shortcut-edit-inline'),
+  }));
+
+  test('a mobile browser gets the plain sentence, with no key in it', async ({ page }) => {
+    await fakeMobileUA(page);
+    await page.goto('/');
+    expect(await hint(page)).toEqual({
+      text: 'Hold the mic to talk · x2 for hands-free', kbd: false, pencil: false,
+    });
+  });
+
+  test('and keeps it through a round trip into hands-free and back', async ({ page }) => {
+    await fakeMobileUA(page);
+    await page.goto('/');
+    await page.evaluate(() => { audioTrack = { enabled: false, kind: 'audio' }; setFreeHand(true); });
+    expect((await hint(page)).text).toBe('Hands-free · tap to stop');
+    await page.evaluate(() => setFreeHand(false));
+    expect(await hint(page)).toEqual({
+      text: 'Hold the mic to talk · x2 for hands-free', kbd: false, pencil: false,
+    });
+  });
+
+  // A desktop browser still has the key, and still says which one.
+  test('a desktop keeps the shortcut, and the pencil that edits it', async ({ page }) => {
+    await page.goto('/');
+    const seen = await hint(page);
+    expect(seen.kbd).toBe(true);
+    expect(seen.text).toContain('anywhere to talk');
   });
 });
 

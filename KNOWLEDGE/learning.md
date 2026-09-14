@@ -303,11 +303,11 @@ Copilot should read this file at the start of every session.
   - The measurements are published as `--stage-inset-top/bottom` **on `documentElement`, not on the stage**, because two things outside the stage need them: the corner-anchored self-view badge, and the panel scrim.
 - **The header and roster are sliding panels, not fading chrome — and the first design was wrong on both counts.** The first pass faded them on an idle timer *and* recoloured everything over video (white text, translucent black buttons). Both were mistakes: an idle timer means the header disappears while you are reading it, and a video-only palette means switching a camera on **restyles the room**, which is exactly what a consistent UI must not do. They are now off-screen while video is live and pulled back over the tiles by a drag handle (top-centre for the header, right-centre for the roster), keeping the app's **own surface colours** — which is also what makes them legible over video with no palette of their own. `.room-action-btn` already has `background: var(--bg-card)` and a border, so there was never anything to fix.
   - **They overlay rather than reserve space**, so revealing one never reflows the video — which also collapses the inset logic to just the bottom bar.
-  - **`sign` in a drag must be the direction of the GESTURE, not of the transform that hides the panel** — they are opposites. The header hides *upward* (`translateY(-100%)`) but is opened by pulling **down**; encoding the transform direction made every drag clamp to 0 and refuse to open, while the tap path kept working, so only the drag test caught it.
-  - **The scrim must stop above the control stack.** A full-`inset: 0` scrim dims *and swallows taps on* the talk button — it looks like a cosmetic detail and silently breaks the rule the whole layout is built around. Guarded with `elementFromPoint` rather than a visibility check, because the button stays perfectly visible while being unclickable; verified by reverting the fix and watching the test fail.
+  - **`sign` in a drag must be the direction of the GESTURE, not of the transform that hides the panel** — they are opposites. The header hid *upward* (`translateY(-100%)`) but was opened by pulling **down**; encoding the transform direction made every drag clamp to 0 and refuse to open, while the tap path kept working, so only the drag test caught it. (The header is no longer one of these panels — see *The header is chrome, not a panel* below — but the rule still holds for the roster and the chat.)
+  - ~~**The scrim must stop above the control stack.**~~ **Superseded:** it stops nothing; it covers `inset: 0` and the *bar* is lifted over it instead. See *The header is chrome, not a panel* below. The invariant it was protecting — the talk button is never dimmed and never un-tappable — is unchanged, and `elementFromPoint` is still the right guard, because the button stays perfectly visible while being unclickable.
   - The two panels are **mutually exclusive** (opening one closes the other), and the inactive one's handle is hidden while the other is open, or it floats as a live control on top of a panel it does not belong to.
 - **The flip button belongs ON the self-view tile, not in the room's control row.** It is a property of that camera, not of the room. The payoff is structural: `renderVideoStage()` **moves the same tile element** between the grid and the minimized badge, so one button automatically serves both without a second implementation or any repositioning logic. Two things it must do: `stopPropagation` on `click` (every tile carries a click-to-pin handler) *and* on `pointerdown` (the badge carries a drag), and counter-mirror itself (`scaleX(-1)`) since the front-camera tile it sits on is mirrored and its icon would otherwise read backwards.
-- **Hiding `#ptt-hint` in immersive mode is worth the 40px.** "Hold Space anywhere to talk · x2 for hands-free" describes a keyboard, and over video every line it takes is taken from the tiles underneath it. Scoped to immersive only, so it returns the moment the stage stands down (it also carries the change-shortcut pencil, which is why it is not hidden on mobile generally).
+- ~~**Hiding `#ptt-hint` in immersive mode is worth the 40px.**~~ **Superseded:** it loses its ink, not its space (`visibility`), because taking its space moved the mic. Upright, that is; sideways it goes entirely. See *The header is chrome, not a panel* below.
 - **The PTT button and control row are never hidden, by any mechanism.** This is a push-to-talk app — hiding the one control people reach for without looking is hostile, and it is the same "the room is a voice UI first" principle that made the desktop stage strictly additive.
 - **A stubbed media stream must be a real `MediaStream`.** The stage assigns it to `video.srcObject`, which throws `TypeError: The provided value is not of type '(MediaSourceHandle or MediaStream)'` on a plain object. Construct a real one (`new MediaStream()`) and override only `getVideoTracks`/`getTracks` on the instance.
 - **A camera flip is not a stop, and the distinction is on the wire.** `flipCamera()` reuses `reacquireMicForRoom()`'s shape — acquire first, keep the old stream on any throw, `replaceTrack` every live sender (mesh `videoMediaOut` **and** the SFU publisher pc), stop the old stream last, re-run `tuneVideoSenders()` because a replaced track carries none of the old encoder parameters. What it must **not** do is send anything: `conn.videoActive` means "this peer is sharing", a live share never re-announces itself, so a `video-stop` during a flip would delete the tile for everyone permanently. The regression test asserts `replaceTrack` was called and **zero** messages were sent — a teardown-and-republish implementation fails it on the message count.
@@ -329,12 +329,177 @@ Copilot should read this file at the start of every session.
   - The probe that nearly sent that debugging the wrong way: walking `document.styleSheets` with `if (rule.cssRules) recurse(); else check(rule.selectorText)`. In current Chromium a plain `CSSStyleRule` **has** a `cssRules` property (nested CSS) — an empty `CSSRuleList`, which is **truthy** — so every style rule takes the recursive branch and nothing is ever checked. Test for `rule.selectorText` first.
 - **The tiles run full-bleed UNDER the dock**, which is what makes "tap to put it away" reveal anything at all. `applyImmersiveStageInsets()` no longer pads the grid's bottom; only the **ribbon** still clears the dock, because a row of faces behind the talk button is not a picture with a panel on it, it is three people you cannot see.
 - **A tap on the video toggles the chrome; a LONG PRESS pins a tile.** The tap used to pin, which reshapes the whole stage — far too big a thing to hang off the same gesture as "show me the picture". The press mirrors the chat's own row-menu press exactly (450 ms, 10px slop, a `_stagePinPressFired` flag that swallows the click it leaves behind *and expires on its own*, because the tile is re-laid-out under the finger and the click can land somewhere the stage never sees). `contextmenu` has to be prevented or the platform's "save video" menu lands on top of it, and the tiles need `-webkit-touch-callout: none` + `user-select: none`.
-- **The slab is a PSEUDO-ELEMENT that grows outward, never padding on the bar.** This is the whole trick, and it took two goes to find. Padding, a border and a `border-radius` on `.room-bottom-bar` itself all change its box, so turning a camera on shoved the control row up by 11px — and those two controls are exactly the ones people reach for without looking. `::before { position: absolute; inset: -12px -8px -6px; z-index: -1 }` carries every bit of the glass *outside* the bar instead, so the bar keeps the box it has in a voice room to the pixel. (`z-index: -1` works because the bar already carries `z-index: 20`, so it is the stacking context the negative index is relative to; and the insets stop short of the screen on every side, or the pill reads as a bar welded to the bottom.)
+- ~~**The slab is a PSEUDO-ELEMENT that grows outward, never padding on the bar.**~~ **Superseded — there is no slab.** The reasoning below is still the reason the bar's *box* is untouchable, and it is why replacing the slab with per-control glass changed no geometry at all. Kept for that. This is the whole trick, and it took two goes to find. Padding, a border and a `border-radius` on `.room-bottom-bar` itself all change its box, so turning a camera on shoved the control row up by 11px — and those two controls are exactly the ones people reach for without looking. `::before { position: absolute; inset: -12px -8px -6px; z-index: -1 }` carries every bit of the glass *outside* the bar instead, so the bar keeps the box it has in a voice room to the pixel. (`z-index: -1` works because the bar already carries `z-index: 20`, so it is the stacking context the negative index is relative to; and the insets stop short of the screen on every side, or the pill reads as a bar welded to the bottom.)
 - **Hiding the control row has to take its INK, not its space.** The bar is anchored to the bottom of the screen and the row comes *after* the button in source order, so `display: none` on the row pulled the talk button 50px down. `visibility: hidden` leaves the geometry alone and costs no picture — the bar paints nothing once the slab has faded, so the video shows straight through where the row was. An earlier attempt reordered the row above the button with `order: -1`; it worked, but it is not what the controls should look like, and this is better anyway because it also holds in landscape (where the bar is a row and `order` fixes nothing).
   - The cost is a band of see-through video at the bottom that is **not** part of `#video-stage`, so the tap that should bring the chrome back lands on the bar and goes nowhere. The bar forwards it (`initStagePanelHandles()`), one way only: while the dock is up it is a control surface, and a thumb that misses a button should not put the whole panel away.
 - **A status line that only takes space when it has something to say is a control that moves every time the room has news.** `.ptt-status:empty { display: none }` looked like free real estate on a phone; it pushes the talk button 16px whenever the room needs to say "microphone muted". It reserves its 16px here exactly as it does in a voice room.
-- **The one thing that still moves on a camera toggle is the mic**, by the 27px of the `Hold Space…` hint that `body.video-stage-immersive` has always hidden — a keyboard hint is worth nothing on a phone and everything over video costs picture. Deliberate, and the control row above it is unaffected because the bar is bottom-anchored.
+- ~~**The one thing that still moves on a camera toggle is the mic**, by the 27px of the `Hold Space…` hint.~~ **Superseded — and it was not deliberate enough to keep.** Nothing moves now: the hint is `visibility: hidden`, so the mic lands on the same pixel in a voice room and a video one. See below.
 - **`body.stage-chrome-hidden` must be cleared whenever the immersive stage stands down**, or the next room opens with its controls already hidden and no video on screen to explain why.
+
+## The header is chrome, not a panel (phone stage, second pass)
+
+The dock shipped, was used on real phones, and came back with a list. Every item
+on it is the same mistake in a different place: a *decision* made for the person
+using the room, instead of a control put where they can reach it.
+
+- **A drag handle at the very top of the screen cannot be reached on a PWA or in
+  a native app.** The room header used to be a sliding panel opened by a 22px tab
+  at `top: env(safe-area-inset-top)`. On the desktop web that is fine; installed
+  to the home screen, or inside the Capacitor apps, that band is the system
+  status bar — the OS takes the gesture and the header never comes down, so
+  Settings, the room code and Leave are simply *gone*. The header is now part of
+  the chrome: it arrives and leaves with the control row, on the same tap. There
+  is no handle to miss, and `STAGE_PANELS` is down to the roster (the chat keeps
+  its own).
+- **A Capacitor app asks the OS to overlay the status bar, and then some Android
+  WebViews report `env(safe-area-inset-top: 0)`.** `setOverlaysWebView({overlay:
+  true})` is called at startup, so there is *always* a bar up there to clear —
+  but the inset that is supposed to describe it can come back zero, and the
+  header's buttons end up under a system bar that eats every touch aimed at them.
+  Hence `--stage-safe-top`, which is the raw inset on the web and
+  `max(inset, 24px)` under `html.is-native` (24px is the shortest Android status
+  bar; a notched device keeps its own larger value).
+- **A panel that overlays must not also reserve.** The header lies ON the picture
+  exactly as the dock does — `position: fixed`, nothing reserved — so the tiles
+  are on the same pixels whether it is there or not. `applyImmersiveStageInsets()`
+  now pins the grid's `padding-top` at 0 (it used to be 26px for the handle, and
+  0 while the chrome was away, which reflowed the whole stage on every tap).
+  `--stage-inset-top` survives as the header's *measured height*, used only to
+  place things that must clear it: the self-view badge's top corners, and the two
+  controls on the self camera's own tile (flip, background) — a button pinned to
+  the top of a tile is otherwise pinned under the header. That last one is only
+  caught by a **click** test; `getComputedStyle` says the button is perfectly
+  visible.
+- **A rule across the middle of a panel lying on a face is a scratch.** The line
+  above the control row is right in a voice room — the bar *is* the bottom of the
+  page there and the line separates the talk button from its controls. On the
+  dock there is already an edge, the slab's own. It goes with
+  `border-top-color: transparent`, **never** `border-top: none`: the 1px is part
+  of the box, and removing it moves everything above it.
+- **`visibility: hidden` is the house rule for this bar, and the hint was the
+  one thing still breaking it.** `#ptt-hint` was `display: none` in immersive
+  mode, which took its line with it — and the bar is bottom-anchored, so the mic
+  dropped by the whole height of the hint the moment a camera came on. The mic is
+  *the* control people reach for without looking; it now lands on the same pixel
+  in both kinds of room. Same treatment for `.ptt-status` in clean mode (it used
+  to be kept on the grounds that it says why the room cannot hear you — but the
+  button already says that: a green ring, an accent fill, or neither).
+- **With the slab gone, the talk button has to become its own piece of glass.**
+  An opaque disc on a photograph is a hole punched in the frame. It takes the
+  dock's own tint/sheen/blur — factored into `--glass-tint`, `--glass-sheen`,
+  `--glass-blur` on the bar — and keeps the **accent ring**, which is how the
+  talk button is recognised anywhere in the app. (First shipped for clean mode
+  and landscape only; now it is every control, everywhere on this stage — see
+  *The slab was a plank* below.)
+- **The scrim stops nothing now; the bar is lifted over it.** A scrim that ended
+  in a hard horizontal line two thirds of the way down the screen read as a grey
+  box someone had left on the video, not as the room standing back. It is
+  `inset: 0` at `z-index: 38`, and `.room-bottom-bar` goes to `z-index: 39`
+  **only while a scrim is actually up** (`stage-roster-open`, or `chat-overlay`)
+  — scoped, so nothing else in the room changes stacking order. Panels stay at
+  40, so where a panel covers the bar the panel still wins.
+- **The chat handle no longer turns accent when the drawer is open.** It is the
+  one control on screen in *every* room, and it was the only one that changed
+  colour under your thumb. The drawer sliding in says "the chat is showing" a
+  good deal louder than a purple icon does.
+- **Turning a camera on is not a decision about the microphone.** `startVideoShare()`
+  used to latch hands-free ("sharing your face while holding a key would be
+  absurd"). In a push-to-talk app, opening a live microphone because somebody
+  pressed a *camera* button is the one thing it must not do. The `?video=1`
+  deep link still arrives hands-free — that link asks for it by name and sets it
+  itself, in `autoStartVideoOnJoin()`. (Screen share still latches; nobody has
+  complained about that one yet.)
+- **The talk hint follows the DEVICE, not the wrapper.** `Hold <kbd>Space</kbd>…`
+  was swapped for a plain sentence only under `window.Capacitor.isNativePlatform()`
+  — so a phone with the site installed to its home screen, which runs the plain
+  web build, was told to hold a key it does not have. It is `IS_MOBILE_DEVICE`
+  now, in `setFreeHand()` and at startup both, and the copy names the thing the
+  finger is actually on: *"Hold the mic to talk · x2 for hands-free"*.
+
+### The slab was a plank, and most of it was empty
+
+The follow-on from the round above, and the cheapest change in it.
+
+- **A panel that exists to back two controls and a line of text is not worth a
+  fifth of somebody's face.** The dock was a blurred slab the full width of the
+  screen and the height of an 80px talk button plus a button row — and once the
+  hint had been reserved-but-hidden (to keep the mic on its pixel) a good third
+  of it was empty glass. Deleting the `::before` and moving the same
+  tint/sheen/blur onto each control gives the identical material in roughly a
+  tenth of the area, with the video running unbroken between the chips.
+- **A control that relied on the slab for contrast is a white button on a white
+  face without it.** `.room-action-btn` wore `rgba(255,255,255,0.10)` — a *light
+  wash*, which only worked because the slab underneath was doing the darkening.
+  Alone it has to carry the dark tint itself. Same for any text left on bare
+  video: `text-shadow` on the bar, since `.ptt-status` and the hint have nothing
+  behind them now.
+- **Removing a pseudo-element is not `display: none`, and a test that checks
+  `display` will not notice.** `getComputedStyle(el, '::before').display` on a
+  pseudo that was never generated comes back **`block`**, not `none` — the rule
+  simply does not exist, so the property takes its initial value. The landscape
+  test that asserted `display === 'none'` back when the slab was switched off
+  there passed for the wrong reason and would have kept passing over a
+  half-deleted rule. `content` is the honest check: it reads `none` when no
+  pseudo-element is generated.
+- **Once the bar paints nothing, its tap has to work both ways.** The band it
+  covers is not part of `#video-stage`, so the bar forwards taps on its own
+  background — but only ever *to bring the chrome back*, on the grounds that
+  while the controls sat on a plank the bar was a control surface and a missed
+  button should not put the panel away. With the plank gone that thumb is on the
+  picture, exactly as it is an inch higher up, and it now toggles in both
+  directions. `_stageTapOnChrome()` still exempts every real control, so missing
+  one is the only way to reach it.
+- **The empty-glass item in `todos.md` closed itself.** It was logged as "take
+  the talk button out of the bar and let the slab hug the control row" — more
+  moving parts than that round wanted. Deleting the slab solves the same problem
+  with a deletion, and the mic keeps the position that caused the gap.
+
+### Sideways, the room was rendering into a 480px letterbox
+
+The single worst thing in this round, and it had been shipping:
+
+- **`.screen { max-width: 480px }` from 640px up applies to the room with a
+  camera live.** The immersive stage is `inset: 0` on `#screen-room`, so the
+  room's width *is* the picture's width. Upright a phone is narrower than the cap
+  and nothing shows. Turned sideways it is 844px, and the video was drawn into a
+  480px column in the middle of the window with app background either side. The
+  landscape voice grid lifts the cap for exactly this reason and is qualified
+  `:not(.video-stage)`, so a room with video never reached it. Lifted now for
+  `body.video-stage-immersive` in **any** orientation — there is no regime where
+  that stage wants a column; it *is* the window.
+- **That was also why the drag handles looked detached from their panels.** They
+  are `position: fixed`, so they sit on the *viewport's* edges — which were a
+  couple of hundred pixels away from the picture they belonged to. Nothing was
+  wrong with the handle offsets; the room was the wrong width.
+- **A centred flex row centres the GROUP, not the mic.** Sideways the bar was
+  `justify-content: center` with the mic and the buttons side by side, so the mic
+  sat left of the centre line — and the thumb goes to the middle of the *screen*.
+  It is a `1fr auto 1fr` grid with the mic in the middle track, so the mic is on
+  the line whatever weighs on either side of it.
+- **`visibility: hidden` reserves WIDTH as well as height.** The hint kept for
+  the mic's sake upright is what pushed the landscape buttons ~100px out from the
+  mic, and lifted the mic off the bottom of a 390px screen. Sideways both lines
+  are `display: none`: there is no voice layout to line up with there anyway.
+- **No slab sideways.** One short row of controls does not need a blurred plank
+  covering a third of a face behind it; the controls carry the glass themselves.
+
+### Running the suite in this container (updated)
+
+`/opt/pw-browsers` ships Chromium **1194**; `@playwright/test` 1.63 wants
+**1243** and the download is blocked. The symlink recipe further up still works,
+but the cheaper route is a throwaway config that reuses the real one and pins the
+binary — no symlink farm, nothing to undo:
+
+```js
+// .pw-local.config.js (not committed)
+import base from './playwright.config.js';
+export default { ...base, projects: base.projects.map((p) => ({ ...p,
+  use: { ...(p.use||{}), launchOptions: { ...((p.use||{}).launchOptions||{}),
+    executablePath: '/opt/pw-browsers/chromium' } } })) };
+```
+
+Then `npx playwright test --config=.pw-local.config.js`. Note
+`/opt/pw-browsers/chromium` is a symlink to the **binary**, not to a directory.
 
 ## Conference layout — dividing the stage, and what happens past the fourth face
 

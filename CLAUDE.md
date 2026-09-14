@@ -109,6 +109,43 @@ handed back. Called from `toggleChatPanel()`, `updateVideoStage()` and
 position/scale permissions for the on-screen nudge) in
 `src-tauri/capabilities/default.json`.
 
+### Phone video stage — the chrome is one thing
+
+On the immersive (phone) stage the room's chrome is a single state, published as
+`body.stage-chrome-hidden` and toggled by a tap on the video (`_onStageTap()` →
+`setStageChrome()`): the control row, the edge handles **and the room header**
+come and go together. The header is deliberately NOT one of `STAGE_PANELS` — a
+pull-down handle for it had to live at the top of the screen, which on a PWA and
+in the Capacitor apps is under the system status bar, where the gesture never
+reaches the page.
+
+Everything in that chrome **overlays** the picture and reserves nothing, so the
+tiles never reflow when it moves: `applyImmersiveStageInsets()` pins the grid's
+`padding-top` at 0 and publishes `--stage-inset-top` (the header's measured
+height) only for things that must clear it — the self-view badge's top corners
+and the self camera tile's own flip/background buttons.
+
+`.room-bottom-bar` itself **paints nothing** in video mode: there is no slab
+behind the controls, in either orientation. Each control carries the glass
+instead (`--glass-tint` / `--glass-sheen` / `--glass-blur`, declared on the bar),
+so the video runs unbroken between them. The talk button's accent **ring** is the
+one thing that never changes — only its fill turns to glass. Because the bar
+paints nothing, a tap on its bare background is a tap on the picture and toggles
+the chrome both ways (`initStagePanelHandles()` hands it to `toggleStageChrome()`
+— `#video-stage` does not extend under the bar, so the stage never sees it).
+
+Anything that hides in there takes its **ink, not its space** (`visibility`,
+never `display`; a border goes `transparent`, never `none`). The bar is
+bottom-anchored, so anything that collapses drags the talk button down — and the
+mic has to be on the same pixel in a voice room and a video one. Upright the hint
+and the status line are therefore reserved; **sideways** they are `display: none`,
+because there is no voice layout to line up with there.
+
+`--stage-safe-top` (`:root`, floored at 24px under `html.is-native`) is what
+keeps the header's buttons clear of an overlaid status bar. The immersive stage
+also lifts `.screen`'s 480px cap — the stage is `inset: 0` on the room, so the
+room's width IS the picture's width.
+
 ### Presence (optional)
 
 Auth token + org ID stored in `localStorage`. All API calls go through `presenceBase()` which reads `localStorage['service-url']` with fallback to `https://voxal.app`. Deep links from the auth flow arrive via `voxal://auth?token=…` (desktop) or `postMessage` (web) and are handled by `handleDeepLink()` — always validate the `state` parameter against `sessionStorage`.
@@ -262,9 +299,9 @@ has none. `chatPeekViewport()` keeps a bubble from being drawn under the open
 drawer, and `fitChatPeekRunWidths()` squeezes a run onto ONE line before letting
 it wrap. `body.chat-overlay` (from `chatOverlaysRoom()`) is what publishes the
 scrim wherever the drawer covers the room, so tapping away from it works in
-landscape too; the scrim stops above the talk button, from `--stage-inset-bottom`
-on the immersive stage and `--room-bar-inset` (`publishRoomBarInset()`)
-everywhere else.
+landscape too. The scrim covers the whole window; `.room-bottom-bar` is lifted
+above it (`z-index: 39` vs the scrim's 38) while one is up, so the talk button is
+neither dimmed nor un-tappable.
 
 ### Keyboard shortcuts in a room
 

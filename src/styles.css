@@ -22,6 +22,13 @@ a, button, [role="button"], input, select, textarea, label {
   --green:      #4ade80;
   --red:        #f87171;
   --radius:     10px;
+  /* How far down the top of the screen the chrome has to start. On the web this
+     is exactly the safe-area inset the browser reports and nothing more; the
+     native apps put a floor under it (below), because a Capacitor app asks the
+     OS to overlay the status bar and some Android WebViews then report no inset
+     at all — which puts the room header's buttons under a system bar that eats
+     every touch aimed at them. */
+  --stage-safe-top: env(safe-area-inset-top, 0px);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 14px;
   line-height: 1.5;
@@ -33,6 +40,12 @@ a, button, [role="button"], input, select, textarea, label {
   -webkit-touch-callout: none;
   touch-action: manipulation; /* disables double-tap zoom globally */
 }
+
+/* The Capacitor apps overlay the status bar deliberately (StatusBar
+   .setOverlaysWebView), so there is always one up there to clear — whatever the
+   WebView reports. 24px is the shortest Android status bar; a device that
+   reports a real inset (a notch, a punch-hole) keeps its own larger one. */
+html.is-native { --stage-safe-top: max(env(safe-area-inset-top, 0px), 24px); }
 
 /* ── Light theme ───────────────────────────────────────────────────── */
 html[data-theme="light"] {
@@ -88,7 +101,7 @@ body {
   height: 100dvh; /* shrinks when browser chrome is visible */
   overflow-x: hidden;
   overflow-y: visible;
-  padding-top:    max(calc(env(safe-area-inset-top)    + 24px), 24px);
+  padding-top:    max(calc(var(--stage-safe-top)       + 24px), 24px);
   padding-right:  max(calc(env(safe-area-inset-right)  + 20px), 20px);
   padding-bottom: max(calc(env(safe-area-inset-bottom) + 24px), 24px);
   padding-left:   max(calc(env(safe-area-inset-left)   + 20px), 20px);
@@ -1231,7 +1244,7 @@ kbd {
 
 #screen-room {
   position: relative;
-  padding-top:    max(calc(env(safe-area-inset-top)    + 14px), 14px);
+  padding-top:    max(calc(var(--stage-safe-top)       + 14px), 14px);
   padding-right:  max(calc(env(safe-area-inset-right)  + 18px), 18px);
   padding-bottom: max(calc(env(safe-area-inset-bottom) + 14px), 14px);
   padding-left:   max(calc(env(safe-area-inset-left)   + 18px), 18px);
@@ -1485,58 +1498,43 @@ kbd {
   html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-bottom-bar .room-controls { margin-top: 0; }
 }
 
-/* ── The glass dock (phones) ──────────────────────────────────────
+/* ── Floating controls (phones) ───────────────────────────────────
    On the immersive stage the control stack is sitting on a picture, so it stops
-   being part of the page's surface and becomes a floating panel: a translucent,
-   blurred slab that the video shows through, with the tiles running full-bleed
-   underneath it.
+   being part of the page's surface. It used to become a translucent, blurred
+   SLAB with the controls arranged on it. That slab is gone: it was a plank the
+   width of the screen and the height of a talk button plus a button row, and
+   most of it was empty — it existed to back two controls and a line of text,
+   and it took a fifth of somebody's face to do it.
+
+   What is left is the controls themselves, each carrying the same glass the slab
+   wore. Same material, a tenth of the area, and the video runs unbroken between
+   them. (Landscape has worked this way since the stage learned to fill the
+   window; this simply makes upright agree with it.)
 
    Phones only. A desktop room keeps the voice UI railed beside the stage, where
    it is app chrome on app background and glass would be an affectation.
 
    The tint is dark in BOTH themes on purpose. It is not app chrome any more, it
-   is glass over whatever the camera happens to be pointing at; a light panel
-   reads as a hole punched in a dark frame, and a panel that changes colour with
-   the theme cannot be relied on to keep white text legible. Everything inside it
-   therefore takes light-on-glass colours — except the talk button, which keeps
-   the accent border it wears everywhere else in the app, because that border is
-   how you recognise it.
+   is glass over whatever the camera happens to be pointing at; a light chip
+   reads as a hole punched in a dark frame, and one that changes colour with the
+   theme cannot be relied on to keep white text legible.
 
    `backdrop-filter` is the whole effect; where it is unsupported the rgba tint
-   alone still keeps the contents readable, so there is nothing to feature-detect. */
-/* NOTHING in this block changes the layout of the bar. The slab is painted by a
-   pseudo-element that reaches OUTSIDE it (`inset: -10px -16px`), never by
-   padding, a border or a reordering on the bar itself — all of which would
-   shove the controls somewhere else the moment a camera came on. A control that
-   moves when the room changes shape is a control you have to look for, and
-   these are the two people reach for without looking.
+   alone still keeps the contents readable, so there is nothing to feature-detect.
 
-   So: the bar keeps the box it has in a voice room, to the pixel, and the glass
-   simply appears behind it. */
+   NOTHING in this block changes the layout of the bar. No padding, no border, no
+   reordering — all of which would shove the controls somewhere else the moment a
+   camera came on. The bar keeps the box it has in a voice room to the pixel; it
+   simply stops painting, and its contents become chips. */
 body.video-stage-immersive #screen-room .room-bottom-bar {
-  --dock-line: rgba(255, 255, 255, 0.16);
+  /* One recipe, worn by every control that has to stand on bare video. */
+  --glass-tint:  rgba(16, 16, 20, 0.38);
+  --glass-sheen: linear-gradient(to bottom,
+                 rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0) 62%);
+  --glass-blur:  blur(18px) saturate(180%);
   color: rgba(255, 255, 255, 0.92);
-}
-body.video-stage-immersive #screen-room .room-bottom-bar::before {
-  content: '';
-  position: absolute;
-  /* Grows OUTWARD from the bar rather than padding it inward, and stops short
-     of the screen on every side so it still reads as something lying on the
-     picture rather than a bar welded to the bottom of it. */
-  inset: -12px -8px -6px;
-  z-index: -1;   /* behind the bar's own children; the bar's z-index makes the context */
-  border-radius: 26px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  /* Two layers: a top-down sheen that gives the slab a lit edge, over the tint
-     that does the actual darkening. */
-  background-color: rgba(16, 16, 20, 0.42);
-  background-image: linear-gradient(to bottom,
-                    rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0) 58%);
-  -webkit-backdrop-filter: blur(22px) saturate(180%);
-  backdrop-filter: blur(22px) saturate(180%);
-  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.34),
-              inset 0 1px 0 rgba(255, 255, 255, 0.18);
-  transition: opacity 0.2s ease;
+  /* Text with nothing behind it, over a frame that may be anything at all. */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
 }
 
 body.video-stage-immersive #screen-room .room-bottom-bar .shortcut-focused-note,
@@ -1550,33 +1548,53 @@ body.video-stage-immersive #screen-room .room-bottom-bar kbd {
 }
 body.video-stage-immersive #screen-room .room-bottom-bar .btn-icon { color: rgba(255, 255, 255, 0.74); }
 body.video-stage-immersive #screen-room .room-bottom-bar .btn-icon:hover { color: #fff; }
-/* The rule above the control row is the app's own border colour, which on dark
-   glass is a light-grey scratch. Colour only — the border is still 1px, so the
-   row does not move. */
+/* The rule above the control row belongs to a voice room, where the bar IS the
+   bottom of the page and the line is what separates the talk button from its
+   controls. There is no row of controls on a surface here any more — there are
+   two chips floating on a picture — so a line across the middle of it is just a
+   scratch on somebody's face.
+
+   Colour, not the border itself: the border is still 1px, so the row keeps its
+   box and nothing above it moves when a camera comes on. That is the rule this
+   whole block is built on. */
 body.video-stage-immersive #screen-room .room-bottom-bar .room-controls {
-  border-top-color: var(--dock-line);
+  border-top-color: transparent;
 }
 
+/* Every control standing on the picture wears the glass. The slab used to do
+   the darkening for the whole group and these only needed a light wash on top
+   of it (`rgba(255,255,255,0.10)`); alone on a bright frame that is a white
+   button on a white face. */
+body.video-stage-immersive #screen-room .ptt-btn,
 body.video-stage-immersive #screen-room .room-bottom-bar .room-action-btn {
-  background: rgba(255, 255, 255, 0.10);
-  border-color: rgba(255, 255, 255, 0.18);
-  color: rgba(255, 255, 255, 0.88);
+  background-color: var(--glass-tint);
+  background-image: var(--glass-sheen);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+body.video-stage-immersive #screen-room .room-bottom-bar .room-action-btn {
+  border-color: rgba(255, 255, 255, 0.28);
+  color: rgba(255, 255, 255, 0.92);
 }
 body.video-stage-immersive #screen-room .room-bottom-bar .room-action-btn:hover {
-  background: rgba(255, 255, 255, 0.18);
-  border-color: rgba(255, 255, 255, 0.35);
+  background-color: rgba(16, 16, 20, 0.58);
+  border-color: rgba(255, 255, 255, 0.45);
   color: #fff;
 }
-/* An engaged control keeps the accent fill it has everywhere else. */
+/* Pressed and engaged are never a style: those two say whether the room can
+   hear you, and they read the same wherever the control is standing. */
+body.video-stage-immersive #screen-room .ptt-btn.active,
 body.video-stage-immersive #screen-room .room-bottom-bar .room-action-btn.active {
-  background: var(--accent);
+  background-color: var(--accent);
+  background-image: none;
   border-color: var(--accent);
-  color: #fff;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
-/* The talk button is the one thing that is never restyled: same border, same
-   states, same size as in a voice room. It is what the room is, and it has to
-   look the same wherever it is standing. A shadow is the only addition — it is
-   the one control that can end up on bare video with no slab behind it. */
+/* The talk button's RING is what is never restyled — it is how the button is
+   recognised, on the home screen and in every room. Only the fill becomes
+   glass, and only here. The drop shadow is what lifts it off the frame now that
+   there is nothing behind it at all. */
 body.video-stage-immersive #screen-room .ptt-btn {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
 }
@@ -1590,21 +1608,31 @@ body.video-stage-immersive #screen-room .video-tile {
 }
 
 /* ── Chrome away ──────────────────────────────────────────────────
-   A tap on the video (`_onStageTap()`) publishes this: the slab fades out and
-   the control row goes with it, leaving the talk button lying on the picture.
+   A tap on the video (`_onStageTap()`, or on the bar's own bare background)
+   publishes this: the room header and the control row go, leaving the talk
+   button alone on the picture.
 
    Nothing MOVES — not the button, not the row when it comes back. The row loses
    its INK, not its space (`visibility`, never `display`), because the bar is
    anchored to the bottom of the screen and collapsing the row would drag the
-   talk button down with it. It costs no picture: the bar paints nothing while
-   the slab is gone, so the video shows straight through where the row was.
-
-   The status line stays. It is not chrome — it is the room telling you why it
-   cannot hear you, and that is worth more than the pixels it sits on. */
-body.video-stage-immersive.stage-chrome-hidden #screen-room .room-bottom-bar::before {
-  opacity: 0;
-}
+   talk button down with it. It costs no picture: the bar paints nothing at all
+   in video mode, so the video shows straight through where the row was. */
 body.video-stage-immersive.stage-chrome-hidden #screen-room .room-bottom-bar .room-controls {
+  visibility: hidden;
+}
+/* The talk button needs nothing here: it has worn the glass since the slab was
+   dropped, so clean mode is simply the same button with the chips beside it
+   gone. (It used to be the one place the button became translucent, back when
+   there was a slab to fade out from behind it.)
+
+   The status line goes too. It was kept back when the chrome left because it is
+   the room telling you why it cannot hear you — but the button says that
+   already: a green ring is hands-free, an accent fill is transmitting, neither
+   is silence. A line of red text under a bare mic on top of somebody's face is
+   the one thing clean mode was asked to get rid of.
+
+   Ink again, never space: it is between the mic and the bottom of the screen. */
+body.video-stage-immersive.stage-chrome-hidden #screen-room .ptt-status {
   visibility: hidden;
 }
 body.video-stage-immersive.stage-chrome-hidden .stage-handle { display: none; }
@@ -1696,7 +1724,13 @@ body.video-stage-immersive #screen-room .room-header {
   right: 0;
   z-index: 40;
   margin: 0;
-  padding: max(calc(env(safe-area-inset-top) + 12px), 12px)
+  /* `--stage-safe-top` rather than the raw inset: a Capacitor app asks the OS to
+     overlay the status bar, and on the Android WebViews that then report
+     `env(safe-area-inset-top: 0)` the gear and Leave end up UNDER it — visible,
+     and untappable because the system bar takes the touch. The floor is applied
+     once, on `html.is-native`, where it is the only thing standing between the
+     header's buttons and the status bar. */
+  padding: max(calc(var(--stage-safe-top) + 12px), 12px)
            max(calc(env(safe-area-inset-right) + 18px), 18px) 12px
            max(calc(env(safe-area-inset-left) + 18px), 18px);
   background: var(--bg-surface);
@@ -1704,7 +1738,13 @@ body.video-stage-immersive #screen-room .room-header {
   transform: translateY(-100%);
   transition: transform 0.25s ease;
 }
-body.video-stage-immersive.stage-header-open #screen-room .room-header {
+/* It is not a panel with a gesture of its own any more — it is part of the
+   chrome, and arrives and leaves with the control row. It lies ON the picture
+   (fixed, z-index 40, nothing reserved for it) so the tiles never reflow when it
+   does: tapping the video swaps chrome for picture, not one layout for another.
+   The two controls on its right — Share and Leave — are therefore one tap away
+   from anywhere, instead of behind a handle wedged under the status bar. */
+body.video-stage-immersive:not(.stage-chrome-hidden) #screen-room .room-header {
   transform: translateY(0);
 }
 
@@ -1767,12 +1807,8 @@ body:not(.embed-tiny) .stage-handle-right { display: flex; }
 body.embed-tiny .stage-handle-right { display: none; }
 /* The panels are mutually exclusive, so while one is open the other's handle is
    just a control floating on top of it. Hide it until the panel is dismissed. */
-body.video-stage-immersive.stage-roster-open .stage-handle-top,
 body.video-stage-immersive.stage-roster-open .stage-handle-right,
-body.video-stage-immersive.chat-open .stage-handle-top,
-body.video-stage-immersive.chat-open .stage-handle-left,
-body.video-stage-immersive.stage-header-open .stage-handle-left,
-body.video-stage-immersive.stage-header-open .stage-handle-right { display: none; }
+body.video-stage-immersive.chat-open .stage-handle-left { display: none; }
 .stage-handle::before {
   content: '';
   display: block;
@@ -1780,22 +1816,6 @@ body.video-stage-immersive.stage-header-open .stage-handle-right { display: none
   background: rgba(255, 255, 255, 0.75);
 }
 .stage-handle:active { cursor: grabbing; }
-
-/* Top-centre: pulls the header down. */
-.stage-handle-top {
-  top: max(env(safe-area-inset-top), 0px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: 72px;
-  height: 22px;
-  border-radius: 0 0 12px 12px;
-  transition: top 0.25s ease;
-}
-.stage-handle-top::before { width: 34px; height: 4px; }
-/* Ride down with the header, so the handle stays the thing you grab to close. */
-body.video-stage-immersive.stage-header-open .stage-handle-top {
-  top: calc(var(--stage-header-height, 56px) + max(env(safe-area-inset-top), 0px));
-}
 
 /* Left-centre: pulls the participant list in. */
 .stage-handle-left {
@@ -1855,9 +1875,12 @@ body.chat-docked .stage-handle-right {
   color: var(--text-muted);
 }
 body:not(.video-stage) .stage-handle-right:hover,
-body.chat-docked .stage-handle-right:hover { color: var(--accent); }
-body:not(.video-stage) .stage-handle-right[aria-expanded="true"],
-body.chat-docked .stage-handle-right[aria-expanded="true"] { color: var(--accent); }
+body.chat-docked .stage-handle-right:hover { color: var(--text); }
+/* Deliberately NOT recoloured while the drawer is open. The accent said "the
+   chat is showing", which the drawer itself says a good deal louder — and it
+   made the one control that is on screen in every single room the only one that
+   changes colour under your thumb. It stays what it is: white over video, the
+   app's muted grey everywhere else. */
 
 /* An icon handle draws its own content, so it must not also draw the pill. */
 .stage-handle-icon { color: rgba(255, 255, 255, 0.85); }
@@ -1873,26 +1896,28 @@ body.chat-docked .stage-handle-right[aria-expanded="true"] { color: var(--accent
 /* A scrim behind an open panel, so a tap outside dismisses it and the video
    behind reads as "not the thing you are looking at".
 
-   It stops ABOVE the control stack: covering the talk button would both dim it
-   and swallow the tap, and "the PTT button is always available" is the rule this
-   whole layout is built around. `--stage-inset-bottom` is the measured height of
-   that stack, published by applyImmersiveStageInsets(). */
+   It covers the WHOLE screen. It used to stop above the control stack, so that
+   the talk button was neither dimmed nor un-tappable — but a dim that ends in a
+   hard horizontal line two thirds of the way down reads as a grey box someone
+   left on the video, not as the room standing back. The button keeps both of
+   its guarantees another way: the bar is lifted ABOVE the scrim (see its
+   z-index below), so it is painted undimmed and receives its own taps, while the
+   panels stay above both. */
 .stage-panel-scrim {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  /* The immersive stage measures its own control stack; every other regime is
-     measured by publishRoomBarInset(). Either way the scrim stops above the
-     talk button — dimming it and swallowing its tap is the one thing this
-     layout may not do. */
-  bottom: var(--stage-inset-bottom, var(--room-bar-inset, 0px));
-  z-index: 39;
+  inset: 0;
+  z-index: 38;
   display: none;
   background: rgba(0, 0, 0, 0.35);
 }
-body.video-stage-immersive.stage-header-open .stage-panel-scrim,
 body.video-stage-immersive.stage-roster-open .stage-panel-scrim { display: block; }
+/* The talk button is never dimmed and never un-tappable — that is the rule this
+   whole layout is built around, and it is now kept by lifting the bar over the
+   scrim rather than by cutting the scrim short of it. Only while a scrim is
+   actually up: everywhere else the bar keeps the z-index it has always had, so
+   nothing else in the room changes stacking order. */
+body.video-stage-immersive.stage-roster-open #screen-room .room-bottom-bar,
+body.chat-overlay #screen-room .room-bottom-bar { z-index: 39; }
 /* The chat drawer gets one wherever it is sitting ON the room rather than
    beside it — `body.chat-overlay`, measured by chatOverlaysRoom(). That is what
    makes the gesture the same on a phone turned on its side as upright: before,
@@ -1902,10 +1927,37 @@ body.video-stage-immersive.stage-roster-open .stage-panel-scrim { display: block
    behind it to tap and no scrim is published. */
 body.chat-overlay .stage-panel-scrim { display: block; }
 
-/* "Hold Space anywhere to talk" describes a keyboard, and screen space over
-   video is the scarcest thing here — every line it takes is taken from the
-   tiles it sits on. It comes back the moment the stage stands down. */
-body.video-stage-immersive #screen-room .ptt-hint { display: none; }
+/* The hint has nothing to say over video — the controls are right there and the
+   picture is the scarcest thing on the screen. But it goes the way everything
+   else in this bar goes: it loses its INK, not its space (`visibility`, never
+   `display`).
+
+   The bar is anchored to the BOTTOM of the screen, so anything that collapses
+   inside it drags everything above it down — and the thing above this line is
+   the talk button. Collapsing the hint moved the mic by its whole height the
+   moment a camera came on, which is exactly what "a control you reach for
+   without looking" may not do. Reserved, the mic lands on the same pixel in a
+   voice room and a video one. */
+body.video-stage-immersive #screen-room .ptt-hint { visibility: hidden; }
+
+/* ── The stage takes the whole window ─────────────────────────────
+   The immersive stage is `inset: 0` on #screen-room, so it is only ever as wide
+   as the room is — and from 640px up the room is a 480px column centred on the
+   page. Held upright a phone is narrower than that and nothing shows; turned on
+   its side it is 844px, and the video was being rendered into a 480px letterbox
+   in the middle of it with app background either side. Worse, the drag handles
+   are fixed to the VIEWPORT, so they sat out on the window's edges, detached
+   from the panels and from the picture they belong to.
+
+   The landscape voice grid already lifts the cap for exactly this reason; it is
+   qualified `:not(.video-stage)`, so a room with a camera on never reached it.
+   Lift it for the immersive stage in any orientation: there is no regime where
+   this stage wants a column — it IS the window. */
+body.video-stage-immersive #screen-room.active {
+  max-width: none;
+  border-left: none;
+  border-right: none;
+}
 
 /* ── The immersive stage on a phone held sideways ─────────────────
    The control stack is an 80px circle with a row of buttons UNDER it, which on
@@ -1918,13 +1970,23 @@ body.video-stage-immersive #screen-room .ptt-hint { display: none; }
    bar and still dead centre of the gesture, which is the rule this layout is
    built around. */
 @media (orientation: landscape) and (max-height: 600px) {
+  /* Three tracks, the mic in the middle one: side by side in a flex row the mic
+     and the button beside it are centred TOGETHER, which leaves the mic itself
+     sitting left of centre — and on a phone held sideways the thumb goes to the
+     middle of the screen, not to the middle of a group. The outer tracks are
+     equal, so the mic lands on the centre line whatever the row beside it
+     weighs (one button, three, or none at all). */
   body.video-stage-immersive #screen-room .room-bottom-bar {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    justify-content: center;
-    gap: 16px;
+    justify-items: center;
+    column-gap: 16px;
   }
+  body.video-stage-immersive #screen-room .room-bottom-bar .ptt-area { grid-column: 2; }
   body.video-stage-immersive #screen-room .room-bottom-bar .room-controls {
+    grid-column: 3;
+    justify-self: start;
     margin-top: 0;
     padding-top: 0;
     border-top: none;
@@ -1933,6 +1995,17 @@ body.video-stage-immersive #screen-room .ptt-hint { display: none; }
      the buttons stay on one line rather than wrapping into a second. */
   body.video-stage-immersive #screen-room .room-bottom-bar .ctrl-row { flex-wrap: nowrap; }
   body.video-stage-immersive #screen-room .ptt-btn { width: 62px; height: 62px; font-size: 24px; }
+  /* Both lines go entirely — space, not just ink. The reserve upright is there
+     to keep the mic on the pixel it occupies in a voice room, and sideways
+     there is no such room to match: the voice layout is a different grid
+     altogether. Reserved here they cost twice — the height under the mic lifts
+     it off the bottom of a 390px screen, and the width of the sentence pushes
+     the buttons a hundred pixels out from the mic they belong to. */
+  body.video-stage-immersive #screen-room .ptt-hint,
+  body.video-stage-immersive #screen-room .ptt-status { display: none; }
+  /* The glass on each control, the absent slab and the ring that survives both
+     are no longer landscape's business — upright works exactly the same way
+     now. All that is left here is the shape of the row. */
 }
 
 /* Flip lives ON the self camera tile — it is a property of that camera, not a
@@ -1960,6 +2033,20 @@ body.video-stage-immersive #screen-room .ptt-hint { display: none; }
 .video-tile-self.video-tile-camera .video-tile-flip.available { display: flex; }
 /* The badge is small; keep the control proportional to it. */
 #video-stage-self .video-tile-flip { width: 26px; height: 26px; top: 4px; right: 4px; }
+/* On the phone stage the room header lies ON the top of the picture, so a
+   control pinned to the top of a tile is pinned under it. The self camera is the
+   only tile that carries any — the flip and the background picker — and it is
+   only ever IN the grid while it is the thing at the top of the stage, so
+   clearing the header clears them. The offset is zero while the chrome is away,
+   which is exactly when there is no header to clear, so they ride back up with
+   it rather than floating in the middle of nothing. */
+body.video-stage-immersive #screen-room #video-stage-grid .video-tile-flip,
+body.video-stage-immersive #screen-room #video-stage-grid .video-tile-bg,
+body.video-stage-immersive #screen-room #video-stage-focus .video-tile-flip,
+body.video-stage-immersive #screen-room #video-stage-focus .video-tile-bg {
+  top: calc(var(--stage-inset-top, 0px) + 6px);
+  transition: top 0.25s ease;
+}
 /* The tile is mirrored on the front camera — the control on top of it must not
    be, or its icon reads backwards. */
 .video-tile-self.video-tile-camera .video-tile-flip { transform: scaleX(-1); }

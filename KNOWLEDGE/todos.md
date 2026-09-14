@@ -845,6 +845,25 @@ than assuming the keystrokes arrive in order.
   Worth revisiting once the tap gesture has been lived with.
 - **Hiding the tile name bars with the rest of the chrome.** They are cheap and
   they answer "who is that", so they stay up for now.
+- **The roster panel still covers the talk button on a 390px phone.** It is
+  `min(300px, 82vw)` of a 390px screen and full height, so an open participant
+  list sits squarely on the mic — which quietly breaks "the PTT button is always
+  available". Pre-existing, and not the scrim (the scrim is now handled: it
+  covers the screen and the bar is lifted over it). The fix is a design call:
+  lift the bar over the *panels* too and let the mic float on the list, or stop
+  the panels above the control stack. Left alone deliberately rather than picked
+  blind. The test that claimed to guard this was only passing because it read
+  `elementFromPoint` while the panel was still sliding in; it now asserts what is
+  actually true — the scrim does not swallow the bar — and the panel question is
+  this item.
+- **Screen share still latches hands-free.** The camera's auto-latch is gone (a
+  camera says nothing about your microphone); `startScreenShare()` kept its own
+  on the grounds that nobody has complained about it. Same argument applies, so
+  it should probably go the same way — but not without being asked.
+- ~~**The dock has a band of empty glass under the mic upright.**~~ **Done, by
+  deletion.** The slab is gone entirely — every control carries the glass itself
+  and the video runs unbroken between them — so the reserved hint line costs
+  nothing to look at and the mic keeps the position it was reserved for.
 
 ---
 
