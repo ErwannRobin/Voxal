@@ -144,13 +144,12 @@ test.describe('body.video-stage-immersive', () => {
     expect(Math.round(stage.height)).toBe(Math.round(room.height));
   });
 
-  // The stage runs under the chrome, so without measured insets the top tile
-  // hides behind the roster strip and the bottom tile's name bar behind the
-  // controls. The insets come off the grid's CONTENT box, which is also why the
-  // column count has to be computed from the content box, not the border box.
-  // The header and roster OVERLAY the video, so they cost the tiles nothing —
-  // only the always-present control stack does.
-  test('tiles clear the control stack, and nothing else', async ({ page }) => {
+  // The tiles run full-bleed UNDER the dock. The control stack is a translucent
+  // panel lying on the picture, not a bar the video has to stop above — which is
+  // exactly what makes "tap the video to put it away" reveal anything. The
+  // header and roster overlay the video too, so the only thing left costing the
+  // tiles any height is the top drag handle.
+  test('tiles run full-bleed under the dock, clearing only the top handle', async ({ page }) => {
     await enterRoom(page, {
       knownPeerIds: ['p1', 'p2'],
       connections: [
@@ -162,20 +161,26 @@ test.describe('body.video-stage-immersive', () => {
       const r = (s) => document.querySelector(s).getBoundingClientRect().toJSON();
       return {
         bar: r('.room-bottom-bar'),
+        stage: r('#video-stage'),
         tiles: [...document.querySelectorAll('#video-stage-grid .video-tile')]
           .map((e) => e.getBoundingClientRect().toJSON()),
       };
     });
     expect(boxes.tiles.length).toBe(2);
-    for (const t of boxes.tiles) {
-      expect(t.bottom).toBeLessThanOrEqual(Math.ceil(boxes.bar.top));
-      expect(t.height).toBeGreaterThan(0);
-    }
+    for (const t of boxes.tiles) expect(t.height).toBeGreaterThan(0);
+    // The last tile reaches the bottom of the stage, i.e. past the dock's top.
+    const last = boxes.tiles[boxes.tiles.length - 1];
+    expect(last.bottom).toBeGreaterThanOrEqual(boxes.stage.bottom - 1);
+    expect(last.bottom).toBeGreaterThan(boxes.bar.top);
+
+    const pad = await page.evaluate(() => {
+      const st = getComputedStyle(document.getElementById('video-stage-grid'));
+      return { top: parseFloat(st.paddingTop), bottom: parseFloat(st.paddingBottom) };
+    });
     // Only the top handle sits above the tiles, so the top inset stays small —
     // if this grows, a panel has started reserving space again.
-    const padTop = await page.evaluate(() =>
-      parseFloat(getComputedStyle(document.getElementById('video-stage-grid')).paddingTop));
-    expect(padTop).toBeLessThanOrEqual(30);
+    expect(pad.top).toBeLessThanOrEqual(30);
+    expect(pad.bottom).toBe(0);
   });
 
   // The talk button and the control row are never hidden — this is a
@@ -206,34 +211,173 @@ test.describe('body.video-stage-immersive', () => {
   });
 });
 
-// Switching a camera on must not restyle the room. The panels keep the app's
-// own surface colours, which is also what makes them legible over video without
-// a video-only palette.
+// The sliding panels keep the app's own surface colours — that is what makes
+// them legible over video without a video-only palette. The control stack is the
+// deliberate exception: on the phone stage it is glass lying on the picture, so
+// its contents take light-on-glass colours. The talk button is the exception to
+// the exception, and keeps the border it wears everywhere else in the app.
 test.describe('the room keeps its colours in video mode', () => {
   test.use({ viewport: PHONE });
 
-  test('the control buttons look identical with and without video', async ({ page }) => {
+  // The dock cross-fades into place (see its `transition` in styles.css), so a
+  // colour read on the frame the class lands is the value it is coming FROM.
+  const pick = (page, sel, props) => page.evaluate(({ sel, props }) => {
+    const st = getComputedStyle(document.querySelector(sel));
+    const out = {};
+    for (const p of props) out[p] = st[p];
+    return out;
+  }, { sel, props });
+
+  async function pickSettled(page, sel, props) {
+    let prev = null;
+    for (let i = 0; i < 40; i++) {
+      const now = await pick(page, sel, props);
+      if (prev && JSON.stringify(prev) === JSON.stringify(now)) return now;
+      prev = now;
+      await page.waitForTimeout(60);
+    }
+    return prev;
+  }
+
+  async function enterAudioRoom(page) {
     await page.goto('/');
     await enterRoom(page, {
       knownPeerIds: ['p1'],
       connections: [{ id: 'p1', pseudo: 'Alice', open: true }],
     });
-    const styles = () => page.evaluate(() => {
-      const pick = (s) => {
-        const st = getComputedStyle(document.querySelector(s));
-        return { bg: st.backgroundColor, color: st.color, border: st.borderColor };
-      };
-      return { btn: pick('#btn-freehand'), status: pick('.ptt-status') };
-    });
-    const audioOnly = await styles();
     expect(await page.evaluate(() => document.body.classList.contains('video-stage-immersive'))).toBe(false);
+  }
 
+  async function turnCameraOn(page) {
     await page.evaluate(() => {
       connections.get('p1').videoActive = true;
       updatePeerList();
     });
     expect(await page.evaluate(() => document.body.classList.contains('video-stage-immersive'))).toBe(true);
-    expect(await styles()).toEqual(audioOnly);
+  }
+
+  test('the talk button is identical with and without video', async ({ page }) => {
+    await enterAudioRoom(page);
+    const props = ['backgroundColor', 'borderTopColor', 'width', 'height'];
+    const audioOnly = await pickSettled(page, '#ptt-btn', props);
+    await turnCameraOn(page);
+    expect(await pickSettled(page, '#ptt-btn', props)).toEqual(audioOnly);
+  });
+
+  test('the status line keeps its own colour', async ({ page }) => {
+    await enterAudioRoom(page);
+    const audioOnly = await pickSettled(page, '.ptt-status', ['color']);
+    await turnCameraOn(page);
+    expect(await pickSettled(page, '.ptt-status', ['color'])).toEqual(audioOnly);
+  });
+
+  test('the controls beside it do take the glass treatment', async ({ page }) => {
+    await enterAudioRoom(page);
+    const audioOnly = await pickSettled(page, '#btn-freehand', ['backgroundColor', 'color']);
+    await turnCameraOn(page);
+    expect(await pickSettled(page, '#btn-freehand', ['backgroundColor', 'color'])).not.toEqual(audioOnly);
+  });
+});
+
+// A tap on the video puts the dock's panel away and brings it back; the talk
+// button never goes with it. Pinning a tile — which reshapes the whole stage —
+// moved to a long press, so the two gestures cannot be confused.
+test.describe('tap the video to put the chrome away', () => {
+  test.use({ viewport: PHONE });
+
+  const twoCameras = (page) => enterRoom(page, {
+    knownPeerIds: ['p1', 'p2'],
+    connections: [
+      { id: 'p1', pseudo: 'Alice', open: true, videoActive: true },
+      { id: 'p2', pseudo: 'Bob', open: true, videoActive: true },
+    ],
+  });
+
+  const hidden = (page) =>
+    page.evaluate(() => document.body.classList.contains('stage-chrome-hidden'));
+
+  // Somewhere on the top tile, well clear of the dock and of the handles.
+  const tapVideo = (page) => page.mouse.click(PHONE.width / 2, 200);
+
+  test.beforeEach(async ({ page }) => { await page.goto('/'); });
+
+  test('it starts shown, and the tap toggles it both ways', async ({ page }) => {
+    await twoCameras(page);
+    expect(await hidden(page)).toBe(false);
+    await tapVideo(page);
+    expect(await hidden(page)).toBe(true);
+    await tapVideo(page);
+    expect(await hidden(page)).toBe(false);
+  });
+
+  test('the talk button neither goes away nor moves', async ({ page }) => {
+    await twoCameras(page);
+    const btn = () => page.evaluate(() => {
+      const b = document.getElementById('ptt-btn').getBoundingClientRect();
+      const st = getComputedStyle(document.getElementById('ptt-btn'));
+      return { x: Math.round(b.left), y: Math.round(b.top),
+               w: Math.round(b.width), h: Math.round(b.height), display: st.display };
+    });
+    const shown = await btn();
+    await tapVideo(page);
+    expect(await hidden(page)).toBe(true);
+    expect(await btn()).toEqual(shown);
+  });
+
+  test('the control row and the handles go, and the video takes the space', async ({ page }) => {
+    await twoCameras(page);
+    const visible = (sel) => page.evaluate((s) => {
+      const el = document.querySelector(s);
+      return !!el && getComputedStyle(el).display !== 'none';
+    }, sel);
+    const stageTop = () => page.evaluate(() =>
+      document.querySelectorAll('#video-stage-grid .video-tile')[0].getBoundingClientRect().top);
+    expect(await visible('.room-controls')).toBe(true);
+    expect(await visible('#stage-handle-header')).toBe(true);
+    const before = await stageTop();
+
+    await tapVideo(page);
+    expect(await visible('.room-controls')).toBe(false);
+    expect(await visible('#stage-handle-header')).toBe(false);
+    expect(await visible('#ptt-btn')).toBe(true);
+    expect(await stageTop()).toBeLessThan(before);
+  });
+
+  test('a long press pins the tile and does not toggle the chrome', async ({ page }) => {
+    await twoCameras(page);
+    await page.mouse.move(PHONE.width / 2, 200);
+    await page.mouse.down();
+    await page.waitForTimeout(650);
+    await page.mouse.up();
+    expect(await page.evaluate(() => _stagePinnedKey)).toBe('camera:p1');
+    expect(await hidden(page)).toBe(false);
+  });
+
+  test('a tap on a control in the dock is not a tap on the video', async ({ page }) => {
+    await twoCameras(page);
+    await page.locator('#btn-freehand').click();
+    expect(await hidden(page)).toBe(false);
+  });
+
+  test('leaving the stage stands the chrome back up', async ({ page }) => {
+    await twoCameras(page);
+    await tapVideo(page);
+    expect(await hidden(page)).toBe(true);
+    await page.evaluate(() => {
+      connections.get('p1').videoActive = false;
+      connections.get('p2').videoActive = false;
+      updatePeerList();
+    });
+    expect(await hidden(page)).toBe(false);
+  });
+
+  test('a desktop stage keeps click-to-pin, and has no chrome to hide', async ({ page }) => {
+    await page.setViewportSize(DESKTOP);
+    await twoCameras(page);
+    expect(await page.evaluate(() => stageChromeToggles())).toBe(false);
+    await page.locator('#video-stage-grid [data-key="camera:p1"]').click();
+    expect(await page.evaluate(() => _stagePinnedKey)).toBe('camera:p1');
+    expect(await hidden(page)).toBe(false);
   });
 });
 

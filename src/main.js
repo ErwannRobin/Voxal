@@ -11779,7 +11779,15 @@ function _buildVideoTile(tile) {
   bar.appendChild(badges);
   el.appendChild(bar);
 
-  el.addEventListener('click', function() { toggleStagePin(tile.key); });
+  el.addEventListener('click', function() {
+    // On the phone stage a tap on the video means "show me the picture" — the
+    // stage's own handler owns it. Pinning reshapes the whole stage and is far
+    // too big a thing to hang off the same gesture, so there it is a long
+    // press (see _stagePinPressDown). The self-view badge is not "the video":
+    // it is a control you deliberately reach for, and it keeps its tap.
+    if (stageChromeToggles() && !el.closest('#video-stage-self')) return;
+    toggleStagePin(tile.key);
+  });
   return el;
 }
 
@@ -12200,27 +12208,6 @@ function noteStageSpeaker(peerId, active) {
 // permanently up there is the top drag handle.
 var STAGE_HANDLE_CLEARANCE = 26;
 
-// How tall the glass dock is, for the desktop stage it floats on.
-//
-// The dock is allowed to sit on the picture — that is the whole reason it left
-// the rail. What it may not sit on is the strip of faces along the bottom of
-// the stage (the filmstrip beside a focused tile, or the overflow ribbon):
-// burying three people behind the talk button is exactly the cost the rail used
-// to charge in width. So the stage clears the dock only while such a strip is
-// up, which is what the `.has-focus` / `:has()` rule in styles.css keys off.
-//
-// The height is measured rather than a constant because the stack grows with
-// its content — a wrapped hint, a status line that has something to say.
-function publishStageDockHeight() {
-  var root = document.documentElement.style;
-  var dock = document.body.classList.contains('video-stage')
-    ? document.querySelector('#screen-room .room-bottom-bar')
-    : null;
-  var box = dock ? dock.getBoundingClientRect() : null;
-  if (!box || !box.height) { root.removeProperty('--stage-dock-height'); return; }
-  root.setProperty('--stage-dock-height', Math.round(box.height) + 'px');
-}
-
 function applyImmersiveStageInsets(gridEl) {
   if (!gridEl) return;
   var stage = document.getElementById('video-stage');
@@ -12244,15 +12231,21 @@ function applyImmersiveStageInsets(gridEl) {
   var bar = document.querySelector('.room-bottom-bar');
   var barBox = bar ? bar.getBoundingClientRect() : null;
 
-  var insetTop = STAGE_HANDLE_CLEARANCE;
+  // Nothing is up there while the chrome is away — the handle went with it.
+  var insetTop = stageChromeHidden() ? 0 : STAGE_HANDLE_CLEARANCE;
   var insetBottom = (barBox && barBox.height)
     ? Math.max(0, Math.round(stageBox.bottom - barBox.top))
     : 0;
 
   gridEl.style.paddingTop = insetTop + 'px';
-  // The clearance belongs to whatever is actually at the bottom of the stack: a
-  // ribbon under a grid that still carried the inset would sit on the controls.
-  gridEl.style.paddingBottom = ribbonOpen ? '0px' : insetBottom + 'px';
+  // The tiles run full-bleed UNDER the dock. It is a translucent panel lying on
+  // the picture, not a bar the video has to stop above — which is the whole
+  // reason a tap can put it away and reveal what was behind it.
+  //
+  // The ribbon is the exception, and keeps the clearance it always had: a row
+  // of faces behind the talk button is not a picture with a panel on it, it is
+  // three people you cannot see.
+  gridEl.style.paddingBottom = '0px';
   if (ribbonWrap) ribbonWrap.style.paddingBottom = ribbonOpen ? insetBottom + 'px' : '';
   // Published on the root, not the stage, because two things outside the stage
   // need them: the self-view badge (corner-anchored, would otherwise park on the
@@ -12366,11 +12359,6 @@ function updateVideoStage() {
   // brings us straight back here with the landscape width.
   applyDesktopWindowShape();
   stage.classList.toggle('hidden', !active);
-  // Before the tiles are laid out, never after: on the desktop stage the grid's
-  // own height is measured from a box that clears the dock, so the dock has to
-  // have been measured first. It does not depend on the stage, so there is no
-  // circle to close.
-  publishStageDockHeight();
   // The screen must not sleep while you are watching someone — and must be
   // allowed to again the moment the stage stands down.
   if (active) requestStageWakeLock(); else releaseStageWakeLock();
@@ -12381,6 +12369,7 @@ function updateVideoStage() {
     // Leaving immersive (or the stage entirely) must not strand a panel open
     // over a layout that no longer has anywhere to slide it back to.
     closeStagePanels();
+    resetStageChrome();
   }
   if (!active) {
     renderVideoStage([], '', '');
@@ -12628,6 +12617,123 @@ function _onStagePanelPointerUp(e) {
   setPanelOpen(d.which, open);
 }
 
+// ── Tap the video to put the chrome away (phones) ─────────────────
+//
+// On the immersive stage the tiles run edge to edge and full-bleed UNDER the
+// control dock, so every pixel of chrome costs a pixel of picture. A tap
+// anywhere on the video puts the panel away and brings it back — the gesture
+// every video player on a phone already has.
+//
+// The talk button NEVER goes. What hides is the slab behind it, the control
+// row and the edge handles; the one rule this layout is built around is that
+// the mic is always there to press, and nothing about it moves when the rest
+// of the dock stands down.
+//
+// It starts visible rather than hidden: a control nobody has seen yet is a
+// control nobody knows to tap for. One tap is all it costs to get the full
+// picture, and the choice lasts as long as the stage does.
+var STAGE_PIN_PRESS_MS   = 450;
+var STAGE_PIN_PRESS_SLOP = 10;   // px of travel that makes it a drag, not a press
+
+var _stageChromeHidden = false;
+var _stagePinPress = null;
+var _stagePinPressFired = false;   // swallow the click the press leaves behind
+
+// The gesture belongs to the phone stage. On a desktop the voice UI is railed
+// beside the video and costs it nothing, so there is nothing to put away — and
+// a click there still pins, exactly as it always did.
+function stageChromeToggles() {
+  return document.body.classList.contains('video-stage-immersive');
+}
+
+function stageChromeHidden() {
+  return _stageChromeHidden && stageChromeToggles();
+}
+
+function setStageChrome(hidden) {
+  hidden = !!hidden && stageChromeToggles();
+  if (hidden === _stageChromeHidden) return;
+  _stageChromeHidden = hidden;
+  document.body.classList.toggle('stage-chrome-hidden', hidden);
+  // The dock just changed height, and the tile insets, the self-view badge and
+  // both scrims are all measured from it.
+  var grid = document.getElementById('video-stage-grid');
+  if (grid) {
+    applyImmersiveStageInsets(grid);
+    layoutVideoStageGrid(grid, grid.children.length);
+  }
+  publishRoomBarInset();
+}
+
+function toggleStageChrome() { setStageChrome(!_stageChromeHidden); }
+
+// Leaving the stage must not strand the chrome off: the next room would open
+// with its controls already hidden and no video to explain why.
+function resetStageChrome() {
+  _stageChromeHidden = false;
+  document.body.classList.remove('stage-chrome-hidden');
+}
+
+// A tap that is not on a control, and not on a panel that is already over the
+// video (those are dismissed by their own scrim, which sits above this).
+function _stageTapOnChrome(e) {
+  return !!e.target.closest('button, a, input, textarea, select, label, [role="button"], #video-stage-self');
+}
+
+function _onStageTap(e) {
+  if (!stageChromeToggles()) return;
+  if (_stagePinPressFired) return;          // the long press already acted
+  if (_stageTapOnChrome(e)) return;
+  if (stagePanelOpen('header') || stagePanelOpen('roster') || chatPanelOpen()) return;
+  toggleStageChrome();
+}
+
+function _stagePinPressDown(e) {
+  if (!stageChromeToggles()) return;
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if (_stageTapOnChrome(e)) return;
+  var tile = e.target.closest('.video-tile');
+  if (!tile || !tile.dataset.key) return;
+  _cancelStagePinPress();
+  _stagePinPress = {
+    pointerId: e.pointerId,
+    x: e.clientX,
+    y: e.clientY,
+    key: tile.dataset.key,
+    timer: setTimeout(function() {
+      var p = _stagePinPress;
+      _stagePinPress = null;
+      if (!p) return;
+      // The click this press leaves behind must not also toggle the chrome. It
+      // may never arrive — the tile is re-laid-out under the finger, so the
+      // click can land on an element the stage never sees — so the flag expires
+      // on its own rather than eating the next real tap.
+      _stagePinPressFired = true;
+      setTimeout(function() { _stagePinPressFired = false; }, 700);
+      // The only feedback a press without a menu can give. Absent on iOS
+      // Safari, which is why it is guarded rather than relied on.
+      if (typeof navigator.vibrate === 'function') {
+        try { navigator.vibrate(10); } catch (err) { /* blocked by the page's settings */ }
+      }
+      toggleStagePin(p.key);
+    }, STAGE_PIN_PRESS_MS)
+  };
+}
+
+function _stagePinPressMove(e) {
+  var p = _stagePinPress;
+  if (!p || (e.pointerId !== undefined && e.pointerId !== p.pointerId)) return;
+  if (Math.abs(e.clientX - p.x) <= STAGE_PIN_PRESS_SLOP &&
+      Math.abs(e.clientY - p.y) <= STAGE_PIN_PRESS_SLOP) return;
+  _cancelStagePinPress();   // the finger is dragging, not pressing
+}
+
+function _cancelStagePinPress() {
+  if (!_stagePinPress) return;
+  clearTimeout(_stagePinPress.timer);
+  _stagePinPress = null;
+}
+
 function initStagePanelHandles() {
   DRAGGABLE_PANELS.forEach(function(which) {
     var el = document.getElementById(panelSpec(which).handle);
@@ -12641,6 +12747,21 @@ function initStagePanelHandles() {
       setPanelOpen(which, !panelIsOpen(which));
     });
   });
+  var stage = document.getElementById('video-stage');
+  if (stage && !stage._voxalTapWired) {
+    stage._voxalTapWired = true;
+    stage.addEventListener('click', _onStageTap);
+    stage.addEventListener('pointerdown', _stagePinPressDown);
+    stage.addEventListener('pointermove', _stagePinPressMove, { passive: true });
+    stage.addEventListener('pointerup', _cancelStagePinPress);
+    stage.addEventListener('pointercancel', _cancelStagePinPress);
+    // The platform's own long-press menu (copy image, save video) would land on
+    // top of the gesture that pins a tile.
+    stage.addEventListener('contextmenu', function(e) {
+      if (stageChromeToggles()) e.preventDefault();
+    });
+  }
+
   var scrim = document.getElementById('stage-panel-scrim');
   if (scrim && !scrim._voxalWired) {
     scrim._voxalWired = true;

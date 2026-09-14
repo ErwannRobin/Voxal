@@ -369,7 +369,7 @@ What differs is the presentation and the capture budget:
 
 | | Desktop web (≥861px) | Phone (mobile web + iOS/Android apps) | Tauri desktop / tiny embed |
 |---|---|---|---|
-| Layout | Tile grid, roster railed left, talk button on a glass dock over the stage | **Immersive** — tiles fill the screen; header and roster slide in over them from drag handles | Floating viewer panel / pop-out window |
+| Layout | Tile grid, voice UI railed right | **Immersive** — tiles fill the screen; header and roster slide in over them from drag handles | Floating viewer panel / pop-out window |
 | Capture | 720p30 | 360p24 | 720p30 |
 | Bitrate cap | 600 kbps | 300 kbps, or 150 kbps on save-data / 2g / 3g | 600 kbps |
 | Camera flip | — | Front/back button on your own self-view tile | — |
@@ -380,22 +380,31 @@ CSS media queries, and published as the `video-stage` / `video-stage-immersive`
 body classes. Both are set **only** while a camera or screen is genuinely live,
 so an audio-only room renders exactly as it did before video existed.
 
-On the desktop stage the talk button and its control row do not take a column
-of their own: they float over the bottom of the tiles as a **glass dock** — a
-translucent, blurred slab (`backdrop-filter`) that the video shows through, dark
-in both themes because it is lying on a picture rather than on the page. That is
-what lets the left rail be sized for a list of names alone. The dock is allowed
-to cover video; it is never allowed to cover the strip of faces along the bottom
-of the stage (the filmstrip beside a focused tile, or the overflow ribbon), so
-the stage reserves the dock's measured height — `--stage-dock-height`, published
-by `publishStageDockHeight()` — whenever such a strip is up. The phone has always
-had this shape; the dock simply gives it the glass too.
-
 In the immersive layout the room header and the participant list slide
 off-screen and are pulled back **over** the tiles by a drag handle — top-centre
 for the header, right-centre for the roster — so neither costs the video any
 height. Both keep the app's normal colours: turning a camera on never restyles
-the room. The talk button and the control row are never hidden by anything.
+the room.
+
+The control stack is the one deliberate exception, and it is phone-only. There
+it is a **glass dock**: a translucent, blurred slab (`backdrop-filter`) lying on
+the picture, dark in both themes because it is on video rather than on the page,
+with its contents recoloured light-on-glass. The talk button inside it is not
+restyled at all — same border, same states, same size as in a voice room. The
+desktop stage is untouched and keeps the voice UI railed beside the tiles.
+
+Because the dock is a panel on the picture and not a bar the video stops above,
+the tiles run **full-bleed underneath it**, and:
+
+- **A tap anywhere on the video puts the dock's panel away and brings it back**
+  (`body.stage-chrome-hidden`). The control row, the status line and the edge
+  handles go; the talk button never does, and does not move — the control row is
+  ordered *above* it, so what disappears disappears from the top of the bar. The
+  chrome starts shown, and the choice lasts as long as the stage does.
+- **Pinning a tile is a long press**, not a tap. It reshapes the whole stage,
+  which is far too big a thing to hang off the same gesture as "show me the
+  picture". On a desktop, where there is no chrome to put away, a click still
+  pins exactly as it always did.
 
 On a phone the stage also takes a screen wake lock (so the display does not
 sleep mid-call) and **pauses capture when the app is backgrounded** — the local

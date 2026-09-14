@@ -830,13 +830,21 @@ Deliberately left for later:
 
 `tests/e2e/unit-command-palette.spec.js` → "running one does the thing and puts
 the palette away" types `chat` and presses Enter immediately. Under a loaded
-parallel run (the full 1625-test `unit` project, 8 workers) it fails roughly
-once in eight: Enter lands before the filtered list has settled, so a different
-row runs and `chatPanelOpen()` comes back `false`. It passes every time in
-isolation and at `--repeat-each=16` on its own, so nothing is wrong with the
-palette itself — the test needs to wait for the highlighted row to read
-"Show the chat" before pressing Enter, rather than assuming the keystrokes
-arrive in order.
+parallel run it has been seen to fail about once in eight: Enter lands before
+the filtered list has settled, so a different row runs and `chatPanelOpen()`
+comes back `false`. It passes every time in isolation and at `--repeat-each=16`
+on its own, so nothing is wrong with the palette itself — the test needs to wait
+for the highlighted row to read "Show the chat" before pressing Enter, rather
+than assuming the keystrokes arrive in order.
+
+## 📱 Phone stage chrome — deliberately left for later
+
+- **An auto-hide timer.** Every video player puts its chrome away by itself
+  after a few seconds. Here the chrome only moves when you tap, which is
+  predictable and has no timer to fight when you are reaching for a control.
+  Worth revisiting once the tap gesture has been lived with.
+- **Hiding the tile name bars with the rest of the chrome.** They are cheap and
+  they answer "who is that", so they stay up for now.
 
 ---
 

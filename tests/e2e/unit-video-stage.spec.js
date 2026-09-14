@@ -158,7 +158,7 @@ test.describe('room layout', () => {
     expect(style.maxWidth).toBe('none');
   });
 
-  test('the roster keeps the rail, and the talk dock floats on the stage', async ({ page }) => {
+  test('the voice UI stays on screen, to the left of the stage', async ({ page }) => {
     await enterRoom(page, {
       knownPeerIds: ['p1'],
       connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
@@ -170,45 +170,9 @@ test.describe('room layout', () => {
     // Participants on the left, stage in the middle — and the chat on the right
     // once it is opened. See the `chat-docked` block in styles.css.
     expect(boxes.roster.left).toBeLessThan(boxes.stage.left);
-    // The talk button is no longer railed with them: it is a floating dock over
-    // the bottom of the stage, which is what buys the rail its narrower column.
-    expect(boxes.ptt.left).toBeGreaterThanOrEqual(boxes.stage.left - 1);
-    expect(boxes.ptt.right).toBeLessThanOrEqual(boxes.stage.right + 1);
-    expect(boxes.ptt.bottom).toBeLessThanOrEqual(boxes.stage.bottom + 1);
-    // …and still entirely on screen, which is the rule the whole layout is
-    // built around.
-    expect(boxes.ptt.top).toBeGreaterThanOrEqual(0);
-  });
-
-  // The dock may lie on the picture; it may not lie on the row of faces that
-  // exists so nobody drops out of the room. See publishStageDockHeight().
-  test('the filmstrip beside a focused tile clears the dock', async ({ page }) => {
-    await enterRoom(page, {
-      knownPeerIds: ['p1', 'p2', 'p3'],
-      connections: [
-        { id: 'p1', pseudo: 'Alice', open: true, videoActive: true, screenActive: true },
-        { id: 'p2', pseudo: 'Bob', open: true, videoActive: true },
-        { id: 'p3', pseudo: 'Charlie', open: true, videoActive: true },
-      ],
-    });
-    await page.evaluate(() => {
-      for (const id of ['p1', 'p2', 'p3']) {
-        const conn = connections.get(id);
-        conn.remoteVideoStream = new MediaStream();
-        if (id === 'p1') conn.remoteScreenStream = new MediaStream();
-      }
-      updatePeerList();
-    });
-    const boxes = await page.evaluate(() => ({
-      bar: document.querySelector('.room-bottom-bar').getBoundingClientRect().toJSON(),
-      tiles: [...document.querySelectorAll('#video-stage-grid .video-tile')]
-        .map((e) => e.getBoundingClientRect().toJSON()),
-    }));
-    expect(boxes.tiles.length).toBeGreaterThan(0);
-    for (const t of boxes.tiles) {
-      expect(t.height).toBeGreaterThan(0);
-      expect(t.bottom).toBeLessThanOrEqual(Math.ceil(boxes.bar.top));
-    }
+    expect(boxes.ptt.left).toBeLessThan(boxes.stage.left);
+    // The PTT column sits below the roster in the same rail.
+    expect(boxes.ptt.top).toBeGreaterThanOrEqual(boxes.roster.top);
   });
 
   test('an audio-only room keeps the flex stack', async ({ page }) => {
