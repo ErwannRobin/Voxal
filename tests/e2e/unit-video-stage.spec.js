@@ -733,6 +733,81 @@ test.describe('the self-view badge', () => {
       .toBe(12);
   });
 
+  test('the drag owns the gesture: the page cannot scroll out from under it',
+    async ({ page }) => {
+      await enterRoom(page, {
+        knownPeerIds: ['p1'],
+        connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
+      });
+      await page.evaluate(() => { localVideoActive = true; updatePeerList(); });
+      const scrolls = () => page.evaluate(() => {
+        const e = new TouchEvent('touchmove', { cancelable: true, bubbles: true });
+        document.dispatchEvent(e);
+        return !e.defaultPrevented;
+      });
+      expect(await scrolls()).toBe(true);
+
+      const box = await page.locator('#video-stage-self').boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x, box.y - 40, { steps: 4 });
+      // A press that reaches the badge from the control bar started on the bar,
+      // whose touch-action would otherwise let the room pan away under it.
+      expect(await scrolls()).toBe(false);
+
+      await page.mouse.up();
+      // …and the page is the page again the moment the drag ends.
+      expect(await scrolls()).toBe(true);
+    });
+
+  test('a badge parked under the control bar claims the bar for itself', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
+    });
+    await page.evaluate(() => { localVideoActive = true; updatePeerList(); });
+    const onBar = () => page.evaluate(() => document.body.classList.contains('self-badge-on-bar'));
+    expect(await onBar()).toBe(false);
+    await page.evaluate(() => setSelfBadgePlacement({ side: 'bottom', pos: 0.5, tucked: true }));
+    expect(await onBar()).toBe(true);
+    // A band slot only puts the badge under the bar where there IS a band; on a
+    // desktop stage the placement falls back to an edge, and the bar is free.
+    await page.evaluate(() => setSelfBadgePlacement({ slot: 'barl' }));
+    expect(await onBar()).toBe(false);
+    await page.evaluate(() => setSelfBadgePlacement({ side: 'right', pos: 1, tucked: false }));
+    expect(await onBar()).toBe(false);
+  });
+
+  test('a gesture the system takes back leaves the badge where it was', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
+    });
+    await page.evaluate(() => { localVideoActive = true; updatePeerList(); });
+    const badge = page.locator('#video-stage-self');
+    const box = await badge.boundingBox();
+    const stage = await page.locator('#video-stage').boundingBox();
+
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(stage.x + box.width, stage.y + box.height, { steps: 6 });
+    await page.evaluate(() => window.dispatchEvent(
+      new PointerEvent('pointercancel', { pointerId: _selfBadgeDrag.pointerId })));
+
+    // Nothing was chosen, so nothing moved: still the stored bottom-right.
+    expect(await page.evaluate(() => _selfBadgePlacement))
+      .toMatchObject({ side: 'right', pos: 1, tucked: false });
+    expect(await page.evaluate(() => localStorage.getItem('self-video-corner'))).toBeNull();
+    expect(await badge.evaluate((el) => el.classList.contains('dragging'))).toBe(false);
+    await expect
+      .poll(async () => {
+        const b = await badge.boundingBox();
+        return Math.round(stage.x + stage.width - (b.x + b.width));
+      })
+      .toBe(12);
+    await page.mouse.up();
+  });
+
   test('a plain click still pins the self-view, as on any other tile', async ({ page }) => {
     await enterRoom(page, {
       knownPeerIds: ['p1'],

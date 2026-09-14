@@ -13038,6 +13038,13 @@ function applySelfBadgePlacement() {
   var slots = selfBadgeBarSlots();
   var p = effectiveSelfBadgePlacement(slots);
   badge.dataset.corner = selfBadgeCornerToken(p);
+  // Parked beside the mic or tucked under the bottom edge, the badge lies under
+  // the control bar, which forwards a press that lands on it (selfBadgeAtPoint).
+  // Published so the bar can stop the browser scrolling that press away: the
+  // touch starts on the BAR, so the bar's own `touch-action` is what decides.
+  document.body.classList.toggle(
+    'self-badge-on-bar',
+    !badge.classList.contains('hidden') && !!(p.slot || p.tucked));
   var root = document.documentElement.style;
   if (slots) {
     root.setProperty('--stage-ptt-centre', Math.round(slots.centre) + 'px');
@@ -13129,9 +13136,51 @@ function _onSelfBadgePointerDown(e) {
   // badge mid-drag, and a lost pointerup would leave it stuck to the cursor.
   window.addEventListener('pointermove', _onSelfBadgePointerMove);
   window.addEventListener('pointerup', _onSelfBadgePointerUp);
-  window.addEventListener('pointercancel', _onSelfBadgePointerUp);
+  window.addEventListener('pointercancel', _onSelfBadgePointerCancel);
+  // And hold the page still for the length of the drag. `touch-action` decides
+  // whether a touch scrolls, and it is read off the element the touch STARTED
+  // on: the badge says `none`, but a press that arrives here from the control
+  // bar (selfBadgeAtPoint) started on the bar, which does not — so without this
+  // the room scrolls out from under the badge you are dragging. It has to be a
+  // non-passive listener: a passive one may not call preventDefault().
+  document.addEventListener('touchmove', _onSelfBadgeTouchMove, { passive: false });
   badge.classList.add('dragging');
   e.preventDefault();
+}
+
+function _onSelfBadgeTouchMove(e) {
+  if (_selfBadgeDrag && e.cancelable) e.preventDefault();
+}
+
+// Everything that ends a drag, however it ended: the listeners, the pointer
+// capture and the lifted look. Returns the badge, since every caller wants it.
+function _stopSelfBadgeDrag(d) {
+  _selfBadgeDrag = null;
+  window.removeEventListener('pointermove', _onSelfBadgePointerMove);
+  window.removeEventListener('pointerup', _onSelfBadgePointerUp);
+  window.removeEventListener('pointercancel', _onSelfBadgePointerCancel);
+  document.removeEventListener('touchmove', _onSelfBadgeTouchMove);
+  var badge = document.getElementById('video-stage-self');
+  if (!badge) return null;
+  badge.classList.remove('dragging');
+  try {
+    if (badge.hasPointerCapture && badge.hasPointerCapture(d.pointerId)) {
+      badge.releasePointerCapture(d.pointerId);
+    }
+  } catch (err) { /* already released with the pointer */ }
+  return badge;
+}
+
+// The system took the gesture back — a second finger, an edge swipe, a call
+// coming in. It never got to say where the badge goes, so the badge goes back
+// where it was rather than landing wherever the drag had reached.
+function _onSelfBadgePointerCancel(e) {
+  var d = _selfBadgeDrag;
+  if (!d || (e && e.pointerId !== undefined && e.pointerId !== d.pointerId)) return;
+  if (!_stopSelfBadgeDrag(d)) return;
+  // A cancelled drag is still not a pin: it moved.
+  _selfBadgeSwallowClick = _selfBadgeDragged;
+  applySelfBadgePlacement();
 }
 
 function _onSelfBadgePointerMove(e) {
@@ -13143,6 +13192,13 @@ function _onSelfBadgePointerMove(e) {
       (Math.abs(e.clientX - d.startX) > SELF_BADGE_DRAG_SLOP ||
        Math.abs(e.clientY - d.startY) > SELF_BADGE_DRAG_SLOP)) {
     _selfBadgeDragged = true;
+    // Now that this is a drag and not a press, take the pointer with us: the
+    // press otherwise keeps belonging to whatever it landed on — for a badge
+    // parked in the bar, the bar — and the browser stays free to hand the
+    // gesture to its own scroller. Not a moment earlier, though: a captured
+    // pointer delivers its click to the capturing element, which would take the
+    // click-to-pin away from the tile inside the badge.
+    try { badge.setPointerCapture(d.pointerId); } catch (err) { /* pointer gone */ }
     // Picked up, a tucked badge is a picture again — otherwise it is dragged
     // around the stage as a faded sliver of itself.
     badge.classList.remove('tucked');
@@ -13158,13 +13214,7 @@ function _onSelfBadgePointerMove(e) {
 function _onSelfBadgePointerUp(e) {
   var d = _selfBadgeDrag;
   if (!d || (e && e.pointerId !== undefined && e.pointerId !== d.pointerId)) return;
-  _selfBadgeDrag = null;
-  window.removeEventListener('pointermove', _onSelfBadgePointerMove);
-  window.removeEventListener('pointerup', _onSelfBadgePointerUp);
-  window.removeEventListener('pointercancel', _onSelfBadgePointerUp);
-  var badge = document.getElementById('video-stage-self');
-  if (!badge) return;
-  badge.classList.remove('dragging');
+  if (!_stopSelfBadgeDrag(d)) return;
   if (_selfBadgeDragged) {
     _selfBadgeSwallowClick = true;
     // Straight from the dragged offsets to the settled ones, with nothing

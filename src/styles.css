@@ -2087,6 +2087,12 @@ body.video-stage-immersive #video-stage-self[data-corner="barr"] {
   transform: translateY(50%);
   box-shadow: none;
 }
+/* A press on the bar is forwarded to the badge while it is parked down here, so
+   the bar must not let the page pan out from under the drag. `touch-action` is
+   read off the element the touch STARTED on, and for those presses that element
+   is the bar, not the badge — the badge's own `none` never gets a say. The
+   immersive stage fills the screen, so there is nothing to scroll anyway. */
+body.video-stage-immersive.self-badge-on-bar #screen-room .room-bottom-bar { touch-action: none; }
 body.video-stage-immersive #video-stage-self[data-corner="barl"] { left: 10px; right: auto; }
 body.video-stage-immersive #video-stage-self[data-corner="barr"] { right: 10px; left: auto; }
 /* While it is being dragged the badge follows the pointer from its top-left

@@ -249,6 +249,26 @@ test.describe('the self-view beside the mic', () => {
     expect(await page.evaluate((p) => selfBadgeCornerToken(p), placement)).toBe('bl');
   });
 
+  test('parked in the band, the badge claims the bar the press lands on',
+    async ({ page }) => {
+      await room(page);
+      // A badge only shows while somebody else has a camera on — and it is the
+      // visible one, lying under the bar, that the bar has to forward a press to.
+      await page.evaluate(() => {
+        connections.get('other').videoActive = true;
+        connections.get('other').remoteVideoStream = new MediaStream();
+        localVideoActive = true;
+        updatePeerList();
+        setSelfBadgePlacement({ slot: 'barl' });
+      });
+      expect(await page.evaluate(() => document.body.classList.contains('self-badge-on-bar')))
+        .toBe(true);
+      // Back on a border of its own, the bar is the bar again.
+      await page.evaluate(() => setSelfBadgePlacement({ side: 'right', pos: 0.4, tucked: false }));
+      expect(await page.evaluate(() => document.body.classList.contains('self-badge-on-bar')))
+        .toBe(false);
+    });
+
   test('a phone on its side hands a parked badge back to an edge', async ({ page }) => {
     await room(page, PHONE_LANDSCAPE);
     const fallback = await page.evaluate(() => {

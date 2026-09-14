@@ -286,6 +286,28 @@ Copilot should read this file at the start of every session.
     - `selfBadgePlacementFor()` and `selfBadgeOffsets()` are pure and are exact inverses, via the one `_selfBadgeTravel()` that both read. They must be: anything else and the badge drifts a few pixels every time it is picked up and put down.
     - The offsets are **inline**, written by `applySelfBadgePlacement()` from measured boxes; the `[data-corner]` rules in the stylesheet are only the fallback that holds the badge before it has ever been measured (it is `hidden`, so unmeasurable, until the render that reveals it — hence the explicit call at the END of `renderVideoStage()`, after the layout).
     - **Do not hand the badge back to the stylesheet before re-placing it.** `applySelfBadgePlacement()` measures, and measuring flushes layout — so clearing the inline offsets first makes the badge visibly jump to a corner and animate back from there.
+  - **`touch-action: none` on the badge is not enough to own the gesture.** It is
+    read off the element the touch **started** on, and the press that reaches
+    the badge sometimes starts somewhere else: parked beside the mic (or tucked
+    under the bottom edge) the badge lies *under* the control bar, which
+    forwards the press (`selfBadgeAtPoint()`). The bar says `manipulation`
+    (inherited from `body`), so the browser panned the room out from under the
+    drag. Three things fix it, and all three are needed:
+    - a non-passive `touchmove` on `document` that `preventDefault()`s for the
+      length of the drag (a *passive* listener may not call it at all);
+    - `touch-action: none` on the bar itself while the badge is parked there
+      (`body.self-badge-on-bar`), because on WebKit the compositor decides at
+      **touchstart** whether it may scroll, and by the first `touchmove` it can
+      be too late;
+    - `setPointerCapture()` — but **only once the press has become a drag**, past
+      `SELF_BADGE_DRAG_SLOP`. A captured pointer delivers its `click` to the
+      capturing element, so capturing at `pointerdown` silently took
+      click-to-pin away from the tile inside the badge. The test for the plain
+      click is what caught it.
+  - **`pointercancel` is not `pointerup`.** The system taking the gesture back (a
+    second finger, an edge swipe, a call arriving) is not a choice of where the
+    badge goes, so it restores the stored placement instead of committing
+    wherever the drag had reached.
   - **Dragged off the stage, it tucks rather than springing back.** Pushed past a border by more than `SELF_BADGE_TUCK_MIN`, the drop leaves it under that border with `SELF_BADGE_PEEK` showing. That sliver is a *handle*, not a picture: its own controls are hidden, and the click-to-pin every tile carries is swallowed there — a tap means "bring it back", which is the only way back in. The drag itself is clamped to leave that same sliver, so a badge can never be pushed somewhere no pointer can reach it.
   - **Listen for `pointermove`/`pointerup` on the window, not on the badge.** The pointer routinely leaves a 200px badge mid-drag; a `pointerup` delivered elsewhere would leave it glued to the cursor. The listeners are added on `pointerdown` and removed on release.
   - **A drag ends with a `click`, and every tile has a click-to-pin handler**, so moving the badge would also blow it up into the focus slot. A capture-phase listener on the badge swallows exactly that one click when the pointer moved more than `SELF_BADGE_DRAG_SLOP`; a genuine click still pins.
