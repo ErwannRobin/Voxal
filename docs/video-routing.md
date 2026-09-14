@@ -369,7 +369,7 @@ What differs is the presentation and the capture budget:
 
 | | Desktop web (≥861px) | Phone (mobile web + iOS/Android apps) | Tauri desktop / tiny embed |
 |---|---|---|---|
-| Layout | Tile grid, voice UI railed right | **Immersive** — tiles fill the screen; header and roster slide in over them from drag handles | Floating viewer panel / pop-out window |
+| Layout | Tile grid, roster railed left, talk button on a glass dock over the stage | **Immersive** — tiles fill the screen; header and roster slide in over them from drag handles | Floating viewer panel / pop-out window |
 | Capture | 720p30 | 360p24 | 720p30 |
 | Bitrate cap | 600 kbps | 300 kbps, or 150 kbps on save-data / 2g / 3g | 600 kbps |
 | Camera flip | — | Front/back button on your own self-view tile | — |
@@ -379,6 +379,17 @@ Which layout applies is decided by `videoStageMode()` in `src/main.js`, not by
 CSS media queries, and published as the `video-stage` / `video-stage-immersive`
 body classes. Both are set **only** while a camera or screen is genuinely live,
 so an audio-only room renders exactly as it did before video existed.
+
+On the desktop stage the talk button and its control row do not take a column
+of their own: they float over the bottom of the tiles as a **glass dock** — a
+translucent, blurred slab (`backdrop-filter`) that the video shows through, dark
+in both themes because it is lying on a picture rather than on the page. That is
+what lets the left rail be sized for a list of names alone. The dock is allowed
+to cover video; it is never allowed to cover the strip of faces along the bottom
+of the stage (the filmstrip beside a focused tile, or the overflow ribbon), so
+the stage reserves the dock's measured height — `--stage-dock-height`, published
+by `publishStageDockHeight()` — whenever such a strip is up. The phone has always
+had this shape; the dock simply gives it the glass too.
 
 In the immersive layout the room header and the participant list slide
 off-screen and are pulled back **over** the tiles by a drag handle — top-centre

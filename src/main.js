@@ -12200,6 +12200,27 @@ function noteStageSpeaker(peerId, active) {
 // permanently up there is the top drag handle.
 var STAGE_HANDLE_CLEARANCE = 26;
 
+// How tall the glass dock is, for the desktop stage it floats on.
+//
+// The dock is allowed to sit on the picture — that is the whole reason it left
+// the rail. What it may not sit on is the strip of faces along the bottom of
+// the stage (the filmstrip beside a focused tile, or the overflow ribbon):
+// burying three people behind the talk button is exactly the cost the rail used
+// to charge in width. So the stage clears the dock only while such a strip is
+// up, which is what the `.has-focus` / `:has()` rule in styles.css keys off.
+//
+// The height is measured rather than a constant because the stack grows with
+// its content — a wrapped hint, a status line that has something to say.
+function publishStageDockHeight() {
+  var root = document.documentElement.style;
+  var dock = document.body.classList.contains('video-stage')
+    ? document.querySelector('#screen-room .room-bottom-bar')
+    : null;
+  var box = dock ? dock.getBoundingClientRect() : null;
+  if (!box || !box.height) { root.removeProperty('--stage-dock-height'); return; }
+  root.setProperty('--stage-dock-height', Math.round(box.height) + 'px');
+}
+
 function applyImmersiveStageInsets(gridEl) {
   if (!gridEl) return;
   var stage = document.getElementById('video-stage');
@@ -12345,6 +12366,11 @@ function updateVideoStage() {
   // brings us straight back here with the landscape width.
   applyDesktopWindowShape();
   stage.classList.toggle('hidden', !active);
+  // Before the tiles are laid out, never after: on the desktop stage the grid's
+  // own height is measured from a box that clears the dock, so the dock has to
+  // have been measured first. It does not depend on the stage, so there is no
+  // circle to close.
+  publishStageDockHeight();
   // The screen must not sleep while you are watching someone — and must be
   // allowed to again the moment the stage stands down.
   if (active) requestStageWakeLock(); else releaseStageWakeLock();

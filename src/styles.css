@@ -1426,7 +1426,12 @@ kbd {
 @media (min-width: 861px) {
   html.is-web body.video-stage:not(.embed-tiny) #screen-room.active {
     display: grid;
-    grid-template-columns: 320px minmax(0, 1fr);   /* voice rail | stage */
+    /* The rail carries the roster ONLY: the talk button and its controls float
+       over the stage as a glass dock (see `.room-bottom-bar` below), so the
+       column is sized for a list of names rather than for an 80px circle with
+       a wrapped button row under it. Every pixel taken off it is a pixel the
+       tiles get. */
+    grid-template-columns: 240px minmax(0, 1fr);   /* voice rail | stage */
     /* The consent banner gets a row of its own, exactly as in the landscape
        grid above. Sharing `header` with .room-header stacks the two in the same
        cell, and the banner's Accept/Decline then land on the room's own
@@ -1457,10 +1462,29 @@ kbd {
     min-height: 0;
     min-width: 0;
     overflow: hidden;
+    /* The stage is a picture, not a page: a dark field behind the tiles is what
+       the phone has always had, and it is what the dock is designed to sit on.
+       Without it the reserve below a filmstrip is app background, and a slab of
+       dark glass floating on a light room reads as a smudge rather than as
+       something lying on the video. */
+    border-radius: 12px;
+    background: #0c0c0f;
   }
 
-  /* The voice UI keeps its own markup and behaviour — it is simply stacked
-     into the right rail: roster on top, PTT + controls beneath it. */
+  /* …except while a strip of faces is running along the bottom of the stage —
+     the filmstrip beside a focused tile, or the overflow ribbon. The dock may
+     cover video; it may not cover the row that is there precisely so nobody
+     drops out of the room. Padding the stage lifts that strip, the tiles above
+     it and the self-view badge together, since all three are measured from this
+     box — `--stage-dock-height` is published by publishStageDockHeight(). */
+  html.is-web body.video-stage:not(.embed-tiny) #screen-room #video-stage.has-focus,
+  html.is-web body.video-stage:not(.embed-tiny) #screen-room
+  #video-stage:has(.video-stage-ribbon-wrap:not(.hidden)) {
+    padding-bottom: calc(var(--stage-dock-height, 0px) + 28px);
+  }
+
+  /* The roster keeps its own markup and behaviour — it is simply moved into the
+     left rail, which it now has to itself. */
   html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-peers-panel {
     grid-area: rail;
     align-self: start;
@@ -1469,20 +1493,136 @@ kbd {
     padding-bottom: 0;
     overflow: hidden;
   }
+  /* The talk button sits ON the stage, not beside it — the same shape the phone
+     has always had, for the same reason: a column of chrome reserved down the
+     side of the room is space the tiles never get back, and the one control
+     that must always be reachable is better placed where the eyes already are.
+     It shares the `stage` cell with the tiles (two grid items in one area stack)
+     rather than being absolutely positioned, so it stays inside the stage's
+     column however the rail is sized. */
   html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-bottom-bar {
-    grid-area: rail;
+    grid-area: stage;
     align-self: end;
+    justify-self: center;
+    z-index: 20;
     position: static;
     left: auto;
     right: auto;
     bottom: auto;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
-    gap: 10px;
+    gap: 14px;
+    margin-bottom: 18px;
     min-height: 0;
   }
-  html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-bottom-bar .room-controls { margin-top: 0; }
+  /* Side by side with the mic the divider is vertical, not a rule drawn under
+     a stack that no longer exists. */
+  html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-bottom-bar .room-controls {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+    padding-left: 14px;
+    border-left: 1px solid var(--dock-line);
+  }
+  html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-bottom-bar .ctrl-row {
+    flex-wrap: nowrap;
+  }
+  /* A touch smaller than the 80px it is in a voice room: here it is sitting on
+     someone's face, and it is still by some way the biggest target in the dock. */
+  html.is-web body.video-stage:not(.embed-tiny) #screen-room .ptt-btn {
+    width: 72px;
+    height: 72px;
+    font-size: 27px;
+  }
+}
+
+/* ── The glass dock ───────────────────────────────────────────────
+   Wherever a stage is live the control stack is sitting on a picture, so it
+   stops being part of the page's surface and becomes a floating panel: a
+   translucent, blurred slab that the video shows through. `body.video-stage` is
+   exactly the set of layouts where that is true — the desktop grid above and
+   the immersive phone stage below — so one block serves both.
+
+   The tint is dark in BOTH themes on purpose. It is not app chrome any more, it
+   is glass over whatever the camera happens to be pointing at; a light panel
+   reads as a hole punched in a dark frame, and a panel that changes colour with
+   the theme cannot be relied on to keep white text legible. Everything inside it
+   therefore takes light-on-glass colours, which is what the overrides below are
+   for — they are scoped to the dock and leave the voice room untouched.
+
+   `backdrop-filter` is the whole effect; where it is unsupported the rgba tint
+   alone still keeps the contents readable, so there is nothing to feature-detect. */
+body.video-stage #screen-room .room-bottom-bar {
+  --dock-line: rgba(255, 255, 255, 0.16);
+  box-sizing: border-box;
+  padding: 10px 16px;
+  border-radius: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  /* Two layers: a top-down sheen that gives the slab a lit edge, over the tint
+     that does the actual darkening. */
+  background-color: rgba(16, 16, 20, 0.42);
+  background-image: linear-gradient(to bottom,
+                    rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0) 58%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  backdrop-filter: blur(22px) saturate(180%);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.34),
+              inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.92);
+}
+
+/* Floating over the tiles, the stack pays for its own height twice: once in the
+   picture it hides and once in how far the dock reaches up the stage. The status
+   line reserves 16px for a message it usually has not got, so give it that space
+   only when it has something to say. */
+body.video-stage #screen-room .room-bottom-bar .ptt-area { gap: 8px; }
+body.video-stage #screen-room .room-bottom-bar .ptt-status:empty { display: none; }
+
+body.video-stage #screen-room .room-bottom-bar .ptt-btn {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.45);
+}
+body.video-stage #screen-room .room-bottom-bar .ptt-btn:hover { border-color: var(--accent); }
+/* `active` and `freehand` keep their own accent/green — they are the states the
+   button exists to show, and washing them into the glass would cost the one
+   piece of feedback that says whether the room can hear you. */
+body.video-stage #screen-room .room-bottom-bar .ptt-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+body.video-stage #screen-room .room-bottom-bar .ptt-btn.freehand {
+  border-color: var(--green);
+}
+
+body.video-stage #screen-room .room-bottom-bar .ptt-hint,
+body.video-stage #screen-room .room-bottom-bar .shortcut-focused-note,
+body.video-stage #screen-room .room-bottom-bar .recording-hint {
+  color: rgba(255, 255, 255, 0.74);
+}
+body.video-stage #screen-room .room-bottom-bar kbd {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.24);
+  color: rgba(255, 255, 255, 0.92);
+}
+body.video-stage #screen-room .room-bottom-bar .btn-icon { color: rgba(255, 255, 255, 0.74); }
+body.video-stage #screen-room .room-bottom-bar .btn-icon:hover { color: #fff; }
+
+body.video-stage #screen-room .room-bottom-bar .room-controls { border-top-color: var(--dock-line); }
+body.video-stage #screen-room .room-bottom-bar .room-action-btn {
+  background: rgba(255, 255, 255, 0.10);
+  border-color: rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.88);
+}
+body.video-stage #screen-room .room-bottom-bar .room-action-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #fff;
+}
+/* An engaged control keeps the accent fill it has everywhere else. */
+body.video-stage #screen-room .room-bottom-bar .room-action-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 /* ---------------------------------------------------------------------------
@@ -4800,7 +4940,7 @@ body.video-stage-immersive .chat-resizer { display: none; }
 
 @media (min-width: 1100px) {
   html.is-web body.video-stage.chat-docked.chat-open:not(.embed-tiny) #screen-room.active {
-    grid-template-columns: 320px minmax(0, 1fr) min(var(--chat-width, 360px), 38vw);
+    grid-template-columns: 240px minmax(0, 1fr) min(var(--chat-width, 360px), 38vw);
     grid-template-areas:
       "consent consent consent"
       "header  header  header"
@@ -4829,10 +4969,13 @@ body.video-stage-immersive .chat-resizer { display: none; }
     padding: 0 0 0 14px;
     background: none;
   }
-  /* The stage keeps the left rail on its left; the roster and the talk button
-     stay stacked in it exactly as they were, on the other side. */
+  /* The stage keeps the left rail on its left; the roster stays in it exactly as
+     it was, on the other side. The talk button does NOT — it floats on the
+     stage, and naming `rail` here would drag it back into the column the wider
+     grid above already took it out of. It only needs the middle area repeated,
+     because this grid renames the tracks. */
   html.is-web body.chat-docked:not(.embed-tiny) #screen-room .room-peers-panel { grid-area: rail; }
-  html.is-web body.chat-docked:not(.embed-tiny) #screen-room .room-bottom-bar { grid-area: rail; }
+  html.is-web body.chat-docked:not(.embed-tiny) #screen-room .room-bottom-bar { grid-area: stage; }
 }
 
 /* ── Chat: beside the room in the desktop app ─────────────────────

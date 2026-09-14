@@ -826,6 +826,18 @@ Deliberately left for later:
   so it needs the page alive. A real notification needs the same FCM/APNs work
   ring-a-friend is waiting on.
 
+## 🧪 Flaky: the quick-actions "run one" test races its own typing
+
+`tests/e2e/unit-command-palette.spec.js` → "running one does the thing and puts
+the palette away" types `chat` and presses Enter immediately. Under a loaded
+parallel run (the full 1625-test `unit` project, 8 workers) it fails roughly
+once in eight: Enter lands before the filtered list has settled, so a different
+row runs and `chatPanelOpen()` comes back `false`. It passes every time in
+isolation and at `--repeat-each=16` on its own, so nothing is wrong with the
+palette itself — the test needs to wait for the highlighted row to read
+"Show the chat" before pressing Enter, rather than assuming the keystrokes
+arrive in order.
+
 ---
 
 _Add new items above this line._
