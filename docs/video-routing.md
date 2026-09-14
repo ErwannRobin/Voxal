@@ -384,7 +384,31 @@ In the immersive layout the room header and the participant list slide
 off-screen and are pulled back **over** the tiles by a drag handle — top-centre
 for the header, right-centre for the roster — so neither costs the video any
 height. Both keep the app's normal colours: turning a camera on never restyles
-the room. The talk button and the control row are never hidden by anything.
+the room.
+
+The control stack is the one deliberate exception, and it is phone-only. There
+it is a **glass dock**: a translucent, blurred slab (`backdrop-filter`) lying on
+the picture, dark in both themes because it is on video rather than on the page,
+with its contents recoloured light-on-glass. The talk button inside it is not
+restyled at all — same border, same states, same size as in a voice room. The
+desktop stage is untouched and keeps the voice UI railed beside the tiles.
+
+Because the dock is a panel on the picture and not a bar the video stops above,
+the tiles run **full-bleed underneath it**, and:
+
+- **A tap anywhere on the video puts the dock's panel away and brings it back**
+  (`body.stage-chrome-hidden`). The slab fades out, the control row and the edge
+  handles go with it, and the talk button is left lying on the picture. The
+  chrome starts shown, and the choice lasts as long as the stage does.
+- **Nothing ever moves.** The glass is painted by a pseudo-element that grows
+  *outside* the bar, so turning a camera on adds no padding and shifts no
+  control; the row hidden by a tap loses its ink and not its space; and the
+  status line always reserves its own. The two controls people reach for without
+  looking stay where they were.
+- **Pinning a tile is a long press**, not a tap. It reshapes the whole stage,
+  which is far too big a thing to hang off the same gesture as "show me the
+  picture". On a desktop, where there is no chrome to put away, a click still
+  pins exactly as it always did.
 
 On a phone the stage also takes a screen wake lock (so the display does not
 sleep mid-call) and **pauses capture when the app is backgrounded** — the local

@@ -1485,6 +1485,134 @@ kbd {
   html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-bottom-bar .room-controls { margin-top: 0; }
 }
 
+/* ── The glass dock (phones) ──────────────────────────────────────
+   On the immersive stage the control stack is sitting on a picture, so it stops
+   being part of the page's surface and becomes a floating panel: a translucent,
+   blurred slab that the video shows through, with the tiles running full-bleed
+   underneath it.
+
+   Phones only. A desktop room keeps the voice UI railed beside the stage, where
+   it is app chrome on app background and glass would be an affectation.
+
+   The tint is dark in BOTH themes on purpose. It is not app chrome any more, it
+   is glass over whatever the camera happens to be pointing at; a light panel
+   reads as a hole punched in a dark frame, and a panel that changes colour with
+   the theme cannot be relied on to keep white text legible. Everything inside it
+   therefore takes light-on-glass colours — except the talk button, which keeps
+   the accent border it wears everywhere else in the app, because that border is
+   how you recognise it.
+
+   `backdrop-filter` is the whole effect; where it is unsupported the rgba tint
+   alone still keeps the contents readable, so there is nothing to feature-detect. */
+/* NOTHING in this block changes the layout of the bar. The slab is painted by a
+   pseudo-element that reaches OUTSIDE it (`inset: -10px -16px`), never by
+   padding, a border or a reordering on the bar itself — all of which would
+   shove the controls somewhere else the moment a camera came on. A control that
+   moves when the room changes shape is a control you have to look for, and
+   these are the two people reach for without looking.
+
+   So: the bar keeps the box it has in a voice room, to the pixel, and the glass
+   simply appears behind it. */
+body.video-stage-immersive #screen-room .room-bottom-bar {
+  --dock-line: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.92);
+}
+body.video-stage-immersive #screen-room .room-bottom-bar::before {
+  content: '';
+  position: absolute;
+  /* Grows OUTWARD from the bar rather than padding it inward, and stops short
+     of the screen on every side so it still reads as something lying on the
+     picture rather than a bar welded to the bottom of it. */
+  inset: -12px -8px -6px;
+  z-index: -1;   /* behind the bar's own children; the bar's z-index makes the context */
+  border-radius: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  /* Two layers: a top-down sheen that gives the slab a lit edge, over the tint
+     that does the actual darkening. */
+  background-color: rgba(16, 16, 20, 0.42);
+  background-image: linear-gradient(to bottom,
+                    rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0) 58%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  backdrop-filter: blur(22px) saturate(180%);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.34),
+              inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  transition: opacity 0.2s ease;
+}
+
+body.video-stage-immersive #screen-room .room-bottom-bar .shortcut-focused-note,
+body.video-stage-immersive #screen-room .room-bottom-bar .recording-hint {
+  color: rgba(255, 255, 255, 0.74);
+}
+body.video-stage-immersive #screen-room .room-bottom-bar kbd {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.24);
+  color: rgba(255, 255, 255, 0.92);
+}
+body.video-stage-immersive #screen-room .room-bottom-bar .btn-icon { color: rgba(255, 255, 255, 0.74); }
+body.video-stage-immersive #screen-room .room-bottom-bar .btn-icon:hover { color: #fff; }
+/* The rule above the control row is the app's own border colour, which on dark
+   glass is a light-grey scratch. Colour only — the border is still 1px, so the
+   row does not move. */
+body.video-stage-immersive #screen-room .room-bottom-bar .room-controls {
+  border-top-color: var(--dock-line);
+}
+
+body.video-stage-immersive #screen-room .room-bottom-bar .room-action-btn {
+  background: rgba(255, 255, 255, 0.10);
+  border-color: rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.88);
+}
+body.video-stage-immersive #screen-room .room-bottom-bar .room-action-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #fff;
+}
+/* An engaged control keeps the accent fill it has everywhere else. */
+body.video-stage-immersive #screen-room .room-bottom-bar .room-action-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+/* The talk button is the one thing that is never restyled: same border, same
+   states, same size as in a voice room. It is what the room is, and it has to
+   look the same wherever it is standing. A shadow is the only addition — it is
+   the one control that can end up on bare video with no slab behind it. */
+body.video-stage-immersive #screen-room .ptt-btn {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+
+/* A long press pins a tile, so the platform's own press behaviours — the
+   callout menu, the text selection — have to be out of the way first. */
+body.video-stage-immersive #screen-room .video-tile {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ── Chrome away ──────────────────────────────────────────────────
+   A tap on the video (`_onStageTap()`) publishes this: the slab fades out and
+   the control row goes with it, leaving the talk button lying on the picture.
+
+   Nothing MOVES — not the button, not the row when it comes back. The row loses
+   its INK, not its space (`visibility`, never `display`), because the bar is
+   anchored to the bottom of the screen and collapsing the row would drag the
+   talk button down with it. It costs no picture: the bar paints nothing while
+   the slab is gone, so the video shows straight through where the row was.
+
+   The status line stays. It is not chrome — it is the room telling you why it
+   cannot hear you, and that is worth more than the pixels it sits on. */
+body.video-stage-immersive.stage-chrome-hidden #screen-room .room-bottom-bar::before {
+  opacity: 0;
+}
+body.video-stage-immersive.stage-chrome-hidden #screen-room .room-bottom-bar .room-controls {
+  visibility: hidden;
+}
+body.video-stage-immersive.stage-chrome-hidden .stage-handle { display: none; }
+body.video-stage-immersive.stage-chrome-hidden #screen-room #video-stage::before,
+body.video-stage-immersive.stage-chrome-hidden #screen-room #video-stage::after {
+  opacity: 0;
+}
+
 /* ---------------------------------------------------------------------------
    IMMERSIVE STAGE — phones (mobile web AND the Capacitor apps).
 
