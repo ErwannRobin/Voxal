@@ -657,6 +657,13 @@
            chrome. A handle of its own had to live at the very top of the screen,
            which on a PWA and in the native apps is under the system status bar,
            where the gesture never reaches the page. -->
+      <!-- Sideways, the chrome's rail carries the room's roster too: who is
+           here, down the column, so the picture keeps the height it used to
+           spend on a header. A summary and nothing more — no controls, and no
+           pointer events, so a tap on it is a tap on the picture like every
+           other piece of bare chrome. The full list is one handle away.
+           Rendered by renderStageRailPeers(); hidden in every other layout. -->
+      <div id="stage-rail-peers" class="stage-rail-peers hidden" aria-hidden="true"></div>
       <div id="stage-panel-scrim" class="stage-panel-scrim"></div>
       <!-- Participants pull in from the left edge, the conversation from the
            right. Each handle is on the side its panel lives on, so the gesture

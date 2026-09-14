@@ -932,6 +932,93 @@ test.describe('the immersive stage held sideways', () => {
     expect(seen.left).toBe(seen.header + 'px');
   });
 
+  // A column has room for the one thing the phone stage otherwise keeps behind
+  // a handle: who is in the room.
+  test('the column carries the roster, self included', async ({ page }) => {
+    await withVideo(page);
+    const seen = await page.evaluate(() => {
+      const el = document.getElementById('stage-rail-peers');
+      const b = el.getBoundingClientRect();
+      const ctrls = document.querySelector('#screen-room .room-controls').getBoundingClientRect();
+      return {
+        hidden: el.classList.contains('hidden'),
+        crowded: el.classList.contains('crowded'),
+        names: [...el.querySelectorAll('.peer-compact-label')].map((n) => n.textContent),
+        left: Math.round(b.left),
+        rail: Math.round(ctrls.left),
+        below: b.top >= ctrls.bottom,
+        // A summary: a tap on it is a tap on the picture, like any bare chrome.
+        taps: getComputedStyle(el).pointerEvents,
+      };
+    });
+    expect(seen.hidden).toBe(false);
+    // Your own name first — a generated one here, since none was chosen.
+    expect(seen.names.slice(1)).toEqual(['Alice', 'Bob']);
+    expect(seen.names[0]).toBeTruthy();
+    expect(seen.crowded).toBe(false);
+    expect(seen.left).toBe(seen.rail);
+    expect(seen.below).toBe(true);
+    expect(seen.taps).toBe('none');
+  });
+
+  // More people than room: the same capsules the tiny embed uses, two to a line.
+  test('past what fits, the names become the tiny embed capsules', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: Array.from({ length: 14 }, (_, i) => 'p' + i),
+      connections: Array.from({ length: 14 }, (_, i) => ({
+        id: 'p' + i, pseudo: 'Participant ' + i, open: true, videoActive: i === 0,
+      })),
+    });
+    const seen = await page.evaluate(() => {
+      const el = document.getElementById('stage-rail-peers');
+      const first = el.querySelector('.peer-item-compact');
+      return {
+        crowded: el.classList.contains('crowded'),
+        rows: el.children.length,
+        columns: getComputedStyle(el).gridTemplateColumns.split(' ').length,
+        // The chip itself is the tiny embed's: a pill, not a line of text.
+        radius: getComputedStyle(first).borderRadius,
+        scrolls: getComputedStyle(el).overflowY,
+      };
+    });
+    expect(seen.rows).toBe(15);
+    expect(seen.crowded).toBe(true);
+    expect(seen.columns).toBe(2);
+    expect(seen.radius).toBe('999px');
+    expect(seen.scrolls).toBe('auto');
+  });
+
+  // Who is talking is the one state a summary has to carry, and it arrives
+  // without a re-render — the roster's own row is updated the same way.
+  test('the rail says who is talking, live', async ({ page }) => {
+    await withVideo(page);
+    const talking = () => page.evaluate(() =>
+      document.getElementById('rail-peer-p1').classList.contains('talking'));
+    expect(await talking()).toBe(false);
+    await page.evaluate(() => updatePeerTalking('p1', true));
+    expect(await talking()).toBe(true);
+    await page.evaluate(() => updatePeerTalking('p1', false));
+    expect(await talking()).toBe(false);
+  });
+
+  // It is chrome: it leaves with the rest of it, and it is not there at all in
+  // a layout that has no rail.
+  test('the rail roster is chrome, and only the rail has one', async ({ page }) => {
+    await withVideo(page);
+    await page.evaluate(() => setStageChrome(true));
+    await page.waitForTimeout(350);
+    expect(await page.evaluate(() =>
+      Math.round(document.getElementById('stage-rail-peers').getBoundingClientRect().right)))
+      .toBeLessThanOrEqual(0);
+
+    await page.evaluate(() => setStageChrome(false));
+    await page.setViewportSize(PHONE);
+    await expect
+      .poll(async () => page.evaluate(() =>
+        document.getElementById('stage-rail-peers').classList.contains('hidden')))
+      .toBe(true);
+  });
+
   // Sideways there is no voice layout to match, so both lines go entirely:
   // reserved, the sentence lifts the mic off the bottom of a 390px screen and
   // its width shoves the buttons a hundred pixels out from the mic.

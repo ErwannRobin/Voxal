@@ -2003,13 +2003,15 @@ body.video-stage-immersive #screen-room.active {
      still showing. */
   body.video-stage-immersive #screen-room {
     --rail-x: calc(max(env(safe-area-inset-left), 0px) + 26px);
+    /* One width for all three pieces of it, or it is three floating cards
+       rather than a column. */
+    --rail-w: min(38vw, 220px);
   }
   body.video-stage-immersive #screen-room .room-header {
     left: var(--rail-x);
     right: auto;
     top: max(calc(var(--stage-safe-top) + 8px), 8px);
-    width: max-content;
-    max-width: min(46vw, 260px);
+    width: var(--rail-w);
     flex-direction: column;
     align-items: flex-start;
     gap: 6px;
@@ -2036,7 +2038,7 @@ body.video-stage-immersive #screen-room.active {
     position: fixed;
     left: var(--rail-x);
     top: calc(var(--stage-rail-top, 64px) + 8px);
-    width: max-content;
+    width: var(--rail-w);
     margin-top: 0;
     padding-top: 0;
     border-top: none;
@@ -2052,6 +2054,66 @@ body.video-stage-immersive #screen-room.active {
      sliding while the other half vanishes reads as two different controls. */
   body.video-stage-immersive.stage-chrome-hidden #screen-room .room-bottom-bar .room-controls {
     visibility: visible;
+    transform: translateX(calc(-100% - var(--rail-x)));
+  }
+
+  /* And the roster under them. Sideways there is a column's worth of room for
+     the one thing the phone stage otherwise keeps behind a handle: who is here.
+     `--stage-rail-peers-top` is the buttons' measured bottom (viewport
+     coordinates, like everything else fixed in the rail), and the bottom stops
+     clear of the bar so the names never reach the talk button.
+
+     No pointer events: it is a summary, so a tap on it is a tap on the picture
+     and toggles the chrome, exactly like the bare bar below. */
+  body.video-stage-immersive #screen-room .stage-rail-peers {
+    position: fixed;
+    left: var(--rail-x);
+    top: var(--stage-rail-peers-top, 120px);
+    bottom: calc(var(--stage-inset-bottom, 0px) + 10px);
+    width: var(--rail-w);
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+    overflow: hidden;
+    pointer-events: none;
+    transition: transform 0.25s ease;
+  }
+  /* More people than room: the same capsules, two to a line and clipped to a
+     name you can still tell apart, and the column scrolls past that. */
+  body.video-stage-immersive #screen-room .stage-rail-peers.crowded {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    align-content: start;
+    gap: 4px;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  body.video-stage-immersive #screen-room .stage-rail-peers.crowded::-webkit-scrollbar {
+    display: none;
+    width: 0;
+  }
+  body.video-stage-immersive #screen-room .stage-rail-peers .peer-item-compact {
+    max-width: 100%;
+  }
+  body.video-stage-immersive #screen-room .stage-rail-peers .peer-compact-label {
+    max-width: 100%;
+  }
+  body.video-stage-immersive #screen-room .stage-rail-peers.crowded .peer-item-compact {
+    height: 24px;
+    padding: 4px 7px;
+  }
+  /* Talking is the one state a summary has to carry: it is what says which of
+     these names is the voice you are hearing. */
+  body.video-stage-immersive #screen-room .stage-rail-peers .peer-item-compact.talking {
+    border-color: var(--green);
+  }
+  body.video-stage-immersive #screen-room .stage-rail-peers .peer-item-compact.peer-self {
+    border-color: var(--accent-dim);
+  }
+  /* It is chrome, so it leaves with the chrome — the same slide as the rest. */
+  body.video-stage-immersive.stage-chrome-hidden #screen-room .stage-rail-peers {
     transform: translateX(calc(-100% - var(--rail-x)));
   }
 
@@ -2654,7 +2716,8 @@ body.embed-tiny #screen-room .tiny-peers-others {
 }
 body.embed-tiny #screen-room .tiny-peers-others::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
-body.embed-tiny #screen-room .peer-item-compact {
+body.embed-tiny #screen-room .peer-item-compact,
+.stage-rail-peers .peer-item-compact {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -2670,7 +2733,8 @@ body.embed-tiny #screen-room .peer-item-compact {
 }
 
 /* dot is only useful in the full peer list — hide in tiny mode */
-body.embed-tiny #screen-room .peer-item-compact .peer-dot {
+body.embed-tiny #screen-room .peer-item-compact .peer-dot,
+.stage-rail-peers .peer-item-compact .peer-dot {
   display: none;
 }
 
@@ -2678,7 +2742,8 @@ body.embed-tiny #screen-room .peer-item-compact .peer-mic-icon {
   display: none;
 }
 
-body.embed-tiny #screen-room .peer-item-compact .peer-compact-label {
+body.embed-tiny #screen-room .peer-item-compact .peer-compact-label,
+.stage-rail-peers .peer-item-compact .peer-compact-label {
   font-size: 12px;
   font-weight: 400;
   -webkit-font-smoothing: antialiased;

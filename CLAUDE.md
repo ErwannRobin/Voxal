@@ -126,16 +126,25 @@ height) only for things that must clear it — the self-view badge's top corners
 and the self camera tile's own flip/background buttons.
 
 **Sideways that chrome is a rail down the left.** A phone on its side has no
-height to give and width to spare, so the header and the control buttons become
-one fixed column on the left edge (inboard of the roster handle) and only the
-talk button stays along the bottom, in the middle, where the thumb goes. The
-buttons being `position: fixed` takes them out of the bar's grid, so the bar
-shrinks to the mic. Which edge the chrome is on is **measured, not re-derived
-from the media query that does it**: a header narrower than 60% of the stage is
-the rail, and the stage's no-go margin then moves from `--stage-inset-top` to
-`--stage-inset-left` — one or the other, never both. `--stage-rail-top` (the
-header's measured bottom, in viewport coordinates) is where the button stack
-hangs from.
+height to give and width to spare, so the header, the control buttons **and the
+roster** become one fixed column on the left edge (inboard of the roster handle)
+and only the talk button stays along the bottom, in the middle, where the thumb
+goes. All three take `--rail-w`, or it reads as three floating cards rather than
+a column. The buttons being `position: fixed` takes them out of the bar's grid,
+so the bar shrinks to the mic. Which edge the chrome is on is **measured, not
+re-derived from the media query that does it** (`isStageRail()`): a header
+narrower than 60% of the stage is the rail, and the stage's no-go margin then
+moves from `--stage-inset-top` to `--stage-inset-left` — one or the other, never
+both. `--stage-rail-top` (the header's measured bottom, in viewport coordinates)
+is where the button stack hangs from, and `--stage-rail-peers-top` (the buttons'
+measured bottom) is where the roster does.
+
+`renderStageRailPeers()` draws that roster: names while they fit, and the tiny
+embed's **capsules** (`.peer-item-compact`, the same rule) two to a line when
+they do not — measured per render, never counted. It is a summary, so it has no
+per-person controls and `pointer-events: none`: a tap on it is a tap on the
+picture, and the full list stays one handle away. Talking reaches it through
+`setRailPeerTalking()`, since `peer-item-<id>` is the roster's own id.
 
 **A picture fills its tile, unless the crop is one you cannot afford.**
 `stageVideoFit()` chooses `object-fit` per tile from the picture's own shape

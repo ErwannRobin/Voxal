@@ -545,6 +545,19 @@ The single worst thing in this round, and it had been shipping:
     true while the chrome is away; `--stage-rail-top` (the header's measured
     bottom, in viewport coordinates, since the buttons are fixed too) is
     published even then, or the stack jumps before it slides out.
+- **The rail earned a third tenant: the roster.** Sideways a column has room for
+  who is in the room, which the phone stage otherwise keeps behind a handle — so
+  the rail is header, buttons and names, all on one `--rail-w`. Names while they
+  fit and the tiny embed's capsules when they do not, decided by **measuring**
+  (`scrollHeight > clientHeight`), not by counting heads: whether they fit
+  depends on the phone's height as much as on the room's size. Cleared before
+  measuring and only ever tightened within a pass, so it cannot oscillate.
+  - It is a summary, so `pointer-events: none` — a tap on it is a tap on the
+    picture, exactly like the bare bottom bar, and the chrome toggles instead of
+    a control swallowing the gesture.
+  - Its rows are a SECOND element, `rail-peer-<id>`: `peer-item-<id>` belongs to
+    the roster. `updatePeerTalking()` updates both, because talking arrives
+    without a re-render.
 - **One crop limit is not enough, and the symmetry is a trap.** Fitting a picture
   to a tile by the ratio mismatch alone cannot tell a phone held upright showing
   a 16:9 camera (mismatch 3.85, and cropping the sides is what every video call

@@ -9479,6 +9479,7 @@ function updatePeerTalking(peerId, active) {
   if (conn) conn.talking = active;
   const el = document.getElementById('peer-item-' + peerId);
   if (el) el.classList.toggle('talking', active);
+  setRailPeerTalking(peerId, active);
   setStageTileTalking('camera:' + peerId, active);
   // Speaking order is what decides who holds a grid slot once the room outgrows
   // the stage, so it is recorded here rather than on the next roster tick.
@@ -9489,6 +9490,7 @@ function updatePeerTalking(peerId, active) {
 function updateSelfTalking(active) {
   const el = document.getElementById('peer-item-self');
   if (el) el.classList.toggle('talking', active);
+  setRailPeerTalking('self', active);
   setStageTileTalking('camera:self', active);
   noteStageSpeaker((peer && peer.id) || 'self', active);
 }
@@ -11704,6 +11706,59 @@ function videoStageFocusKey(tiles) {
   return '';
 }
 
+// --- The roster, in the rail ---------------------------------------------------
+//
+// Sideways the chrome is a column down the left, and a column has room for the
+// one thing the phone stage otherwise hides behind a handle: who is in the room.
+// It is a summary and nothing else — no per-person controls, and no pointer
+// events at all, so a tap on it is a tap on the picture exactly like a tap on
+// any other bare chrome. The full list is still one handle away.
+//
+// Names while they fit. Past that they become the tiny embed's capsules, two to
+// a line — the same chips answering the same question, more people than room —
+// and the column scrolls if even those run out.
+function renderStageRailPeers() {
+  var el = document.getElementById('stage-rail-peers');
+  if (!el) return;
+  var on = inRoom && stageChromeIsRail();
+  el.classList.toggle('hidden', !on);
+  el.textContent = '';
+  if (!on) return;
+
+  var add = function(id, label, self, talking, labelColor) {
+    var row = document.createElement('div');
+    row.id = 'rail-peer-' + id;
+    row.className = 'peer-item peer-item-compact' +
+      (self ? ' peer-self' : '') + (talking ? ' talking' : '');
+    var name = document.createElement('span');
+    name.className = 'peer-compact-label';
+    name.textContent = label;
+    name.title = label;
+    if (labelColor) name.style.color = labelColor;
+    row.appendChild(name);
+    el.appendChild(row);
+  };
+
+  add('self', displayPseudoForSelf(), true, isTalking || freeHandMode, pseudoColorForSelf());
+  connections.forEach(function(conn, id) {
+    add(id, conn.pseudo || shortId(id), false, conn.talking || false, conn.pseudoColor || null);
+  });
+
+  // Measured, not counted: whether the names fit depends on how many people are
+  // here AND on how tall the phone is. Cleared first so a room that empties out
+  // gets its names back, and only ever tightened in one direction within a
+  // pass — capsules are smaller than rows, so this cannot oscillate.
+  el.classList.remove('crowded');
+  if (el.scrollHeight > el.clientHeight) el.classList.add('crowded');
+}
+
+// The rail's copy of a row carries the same talking state. It is a second
+// element rather than the roster's own: `peer-item-<id>` is that one's id.
+function setRailPeerTalking(peerId, active) {
+  var el = document.getElementById('rail-peer-' + peerId);
+  if (el) el.classList.toggle('talking', active);
+}
+
 // --- How a picture is fitted to its tile --------------------------------------
 //
 // A camera FILLS its tile and is cropped to fit. That is what every video call
@@ -12017,6 +12072,10 @@ function renderVideoStage(tiles, focusKey, badgeKey) {
   // pass calls the badge too, but it is skipped entirely while a tile is pinned.
   applySelfBadgePlacement();
   applyStageVideoFit();
+  // Last: it is measured against the rail the insets above just placed, and it
+  // has to stand down the moment the stage does — renderVideoStage([]) is the
+  // one call that happens on every one of those.
+  renderStageRailPeers();
 }
 
 // The space the grid has to work with, in content-box terms and independent of
@@ -12272,6 +12331,24 @@ function noteStageSpeaker(peerId, active) {
 // IS measured from it is `--stage-inset-top`, which places the self-view badge's
 // top corners clear of the header while the header is on screen.
 
+// Pure: the chrome is a rail down the left rather than a band across the top.
+// Decided by measurement — a header that does not span the stage is the rail —
+// so the JS and the media query that lays it out can never disagree.
+var STAGE_RAIL_MAX_SHARE = 0.6;
+
+function isStageRail(headerWidth, stageWidth) {
+  return headerWidth > 0 && stageWidth > 0 && headerWidth < stageWidth * STAGE_RAIL_MAX_SHARE;
+}
+
+// Whether the room is wearing that rail right now.
+function stageChromeIsRail() {
+  if (!document.body.classList.contains('video-stage-immersive')) return false;
+  var stage = document.getElementById('video-stage');
+  var header = document.querySelector('#screen-room .room-header');
+  if (!stage || !header) return false;
+  return isStageRail(header.getBoundingClientRect().width, stage.getBoundingClientRect().width);
+}
+
 function applyImmersiveStageInsets(gridEl) {
   if (!gridEl) return;
   var stage = document.getElementById('video-stage');
@@ -12307,7 +12384,7 @@ function applyImmersiveStageInsets(gridEl) {
   // self-view that clears the chrome and one parked on top of it.
   var header = document.querySelector('#screen-room .room-header');
   var headerBox = header ? header.getBoundingClientRect() : null;
-  var rail = !!headerBox && headerBox.width > 0 && headerBox.width < stageBox.width * 0.6;
+  var rail = isStageRail(headerBox ? headerBox.width : 0, stageBox.width);
   var chromeUp = !stageChromeHidden();
   var insetTop = (headerBox && chromeUp && !rail) ? Math.round(headerBox.height) : 0;
   var insetLeft = (headerBox && chromeUp && rail)
@@ -12342,8 +12419,16 @@ function applyImmersiveStageInsets(gridEl) {
   // dropping the value would jump the stack before it slid out.
   if (rail && headerBox) {
     document.documentElement.style.setProperty('--stage-rail-top', Math.round(headerBox.bottom) + 'px');
+    // …and where the roster under them starts. Measured after the line above,
+    // so the buttons have already been moved by it; their own height is theirs
+    // (one control or four), which is why this is not arithmetic on a constant.
+    var ctrls = document.querySelector('#screen-room .room-bottom-bar .room-controls');
+    var ctrlsBox = ctrls ? ctrls.getBoundingClientRect() : null;
+    var peersTop = (ctrlsBox && ctrlsBox.height) ? ctrlsBox.bottom : headerBox.bottom;
+    document.documentElement.style.setProperty('--stage-rail-peers-top', Math.round(peersTop + 10) + 'px');
   } else {
     document.documentElement.style.removeProperty('--stage-rail-top');
+    document.documentElement.style.removeProperty('--stage-rail-peers-top');
   }
   // The slots beside the mic are measured from that same control stack, and a
   // badge parked in one has to be handed back to an edge the moment the stack
