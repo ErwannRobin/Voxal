@@ -80,6 +80,24 @@ test.describe('joinOrCreateByChannelName without an account', () => {
     expect(seen.display).toBe('happy-otter');
   });
 
+  test('a stale host leaves no peer running beside the room we create', async ({ page }) => {
+    const seen = await page.evaluate(async () => {
+      window.__reply = { ok: true, status: 200, body: { room_id: 'dead-host', room_code: 'happy-otter' } };
+      // The real joinRoom leaves its Peer standing when it rejects; the caller
+      // has to drop it, or the broker keeps reporting the dead host to a peer
+      // nobody is waiting for while the fresh room is being built.
+      const abandoned = { id: 'abandoned', destroyed: false, destroy() { this.destroyed = true; } };
+      window.joinRoom = () => {
+        peer = abandoned;
+        return Promise.reject(Object.assign(new Error('Could not connect to peer dead-host'),
+                                            { type: 'peer-unavailable' }));
+      };
+      await joinOrCreateByChannelName('happy-otter');
+      return { destroyed: abandoned.destroyed, live: peer !== abandoned, created: window.__created };
+    });
+    expect(seen).toEqual({ destroyed: true, live: true, created: 1 });
+  });
+
   test('a stale host is replaced, and the slug re-pointed at us', async ({ page }) => {
     const seen = await page.evaluate(async () => {
       window.__reply = { ok: true, status: 200, body: { room_id: 'dead-host', room_code: 'happy-otter' } };
