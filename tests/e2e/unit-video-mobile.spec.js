@@ -932,91 +932,106 @@ test.describe('the immersive stage held sideways', () => {
     expect(seen.left).toBe(seen.header + 'px');
   });
 
-  // A column has room for the one thing the phone stage otherwise keeps behind
-  // a handle: who is in the room.
-  test('the column carries the roster, self included', async ({ page }) => {
+  // One column, not a column with a drawer coming out on top of it: sideways
+  // the roster IS the bottom of the rail, always up, and the handle that used
+  // to pull it over the picture has nothing left to do.
+  test('the roster is the bottom of the column, not a second one', async ({ page }) => {
     await withVideo(page);
     const seen = await page.evaluate(() => {
-      const el = document.getElementById('stage-rail-peers');
-      const b = el.getBoundingClientRect();
+      const panel = document.getElementById('room-peers-panel').getBoundingClientRect();
       const ctrls = document.querySelector('#screen-room .room-controls').getBoundingClientRect();
+      const bar = document.querySelector('.room-bottom-bar').getBoundingClientRect();
       return {
-        hidden: el.classList.contains('hidden'),
-        crowded: el.classList.contains('crowded'),
-        names: [...el.querySelectorAll('.peer-compact-label')].map((n) => n.textContent),
-        left: Math.round(b.left),
-        rail: Math.round(ctrls.left),
-        below: b.top >= ctrls.bottom,
-        // A summary: a tap on it is a tap on the picture, like any bare chrome.
-        taps: getComputedStyle(el).pointerEvents,
+        left: Math.round(panel.left), rail: Math.round(ctrls.left),
+        width: Math.round(panel.width), railWidth: Math.round(ctrls.width),
+        below: panel.top >= ctrls.bottom,
+        clearsTheMic: panel.bottom <= bar.top,
+        // Up without anyone opening it, and nothing to open it with.
+        onScreen: panel.left >= 0 && panel.width > 0,
+        handle: getComputedStyle(document.getElementById('stage-handle-roster')).display,
+        names: [...document.querySelectorAll('#peers-list .peer-name')].map((n) => n.textContent),
       };
     });
-    expect(seen.hidden).toBe(false);
-    // Your own name first — a generated one here, since none was chosen.
-    expect(seen.names.slice(1)).toEqual(['Alice', 'Bob']);
-    expect(seen.names[0]).toBeTruthy();
-    expect(seen.crowded).toBe(false);
     expect(seen.left).toBe(seen.rail);
+    expect(seen.width).toBe(seen.railWidth);
     expect(seen.below).toBe(true);
-    expect(seen.taps).toBe('none');
+    expect(seen.clearsTheMic).toBe(true);
+    expect(seen.onScreen).toBe(true);
+    expect(seen.handle).toBe('none');
+    expect(seen.names).toEqual(['Alice', 'Bob']);
   });
 
-  // More people than room: the same capsules the tiny embed uses, two to a line.
-  test('past what fits, the names become the tiny embed capsules', async ({ page }) => {
+  // Standing on the picture, each row carries its own surface — and that
+  // surface is the tiny embed's capsule, one declaration serving both.
+  test('its rows are the tiny embed capsule, full width while they fit', async ({ page }) => {
+    await withVideo(page);
+    const seen = await page.evaluate(() => {
+      const list = document.getElementById('peers-list');
+      const item = list.querySelector('.peer-item');
+      return {
+        crowded: list.classList.contains('crowded'),
+        radius: getComputedStyle(item).borderRadius,
+        width: Math.round(item.getBoundingClientRect().width),
+        listWidth: Math.round(list.getBoundingClientRect().width),
+        // Room for a row means room for what is on it.
+        controls: !!item.querySelector('.btn-icon, .peer-cam-btn'),
+      };
+    });
+    expect(seen.crowded).toBe(false);
+    expect(seen.radius).toBe('999px');
+    expect(seen.width).toBe(seen.listWidth);
+    expect(seen.controls).toBe(true);
+  });
+
+  // More people than room: name only, two to a line.
+  test('past what fits, the rows become name-only capsules two to a line', async ({ page }) => {
     await enterRoom(page, {
-      knownPeerIds: Array.from({ length: 14 }, (_, i) => 'p' + i),
-      connections: Array.from({ length: 14 }, (_, i) => ({
+      knownPeerIds: Array.from({ length: 12 }, (_, i) => 'p' + i),
+      connections: Array.from({ length: 12 }, (_, i) => ({
         id: 'p' + i, pseudo: 'Participant ' + i, open: true, videoActive: i === 0,
       })),
     });
     const seen = await page.evaluate(() => {
-      const el = document.getElementById('stage-rail-peers');
-      const first = el.querySelector('.peer-item-compact');
+      const list = document.getElementById('peers-list');
+      const item = list.querySelector('.peer-item');
       return {
-        crowded: el.classList.contains('crowded'),
-        rows: el.children.length,
-        columns: getComputedStyle(el).gridTemplateColumns.split(' ').length,
-        // The chip itself is the tiny embed's: a pill, not a line of text.
-        radius: getComputedStyle(first).borderRadius,
-        scrolls: getComputedStyle(el).overflowY,
+        crowded: list.classList.contains('crowded'),
+        columns: getComputedStyle(list).gridTemplateColumns.split(' ').length,
+        narrower: item.getBoundingClientRect().width < list.getBoundingClientRect().width * 0.6,
+        dot: getComputedStyle(item.querySelector('.peer-dot')).display,
+        scrolls: getComputedStyle(list).overflowY,
+        // Whoever the row is (your own included), its name survives the squeeze.
+        name: item.textContent.trim().length > 0,
       };
     });
-    expect(seen.rows).toBe(15);
     expect(seen.crowded).toBe(true);
     expect(seen.columns).toBe(2);
-    expect(seen.radius).toBe('999px');
+    expect(seen.narrower).toBe(true);
+    expect(seen.dot).toBe('none');
     expect(seen.scrolls).toBe('auto');
+    expect(seen.name).toBe(true);
   });
 
-  // Who is talking is the one state a summary has to carry, and it arrives
-  // without a re-render — the roster's own row is updated the same way.
-  test('the rail says who is talking, live', async ({ page }) => {
-    await withVideo(page);
-    const talking = () => page.evaluate(() =>
-      document.getElementById('rail-peer-p1').classList.contains('talking'));
-    expect(await talking()).toBe(false);
-    await page.evaluate(() => updatePeerTalking('p1', true));
-    expect(await talking()).toBe(true);
-    await page.evaluate(() => updatePeerTalking('p1', false));
-    expect(await talking()).toBe(false);
-  });
-
-  // It is chrome: it leaves with the rest of it, and it is not there at all in
-  // a layout that has no rail.
-  test('the rail roster is chrome, and only the rail has one', async ({ page }) => {
+  // It is part of the chrome now, so it leaves with it — and turning the phone
+  // back gives it its old life as a panel behind a handle.
+  test('the docked roster is chrome sideways and a panel upright', async ({ page }) => {
     await withVideo(page);
     await page.evaluate(() => setStageChrome(true));
     await page.waitForTimeout(350);
     expect(await page.evaluate(() =>
-      Math.round(document.getElementById('stage-rail-peers').getBoundingClientRect().right)))
+      Math.round(document.getElementById('room-peers-panel').getBoundingClientRect().right)))
       .toBeLessThanOrEqual(0);
 
     await page.evaluate(() => setStageChrome(false));
     await page.setViewportSize(PHONE);
     await expect
-      .poll(async () => page.evaluate(() =>
-        document.getElementById('stage-rail-peers').classList.contains('hidden')))
-      .toBe(true);
+      .poll(async () => page.evaluate(() => ({
+        // Off to the left until its handle is pulled, exactly as before.
+        parked: getComputedStyle(document.getElementById('room-peers-panel')).transform,
+        handle: getComputedStyle(document.getElementById('stage-handle-roster')).display,
+        crowded: document.getElementById('peers-list').classList.contains('crowded'),
+      })))
+      .toEqual({ parked: 'matrix(1, 0, 0, 1, -300, 0)', handle: 'flex', crowded: false });
   });
 
   // Sideways there is no voice layout to match, so both lines go entirely:

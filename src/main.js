@@ -9479,7 +9479,6 @@ function updatePeerTalking(peerId, active) {
   if (conn) conn.talking = active;
   const el = document.getElementById('peer-item-' + peerId);
   if (el) el.classList.toggle('talking', active);
-  setRailPeerTalking(peerId, active);
   setStageTileTalking('camera:' + peerId, active);
   // Speaking order is what decides who holds a grid slot once the room outgrows
   // the stage, so it is recorded here rather than on the next roster tick.
@@ -9490,7 +9489,6 @@ function updatePeerTalking(peerId, active) {
 function updateSelfTalking(active) {
   const el = document.getElementById('peer-item-self');
   if (el) el.classList.toggle('talking', active);
-  setRailPeerTalking('self', active);
   setStageTileTalking('camera:self', active);
   noteStageSpeaker((peer && peer.id) || 'self', active);
 }
@@ -11708,55 +11706,26 @@ function videoStageFocusKey(tiles) {
 
 // --- The roster, in the rail ---------------------------------------------------
 //
-// Sideways the chrome is a column down the left, and a column has room for the
-// one thing the phone stage otherwise hides behind a handle: who is in the room.
-// It is a summary and nothing else — no per-person controls, and no pointer
-// events at all, so a tap on it is a tap on the picture exactly like a tap on
-// any other bare chrome. The full list is still one handle away.
+// Sideways the roster is not a panel that slides over the picture: it IS the
+// bottom of the chrome's rail, under the buttons, always up — one column rather
+// than a column plus a drawer that comes out on top of it. The stylesheet does
+// the docking (it is the same media query that makes the rail); the one thing
+// only JS can decide is whether the rows fit.
 //
-// Names while they fit. Past that they become the tiny embed's capsules, two to
-// a line — the same chips answering the same question, more people than room —
-// and the column scrolls if even those run out.
-function renderStageRailPeers() {
-  var el = document.getElementById('stage-rail-peers');
-  if (!el) return;
-  var on = inRoom && stageChromeIsRail();
-  el.classList.toggle('hidden', !on);
-  el.textContent = '';
-  if (!on) return;
-
-  var add = function(id, label, self, talking, labelColor) {
-    var row = document.createElement('div');
-    row.id = 'rail-peer-' + id;
-    row.className = 'peer-item peer-item-compact' +
-      (self ? ' peer-self' : '') + (talking ? ' talking' : '');
-    var name = document.createElement('span');
-    name.className = 'peer-compact-label';
-    name.textContent = label;
-    name.title = label;
-    if (labelColor) name.style.color = labelColor;
-    row.appendChild(name);
-    el.appendChild(row);
-  };
-
-  add('self', displayPseudoForSelf(), true, isTalking || freeHandMode, pseudoColorForSelf());
-  connections.forEach(function(conn, id) {
-    add(id, conn.pseudo || shortId(id), false, conn.talking || false, conn.pseudoColor || null);
-  });
-
-  // Measured, not counted: whether the names fit depends on how many people are
-  // here AND on how tall the phone is. Cleared first so a room that empties out
-  // gets its names back, and only ever tightened in one direction within a
-  // pass — capsules are smaller than rows, so this cannot oscillate.
-  el.classList.remove('crowded');
-  if (el.scrollHeight > el.clientHeight) el.classList.add('crowded');
-}
-
-// The rail's copy of a row carries the same talking state. It is a second
-// element rather than the roster's own: `peer-item-<id>` is that one's id.
-function setRailPeerTalking(peerId, active) {
-  var el = document.getElementById('rail-peer-' + peerId);
-  if (el) el.classList.toggle('talking', active);
+// They do, and the roster is itself: a row per person, controls and all. They do
+// not, and the rows become the tiny embed's capsules — name only, two to a line
+// — which is the same chip answering the same question, more people than room.
+// MEASURED, never counted: whether they fit depends on the phone's height as
+// much as on the size of the room.
+function applyStageRailRoster() {
+  var list = document.getElementById('peers-list');
+  if (!list) return;
+  // Cleared first, so a room that empties out gets its rows back, and only ever
+  // tightened once within a pass — capsules are smaller than rows, so this
+  // cannot oscillate.
+  list.classList.remove('crowded');
+  if (!inRoom || !stageChromeIsRail()) return;
+  if (list.scrollHeight > list.clientHeight) list.classList.add('crowded');
 }
 
 // --- How a picture is fitted to its tile --------------------------------------
@@ -12075,7 +12044,7 @@ function renderVideoStage(tiles, focusKey, badgeKey) {
   // Last: it is measured against the rail the insets above just placed, and it
   // has to stand down the moment the stage does — renderVideoStage([]) is the
   // one call that happens on every one of those.
-  renderStageRailPeers();
+  applyStageRailRoster();
 }
 
 // The space the grid has to work with, in content-box terms and independent of

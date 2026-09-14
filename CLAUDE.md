@@ -139,12 +139,14 @@ both. `--stage-rail-top` (the header's measured bottom, in viewport coordinates)
 is where the button stack hangs from, and `--stage-rail-peers-top` (the buttons'
 measured bottom) is where the roster does.
 
-`renderStageRailPeers()` draws that roster: names while they fit, and the tiny
-embed's **capsules** (`.peer-item-compact`, the same rule) two to a line when
-they do not — measured per render, never counted. It is a summary, so it has no
-per-person controls and `pointer-events: none`: a tap on it is a tap on the
-picture, and the full list stays one handle away. Talking reaches it through
-`setRailPeerTalking()`, since `peer-item-<id>` is the roster's own id.
+That roster is the **same** roster, not a second one: sideways `.room-peers-panel`
+stops sliding and docks as the rail's bottom block, always up, so the left handle
+has nothing to pull and goes. Each row carries its own surface — they stand on
+the picture — and that surface is the tiny embed's **capsule**, one declaration
+serving both. `applyStageRailRoster()` is the only JS in it: it measures whether
+the rows fit and, when they do not, adds `crowded` — name-only capsules, two to a
+line — measured per pass, never counted, since it depends on the phone's height
+as much as on the size of the room.
 
 **A picture fills its tile, unless the crop is one you cannot afford.**
 `stageVideoFit()` chooses `object-fit` per tile from the picture's own shape
