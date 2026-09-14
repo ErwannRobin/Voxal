@@ -1504,13 +1504,27 @@ kbd {
 
    `backdrop-filter` is the whole effect; where it is unsupported the rgba tint
    alone still keeps the contents readable, so there is nothing to feature-detect. */
+/* NOTHING in this block changes the layout of the bar. The slab is painted by a
+   pseudo-element that reaches OUTSIDE it (`inset: -10px -16px`), never by
+   padding, a border or a reordering on the bar itself — all of which would
+   shove the controls somewhere else the moment a camera came on. A control that
+   moves when the room changes shape is a control you have to look for, and
+   these are the two people reach for without looking.
+
+   So: the bar keeps the box it has in a voice room, to the pixel, and the glass
+   simply appears behind it. */
 body.video-stage-immersive #screen-room .room-bottom-bar {
   --dock-line: rgba(255, 255, 255, 0.16);
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 10px 16px;
+  color: rgba(255, 255, 255, 0.92);
+}
+body.video-stage-immersive #screen-room .room-bottom-bar::before {
+  content: '';
+  position: absolute;
+  /* Grows OUTWARD from the bar rather than padding it inward, and stops short
+     of the screen on every side so it still reads as something lying on the
+     picture rather than a bar welded to the bottom of it. */
+  inset: -12px -8px -6px;
+  z-index: -1;   /* behind the bar's own children; the bar's z-index makes the context */
   border-radius: 26px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   /* Two layers: a top-down sheen that gives the slab a lit edge, over the tint
@@ -1522,30 +1536,7 @@ body.video-stage-immersive #screen-room .room-bottom-bar {
   backdrop-filter: blur(22px) saturate(180%);
   box-shadow: 0 10px 32px rgba(0, 0, 0, 0.34),
               inset 0 1px 0 rgba(255, 255, 255, 0.18);
-  color: rgba(255, 255, 255, 0.92);
-  transition: background-color 0.2s ease, border-color 0.2s ease,
-              box-shadow 0.2s ease, padding 0.2s ease;
-}
-
-/* Floating over the tiles, the stack pays for its own height twice: once in the
-   picture it hides and once in how far the dock reaches up the stage. The status
-   line reserves 16px for a message it usually has not got, so give it that space
-   only when it has something to say. */
-body.video-stage-immersive #screen-room .room-bottom-bar .ptt-area { gap: 8px; }
-body.video-stage-immersive #screen-room .room-bottom-bar .ptt-status:empty { display: none; }
-
-/* The control row sits ABOVE the mic here, which is the whole reason the talk
-   button does not move when the row folds away: the bar is anchored to the
-   bottom of the screen, so everything that disappears has to disappear from the
-   TOP of it. In source order the row comes second, and `order` is what lets the
-   markup stay as it is — one element, one behaviour, three layouts. */
-body.video-stage-immersive #screen-room .room-bottom-bar .room-controls {
-  order: -1;
-  align-self: stretch;   /* or the divider shrinks to the width of the buttons */
-  margin: 0 0 10px;
-  padding: 0 0 10px;
-  border-top: none;
-  border-bottom: 1px solid var(--dock-line);
+  transition: opacity 0.2s ease;
 }
 
 body.video-stage-immersive #screen-room .room-bottom-bar .shortcut-focused-note,
@@ -1559,6 +1550,12 @@ body.video-stage-immersive #screen-room .room-bottom-bar kbd {
 }
 body.video-stage-immersive #screen-room .room-bottom-bar .btn-icon { color: rgba(255, 255, 255, 0.74); }
 body.video-stage-immersive #screen-room .room-bottom-bar .btn-icon:hover { color: #fff; }
+/* The rule above the control row is the app's own border colour, which on dark
+   glass is a light-grey scratch. Colour only — the border is still 1px, so the
+   row does not move. */
+body.video-stage-immersive #screen-room .room-bottom-bar .room-controls {
+  border-top-color: var(--dock-line);
+}
 
 body.video-stage-immersive #screen-room .room-bottom-bar .room-action-btn {
   background: rgba(255, 255, 255, 0.10);
@@ -1593,29 +1590,24 @@ body.video-stage-immersive #screen-room .video-tile {
 }
 
 /* ── Chrome away ──────────────────────────────────────────────────
-   A tap on the video (`_onStageTap()`) publishes this. The dock stops being a
-   slab and is just the talk button lying on the picture; the control row, the
-   status line and the edge handles go with it, and so do the scrims that only
-   existed to keep them legible.
+   A tap on the video (`_onStageTap()`) publishes this: the slab fades out and
+   the control row goes with it, leaving the talk button lying on the picture.
 
-   Nothing MOVES. The button keeps its place in the bar, so whatever you were
-   about to press is still under your thumb — the tap reveals the picture, it
-   does not rearrange the room. */
-body.video-stage-immersive.stage-chrome-hidden #screen-room .room-bottom-bar {
-  padding: 0;
-  border-color: transparent;
-  background-color: transparent;
-  background-image: none;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-  box-shadow: none;
+   Nothing MOVES — not the button, not the row when it comes back. The row loses
+   its INK, not its space (`visibility`, never `display`), because the bar is
+   anchored to the bottom of the screen and collapsing the row would drag the
+   talk button down with it. It costs no picture: the bar paints nothing while
+   the slab is gone, so the video shows straight through where the row was.
+
+   The status line stays. It is not chrome — it is the room telling you why it
+   cannot hear you, and that is worth more than the pixels it sits on. */
+body.video-stage-immersive.stage-chrome-hidden #screen-room .room-bottom-bar::before {
+  opacity: 0;
 }
-body.video-stage-immersive.stage-chrome-hidden #screen-room .room-bottom-bar .room-controls,
-body.video-stage-immersive.stage-chrome-hidden #screen-room .room-bottom-bar .ptt-status,
-body.video-stage-immersive.stage-chrome-hidden #screen-room .room-bottom-bar .shortcut-recording-bar,
-body.video-stage-immersive.stage-chrome-hidden .stage-handle {
-  display: none;
+body.video-stage-immersive.stage-chrome-hidden #screen-room .room-bottom-bar .room-controls {
+  visibility: hidden;
 }
+body.video-stage-immersive.stage-chrome-hidden .stage-handle { display: none; }
 body.video-stage-immersive.stage-chrome-hidden #screen-room #video-stage::before,
 body.video-stage-immersive.stage-chrome-hidden #screen-room #video-stage::after {
   opacity: 0;
@@ -1932,28 +1924,14 @@ body.video-stage-immersive #screen-room .ptt-hint { display: none; }
     justify-content: center;
     gap: 16px;
   }
-  /* A row, not a column — and with the controls beside the mic rather than
-     above it, `order` has nothing to fix and the divider is not drawn at all. */
-  body.video-stage-immersive #screen-room .room-bottom-bar { flex-direction: row; }
   body.video-stage-immersive #screen-room .room-bottom-bar .room-controls {
-    order: 0;
-    align-self: auto;
-    margin: 0;
-    padding: 0;
+    margin-top: 0;
+    padding-top: 0;
     border-top: none;
-    border-bottom: none;
   }
   /* Side by side with the mic there is width to spare and no height at all, so
      the buttons stay on one line rather than wrapping into a second. */
   body.video-stage-immersive #screen-room .room-bottom-bar .ctrl-row { flex-wrap: nowrap; }
-  /* Chrome away: here the row is BESIDE the mic, so removing it outright would
-     re-centre the button under a thumb that is already on its way down. It keeps
-     its space and only its ink goes — which costs nothing visible, because the
-     slab it was drawn on has gone too. */
-  body.video-stage-immersive.stage-chrome-hidden #screen-room .room-bottom-bar .room-controls {
-    display: block;
-    visibility: hidden;
-  }
   body.video-stage-immersive #screen-room .ptt-btn { width: 62px; height: 62px; font-size: 24px; }
 }
 

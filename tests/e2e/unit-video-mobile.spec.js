@@ -271,6 +271,33 @@ test.describe('the room keeps its colours in video mode', () => {
     expect(await pickSettled(page, '.ptt-status', ['color'])).toEqual(audioOnly);
   });
 
+  // The slab is painted by a pseudo-element that reaches outside the bar, so
+  // turning a camera on adds no padding, no border and no reordering. The two
+  // controls people reach for without looking are exactly where they were.
+  test('the control row does not move when the camera comes on', async ({ page }) => {
+    await enterAudioRoom(page);
+    const box = (sel) => page.evaluate((s) => {
+      const b = document.querySelector(s).getBoundingClientRect();
+      return { x: Math.round(b.left), y: Math.round(b.top),
+               w: Math.round(b.width), h: Math.round(b.height) };
+    }, sel);
+    const audioOnly = await box('.room-controls');
+    await turnCameraOn(page);
+    expect(await box('.room-controls')).toEqual(audioOnly);
+  });
+
+  // A status line that only takes space when it has something to say pushes the
+  // talk button around every time the room has news.
+  test('the status line always reserves its space, so the mic cannot shift', async ({ page }) => {
+    await enterAudioRoom(page);
+    await turnCameraOn(page);
+    const micY = () => page.evaluate(() =>
+      Math.round(document.getElementById('ptt-btn').getBoundingClientRect().top));
+    const quiet = await micY();
+    await page.evaluate(() => { document.getElementById('ptt-status').textContent = 'Microphone muted'; });
+    expect(await micY()).toBe(quiet);
+  });
+
   test('the controls beside it do take the glass treatment', async ({ page }) => {
     await enterAudioRoom(page);
     const audioOnly = await pickSettled(page, '#btn-freehand', ['backgroundColor', 'color']);
@@ -324,23 +351,55 @@ test.describe('tap the video to put the chrome away', () => {
     expect(await btn()).toEqual(shown);
   });
 
+  const shown = (page, sel) => page.evaluate((s) => {
+    const el = document.querySelector(s);
+    if (!el) return false;
+    const st = getComputedStyle(el);
+    return st.display !== 'none' && st.visibility !== 'hidden';
+  }, sel);
+
   test('the control row and the handles go, and the video takes the space', async ({ page }) => {
     await twoCameras(page);
-    const visible = (sel) => page.evaluate((s) => {
-      const el = document.querySelector(s);
-      return !!el && getComputedStyle(el).display !== 'none';
-    }, sel);
     const stageTop = () => page.evaluate(() =>
       document.querySelectorAll('#video-stage-grid .video-tile')[0].getBoundingClientRect().top);
-    expect(await visible('.room-controls')).toBe(true);
-    expect(await visible('#stage-handle-header')).toBe(true);
+    expect(await shown(page, '.room-controls')).toBe(true);
+    expect(await shown(page, '#stage-handle-header')).toBe(true);
     const before = await stageTop();
 
     await tapVideo(page);
-    expect(await visible('.room-controls')).toBe(false);
-    expect(await visible('#stage-handle-header')).toBe(false);
-    expect(await visible('#ptt-btn')).toBe(true);
+    expect(await shown(page, '.room-controls')).toBe(false);
+    expect(await shown(page, '#stage-handle-header')).toBe(false);
+    expect(await shown(page, '#ptt-btn')).toBe(true);
     expect(await stageTop()).toBeLessThan(before);
+  });
+
+  // The row loses its ink, not its space: the bar is anchored to the bottom of
+  // the screen, so collapsing the row would drag the talk button down with it.
+  // It costs no picture — the bar paints nothing once the slab has gone.
+  test('the control row keeps its box, so nothing below it shifts', async ({ page }) => {
+    await twoCameras(page);
+    const box = () => page.evaluate(() => {
+      const b = document.querySelector('.room-controls').getBoundingClientRect();
+      return { y: Math.round(b.top), h: Math.round(b.height) };
+    });
+    const before = await box();
+    await tapVideo(page);
+    expect(await box()).toEqual(before);
+  });
+
+  // The bar keeps its full height while the chrome is away, so the band it
+  // covers is not part of the stage and its taps would otherwise go nowhere.
+  test('a tap on the invisible bar brings the chrome back', async ({ page }) => {
+    await twoCameras(page);
+    await tapVideo(page);
+    expect(await hidden(page)).toBe(true);
+    const where = await page.evaluate(() => {
+      const bar = document.querySelector('.room-bottom-bar').getBoundingClientRect();
+      const row = document.querySelector('.room-controls').getBoundingClientRect();
+      return { x: bar.left + 8, y: row.top + row.height / 2 };
+    });
+    await page.mouse.click(where.x, where.y);
+    expect(await hidden(page)).toBe(false);
   });
 
   test('a long press pins the tile and does not toggle the chrome', async ({ page }) => {

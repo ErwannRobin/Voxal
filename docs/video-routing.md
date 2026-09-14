@@ -397,10 +397,14 @@ Because the dock is a panel on the picture and not a bar the video stops above,
 the tiles run **full-bleed underneath it**, and:
 
 - **A tap anywhere on the video puts the dock's panel away and brings it back**
-  (`body.stage-chrome-hidden`). The control row, the status line and the edge
-  handles go; the talk button never does, and does not move — the control row is
-  ordered *above* it, so what disappears disappears from the top of the bar. The
+  (`body.stage-chrome-hidden`). The slab fades out, the control row and the edge
+  handles go with it, and the talk button is left lying on the picture. The
   chrome starts shown, and the choice lasts as long as the stage does.
+- **Nothing ever moves.** The glass is painted by a pseudo-element that grows
+  *outside* the bar, so turning a camera on adds no padding and shifts no
+  control; the row hidden by a tap loses its ink and not its space; and the
+  status line always reserves its own. The two controls people reach for without
+  looking stay where they were.
 - **Pinning a tile is a long press**, not a tap. It reshapes the whole stage,
   which is far too big a thing to hang off the same gesture as "show me the
   picture". On a desktop, where there is no chrome to put away, a click still

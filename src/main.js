@@ -12774,6 +12774,23 @@ function initStagePanelHandles() {
   // it dismisses. So the bar dismisses too, from its own background only —
   // every actual control inside it is left alone.
   var bar = document.querySelector('#screen-room .room-bottom-bar');
+  if (bar && !bar._voxalChromeWired) {
+    bar._voxalChromeWired = true;
+    // With the chrome away the bar keeps its full height and paints nothing —
+    // the row lost its ink, not its space, so the talk button would not move.
+    // That leaves a band of see-through video at the bottom of the screen that
+    // is not part of the stage and would swallow the tap meant to bring the
+    // controls back. The bar hands it on. One way only: while the dock is up it
+    // is a control surface, and a thumb that misses a button should not put the
+    // whole panel away.
+    bar.addEventListener('click', function(e) {
+      if (!stageChromeHidden()) return;
+      if (_stagePinPressFired) return;
+      if (_stageTapOnChrome(e)) return;
+      if (stagePanelOpen('header') || stagePanelOpen('roster') || chatPanelOpen()) return;
+      toggleStageChrome();
+    });
+  }
   if (bar && !bar._voxalDismissWired) {
     bar._voxalDismissWired = true;
     bar.addEventListener('pointerdown', function(e) {
