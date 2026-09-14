@@ -10,40 +10,34 @@ agent accurate, and means a prompt never goes stale when a doc changes.
 
 ---
 
-## At a glance
+## Contents
 
-Twelve prompts, three groups. Pick the row that matches what you are doing.
+**A — [Embedding Voxal in your product](#a--embedding-voxal-in-your-product)**
 
-| | I want to… | Prompt | Reads |
-|---|---|---|---|
-| **A1** | Put a voice room on a page, no code | [Drop a voice room into a page](#a1-drop-a-voice-room-into-a-page) | iframe embed |
-| **A2** | Drive the room from my own buttons, and react to who is talking | [Control the room from my page](#a2-control-the-room-from-my-page-postmessage-bridge) | iframe embed |
-| **A3** | A reusable `<VoxalRoom>` component | [Wrap the embed as a framework component](#a3-wrap-the-embed-as-a-framework-component) | iframe embed |
-| **A4** | Make an existing embed production-safe | [Lock the embed down](#a4-lock-the-embed-down-for-production) | iframe embed |
-| **A5** | Make rooms work behind a corporate firewall | [Give the embed our own TURN relay](#a5-give-the-embed-our-own-turn-relay) | iframe embed · TURN & ICE |
-| **A6** | A link that opens with the camera already on | [Make a "video call" link](#a6-make-a-video-call-link-instead-of-push-to-talk) | iframe embed · video routing |
-| **B1** | Host the app on my own domain | [Deploy the web app](#b1-deploy-the-web-app) | deployment |
-| **B2** | Make connections reliable for users with no account | [Stand up anonymous TURN credentials](#b2-stand-up-anonymous-turn-credentials) | deployment · TURN & ICE |
-| **B3** | Run the relay myself | [Self-host a coturn relay](#b3-self-host-a-coturn-relay) | TURN & ICE |
-| **B4** | Keep video usable in bigger rooms | [Enable the optional SFU for video](#b4-enable-the-optional-sfu-for-video) | video routing · deployment |
-| **B5** | Depend on no public infrastructure at all | [Self-host signaling and assets](#b5-self-host-signaling-and-assets) | deployment · architecture |
-| **C1** | Sign my users in without a second login | [Integrate Voxal Connect sign-in](#c1-integrate-voxal-connect-sign-in) | deployment · iframe embed |
+1. [Drop a voice room into a page](#a1-drop-a-voice-room-into-a-page)
+2. [Control the room from my page (postMessage bridge)](#a2-control-the-room-from-my-page-postmessage-bridge)
+3. [Wrap the embed as a framework component](#a3-wrap-the-embed-as-a-framework-component)
+4. [Lock the embed down for production](#a4-lock-the-embed-down-for-production)
+5. [Give the embed our own TURN relay](#a5-give-the-embed-our-own-turn-relay)
+6. [Make a "video call" link instead of push-to-talk](#a6-make-a-video-call-link-instead-of-push-to-talk)
 
-**Group A — embedding** puts Voxal inside a page you already have, using the
-hosted app at `web.voxal.app`. Nothing to deploy, no API key, no SDK: a standard
-`<iframe>` and a `postMessage` bridge.
+**B — [Running Voxal yourself](#b--running-voxal-yourself)**
 
-**Group B — running Voxal yourself** is for when you want your own domain, your
-own relay, or no dependency on public infrastructure. Every piece is optional
-and degrades safely: deploy before the accounts exist and the app falls back
-rather than breaks.
+1. [Deploy the web app](#b1-deploy-the-web-app)
+2. [Stand up anonymous TURN credentials](#b2-stand-up-anonymous-turn-credentials)
+3. [Self-host a coturn relay](#b3-self-host-a-coturn-relay)
+4. [Enable the optional SFU for video](#b4-enable-the-optional-sfu-for-video)
+5. [Self-host signaling and assets](#b5-self-host-signaling-and-assets)
 
-**Group C — accounts** connects an existing user base to Voxal's presence
-sign-in, so people are not asked to log in twice.
+**C — [Accounts and presence](#c--accounts-and-presence)**
 
-Working *on* Voxal rather than with it — features, native builds, tests — is a
-different job with a different entry point: read
-[`CLAUDE.md`](../CLAUDE.md) and [`CONTRIBUTING.md`](../CONTRIBUTING.md).
+1. [Integrate Voxal Connect sign-in](#c1-integrate-voxal-connect-sign-in)
+
+Also on this page: [how to use it](#how-to-use-this-page) ·
+[document map](#document-map) · [writing your own prompt](#writing-your-own-prompt).
+
+Working *on* Voxal rather than with it — features, native builds, tests — starts
+somewhere else: [`CLAUDE.md`](../CLAUDE.md) and [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ---
 
