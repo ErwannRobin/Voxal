@@ -553,8 +553,18 @@ The single worst thing in this round, and it had been shipping:
   the second list took a renderer, an element and a `rail-peer-<id>` id space with
   it — the merge is smaller than the thing it replaced, which is the sign it was
   the right one.
-  - Rows standing on the picture need their own surface, and that surface is the
-    tiny embed's capsule: one declaration block, two selectors.
+  - **And it has to LOOK like the roster.** The first docking gave every row its
+    own pill, which is a list nobody else in the app has: the voice landscape
+    room already puts a participants card in its own left column, and that card
+    — surface, border, 10px radius, 8px padding, plain 6px rows — is what the
+    video column has to be, or turning a camera on restyles the room. The
+    immersive rule that strips the card is right for the PORTRAIT panel, which
+    carries a surface of its own, and has to be put back for the docked one,
+    which does not. The test for it compares the two on one page, either side of
+    a camera being switched on.
+  - The header and the buttons keep the row shape they have everywhere else,
+    which is also what leaves the height to the participants: stacked as columns
+    they ate 140px of a 390px screen.
   - Names while they fit, name-only capsules two to a line when they do not,
     decided by **measuring** (`scrollHeight > clientHeight`), not by counting
     heads: whether they fit depends on the phone's height as much as on the

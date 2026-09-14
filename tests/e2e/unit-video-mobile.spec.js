@@ -868,7 +868,7 @@ test.describe('the immersive stage held sideways', () => {
   // The picture wants the height, and the chrome was taking it at both ends.
   // Header and buttons are one column down the left now; only the mic is left
   // along the bottom, and it did not move.
-  test('the header and the buttons are a column down the left', async ({ page }) => {
+  test('the header and the buttons are blocks stacked down the left', async ({ page }) => {
     await withVideo(page);
     const seen = await page.evaluate(() => {
       const box = (sel) => {
@@ -961,26 +961,48 @@ test.describe('the immersive stage held sideways', () => {
     expect(seen.names).toEqual(['Alice', 'Bob']);
   });
 
-  // Standing on the picture, each row carries its own surface — and that
-  // surface is the tiny embed's capsule, one declaration serving both.
-  test('its rows are the tiny embed capsule, full width while they fit', async ({ page }) => {
-    await withVideo(page);
-    const seen = await page.evaluate(() => {
+  // The whole point of docking the real panel: a room must not look like a
+  // different app because a camera came on. The participants card in the video
+  // column is the participants card in the VOICE column — same surface, same
+  // border, same rows — so this compares the two on one page, either side of a
+  // camera being switched on.
+  test('it is the voice room\'s own participants card, unchanged', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1', 'p2'],
+      connections: [
+        { id: 'p1', pseudo: 'Alice', open: true },
+        { id: 'p2', pseudo: 'Bob', open: true },
+      ],
+    });
+    const look = () => page.evaluate(() => {
       const list = document.getElementById('peers-list');
       const item = list.querySelector('.peer-item');
+      const l = getComputedStyle(list);
+      const i = getComputedStyle(item);
       return {
-        crowded: list.classList.contains('crowded'),
-        radius: getComputedStyle(item).borderRadius,
-        width: Math.round(item.getBoundingClientRect().width),
-        listWidth: Math.round(list.getBoundingClientRect().width),
+        card: [l.backgroundColor, l.borderTopWidth, l.borderTopColor, l.borderRadius, l.padding, l.gap],
+        row: [i.backgroundColor, i.borderRadius, i.padding, i.fontSize],
         // Room for a row means room for what is on it.
         controls: !!item.querySelector('.btn-icon, .peer-cam-btn'),
+        crowded: list.classList.contains('crowded'),
       };
     });
-    expect(seen.crowded).toBe(false);
-    expect(seen.radius).toBe('999px');
-    expect(seen.width).toBe(seen.listWidth);
-    expect(seen.controls).toBe(true);
+    const voice = await look();
+    expect(await page.evaluate(() => document.body.classList.contains('video-stage'))).toBe(false);
+
+    await page.evaluate(() => {
+      const c = connections.get('p1');
+      c.videoActive = true;
+      c.remoteVideoStream = new MediaStream();
+      updatePeerList();
+    });
+    expect(await page.evaluate(() => document.body.classList.contains('video-stage-immersive'))).toBe(true);
+
+    const video = await look();
+    expect(video.card).toEqual(voice.card);
+    expect(video.row).toEqual(voice.row);
+    expect(video.controls).toBe(true);
+    expect(video.crowded).toBe(false);
   });
 
   // More people than room: name only, two to a line.

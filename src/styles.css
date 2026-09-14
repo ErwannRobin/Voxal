@@ -2004,20 +2004,20 @@ body.video-stage-immersive #screen-room.active {
   body.video-stage-immersive #screen-room {
     --rail-x: calc(max(env(safe-area-inset-left), 0px) + 26px);
     /* One width for all three pieces of it, or it is three floating cards
-       rather than a column. */
-    --rail-w: min(38vw, 220px);
+       rather than a column. Wide enough that the header and the buttons keep
+       the shape they have everywhere else — a row each — which is what leaves
+       the height to the participants, exactly as the voice column spends it. */
+    --rail-w: min(44vw, 264px);
   }
   body.video-stage-immersive #screen-room .room-header {
     left: var(--rail-x);
     right: auto;
     top: max(calc(var(--stage-safe-top) + 8px), 8px);
     width: var(--rail-w);
-    flex-direction: column;
-    align-items: flex-start;
     gap: 6px;
-    padding: 8px 10px;
+    padding: 6px 8px;
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: var(--radius);
     transform: translateX(calc(-100% - var(--rail-x)));
   }
   body.video-stage-immersive:not(.stage-chrome-hidden) #screen-room .room-header {
@@ -2045,9 +2045,8 @@ body.video-stage-immersive #screen-room.active {
     transition: transform 0.25s ease;
   }
   body.video-stage-immersive #screen-room .room-bottom-bar .ctrl-row {
-    flex-direction: column;
-    align-items: flex-start;
     flex-wrap: nowrap;
+    justify-content: flex-start;
   }
   /* It leaves by sliding out with the header rather than blinking away: it is
      fixed, so it costs the layout nothing either way, and half the chrome
@@ -2091,10 +2090,19 @@ body.video-stage-immersive #screen-room.active {
   /* …and with no roster panel to be underneath, the chat's handle is never in
      its way either. */
   body.video-stage-immersive.stage-roster-open .stage-handle-right { display: flex; }
+  /* The card itself, and not a new one: this is the list the voice room puts in
+     ITS left column, with the same surface, the same border and the same rows.
+     A room must not look like a different app because a camera came on, so the
+     immersive rule that strips the card — right for the portrait panel, which
+     carries a surface of its own — is put back here, where the panel behind it
+     carries none. */
   body.video-stage-immersive #screen-room .peers-list {
     min-height: 0;
     height: 100%;
-    gap: 5px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px;
     overflow-y: auto;
     scrollbar-width: none;
   }
@@ -2102,27 +2110,10 @@ body.video-stage-immersive #screen-room.active {
     display: none;
     width: 0;
   }
-  /* Each row carries its own surface here, because the panel behind them no
-     longer does: they are standing on the picture. That surface is the tiny
-     embed's capsule — one declaration, two places (see .peer-item-compact). */
-  body.video-stage-immersive #screen-room .peers-list .peer-item {
-    width: 100%;
-    max-width: 100%;
-    height: auto;
-    min-height: 28px;
-    flex-wrap: nowrap;
-    gap: 6px;
-  }
-  body.video-stage-immersive #screen-room .peers-list .peer-item.talking {
-    border-color: var(--green);
-  }
-  body.video-stage-immersive #screen-room .peers-list .peer-item.peer-self {
-    border-color: var(--accent-dim);
-  }
-  /* More people than room: name only, two to a line, and the column scrolls
-     past that. The controls go with the width — they are one rotation away, and
-     a name you cannot read is worse than a button you have to turn the phone
-     for. */
+  /* More people than room: the rows become the tiny embed's capsules — name
+     only, two to a line — and the column scrolls past that. The controls go
+     with the width: a name you cannot read is worse than a button you have to
+     turn the phone for, and turning it is one gesture away. */
   body.video-stage-immersive #screen-room .peers-list.crowded {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -2130,9 +2121,15 @@ body.video-stage-immersive #screen-room.active {
     gap: 4px;
   }
   body.video-stage-immersive #screen-room .peers-list.crowded .peer-item {
-    width: auto;
     min-height: 24px;
     padding: 4px 7px;
+    flex-wrap: nowrap;
+  }
+  body.video-stage-immersive #screen-room .peers-list.crowded .peer-item.talking {
+    border-color: var(--green);
+  }
+  body.video-stage-immersive #screen-room .peers-list.crowded .peer-item.peer-self {
+    border-color: var(--accent-dim);
   }
   body.video-stage-immersive #screen-room .peers-list.crowded .peer-item .peer-dot,
   body.video-stage-immersive #screen-room .peers-list.crowded .peer-item .btn-icon,
@@ -2747,7 +2744,7 @@ body.embed-tiny #screen-room .tiny-peers-others {
 body.embed-tiny #screen-room .tiny-peers-others::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
 body.embed-tiny #screen-room .peer-item-compact,
-body.video-stage-immersive #screen-room .peers-list .peer-item {
+body.video-stage-immersive #screen-room .peers-list.crowded .peer-item {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;

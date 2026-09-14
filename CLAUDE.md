@@ -141,12 +141,16 @@ measured bottom) is where the roster does.
 
 That roster is the **same** roster, not a second one: sideways `.room-peers-panel`
 stops sliding and docks as the rail's bottom block, always up, so the left handle
-has nothing to pull and goes. Each row carries its own surface — they stand on
-the picture — and that surface is the tiny embed's **capsule**, one declaration
-serving both. `applyStageRailRoster()` is the only JS in it: it measures whether
-the rows fit and, when they do not, adds `crowded` — name-only capsules, two to a
-line — measured per pass, never counted, since it depends on the phone's height
-as much as on the size of the room.
+has nothing to pull and goes. It keeps the participants card the **voice**
+landscape room puts in its own left column — same surface, border and rows — so a
+camera coming on does not restyle the room; the immersive rule that strips that
+card is right for the portrait panel (which carries a surface of its own) and is
+put back here, where the docked panel carries none. The header and the buttons
+keep their row shape for the same reason, which is also what leaves the height to
+the participants. `applyStageRailRoster()` is the only JS in it: it measures
+whether the rows fit and, when they do not, adds `crowded` — the tiny embed's
+name-only capsules, two to a line — measured per pass, never counted, since it
+depends on the phone's height as much as on the size of the room.
 
 **A picture fills its tile, unless the crop is one you cannot afford.**
 `stageVideoFit()` chooses `object-fit` per tile from the picture's own shape
