@@ -1498,65 +1498,43 @@ kbd {
   html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-bottom-bar .room-controls { margin-top: 0; }
 }
 
-/* ── The glass dock (phones) ──────────────────────────────────────
+/* ── Floating controls (phones) ───────────────────────────────────
    On the immersive stage the control stack is sitting on a picture, so it stops
-   being part of the page's surface and becomes a floating panel: a translucent,
-   blurred slab that the video shows through, with the tiles running full-bleed
-   underneath it.
+   being part of the page's surface. It used to become a translucent, blurred
+   SLAB with the controls arranged on it. That slab is gone: it was a plank the
+   width of the screen and the height of a talk button plus a button row, and
+   most of it was empty — it existed to back two controls and a line of text,
+   and it took a fifth of somebody's face to do it.
+
+   What is left is the controls themselves, each carrying the same glass the slab
+   wore. Same material, a tenth of the area, and the video runs unbroken between
+   them. (Landscape has worked this way since the stage learned to fill the
+   window; this simply makes upright agree with it.)
 
    Phones only. A desktop room keeps the voice UI railed beside the stage, where
    it is app chrome on app background and glass would be an affectation.
 
    The tint is dark in BOTH themes on purpose. It is not app chrome any more, it
-   is glass over whatever the camera happens to be pointing at; a light panel
-   reads as a hole punched in a dark frame, and a panel that changes colour with
-   the theme cannot be relied on to keep white text legible. Everything inside it
-   therefore takes light-on-glass colours — except the talk button, which keeps
-   the accent border it wears everywhere else in the app, because that border is
-   how you recognise it.
+   is glass over whatever the camera happens to be pointing at; a light chip
+   reads as a hole punched in a dark frame, and one that changes colour with the
+   theme cannot be relied on to keep white text legible.
 
    `backdrop-filter` is the whole effect; where it is unsupported the rgba tint
-   alone still keeps the contents readable, so there is nothing to feature-detect. */
-/* NOTHING in this block changes the layout of the bar. The slab is painted by a
-   pseudo-element that reaches OUTSIDE it (`inset: -10px -16px`), never by
-   padding, a border or a reordering on the bar itself — all of which would
-   shove the controls somewhere else the moment a camera came on. A control that
-   moves when the room changes shape is a control you have to look for, and
-   these are the two people reach for without looking.
+   alone still keeps the contents readable, so there is nothing to feature-detect.
 
-   So: the bar keeps the box it has in a voice room, to the pixel, and the glass
-   simply appears behind it. */
+   NOTHING in this block changes the layout of the bar. No padding, no border, no
+   reordering — all of which would shove the controls somewhere else the moment a
+   camera came on. The bar keeps the box it has in a voice room to the pixel; it
+   simply stops painting, and its contents become chips. */
 body.video-stage-immersive #screen-room .room-bottom-bar {
-  --dock-line: rgba(255, 255, 255, 0.16);
-  /* The slab's own recipe, named so a control can wear it alone. Two places
-     need that: clean mode, where the slab has faded and the talk button is the
-     last thing standing, and landscape, where there is no slab to begin with. */
+  /* One recipe, worn by every control that has to stand on bare video. */
   --glass-tint:  rgba(16, 16, 20, 0.38);
   --glass-sheen: linear-gradient(to bottom,
                  rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0) 62%);
   --glass-blur:  blur(18px) saturate(180%);
   color: rgba(255, 255, 255, 0.92);
-}
-body.video-stage-immersive #screen-room .room-bottom-bar::before {
-  content: '';
-  position: absolute;
-  /* Grows OUTWARD from the bar rather than padding it inward, and stops short
-     of the screen on every side so it still reads as something lying on the
-     picture rather than a bar welded to the bottom of it. */
-  inset: -12px -8px -6px;
-  z-index: -1;   /* behind the bar's own children; the bar's z-index makes the context */
-  border-radius: 26px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  /* Two layers: a top-down sheen that gives the slab a lit edge, over the tint
-     that does the actual darkening. */
-  background-color: rgba(16, 16, 20, 0.42);
-  background-image: linear-gradient(to bottom,
-                    rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0) 58%);
-  -webkit-backdrop-filter: blur(22px) saturate(180%);
-  backdrop-filter: blur(22px) saturate(180%);
-  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.34),
-              inset 0 1px 0 rgba(255, 255, 255, 0.18);
-  transition: opacity 0.2s ease;
+  /* Text with nothing behind it, over a frame that may be anything at all. */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
 }
 
 body.video-stage-immersive #screen-room .room-bottom-bar .shortcut-focused-note,
@@ -1572,37 +1550,51 @@ body.video-stage-immersive #screen-room .room-bottom-bar .btn-icon { color: rgba
 body.video-stage-immersive #screen-room .room-bottom-bar .btn-icon:hover { color: #fff; }
 /* The rule above the control row belongs to a voice room, where the bar IS the
    bottom of the page and the line is what separates the talk button from its
-   controls. On the dock there is already an edge — the slab's own — and a
-   second one across the middle of a panel lying on somebody's face is just a
-   scratch. So it goes in video mode and stays in voice.
+   controls. There is no row of controls on a surface here any more — there are
+   two chips floating on a picture — so a line across the middle of it is just a
+   scratch on somebody's face.
 
    Colour, not the border itself: the border is still 1px, so the row keeps its
-   box and nothing above it moves when a camera comes on. That is the same rule
-   the whole dock block is built on. */
+   box and nothing above it moves when a camera comes on. That is the rule this
+   whole block is built on. */
 body.video-stage-immersive #screen-room .room-bottom-bar .room-controls {
   border-top-color: transparent;
 }
 
+/* Every control standing on the picture wears the glass. The slab used to do
+   the darkening for the whole group and these only needed a light wash on top
+   of it (`rgba(255,255,255,0.10)`); alone on a bright frame that is a white
+   button on a white face. */
+body.video-stage-immersive #screen-room .ptt-btn,
 body.video-stage-immersive #screen-room .room-bottom-bar .room-action-btn {
-  background: rgba(255, 255, 255, 0.10);
-  border-color: rgba(255, 255, 255, 0.18);
-  color: rgba(255, 255, 255, 0.88);
+  background-color: var(--glass-tint);
+  background-image: var(--glass-sheen);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+body.video-stage-immersive #screen-room .room-bottom-bar .room-action-btn {
+  border-color: rgba(255, 255, 255, 0.28);
+  color: rgba(255, 255, 255, 0.92);
 }
 body.video-stage-immersive #screen-room .room-bottom-bar .room-action-btn:hover {
-  background: rgba(255, 255, 255, 0.18);
-  border-color: rgba(255, 255, 255, 0.35);
+  background-color: rgba(16, 16, 20, 0.58);
+  border-color: rgba(255, 255, 255, 0.45);
   color: #fff;
 }
-/* An engaged control keeps the accent fill it has everywhere else. */
+/* Pressed and engaged are never a style: those two say whether the room can
+   hear you, and they read the same wherever the control is standing. */
+body.video-stage-immersive #screen-room .ptt-btn.active,
 body.video-stage-immersive #screen-room .room-bottom-bar .room-action-btn.active {
-  background: var(--accent);
+  background-color: var(--accent);
+  background-image: none;
   border-color: var(--accent);
-  color: #fff;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
-/* The talk button is the one thing that is never restyled: same border, same
-   states, same size as in a voice room. It is what the room is, and it has to
-   look the same wherever it is standing. A shadow is the only addition — it is
-   the one control that can end up on bare video with no slab behind it. */
+/* The talk button's RING is what is never restyled — it is how the button is
+   recognised, on the home screen and in every room. Only the fill becomes
+   glass, and only here. The drop shadow is what lifts it off the frame now that
+   there is nothing behind it at all. */
 body.video-stage-immersive #screen-room .ptt-btn {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
 }
@@ -1616,43 +1608,24 @@ body.video-stage-immersive #screen-room .video-tile {
 }
 
 /* ── Chrome away ──────────────────────────────────────────────────
-   A tap on the video (`_onStageTap()`) publishes this: the slab fades out and
-   the control row goes with it, leaving the talk button lying on the picture.
+   A tap on the video (`_onStageTap()`, or on the bar's own bare background)
+   publishes this: the room header and the control row go, leaving the talk
+   button alone on the picture.
 
    Nothing MOVES — not the button, not the row when it comes back. The row loses
    its INK, not its space (`visibility`, never `display`), because the bar is
    anchored to the bottom of the screen and collapsing the row would drag the
-   talk button down with it. It costs no picture: the bar paints nothing while
-   the slab is gone, so the video shows straight through where the row was.
-
-   The status line stays. It is not chrome — it is the room telling you why it
-   cannot hear you, and that is worth more than the pixels it sits on. */
-body.video-stage-immersive.stage-chrome-hidden #screen-room .room-bottom-bar::before {
-  opacity: 0;
-}
+   talk button down with it. It costs no picture: the bar paints nothing at all
+   in video mode, so the video shows straight through where the row was. */
 body.video-stage-immersive.stage-chrome-hidden #screen-room .room-bottom-bar .room-controls {
   visibility: hidden;
 }
-/* With the slab gone the button is the only thing left standing on the picture,
-   and an opaque disc there is a hole punched in the frame. It becomes its own
-   small piece of glass instead: the same tint and blur the dock wore, in the
-   only shape still on screen. The accent ring is untouched — that ring is how
-   the talk button is recognised, in every room, in every mode. */
-body.video-stage-immersive.stage-chrome-hidden #screen-room .ptt-btn {
-  background-color: var(--glass-tint);
-  background-image: var(--glass-sheen);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
-}
-/* A pressed button still fills with the accent — that is the room hearing you,
-   and it must read the same wherever the button is standing. */
-body.video-stage-immersive.stage-chrome-hidden #screen-room .ptt-btn.active {
-  background-color: var(--accent);
-  background-image: none;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-}
-/* The status line goes too. It was kept back when the chrome left because it is
+/* The talk button needs nothing here: it has worn the glass since the slab was
+   dropped, so clean mode is simply the same button with the chips beside it
+   gone. (It used to be the one place the button became translucent, back when
+   there was a slab to fade out from behind it.)
+
+   The status line goes too. It was kept back when the chrome left because it is
    the room telling you why it cannot hear you — but the button says that
    already: a green ring is hands-free, an accent fill is transmitting, neither
    is silence. A line of red text under a bare mic on top of somebody's face is
@@ -2030,37 +2003,9 @@ body.video-stage-immersive #screen-room.active {
      the buttons a hundred pixels out from the mic they belong to. */
   body.video-stage-immersive #screen-room .ptt-hint,
   body.video-stage-immersive #screen-room .ptt-status { display: none; }
-  /* And no slab. Sideways the picture is the whole point and the controls are
-     two small things on one line; a blurred plank behind them would cover a
-     third of a face to back a button that is already legible. The controls each
-     carry the glass instead, which is the same material in a tenth of the area.
-     This is what "shift the interface out of the picture's way" means here. */
-  body.video-stage-immersive #screen-room .room-bottom-bar::before { display: none; }
-  body.video-stage-immersive #screen-room .ptt-btn,
-  body.video-stage-immersive #screen-room .room-bottom-bar .room-action-btn {
-    background-color: var(--glass-tint);
-    background-image: var(--glass-sheen);
-    -webkit-backdrop-filter: var(--glass-blur);
-    backdrop-filter: var(--glass-blur);
-  }
-  /* The talk button's ring is NOT part of the glass: it is how the talk button
-     is recognised, in every room and every orientation, and it keeps the accent
-     it wears on the home screen. Only the buttons beside it take a border from
-     the material. */
-  body.video-stage-immersive #screen-room .room-bottom-bar .room-action-btn {
-    border-color: rgba(255, 255, 255, 0.28);
-  }
-  /* Pressed and engaged still read as they do everywhere else — those two say
-     whether the room can hear you, and they are never a style. */
-  body.video-stage-immersive #screen-room .ptt-btn.active,
-  body.video-stage-immersive #screen-room .room-bottom-bar .room-action-btn.active {
-    background-color: var(--accent);
-    background-image: none;
-    border-color: var(--accent);
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
-  body.video-stage-immersive #screen-room .ptt-btn.freehand { border-color: var(--green); }
+  /* The glass on each control, the absent slab and the ring that survives both
+     are no longer landscape's business — upright works exactly the same way
+     now. All that is left here is the shape of the row. */
 }
 
 /* Flip lives ON the self camera tile — it is a property of that camera, not a

@@ -860,11 +860,10 @@ than assuming the keystrokes arrive in order.
   camera says nothing about your microphone); `startScreenShare()` kept its own
   on the grounds that nobody has complained about it. Same argument applies, so
   it should probably go the same way — but not without being asked.
-- **The dock has a band of empty glass under the mic upright.** It is the hint's
-  reserved line plus the status line, which are kept so the mic lands on the same
-  pixel as in a voice room. The tidier answer is to take the talk button out of
-  the bar altogether and anchor it at a constant offset, letting the slab hug
-  only the control row — more moving parts than this round wanted.
+- ~~**The dock has a band of empty glass under the mic upright.**~~ **Done, by
+  deletion.** The slab is gone entirely — every control carries the glass itself
+  and the video runs unbroken between them — so the reserved hint line costs
+  nothing to look at and the mic keeps the position it was reserved for.
 
 ---
 

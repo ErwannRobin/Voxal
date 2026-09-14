@@ -329,7 +329,7 @@ Copilot should read this file at the start of every session.
   - The probe that nearly sent that debugging the wrong way: walking `document.styleSheets` with `if (rule.cssRules) recurse(); else check(rule.selectorText)`. In current Chromium a plain `CSSStyleRule` **has** a `cssRules` property (nested CSS) — an empty `CSSRuleList`, which is **truthy** — so every style rule takes the recursive branch and nothing is ever checked. Test for `rule.selectorText` first.
 - **The tiles run full-bleed UNDER the dock**, which is what makes "tap to put it away" reveal anything at all. `applyImmersiveStageInsets()` no longer pads the grid's bottom; only the **ribbon** still clears the dock, because a row of faces behind the talk button is not a picture with a panel on it, it is three people you cannot see.
 - **A tap on the video toggles the chrome; a LONG PRESS pins a tile.** The tap used to pin, which reshapes the whole stage — far too big a thing to hang off the same gesture as "show me the picture". The press mirrors the chat's own row-menu press exactly (450 ms, 10px slop, a `_stagePinPressFired` flag that swallows the click it leaves behind *and expires on its own*, because the tile is re-laid-out under the finger and the click can land somewhere the stage never sees). `contextmenu` has to be prevented or the platform's "save video" menu lands on top of it, and the tiles need `-webkit-touch-callout: none` + `user-select: none`.
-- **The slab is a PSEUDO-ELEMENT that grows outward, never padding on the bar.** This is the whole trick, and it took two goes to find. Padding, a border and a `border-radius` on `.room-bottom-bar` itself all change its box, so turning a camera on shoved the control row up by 11px — and those two controls are exactly the ones people reach for without looking. `::before { position: absolute; inset: -12px -8px -6px; z-index: -1 }` carries every bit of the glass *outside* the bar instead, so the bar keeps the box it has in a voice room to the pixel. (`z-index: -1` works because the bar already carries `z-index: 20`, so it is the stacking context the negative index is relative to; and the insets stop short of the screen on every side, or the pill reads as a bar welded to the bottom.)
+- ~~**The slab is a PSEUDO-ELEMENT that grows outward, never padding on the bar.**~~ **Superseded — there is no slab.** The reasoning below is still the reason the bar's *box* is untouchable, and it is why replacing the slab with per-control glass changed no geometry at all. Kept for that. This is the whole trick, and it took two goes to find. Padding, a border and a `border-radius` on `.room-bottom-bar` itself all change its box, so turning a camera on shoved the control row up by 11px — and those two controls are exactly the ones people reach for without looking. `::before { position: absolute; inset: -12px -8px -6px; z-index: -1 }` carries every bit of the glass *outside* the bar instead, so the bar keeps the box it has in a voice room to the pixel. (`z-index: -1` works because the bar already carries `z-index: 20`, so it is the stacking context the negative index is relative to; and the insets stop short of the screen on every side, or the pill reads as a bar welded to the bottom.)
 - **Hiding the control row has to take its INK, not its space.** The bar is anchored to the bottom of the screen and the row comes *after* the button in source order, so `display: none` on the row pulled the talk button 50px down. `visibility: hidden` leaves the geometry alone and costs no picture — the bar paints nothing once the slab has faded, so the video shows straight through where the row was. An earlier attempt reordered the row above the button with `order: -1`; it worked, but it is not what the controls should look like, and this is better anyway because it also holds in landscape (where the bar is a row and `order` fixes nothing).
   - The cost is a band of see-through video at the bottom that is **not** part of `#video-stage`, so the tap that should bring the chrome back lands on the bar and goes nowhere. The bar forwards it (`initStagePanelHandles()`), one way only: while the dock is up it is a control surface, and a thumb that misses a button should not put the whole panel away.
 - **A status line that only takes space when it has something to say is a control that moves every time the room has news.** `.ptt-status:empty { display: none }` looked like free real estate on a phone; it pushes the talk button 16px whenever the room needs to say "microphone muted". It reserves its 16px here exactly as it does in a voice room.
@@ -385,11 +385,12 @@ using the room, instead of a control put where they can reach it.
   to be kept on the grounds that it says why the room cannot hear you — but the
   button already says that: a green ring, an accent fill, or neither).
 - **With the slab gone, the talk button has to become its own piece of glass.**
-  An opaque disc on a photograph is a hole punched in the frame. Clean mode gives
-  it the dock's own tint/sheen/blur — factored into `--glass-tint`,
-  `--glass-sheen`, `--glass-blur` on the bar so landscape can wear the same
-  material — and leaves the **accent ring alone**, which is how the talk button
-  is recognised anywhere in the app.
+  An opaque disc on a photograph is a hole punched in the frame. It takes the
+  dock's own tint/sheen/blur — factored into `--glass-tint`, `--glass-sheen`,
+  `--glass-blur` on the bar — and keeps the **accent ring**, which is how the
+  talk button is recognised anywhere in the app. (First shipped for clean mode
+  and landscape only; now it is every control, everywhere on this stage — see
+  *The slab was a plank* below.)
 - **The scrim stops nothing now; the bar is lifted over it.** A scrim that ended
   in a hard horizontal line two thirds of the way down the screen read as a grey
   box someone had left on the video, not as the room standing back. It is
@@ -414,6 +415,44 @@ using the room, instead of a control put where they can reach it.
   web build, was told to hold a key it does not have. It is `IS_MOBILE_DEVICE`
   now, in `setFreeHand()` and at startup both, and the copy names the thing the
   finger is actually on: *"Hold the mic to talk · x2 for hands-free"*.
+
+### The slab was a plank, and most of it was empty
+
+The follow-on from the round above, and the cheapest change in it.
+
+- **A panel that exists to back two controls and a line of text is not worth a
+  fifth of somebody's face.** The dock was a blurred slab the full width of the
+  screen and the height of an 80px talk button plus a button row — and once the
+  hint had been reserved-but-hidden (to keep the mic on its pixel) a good third
+  of it was empty glass. Deleting the `::before` and moving the same
+  tint/sheen/blur onto each control gives the identical material in roughly a
+  tenth of the area, with the video running unbroken between the chips.
+- **A control that relied on the slab for contrast is a white button on a white
+  face without it.** `.room-action-btn` wore `rgba(255,255,255,0.10)` — a *light
+  wash*, which only worked because the slab underneath was doing the darkening.
+  Alone it has to carry the dark tint itself. Same for any text left on bare
+  video: `text-shadow` on the bar, since `.ptt-status` and the hint have nothing
+  behind them now.
+- **Removing a pseudo-element is not `display: none`, and a test that checks
+  `display` will not notice.** `getComputedStyle(el, '::before').display` on a
+  pseudo that was never generated comes back **`block`**, not `none` — the rule
+  simply does not exist, so the property takes its initial value. The landscape
+  test that asserted `display === 'none'` back when the slab was switched off
+  there passed for the wrong reason and would have kept passing over a
+  half-deleted rule. `content` is the honest check: it reads `none` when no
+  pseudo-element is generated.
+- **Once the bar paints nothing, its tap has to work both ways.** The band it
+  covers is not part of `#video-stage`, so the bar forwards taps on its own
+  background — but only ever *to bring the chrome back*, on the grounds that
+  while the controls sat on a plank the bar was a control surface and a missed
+  button should not put the panel away. With the plank gone that thumb is on the
+  picture, exactly as it is an inch higher up, and it now toggles in both
+  directions. `_stageTapOnChrome()` still exempts every real control, so missing
+  one is the only way to reach it.
+- **The empty-glass item in `todos.md` closed itself.** It was logged as "take
+  the talk button out of the bar and let the slab hug the control row" — more
+  moving parts than that round wanted. Deleting the slab solves the same problem
+  with a deletion, and the mic keeps the position that caused the gap.
 
 ### Sideways, the room was rendering into a 480px letterbox
 

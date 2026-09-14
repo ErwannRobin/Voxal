@@ -291,12 +291,48 @@ test.describe('the room keeps its colours in video mode', () => {
     expect(await page.evaluate(() => document.body.classList.contains('video-stage-immersive'))).toBe(true);
   }
 
-  test('the talk button is identical with and without video', async ({ page }) => {
+  // The RING is what makes the talk button the talk button — on the home
+  // screen, in a voice room, on somebody's face. It, and the size, are what may
+  // never change. The fill is the one thing that has to: with the slab gone the
+  // button stands directly on the picture, and an opaque disc there is a hole
+  // punched in the frame.
+  test('the talk button keeps its ring and its size, and only the fill turns to glass', async ({ page }) => {
     await enterAudioRoom(page);
-    const props = ['backgroundColor', 'borderTopColor', 'width', 'height'];
+    const props = ['backgroundColor', 'borderTopColor', 'width', 'height', 'backdropFilter'];
     const audioOnly = await pickSettled(page, '#ptt-btn', props);
+    expect(audioOnly.backdropFilter).toBe('none');
     await turnCameraOn(page);
-    expect(await pickSettled(page, '#ptt-btn', props)).toEqual(audioOnly);
+    const onVideo = await pickSettled(page, '#ptt-btn', props);
+
+    expect(onVideo.borderTopColor).toBe(audioOnly.borderTopColor);
+    expect(onVideo.width).toBe(audioOnly.width);
+    expect(onVideo.height).toBe(audioOnly.height);
+    expect(onVideo.backgroundColor).not.toBe(audioOnly.backgroundColor);
+    expect(onVideo.backgroundColor).toContain('rgba');   // translucent
+    expect(onVideo.backdropFilter).not.toBe('none');
+  });
+
+  // There is no slab any more — no plank the width of the screen backing two
+  // controls and a line of text. The bar paints NOTHING; every control on it
+  // carries the glass itself, and the video runs unbroken between them.
+  test('the bar itself paints nothing at all', async ({ page }) => {
+    await enterAudioRoom(page);
+    await turnCameraOn(page);
+    const seen = await page.evaluate(() => {
+      const bar = document.querySelector('.room-bottom-bar');
+      const slab = getComputedStyle(bar, '::before');
+      const own = getComputedStyle(bar);
+      return {
+        slabContent: slab.content,
+        slabBlur: slab.backdropFilter || slab.webkitBackdropFilter,
+        barBg: own.backgroundColor,
+        barBlur: own.backdropFilter || own.webkitBackdropFilter,
+      };
+    });
+    expect(seen.slabContent).toBe('none');    // the pseudo-element is not drawn
+    expect(seen.slabBlur).toBe('none');
+    expect(seen.barBg).toBe('rgba(0, 0, 0, 0)');
+    expect(seen.barBlur).toBe('none');
   });
 
   test('the status line keeps its own colour', async ({ page }) => {
@@ -396,9 +432,10 @@ test.describe('clean mode leaves the mic on the picture', () => {
 
   test.beforeEach(async ({ page }) => { await page.goto('/'); });
 
-  // With the slab faded there is nothing behind the button but video, and an
-  // opaque disc there is a hole punched in the frame.
-  test('the button becomes its own piece of glass', async ({ page }) => {
+  // The button is already glass with the chrome up — that is what every control
+  // on this stage is now. Clean mode simply takes the chips beside it away, so
+  // the button must come through the toggle completely unchanged.
+  test('the button is glass throughout, and the toggle does not touch it', async ({ page }) => {
     await twoCameras(page);
     const glass = () => page.evaluate(() => {
       const st = getComputedStyle(document.getElementById('ptt-btn'));
@@ -406,14 +443,16 @@ test.describe('clean mode leaves the mic on the picture', () => {
                border: st.borderTopColor };
     });
     const withChrome = await glass();
+    expect(withChrome.bg).toContain('rgba');      // translucent, not a solid disc
+    expect(withChrome.blur).not.toBe('none');
+
     await page.evaluate(() => setStageChrome(true));
     await page.waitForTimeout(250);
-    const clean = await glass();
-    expect(clean.bg).not.toBe(withChrome.bg);
-    expect(clean.bg).toContain('rgba');           // translucent, not a solid disc
-    expect(clean.blur).not.toBe('none');
-    // The ring is how the talk button is recognised. It never changes.
-    expect(clean.border).toBe(withChrome.border);
+    expect(await glass()).toEqual(withChrome);
+
+    // …and the thing that DID go is the row beside it.
+    expect(await page.evaluate(() =>
+      getComputedStyle(document.querySelector('.room-controls')).visibility)).toBe('hidden');
   });
 
   // The button already says whether the room can hear you — a green ring, an
@@ -539,16 +578,32 @@ test.describe('tap the video to put the chrome away', () => {
 
   // The bar keeps its full height while the chrome is away, so the band it
   // covers is not part of the stage and its taps would otherwise go nowhere.
-  test('a tap on the invisible bar brings the chrome back', async ({ page }) => {
+  // The bar covers a band at the bottom that is NOT part of #video-stage, so a
+  // tap there is one the stage never sees. It hands it on — and BOTH ways now.
+  // While the controls sat on a translucent plank the bar was a control surface
+  // and a missed button had no business putting the chrome away; the plank is
+  // gone, so what is under that thumb is the picture and it behaves like it.
+  test('a tap on the bar toggles the chrome, in both directions', async ({ page }) => {
     await twoCameras(page);
-    await tapVideo(page);
-    expect(await hidden(page)).toBe(true);
     const where = await page.evaluate(() => {
       const bar = document.querySelector('.room-bottom-bar').getBoundingClientRect();
       const row = document.querySelector('.room-controls').getBoundingClientRect();
       return { x: bar.left + 8, y: row.top + row.height / 2 };
     });
+    // Shown → away.
+    expect(await hidden(page)).toBe(false);
     await page.mouse.click(where.x, where.y);
+    expect(await hidden(page)).toBe(true);
+    // …and back.
+    await page.mouse.click(where.x, where.y);
+    expect(await hidden(page)).toBe(false);
+  });
+
+  // The controls themselves are still controls: pressing one must not also put
+  // the chrome away underneath it.
+  test('a tap on a control on the bar is not a tap on the picture', async ({ page }) => {
+    await twoCameras(page);
+    await page.locator('#btn-freehand').click();
     expect(await hidden(page)).toBe(false);
   });
 
@@ -790,24 +845,24 @@ test.describe('the immersive stage held sideways', () => {
     expect(Math.abs(centres.mic - centres.screen)).toBeLessThanOrEqual(1);
   });
 
-  // No slab sideways: it is one short row of controls, and a blurred plank
-  // behind them would cover a third of a face to back a button that already
-  // carries the same glass itself.
-  test('the controls wear the glass instead of lying on a slab', async ({ page }) => {
+  // Sideways carries the same glass as upright — it used to be the only place
+  // without a slab, and now there is no slab anywhere. Asserted here too because
+  // the landscape block is a separate cascade and could drop it silently.
+  test('the controls wear the glass here as well', async ({ page }) => {
     await withVideo(page);
     const seen = await page.evaluate(() => {
-      const bar = document.querySelector('.room-bottom-bar');
-      const slab = getComputedStyle(bar, '::before');
-      const mic = getComputedStyle(document.getElementById('ptt-btn'));
-      return {
-        slab: slab.display,
-        micBlur: mic.backdropFilter || mic.webkitBackdropFilter,
-        micBg: mic.backgroundColor,
+      const chip = (sel) => {
+        const st = getComputedStyle(document.querySelector(sel));
+        return { bg: st.backgroundColor, blur: st.backdropFilter || st.webkitBackdropFilter };
       };
+      return { mic: chip('#ptt-btn'), btn: chip('#btn-freehand'),
+               slab: getComputedStyle(document.querySelector('.room-bottom-bar'), '::before').content };
     });
     expect(seen.slab).toBe('none');
-    expect(seen.micBlur).not.toBe('none');
-    expect(seen.micBg).toContain('rgba');
+    for (const c of [seen.mic, seen.btn]) {
+      expect(c.bg).toContain('rgba');
+      expect(c.blur).not.toBe('none');
+    }
   });
 
   // Sideways there is no voice layout to match, so both lines go entirely:

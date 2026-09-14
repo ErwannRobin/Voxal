@@ -12755,27 +12755,23 @@ function initStagePanelHandles() {
     scrim._voxalWired = true;
     scrim.addEventListener('pointerdown', function() { closeStagePanels(); toggleChatPanel(false); });
   }
-  // The scrim deliberately stops above the control stack — dimming the talk
-  // button and swallowing its tap is the one thing this layout may not do. But
-  // that leaves the black band around the mic behaving differently from the
-  // video above it: a tap there did nothing, when everywhere else on the stage
-  // it dismisses. So the bar dismisses too, from its own background only —
-  // every actual control inside it is left alone.
+  // The bar covers a band at the bottom of the stage that is NOT part of
+  // `#video-stage`, so a tap there is one the stage never sees. It hands it on.
   var bar = document.querySelector('#screen-room .room-bottom-bar');
   if (bar && !bar._voxalChromeWired) {
     bar._voxalChromeWired = true;
-    // With the chrome away the bar keeps its full height and paints nothing —
-    // the row lost its ink, not its space, so the talk button would not move.
-    // That leaves a band of see-through video at the bottom of the screen that
-    // is not part of the stage and would swallow the tap meant to bring the
-    // controls back. The bar hands it on. One way only: while the dock is up it
-    // is a control surface, and a thumb that misses a button should not put the
-    // whole panel away.
+    // BOTH ways, now that there is no slab. While the controls sat on a
+    // translucent plank the bar was a control surface, and a thumb that missed
+    // a button had no business putting the whole panel away — so this only ever
+    // brought the chrome back. The plank is gone: what is under that thumb is
+    // the picture, exactly as it is an inch higher up, and it has to behave the
+    // same way. Every actual control inside the bar is still left alone
+    // (`_stageTapOnChrome`), so missing one is the only way to reach this.
     bar.addEventListener('click', function(e) {
-      if (!stageChromeHidden()) return;
+      if (!stageChromeToggles()) return;
       if (_stagePinPressFired) return;
       if (_stageTapOnChrome(e)) return;
-      if (stagePanelOpen('header') || stagePanelOpen('roster') || chatPanelOpen()) return;
+      if (stagePanelOpen('roster') || chatPanelOpen()) return;
       toggleStageChrome();
     });
   }
@@ -12787,7 +12783,7 @@ function initStagePanelHandles() {
       // the stage, which paints under this bar, so the press that should pick it
       // up lands here instead — hand it on rather than lose the gesture.
       if (selfBadgeAtPoint(e.clientX, e.clientY)) { _onSelfBadgePointerDown(e); return; }
-      if (!stagePanelOpen('header') && !stagePanelOpen('roster') && !chatPanelOpen()) return;
+      if (!stagePanelOpen('roster') && !chatPanelOpen()) return;
       if (e.target.closest('button, a, input, textarea, select, label, kbd, [role="button"]')) return;
       closeStagePanels();
       toggleChatPanel(false);

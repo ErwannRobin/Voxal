@@ -125,12 +125,21 @@ tiles never reflow when it moves: `applyImmersiveStageInsets()` pins the grid's
 height) only for things that must clear it — the self-view badge's top corners
 and the self camera tile's own flip/background buttons.
 
-Inside `.room-bottom-bar`, anything that hides takes its **ink, not its space**
-(`visibility`, never `display`; a border goes `transparent`, never `none`). The
-bar is bottom-anchored, so anything that collapses drags the talk button down —
-and the mic has to be on the same pixel in a voice room and a video one. Upright
-the hint and the status line are therefore reserved; **sideways** they are
-`display: none`, because there is no voice layout to line up with there.
+`.room-bottom-bar` itself **paints nothing** in video mode: there is no slab
+behind the controls, in either orientation. Each control carries the glass
+instead (`--glass-tint` / `--glass-sheen` / `--glass-blur`, declared on the bar),
+so the video runs unbroken between them. The talk button's accent **ring** is the
+one thing that never changes — only its fill turns to glass. Because the bar
+paints nothing, a tap on its bare background is a tap on the picture and toggles
+the chrome both ways (`initStagePanelHandles()` hands it to `toggleStageChrome()`
+— `#video-stage` does not extend under the bar, so the stage never sees it).
+
+Anything that hides in there takes its **ink, not its space** (`visibility`,
+never `display`; a border goes `transparent`, never `none`). The bar is
+bottom-anchored, so anything that collapses drags the talk button down — and the
+mic has to be on the same pixel in a voice room and a video one. Upright the hint
+and the status line are therefore reserved; **sideways** they are `display: none`,
+because there is no voice layout to line up with there.
 
 `--stage-safe-top` (`:root`, floored at 24px under `html.is-native`) is what
 keeps the header's buttons clear of an overlaid status bar. The immersive stage
