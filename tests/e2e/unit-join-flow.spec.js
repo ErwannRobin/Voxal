@@ -537,3 +537,87 @@ test.describe('leaveRoom', () => {
     expect(snapshot).toMatchObject({ hostId: 'room-abc', wasHost: true });
   });
 });
+
+// A named room whose published host has died. The broker answers a dead peer
+// with one EXPIRE per signalling message it still had queued for it, so
+// 'peer-unavailable' arrives several times — long after the first one rejected
+// the join and the caller moved on to creating the room. None of those late
+// reports is anybody's join any more.
+test.describe('a stale host hands over cleanly', () => {
+  const DEAD = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+
+  test('the first peer-unavailable rejects the join with a readable message', async ({ page }) => {
+    const seen = await page.evaluate(async (dead) => {
+      const p = joinRoom(dead);
+      const peer1 = await window.__waitPeer();
+      peer1.emit('open');
+      const err = new Error('Could not connect to peer ' + dead);
+      err.type = 'peer-unavailable';
+      peer1.emit('error', err);
+      let message = null;
+      try { await p; } catch (e) { message = e.message; }
+      return { message, inRoom };
+    }, DEAD);
+    expect(seen.message).toBe('Room not found or host is unreachable.');
+    expect(seen.inRoom).toBe(false);
+  });
+
+  test('a repeat report on the abandoned peer never reaches the screen', async ({ page }) => {
+    const seen = await page.evaluate(async (dead) => {
+      const shown = [];
+      const realShowError = window.showError;
+      window.showError = (m) => { shown.push(m); };
+      try {
+        const p = joinRoom(dead);
+        const peer1 = await window.__waitPeer();
+        peer1.emit('open');
+        const mk = () => {
+          const e = new Error('Could not connect to peer ' + dead);
+          e.type = 'peer-unavailable';
+          return e;
+        };
+        peer1.emit('error', mk());
+        try { await p; } catch (_) {}
+        // The caller falls back to creating the room. That is still in flight
+        // (fetchIceServers is a real await) when the broker repeats itself.
+        window.__lastPeer = null;
+        const created = createRoom();
+        peer1.emit('error', mk());
+        const peer2 = await window.__waitPeer();
+        peer1.emit('error', mk());
+        peer2.emit('open', 'fresh-room');
+        await created;
+        return { shown, inRoom, isHost, roomCode, orphanDestroyed: peer1.destroyed };
+      } finally {
+        window.showError = realShowError;
+      }
+    }, DEAD);
+    expect(seen.shown).toEqual([]);
+    expect(seen.inRoom).toBe(true);
+    expect(seen.isHost).toBe(true);
+    expect(seen.roomCode).toBe('fresh-room');
+    // And the peer that failed is gone rather than left holding a broker socket.
+    expect(seen.orphanDestroyed).toBe(true);
+  });
+
+  test('createRoom tears down whatever peer the failed join left behind', async ({ page }) => {
+    const seen = await page.evaluate(async (dead) => {
+      const p = joinRoom(dead);
+      const peer1 = await window.__waitPeer();
+      peer1.emit('open');
+      const err = new Error('Could not connect to peer ' + dead);
+      err.type = 'peer-unavailable';
+      peer1.emit('error', err);
+      try { await p; } catch (_) {}
+      window.__lastPeer = null;
+      const created = createRoom();
+      const peer2 = await window.__waitPeer();
+      peer2.emit('open', 'fresh-room');
+      await created;
+      return { orphanDestroyed: peer1.destroyed, live: peer === peer2, peers: window.__peers.length };
+    }, DEAD);
+    expect(seen.orphanDestroyed).toBe(true);
+    expect(seen.live).toBe(true);
+    expect(seen.peers).toBe(2);
+  });
+});

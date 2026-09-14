@@ -2752,6 +2752,16 @@ function consumeRoomInviteFromQuery() {
   }
 }
 
+// A join attempt that failed owns a live Peer: a broker socket, an id the
+// broker still hands out, and handlers that would accept a joiner. Every caller
+// that falls back (to the next candidate host, or to creating the room) must
+// tear it down first, or the fallback runs beside an orphan that is still being
+// told about the dead host — see discardJoinPeer()'s callers.
+function discardJoinPeer() {
+  if (peer && !peer.destroyed) { try { peer.destroy(); } catch (_) {} }
+  peer = null;
+}
+
 function isNonFatalPeerRuntimeError(err) {
   if (!err) return false;
   var type = err.type || '';
@@ -2991,7 +3001,12 @@ function _tryNativeAppThenJoin(roomId) {
     // App not installed or didn't respond — join in the browser
     showInviteLoading(roomId, 'Connecting…');
     if (_audioCtx.state === 'suspended') _audioCtx.resume();
-    joinRoom(roomId).catch(function(err) { showError(err.message); });
+    // A named code has to go through joinOrCreateByChannelName like every other
+    // entry point: joinRoom() alone resolves the name to whatever host the
+    // service last published and gives up when that host is gone, instead of
+    // claiming the empty room.
+    var joinFn = !UUID_RE.test(roomId) ? joinOrCreateByChannelName : joinRoom;
+    joinFn(roomId).catch(function(err) { showError(err.message); });
   }, WAIT_MS);
 }
 
@@ -16027,6 +16042,10 @@ async function createRoom(onJoined) {
     if (peer && !peer.destroyed) peer.destroy();
   };
 
+  // Creating a room always starts a fresh Peer, so anything still open here is
+  // a leftover — typically the failed join that fell back to us. Drop it before
+  // the await, so it cannot outlive us on the broker.
+  discardJoinPeer();
   knownPeerIds.clear();
   _lastAuthoritativePeerIds = null;
   _authoritativeSuccessorIds = [];
@@ -16431,6 +16450,7 @@ async function joinRoom(code, onJoined) {
   devLog('✓ ICE: ' + iceServers.length + ' server(s)');
   devLog('→ Connecting to PeerJS broker…');
   peer = new Peer(Object.assign({ config: { iceServers } }, peerServerOptions()));
+  var joinPeer = peer;
   // Accept incoming connections in case this peer becomes host after migration
   peer.on('connection', function(dataConn) {
     if (shouldAcceptJoinerDataConnection(dataConn.peer)) {
@@ -16482,6 +16502,18 @@ async function joinRoom(code, onJoined) {
         handlePeerRuntimeError(err, false, function(e) { settle(reject, e); });
         return;
       }
+      // A dead host is reported more than once: the broker queues every
+      // signalling message we sent it and answers each one with its own EXPIRE,
+      // so 'peer-unavailable' keeps arriving after the first one already
+      // rejected this join. By then the caller has moved on — it is creating
+      // the room instead — and inRoom is still false, so the settled branch
+      // below would put "Room not found or host is unreachable" on screen for a
+      // room that is about to open fine. Errors from a Peer we have replaced,
+      // or destroyed, are about nobody's join any more.
+      if (peer !== joinPeer || joinPeer.destroyed) {
+        console.warn('[peer-runtime] (superseded join)', err);
+        return;
+      }
       handlePeerRuntimeError(err, true, reject);
     });
   });
@@ -16499,8 +16531,7 @@ async function attemptRejoin() {
       return; // success — new room state will overwrite the snapshot
     } catch (err) {
       // Clean up the failed Peer before retrying
-      if (peer && !peer.destroyed) { try { peer.destroy(); } catch (_) {} }
-      peer = null;
+      discardJoinPeer();
       if (!isNonFatalPeerRuntimeError(err)) {
         // Fatal error — release mic and bail
         stopMicStreamFully(stream); stream = null; audioTrack = null;
@@ -16688,6 +16719,7 @@ async function joinChannel(item) {
         if (err && err.message === 'Connection cancelled.') throw err;
         if (isMicDeniedError(err)) throw err;
         // Stale anonymous host — fall through to create.
+        discardJoinPeer();
       }
     }
     showInviteLoading(activeChannel || '', 'Connecting…');
@@ -16711,8 +16743,7 @@ async function joinChannel(item) {
         return;
       } catch (err) {
         lastError = err;
-        if (peer && !peer.destroyed) { try { peer.destroy(); } catch (_) {} }
-        peer = null;
+        discardJoinPeer();
         if (!isNonFatalPeerRuntimeError(err)) {
           allUnavailable = false;
           break;
@@ -16785,6 +16816,7 @@ async function joinOrCreateByChannelName(channelName) {
         if (joinErr.message === 'Connection cancelled.') throw joinErr;
         if (isMicDeniedError(joinErr)) throw joinErr;
         // Stale host — fall through to claim the slot.
+        discardJoinPeer();
         devLog('✗ Stale host for "' + claimSlug + '", claiming host slot…', 'warn');
       }
       if (cancelled) throw new Error('Connection cancelled.');
