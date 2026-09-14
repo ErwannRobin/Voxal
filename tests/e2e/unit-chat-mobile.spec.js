@@ -213,44 +213,53 @@ test.describe('the peek beside the name that sent it', () => {
 test.describe('the self-view beside the mic', () => {
   test('a badge dropped in the band beside the mic parks there', async ({ page }) => {
     await room(page);
-    const corner = await page.evaluate(() => nearestBadgeCorner(
+    const placement = await page.evaluate(() => selfBadgePlacementFor(
       { left: 20, top: 700, width: 120, height: 68 },
       { width: 390, height: 800 },
-      { top: 640, centre: 90, width: 130 }
+      { top: 640, centre: 90, width: 130 },
+      {}
     ));
-    expect(corner).toBe('barl');
+    expect(placement).toEqual({ slot: 'barl' });
   });
 
   test('the right-hand side of the band is its own slot', async ({ page }) => {
     await room(page);
-    const corner = await page.evaluate(() => nearestBadgeCorner(
+    const placement = await page.evaluate(() => selfBadgePlacementFor(
       { left: 250, top: 700, width: 120, height: 68 },
       { width: 390, height: 800 },
-      { top: 640, centre: 90, width: 130 }
+      { top: 640, centre: 90, width: 130 },
+      {}
     ));
-    expect(corner).toBe('barr');
+    expect(placement).toEqual({ slot: 'barr' });
   });
 
-  test('with no band the drop is a corner, exactly as before', async ({ page }) => {
+  test('with no band the drop is an ordinary edge', async ({ page }) => {
     await room(page);
-    const corner = await page.evaluate(() => nearestBadgeCorner(
+    const placement = await page.evaluate(() => selfBadgePlacementFor(
       { left: 20, top: 700, width: 120, height: 68 },
       { width: 390, height: 800 },
-      null
+      null,
+      {}
     ));
-    expect(corner).toBe('bl');
+    // Let go at the bottom of the screen with no band to park in: the bottom
+    // border, near its left-hand end.
+    expect(placement.side).toBe('bottom');
+    expect(placement.tucked).toBe(false);
+    expect(placement.pos).toBeLessThan(0.1);
+    expect(await page.evaluate((p) => selfBadgeCornerToken(p), placement)).toBe('bl');
   });
 
-  test('a phone on its side hands a parked badge back to a corner', async ({ page }) => {
+  test('a phone on its side hands a parked badge back to an edge', async ({ page }) => {
     await room(page, PHONE_LANDSCAPE);
-    const corner = await page.evaluate(() => {
-      setSelfBadgeCorner('barr');
+    const fallback = await page.evaluate(() => {
+      setSelfBadgePlacement({ slot: 'barr' });
       // No band: the talk button fills the short strip it sits in.
-      return effectiveSelfBadgeCorner(null);
+      return effectiveSelfBadgePlacement(null);
     });
-    expect(corner).toBe('br');
+    expect(fallback).toEqual({ side: 'right', pos: 1, tucked: false });
     // …and the stored choice survives, so turning back upright restores it.
-    expect(await page.evaluate(() => effectiveSelfBadgeCorner({ top: 300, centre: 60, width: 120 })))
-      .toBe('barr');
+    expect(await page.evaluate(
+      () => effectiveSelfBadgePlacement({ top: 300, centre: 60, width: 120 })))
+      .toEqual({ slot: 'barr' });
   });
 });

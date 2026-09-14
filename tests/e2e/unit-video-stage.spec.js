@@ -575,29 +575,83 @@ test.describe('the self-view badge', () => {
     expect(writes).toBe(0);
   });
 
-  test('nearestBadgeCorner snaps by the badge centre', async ({ page }) => {
+  test('a drop pins to the nearest edge, keeping how far along it you let go', async ({ page }) => {
     const stage = { width: 1000, height: 600 };
-    const at = (left, top) => callFn(page, 'nearestBadgeCorner', { left, top, width: 200, height: 120 }, stage);
-    expect(await at(0, 0)).toBe('tl');
-    expect(await at(800, 0)).toBe('tr');
-    expect(await at(0, 480)).toBe('bl');
-    expect(await at(800, 480)).toBe('br');
-    // Centre just past the midpoint counts as the far corner, not the near one.
-    expect(await at(401, 241)).toBe('br');
-    expect(await at(399, 239)).toBe('tl');
+    const at = (left, top) => callFn(
+      page, 'selfBadgePlacementFor', { left, top, width: 200, height: 120 }, stage, null, {});
+    // Nearest border by the badge's centre, not its top-left.
+    expect(await at(0, 0)).toMatchObject({ side: 'top', tucked: false });
+    expect(await at(800, 240)).toMatchObject({ side: 'right', tucked: false });
+    expect(await at(0, 240)).toMatchObject({ side: 'left', tucked: false });
+    expect(await at(400, 480)).toMatchObject({ side: 'bottom', tucked: false });
+    // The fraction along that border is what makes a drop land where you let go
+    // rather than at the corner nearest it. Measured on a tall stage, where a
+    // drop near either end of a side is still nearest to that side.
+    const tall = { width: 400, height: 1000 };
+    const along = (top) => callFn(
+      page, 'selfBadgePlacementFor', { left: 0, top, width: 100, height: 60 }, tall, null, {});
+    expect((await along(20)).pos).toBeLessThan(0.05);
+    expect((await along(500)).pos).toBeGreaterThan(0.45);
+    expect((await along(500)).pos).toBeLessThan(0.55);
+    expect((await along(916)).pos).toBeGreaterThan(0.95);
+    expect((await along(500)).side).toBe('left');
   });
 
-  test('the corner is remembered, and a stored nonsense value is ignored', async ({ page }) => {
-    await page.evaluate(() => setSelfBadgeCorner('tl'));
-    expect(await page.evaluate(() => localStorage.getItem('self-video-corner'))).toBe('tl');
-    expect(await page.evaluate(() => document.getElementById('video-stage-self').dataset.corner)).toBe('tl');
-    expect(await page.evaluate(() => readSelfBadgeCorner())).toBe('tl');
+  test('pushed off a border, the drop tucks it there instead', async ({ page }) => {
+    const stage = { width: 1000, height: 600 };
+    const at = (left, top) => callFn(
+      page, 'selfBadgePlacementFor', { left, top, width: 200, height: 120 }, stage, null, {});
+    expect(await at(-160, 240)).toMatchObject({ side: 'left', tucked: true });
+    expect(await at(960, 240)).toMatchObject({ side: 'right', tucked: true });
+    expect(await at(400, -100)).toMatchObject({ side: 'top', tucked: true });
+    expect(await at(400, 560)).toMatchObject({ side: 'bottom', tucked: true });
+    // A nudge past the border is not a tuck — it pins to that edge as usual.
+    expect(await at(-8, 240)).toMatchObject({ side: 'left', tucked: false });
+  });
+
+  test('a tucked badge keeps a sliver on the stage, at the same point on its edge',
+    async ({ page }) => {
+      const badge = { width: 200, height: 120 };
+      const stage = { width: 1000, height: 600 };
+      const offsets = (p) => callFn(page, 'selfBadgeOffsets', p, badge, stage, {});
+      const peek = await page.evaluate(() => SELF_BADGE_PEEK);
+      const left = await offsets({ side: 'left', pos: 0.5, tucked: true });
+      const right = await offsets({ side: 'right', pos: 0.5, tucked: true });
+      expect(left.left).toBe(peek - badge.width);
+      expect(right.left).toBe(stage.width - peek);
+      // Same fraction, same point on the edge: it comes back where it went in.
+      expect(left.top).toBe((await offsets({ side: 'left', pos: 0.5, tucked: false })).top);
+      const top = await offsets({ side: 'top', pos: 0, tucked: true });
+      expect(top.top).toBe(peek - badge.height);
+    });
+
+  test('the placement is remembered, and a stored nonsense value is ignored', async ({ page }) => {
+    await page.evaluate(() => setSelfBadgePlacement({ side: 'left', pos: 0.25, tucked: true }));
+    expect(await page.evaluate(() => localStorage.getItem('self-video-corner'))).toBe('left:0.25:tuck');
+    expect(await page.evaluate(() => readSelfBadgePlacement()))
+      .toMatchObject({ side: 'left', pos: 0.25, tucked: true });
+
+    // A corner written by an older build still means what it meant.
+    await page.evaluate(() => localStorage.setItem('self-video-corner', 'tl'));
+    expect(await page.evaluate(() => readSelfBadgePlacement()))
+      .toMatchObject({ side: 'left', pos: 0, tucked: false });
 
     await page.evaluate(() => localStorage.setItem('self-video-corner', 'somewhere'));
-    expect(await page.evaluate(() => readSelfBadgeCorner())).toBe('br');
+    expect(await page.evaluate(() => readSelfBadgePlacement()))
+      .toMatchObject({ side: 'right', pos: 1, tucked: false });
   });
 
-  test('dragging it snaps to the nearest corner without pinning the tile', async ({ page }) => {
+  test('the quadrant published for CSS follows the edge and the fraction', async ({ page }) => {
+    const token = (p) => callFn(page, 'selfBadgeCornerToken', p);
+    expect(await token({ side: 'left', pos: 0 })).toBe('tl');
+    expect(await token({ side: 'left', pos: 1 })).toBe('bl');
+    expect(await token({ side: 'right', pos: 0 })).toBe('tr');
+    expect(await token({ side: 'top', pos: 0.9 })).toBe('tr');
+    expect(await token({ side: 'bottom', pos: 0.1 })).toBe('bl');
+    expect(await token({ slot: 'barl' })).toBe('barl');
+  });
+
+  test('dragging it glues it to the nearest edge without pinning the tile', async ({ page }) => {
     await enterRoom(page, {
       knownPeerIds: ['p1'],
       connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
@@ -608,24 +662,34 @@ test.describe('the self-view badge', () => {
 
     const box = await badge.boundingBox();
     const stage = await page.locator('#video-stage').boundingBox();
+    // Let go halfway down the left-hand side, with the badge still on the stage
+    // (grabbed by its middle, so the pointer travels to half a badge in).
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
-    await page.mouse.move(stage.x + 30, stage.y + 30, { steps: 8 });
+    await page.mouse.move(stage.x + box.width / 2, stage.y + stage.height / 2, { steps: 8 });
     await page.mouse.up();
 
-    expect(await badge.getAttribute('data-corner')).toBe('tl');
-    expect(await page.evaluate(() => localStorage.getItem('self-video-corner'))).toBe('tl');
+    const placement = await page.evaluate(() => _selfBadgePlacement);
+    expect(placement.side).toBe('left');
+    expect(placement.tucked).toBe(false);
+    expect(placement.pos).toBeGreaterThan(0.2);
+    expect(placement.pos).toBeLessThan(0.8);
+    expect(await page.evaluate(() => localStorage.getItem('self-video-corner')))
+      .toMatch(/^left:[\d.]+$/);
     // A drag ends in a click; letting it through would pin the tile to focus.
     expect(await page.evaluate(() => _stagePinnedKey)).toBeNull();
-    // Snapped back to a corner: no inline offset survives the drop.
-    expect(await page.evaluate(() => document.getElementById('video-stage-self').style.left)).toBe('');
 
+    // On the left-hand border, and still roughly where it was let go. Polled:
+    // the snap is a transition, so the badge is still travelling for a frame.
+    await expect
+      .poll(async () => Math.round((await badge.boundingBox()).x - stage.x))
+      .toBe(12);
     const after = await badge.boundingBox();
-    expect(after.x).toBeLessThan(stage.x + stage.width / 2);
-    expect(after.y).toBeLessThan(stage.y + stage.height / 2);
+    expect(Math.abs((after.y + after.height / 2) - (stage.y + stage.height / 2)))
+      .toBeLessThan(after.height);
   });
 
-  test('the badge stays inside the stage when dragged past its edge', async ({ page }) => {
+  test('dragged off the stage, the badge tucks under that border', async ({ page }) => {
     await enterRoom(page, {
       knownPeerIds: ['p1'],
       connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
@@ -634,14 +698,39 @@ test.describe('the self-view badge', () => {
     const badge = page.locator('#video-stage-self');
     const box = await badge.boundingBox();
     const stage = await page.locator('#video-stage').boundingBox();
+    const peek = await page.evaluate(() => SELF_BADGE_PEEK);
 
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
-    await page.mouse.move(stage.x - 400, stage.y - 400, { steps: 6 });
+    await page.mouse.move(stage.x - 400, stage.y + stage.height / 2, { steps: 6 });
+    // Off the stage, but never entirely: a sliver is left to grab it by.
     const during = await badge.boundingBox();
-    expect(during.x).toBeGreaterThanOrEqual(stage.x - 1);
-    expect(during.y).toBeGreaterThanOrEqual(stage.y - 1);
+    expect(during.x).toBeLessThan(stage.x);
+    expect(Math.round(during.x + during.width - stage.x)).toBe(peek);
     await page.mouse.up();
+
+    expect(await page.evaluate(() => _selfBadgePlacement.tucked)).toBe(true);
+    expect(await page.evaluate(() => localStorage.getItem('self-video-corner')))
+      .toMatch(/^left:[\d.]+:tuck$/);
+    expect(await badge.evaluate((el) => el.classList.contains('tucked'))).toBe(true);
+    await expect
+      .poll(async () => {
+        const b = await badge.boundingBox();
+        return Math.round(b.x + b.width - stage.x);
+      })
+      .toBe(peek);
+
+    // The sliver is a handle: a tap on it brings the badge back, and must not
+    // pin the tile to the focus slot on the way. Clicked where it actually is —
+    // most of the badge is off the stage, and its centre with it.
+    const sliver = await badge.boundingBox();
+    await page.mouse.click(stage.x + peek / 2, sliver.y + sliver.height / 2);
+    expect(await page.evaluate(() => _selfBadgePlacement.tucked)).toBe(false);
+    expect(await page.evaluate(() => _stagePinnedKey)).toBeNull();
+    expect(await badge.evaluate((el) => el.classList.contains('tucked'))).toBe(false);
+    await expect
+      .poll(async () => Math.round((await badge.boundingBox()).x - stage.x))
+      .toBe(12);
   });
 
   test('a plain click still pins the self-view, as on any other tile', async ({ page }) => {

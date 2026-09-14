@@ -2052,9 +2052,11 @@ body.video-stage-immersive #screen-room #video-stage-focus .video-tile-bg {
 .video-tile-self.video-tile-camera .video-tile-flip { transform: scaleX(-1); }
 .video-tile-self.video-tile-camera[data-facing="environment"] .video-tile-flip { transform: none; }
 
-/* The self-view badge is anchored to the stage's corners, and the stage now
-   runs under the chrome — so without this it parks on the control stack. The
-   insets are published by applyImmersiveStageInsets() from real measurements. */
+/* The self-view badge is anchored to the stage's edges, and the stage now runs
+   under the chrome — so without this it parks on the control stack. The insets
+   are published by applyImmersiveStageInsets() from real measurements, and are
+   read again by stageBadgeInsets() for the inline offsets that place the badge
+   along an edge rather than at one of these corners. */
 body.video-stage-immersive #video-stage-self[data-corner="tl"],
 body.video-stage-immersive #video-stage-self[data-corner="tr"] {
   top: calc(var(--stage-inset-top, 0px) + 12px);
@@ -2072,7 +2074,7 @@ body.video-stage-immersive #video-stage-self[data-corner="br"] {
    narrower side actually has. Whether the band exists at all is that
    measurement and nothing else — below SELF_BADGE_BAR_MIN_SIDE there is no
    slot, and a badge parked in one is handed back to a bottom corner without
-   losing the stored choice. See effectiveSelfBadgeCorner(). */
+   losing the stored choice. See effectiveSelfBadgePlacement(). */
 body.video-stage-immersive #video-stage-self[data-corner="barl"],
 body.video-stage-immersive #video-stage-self[data-corner="barr"] {
   top: auto;
@@ -2291,10 +2293,15 @@ body.video-stage-immersive #screen-room .video-stage-ribbon .video-tile { border
 }
 
 /* The minimized self-view: a small badge floating over the stage, dragged to
-   whichever corner suits and snapped there on release. Corner-anchored rather
-   than free-floating, so a resize can never leave it parked over someone's
-   face. It holds a tile only while someone else has a camera on — alone, your
-   self-view is the content and takes the stage like any other tile. */
+   whichever border suits and glued there on release — edge-anchored rather than
+   free-floating, so a resize can never leave it parked over someone's face. It
+   holds a tile only while someone else has a camera on — alone, your self-view
+   is the content and takes the stage like any other tile.
+
+   Its exact offsets are inline, written by applySelfBadgePlacement() from the
+   stored edge and the fraction along it. The [data-corner] rules below are the
+   fallback that holds it before it has ever been measured (and while it is
+   hidden, where there is nothing to measure); inline wins over them. */
 .video-stage-self {
   position: absolute;
   z-index: 3;
@@ -2305,15 +2312,33 @@ body.video-stage-immersive #screen-room .video-stage-ribbon .video-tile { border
   border-radius: 10px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
   cursor: grab;
+  /* The snap at the end of a drag, and the slide in and out of a tuck. */
+  transition: left 0.18s ease, top 0.18s ease, opacity 0.18s ease;
   /* Or the browser claims the gesture as a scroll/pan before we see it. */
   touch-action: none;
 }
 .video-stage-self.dragging {
   cursor: grabbing;
   user-select: none;
+  /* The badge is under the pointer, not sliding to a destination. */
+  transition: none;
   /* Lifted while dragging so the drop target is unambiguous. */
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
 }
+/* Dragged off the side of the stage and left there: only a sliver of it is on
+   screen. That sliver is a handle, not a picture — its own controls would be
+   half off the screen — so they go, and a tap on what is left brings the badge
+   back to the edge it was pushed through. */
+.video-stage-self.tucked {
+  opacity: 0.55;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+}
+.video-stage-self.tucked:hover,
+.video-stage-self.tucked:focus-within { opacity: 0.9; }
+.video-stage-self.tucked .video-tile-flip,
+.video-stage-self.tucked .video-tile-bg,
+.video-stage-self.tucked .video-tile-name { display: none; }
 .video-stage-self[data-corner="tl"] { top: 12px; left: 12px; }
 .video-stage-self[data-corner="tr"] { top: 12px; right: 12px; }
 /* The ribbon owns the bottom of the stage while it is up, so the badge steps
@@ -5556,6 +5581,9 @@ html.is-desktop-app body.chat-side.chat-open:not(.embed-tiny) {
 .chat-peek.chat-peek-muted { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
+  /* The self-view lands where it was let go; it does not need to be seen
+     travelling there. */
+  .video-stage-self { transition: none; }
   .chat-peek-item,
   .chat-peek-anchored .chat-peek-item { animation: none; }
   /* The flight is the only thing that says which message a reaction belongs to,

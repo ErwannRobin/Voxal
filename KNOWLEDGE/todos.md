@@ -461,15 +461,19 @@ roster row**, which decides what *you* see and never what anyone transmits — o
 someone else's row it shows/hides their tile (their camera is untouched and
 nothing is signalled), on your own it shows/hides your self-view, while the
 footer Camera button keeps sole ownership of the stream. And your **self-view is
-a small badge floating over the stage** that can be dragged to any corner and
-snaps there, maximising into a real tile only when nobody else has a camera on.
+a small badge floating over the stage** that can be dragged to any of its
+borders and glues itself there, maximising into a real tile only when nobody
+else has a camera on. (Corners at first — it now pins anywhere along an edge,
+and tucks off the screen if you push it past one. See `KNOWLEDGE/learning.md`.)
 The same pass gave the debug-consent banner its own grid row on the stage — it
 shared `header` with `.room-header` and its buttons sat on the room's own.
 
 **Not done — deliberately out of scope for this pass:**
 - **Keyboard access to the badge.** Dragging is pointer-only; there is no
-  arrow-key nudge or corner picker for keyboard users. Clicking it still pins,
-  and the corner is remembered, so this is a comfort gap rather than a lockout.
+  arrow-key nudge or edge picker for keyboard users. Clicking it still pins, and
+  the placement is remembered, so this is a comfort gap rather than a lockout.
+  It now also covers the tuck: a badge pushed off the edge can only be brought
+  back by tapping the sliver.
 - ~~**Mobile / narrow web (<861px)** keeps the floating viewer panel.~~ ✅ **Done**
   — see the section below.
 - **Tauri desktop** still short-circuits to the WebviewWindow pop-out
@@ -758,11 +762,11 @@ turned on its side — no spare height:
   is a circle in the middle of a wide black band, and that band is the only part
   of the screen that is not somebody's face — so `barl` / `barr` join the four
   corners as places to drop the badge (`selfBadgeBarSlots()` measures the band;
-  `nearestBadgeCorner()` takes it as a third argument). Whether the slots exist
-  is measured, never inferred from orientation: below
+  `selfBadgePlacementFor()` takes it as a third argument). Whether the slots
+  exist is measured, never inferred from orientation: below
   `SELF_BADGE_BAR_MIN_SIDE` there is no band, and a badge parked in one is
-  handed back to a bottom corner without losing the stored choice
-  (`effectiveSelfBadgeCorner()`), so turning the phone back returns it. The
+  handed back to a bottom edge without losing the stored choice
+  (`effectiveSelfBadgePlacement()`), so turning the phone back returns it. The
   badge lives inside the stage, which paints under the control bar, so the bar
   forwards a press that lands on it (`selfBadgeAtPoint()`) rather than losing
   the gesture.

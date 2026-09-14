@@ -11948,15 +11948,16 @@ function renderVideoStage(tiles, focusKey, badgeKey) {
   });
 
   focusEl.classList.toggle('hidden', !focusKey);
-  if (badgeEl) {
-    badgeEl.classList.toggle('hidden', !badgeKey);
-    badgeEl.dataset.corner = _selfBadgeCorner;
-  }
+  if (badgeEl) badgeEl.classList.toggle('hidden', !badgeKey);
   // Toggled BEFORE the grid is measured: the ribbon is a flex sibling, so its
   // presence is part of the box the column count is chosen against.
   if (ribbonWrap) ribbonWrap.classList.toggle('hidden', !split.ribbonKeys.length);
   layoutVideoStageGrid(gridEl, focusKey ? 0 : split.gridKeys.length);
   updateStageRibbonOverflow();
+  // After the layout, not before: the badge is placed from its own measured box,
+  // and it was `hidden` — so unmeasurable — until two lines ago. The grid's own
+  // pass calls this too, but it is skipped entirely while a tile is pinned.
+  applySelfBadgePlacement();
 }
 
 // The space the grid has to work with, in content-box terms and independent of
@@ -12225,7 +12226,7 @@ function applyImmersiveStageInsets(gridEl) {
     if (ribbonWrap) ribbonWrap.style.removeProperty('padding-bottom');
     document.documentElement.style.removeProperty('--stage-inset-top');
     document.documentElement.style.removeProperty('--stage-inset-bottom');
-    applySelfBadgeCorner();
+    applySelfBadgePlacement();
     return;
   }
   if (!stage) return;
@@ -12262,9 +12263,9 @@ function applyImmersiveStageInsets(gridEl) {
   document.documentElement.style.setProperty('--stage-inset-top', insetTop + 'px');
   document.documentElement.style.setProperty('--stage-inset-bottom', insetBottom + 'px');
   // The slots beside the mic are measured from that same control stack, and a
-  // badge parked in one has to be handed back to a corner the moment the stack
+  // badge parked in one has to be handed back to an edge the moment the stack
   // stops having room for it (a phone turned on its side).
-  applySelfBadgeCorner();
+  applySelfBadgePlacement();
 }
 
 function layoutVideoStageGrid(gridEl, count) {
@@ -12808,59 +12809,188 @@ function initStagePanelHandles() {
 
 // --- The minimized self-view badge --------------------------------------------
 //
-// The badge is corner-anchored rather than free-floating: a self-view parked at
-// an arbitrary offset drifts over someone's face as soon as the window is
-// resized, whereas a corner stays a corner at every size, with no state to
-// recompute. Dragging is therefore a *pick a corner* gesture — the badge follows
-// the pointer, then snaps to whichever corner it was let go nearest.
+// The badge is edge-anchored rather than free-floating: a self-view parked at an
+// arbitrary offset drifts over someone's face the moment the window is resized.
+// So a drag is a *pick an edge* gesture — the badge follows the pointer and, on
+// release, glues itself to whichever border of the stage it was let go nearest,
+// remembering how far ALONG that border it was dropped as a fraction. A fraction
+// survives every size with nothing to recompute, and unlike the four fixed
+// corners of the first version it lands where you actually put it, which is what
+// made dropping a badge halfway down a side feel arbitrary.
+//
+// Pushed off the stage, it TUCKS instead: the badge slides under that border and
+// leaves a sliver (SELF_BADGE_PEEK) showing. That is both how you put it away
+// without switching your camera off and how you get it back — the sliver is a
+// handle, and a tap on it brings the badge home to the edge it came from.
 
-// The four corners of the stage, plus the two slots either side of the mic. On
-// a phone held upright the talk button is a circle in the middle of a wide black
-// band, and the space left and right of it is the only place a self-view can go
-// without covering somebody's face — so it is offered as somewhere to park,
-// exactly like a corner. There is no such space in landscape (the band is short
-// and the button fills it), which is what selfBadgeBarSlots() tests.
-var SELF_BADGE_CORNERS = ['tl', 'tr', 'bl', 'br', 'barl', 'barr'];
+// The two slots either side of the mic are the one placement that is not an
+// edge. On a phone held upright the talk button is a circle in the middle of a
+// wide black band, and the space left and right of it is the only place a
+// self-view can go without covering somebody's face — so it is offered as
+// somewhere to park, exactly like an edge. There is no such space in landscape
+// (the band is short and the button fills it), which is what selfBadgeBarSlots()
+// tests.
+var SELF_BADGE_SIDES = ['left', 'right', 'top', 'bottom'];
 var SELF_BADGE_BAR_SLOTS = ['barl', 'barr'];
+// What the four corners this used to store mean as edge placements. A corner IS
+// a vertical edge at one end of its travel, so an upgrade moves nothing.
+var SELF_BADGE_LEGACY = { tl: 'left:0', tr: 'right:0', bl: 'left:1', br: 'right:1' };
 // The narrowest side band worth parking in. Below this the badge is either on
 // top of the talk button or too small to be a self-view.
 var SELF_BADGE_BAR_MIN_SIDE = 104;
 var SELF_BADGE_BAR_MAX_WIDTH = 150;
 var SELF_BADGE_BAR_GAP = 10;
-var _selfBadgeCorner = readSelfBadgeCorner();
+var SELF_BADGE_EDGE_GAP = 12;    // the gap a pinned badge keeps off its border
+var SELF_BADGE_PEEK = 26;        // how much of a tucked badge stays grabbable
+var SELF_BADGE_TUCK_MIN = 20;    // overshoot past a border before a drop tucks
+var _selfBadgePlacement = readSelfBadgePlacement();
 var _selfBadgeDrag = null;
-var _selfBadgeDragged = false;   // a drag just ended: swallow the click it produces
+var _selfBadgeDragged = false;       // the pointer moved: this press is a drag
+var _selfBadgeSwallowClick = false;  // ...and the click it ends with is not a pin
 
-function readSelfBadgeCorner() {
-  try {
-    var stored = localStorage.getItem(SELF_VIDEO_CORNER_KEY);
-    if (SELF_BADGE_CORNERS.indexOf(stored) >= 0) return stored;
-  } catch (e) { /* private mode / disabled storage */ }
-  return 'br';
+// A placement is `{slot}` for the band beside the mic, or `{side, pos, tucked}`
+// for an edge. Stored as one short string so the key stays human-readable and a
+// corner written by an older build still parses.
+function parseSelfBadgePlacement(raw) {
+  if (!raw) return null;
+  if (SELF_BADGE_BAR_SLOTS.indexOf(raw) >= 0) return { slot: raw };
+  if (SELF_BADGE_LEGACY[raw]) raw = SELF_BADGE_LEGACY[raw];
+  var parts = String(raw).split(':');
+  if (SELF_BADGE_SIDES.indexOf(parts[0]) < 0) return null;
+  var pos = parseFloat(parts[1]);
+  if (!isFinite(pos)) return null;
+  return { side: parts[0], pos: Math.max(0, Math.min(1, pos)), tucked: parts[2] === 'tuck' };
 }
 
-function setSelfBadgeCorner(corner) {
-  if (SELF_BADGE_CORNERS.indexOf(corner) < 0) return;
-  _selfBadgeCorner = corner;
-  try { localStorage.setItem(SELF_VIDEO_CORNER_KEY, corner); } catch (e) { /* ignore */ }
-  var badge = document.getElementById('video-stage-self');
-  if (badge) badge.dataset.corner = effectiveSelfBadgeCorner(selfBadgeBarSlots());
+function formatSelfBadgePlacement(p) {
+  if (!p) return '';
+  if (p.slot) return p.slot;
+  return p.side + ':' + (Math.round(p.pos * 100) / 100) + (p.tucked ? ':tuck' : '');
 }
 
-// Pure: the corner a badge dropped at `box` (stage-relative) belongs to. Decided
-// by the badge's centre, not its top-left, so the snap lands where it looks like
-// you let go rather than a half-badge earlier.
+function readSelfBadgePlacement() {
+  var stored = null;
+  try { stored = localStorage.getItem(SELF_VIDEO_CORNER_KEY); } catch (e) { /* private mode */ }
+  return parseSelfBadgePlacement(stored) || { side: 'right', pos: 1, tucked: false };
+}
+
+function setSelfBadgePlacement(p) {
+  if (!p) return;
+  _selfBadgePlacement = p;
+  try { localStorage.setItem(SELF_VIDEO_CORNER_KEY, formatSelfBadgePlacement(p)); } catch (e) { /* ignore */ }
+  applySelfBadgePlacement();
+}
+
+// The coarse quadrant a placement sits in, published as `data-corner`. It is the
+// CSS fallback used before the badge has ever been measured (and while it is
+// hidden); the exact offsets are inline, and inline wins.
+function selfBadgeCornerToken(p) {
+  if (!p) return 'br';
+  if (p.slot) return p.slot;
+  if (p.side === 'left' || p.side === 'right') {
+    return (p.pos < 0.5 ? 't' : 'b') + (p.side === 'left' ? 'l' : 'r');
+  }
+  return (p.side === 'top' ? 't' : 'b') + (p.pos < 0.5 ? 'l' : 'r');
+}
+
+// The stage's own no-go margins, as published by applyImmersiveStageInsets():
+// the room header lying on the picture, the control stack at the bottom, and the
+// ribbon of thumbnails while it is up. Only the immersive stage runs UNDER the
+// chrome — on desktop the stage stops above it — so only there do the header and
+// dock insets apply; the ribbon is inside the stage either way.
+function stageBadgeInsets() {
+  var css = getComputedStyle(document.documentElement);
+  var px = function(name) { return parseFloat(css.getPropertyValue(name)) || 0; };
+  var immersive = document.body.classList.contains('video-stage-immersive');
+  return {
+    left: 0,
+    right: 0,
+    top: immersive ? px('--stage-inset-top') : 0,
+    bottom: (immersive ? px('--stage-inset-bottom') : 0) + px('--stage-ribbon-height')
+  };
+}
+
+// The run the badge may slide along its edge: where the travel starts, and how
+// long it is. One function so that reading a fraction off a drop and turning a
+// fraction back into pixels are exact inverses of each other — anything else and
+// a badge drifts a little every time it is picked up.
+function _selfBadgeTravel(side, badge, stage, insets) {
+  var i = insets || {};
+  var vertical = (side === 'left' || side === 'right');
+  var span = vertical
+    ? (stage.height || 0) - (i.top || 0) - (i.bottom || 0) - (badge.height || 0)
+    : (stage.width || 0) - (i.left || 0) - (i.right || 0) - (badge.width || 0);
+  return {
+    start: (vertical ? (i.top || 0) : (i.left || 0)) + SELF_BADGE_EDGE_GAP,
+    travel: Math.max(0, span - SELF_BADGE_EDGE_GAP * 2)
+  };
+}
+
+function _selfBadgeAlong(side, box, stage, insets) {
+  var run = _selfBadgeTravel(side, box, stage, insets);
+  if (!run.travel) return 0;
+  var at = ((side === 'left' || side === 'right') ? box.top : box.left) - run.start;
+  return Math.max(0, Math.min(1, at / run.travel));
+}
+
+// Pure: the placement a badge let go at `box` (stage-relative) belongs to.
 //
-// `bar`, when the layout has the space for it (selfBadgeBarSlots), is the band
-// around the talk button: a badge let go down there parks BESIDE the mic rather
-// than in a bottom corner, which is where the corner rule would otherwise put
-// it — over the controls it was dropped next to.
-function nearestBadgeCorner(box, stage, bar) {
-  var cx = box.left + (box.width || 0) / 2;
-  var cy = box.top + (box.height || 0) / 2;
-  var right = cx >= (stage.width || 0) / 2;
-  if (bar && cy >= bar.top) return right ? 'barr' : 'barl';
-  return (cy < (stage.height || 0) / 2 ? 't' : 'b') + (right ? 'r' : 'l');
+// Three answers, in order. Pushed past a border by more than SELF_BADGE_TUCK_MIN
+// it is tucked under that border — you meant to get it off the picture, so it
+// goes, rather than springing back to the nearest corner. Let go in the band
+// around the talk button (`bar`, when the layout has one — selfBadgeBarSlots) it
+// parks beside the mic. Otherwise it pins to the nearest edge, keeping how far
+// along that edge it was dropped: decided by the badge's CENTRE, so the snap
+// lands where it looks like you let go rather than half a badge earlier.
+function selfBadgePlacementFor(box, stage, bar, insets) {
+  var w = box.width || 0, h = box.height || 0;
+  var sw = stage.width || 0, sh = stage.height || 0;
+  var over = {
+    left: -box.left,
+    right: (box.left + w) - sw,
+    top: -box.top,
+    bottom: (box.top + h) - sh
+  };
+  var tuck = null;
+  SELF_BADGE_SIDES.forEach(function(side) {
+    if (over[side] >= SELF_BADGE_TUCK_MIN && (!tuck || over[side] > over[tuck])) tuck = side;
+  });
+  if (tuck) return { side: tuck, pos: _selfBadgeAlong(tuck, box, stage, insets), tucked: true };
+
+  var cx = box.left + w / 2;
+  var cy = box.top + h / 2;
+  if (bar && cy >= bar.top) return { slot: cx >= sw / 2 ? 'barr' : 'barl' };
+
+  var dist = { left: cx, right: sw - cx, top: cy, bottom: sh - cy };
+  var side = 'left';
+  SELF_BADGE_SIDES.forEach(function(s) { if (dist[s] < dist[side]) side = s; });
+  return { side: side, pos: _selfBadgeAlong(side, box, stage, insets), tucked: false };
+}
+
+// Pure: the stage-relative top-left a placement puts the badge at. A tucked
+// badge is placed by the same fraction along the same edge — it comes back where
+// it went in — with only SELF_BADGE_PEEK of it left on the stage.
+function selfBadgeOffsets(p, badge, stage, insets) {
+  var i = insets || {};
+  var w = badge.width || 0, h = badge.height || 0;
+  var sw = stage.width || 0, sh = stage.height || 0;
+  var run = _selfBadgeTravel(p.side, badge, stage, insets);
+  var along = run.start + run.travel * (p.pos || 0);
+  var peek = Math.min(SELF_BADGE_PEEK, p.side === 'top' || p.side === 'bottom' ? h : w);
+  if (p.side === 'left' || p.side === 'right') {
+    return {
+      left: Math.round(p.side === 'left'
+        ? (p.tucked ? peek - w : (i.left || 0) + SELF_BADGE_EDGE_GAP)
+        : (p.tucked ? sw - peek : sw - w - (i.right || 0) - SELF_BADGE_EDGE_GAP)),
+      top: Math.round(along)
+    };
+  }
+  return {
+    left: Math.round(along),
+    top: Math.round(p.side === 'top'
+      ? (p.tucked ? peek - h : (i.top || 0) + SELF_BADGE_EDGE_GAP)
+      : (p.tucked ? sh - peek : sh - h - (i.bottom || 0) - SELF_BADGE_EDGE_GAP))
+  };
 }
 
 // The geometry of the band either side of the talk button, in the stage's own
@@ -12888,24 +13018,26 @@ function selfBadgeBarSlots() {
   };
 }
 
-// Which corner the badge is ACTUALLY drawn at. A slot beside the mic exists only
-// while the layout has room for it, so a phone turned on its side must hand a
-// badge parked there back to a corner rather than leave it on the controls. The
-// stored choice is untouched: turning back upright returns it to the mic.
-function effectiveSelfBadgeCorner(slots) {
-  if (SELF_BADGE_BAR_SLOTS.indexOf(_selfBadgeCorner) === -1) return _selfBadgeCorner;
-  if (slots) return _selfBadgeCorner;
-  return _selfBadgeCorner === 'barl' ? 'bl' : 'br';
+// Where the badge is ACTUALLY drawn. A slot beside the mic exists only while the
+// layout has room for it, so a phone turned on its side must hand a badge parked
+// there back to an edge rather than leave it on the controls. The stored choice
+// is untouched: turning back upright returns it to the mic.
+function effectiveSelfBadgePlacement(slots) {
+  var p = _selfBadgePlacement;
+  if (!p.slot || slots) return p;
+  return { side: p.slot === 'barl' ? 'left' : 'right', pos: 1, tucked: false };
 }
 
-// Publishes both the effective corner and the measurements the two bar slots are
-// positioned from. Called from the stage's own layout pass, so it re-runs on
-// every resize and every change to the control stack's height.
-function applySelfBadgeCorner() {
+// Publishes the placement: the quadrant CSS falls back on, the measurements the
+// two bar slots are positioned from, and — for an edge — the exact offsets.
+// Called from the stage's own layout pass, so it re-runs on every resize and
+// every change to the control stack's height.
+function applySelfBadgePlacement() {
   var badge = document.getElementById('video-stage-self');
   if (!badge) return;
   var slots = selfBadgeBarSlots();
-  badge.dataset.corner = effectiveSelfBadgeCorner(slots);
+  var p = effectiveSelfBadgePlacement(slots);
+  badge.dataset.corner = selfBadgeCornerToken(p);
   var root = document.documentElement.style;
   if (slots) {
     root.setProperty('--stage-ptt-centre', Math.round(slots.centre) + 'px');
@@ -12914,21 +13046,56 @@ function applySelfBadgeCorner() {
     root.removeProperty('--stage-ptt-centre');
     root.removeProperty('--stage-bar-slot');
   }
+  // A drag owns the badge — both its offsets and whether it looks tucked —
+  // while a finger is down on it.
+  if (_selfBadgeDrag) return;
+  badge.classList.toggle('tucked', !p.slot && !!p.tucked);
+  // The band is positioned by CSS, from the two variables just published.
+  if (p.slot) { _clearSelfBadgeOffsets(badge); return; }
+  var stage = document.getElementById('video-stage');
+  if (!stage) return;
+  var s = stage.getBoundingClientRect();
+  var b = badge.getBoundingClientRect();
+  // Hidden, or before first layout: nothing to measure, and the corner rule in
+  // the stylesheet is holding it. The next pass places it exactly.
+  if (!s.width || !s.height || !b.width || !b.height) return;
+  var off = selfBadgeOffsets(
+    p,
+    { width: b.width, height: b.height },
+    { width: s.width, height: s.height },
+    stageBadgeInsets()
+  );
+  badge.style.left = off.left + 'px';
+  badge.style.top = off.top + 'px';
+  badge.style.right = 'auto';
+  badge.style.bottom = 'auto';
 }
 
-function _clampBadge(value, max) {
-  if (!(max > 0)) return 0;
-  return Math.max(0, Math.min(max, value));
+function _clearSelfBadgeOffsets(badge) {
+  badge.style.removeProperty('left');
+  badge.style.removeProperty('top');
+  badge.style.removeProperty('right');
+  badge.style.removeProperty('bottom');
+}
+
+// A badge being dragged may be pushed off the stage — that is how it is tucked
+// away — but never so far that there is nothing left to grab it by.
+function _clampBadge(value, size, extent) {
+  var peek = Math.min(SELF_BADGE_PEEK, size);
+  if (!(extent > 0)) return 0;
+  return Math.max(peek - size, Math.min(extent - peek, value));
 }
 
 var SELF_BADGE_DRAG_SLOP = 3;   // px of movement before a press counts as a drag
 
-// Whether a point is on the self-view while it is parked beside the mic — the
-// one place the badge sits under something else that wants the same press.
+// Whether a point is on the self-view while it is somewhere something else wants
+// the same press: parked beside the mic, or tucked under a border the controls
+// also sit on.
 function selfBadgeAtPoint(x, y) {
   var badge = document.getElementById('video-stage-self');
   if (!badge || badge.classList.contains('hidden')) return false;
-  if (SELF_BADGE_BAR_SLOTS.indexOf(badge.dataset.corner) === -1) return false;
+  if (SELF_BADGE_BAR_SLOTS.indexOf(badge.dataset.corner) === -1 &&
+      !badge.classList.contains('tucked')) return false;
   var b = badge.getBoundingClientRect();
   return x >= b.left && x <= b.right && y >= b.top && y <= b.bottom;
 }
@@ -12940,6 +13107,7 @@ function _onSelfBadgePointerDown(e) {
   var b = badge.getBoundingClientRect();
   var s = stage.getBoundingClientRect();
   _selfBadgeDragged = false;
+  _selfBadgeSwallowClick = false;
   _selfBadgeDrag = {
     pointerId: e.pointerId,
     startX: e.clientX,
@@ -12950,9 +13118,10 @@ function _onSelfBadgePointerDown(e) {
     width: b.width,
     height: b.height,
     stage: { left: s.left, top: s.top, width: s.width, height: s.height },
-    // Measured once, at the start of the drag: the band cannot change shape
-    // while a finger is down on it.
+    // Measured once, at the start of the drag: neither the band nor the chrome
+    // can change shape while a finger is down on the badge.
     bar: selfBadgeBarSlots(),
+    insets: stageBadgeInsets(),
     left: b.left - s.left,
     top: b.top - s.top
   };
@@ -12974,9 +13143,12 @@ function _onSelfBadgePointerMove(e) {
       (Math.abs(e.clientX - d.startX) > SELF_BADGE_DRAG_SLOP ||
        Math.abs(e.clientY - d.startY) > SELF_BADGE_DRAG_SLOP)) {
     _selfBadgeDragged = true;
+    // Picked up, a tucked badge is a picture again — otherwise it is dragged
+    // around the stage as a faded sliver of itself.
+    badge.classList.remove('tucked');
   }
-  d.left = _clampBadge(e.clientX - d.stage.left - d.grabX, d.stage.width - d.width);
-  d.top  = _clampBadge(e.clientY - d.stage.top  - d.grabY, d.stage.height - d.height);
+  d.left = _clampBadge(e.clientX - d.stage.left - d.grabX, d.width, d.stage.width);
+  d.top  = _clampBadge(e.clientY - d.stage.top  - d.grabY, d.height, d.stage.height);
   badge.style.left = d.left + 'px';
   badge.style.top = d.top + 'px';
   badge.style.right = 'auto';
@@ -12993,32 +13165,49 @@ function _onSelfBadgePointerUp(e) {
   var badge = document.getElementById('video-stage-self');
   if (!badge) return;
   badge.classList.remove('dragging');
-  badge.style.removeProperty('left');
-  badge.style.removeProperty('top');
-  badge.style.removeProperty('right');
-  badge.style.removeProperty('bottom');
   if (_selfBadgeDragged) {
-    setSelfBadgeCorner(nearestBadgeCorner(
+    _selfBadgeSwallowClick = true;
+    // Straight from the dragged offsets to the settled ones, with nothing
+    // cleared in between: apply() measures, which flushes layout, so a badge
+    // handed back to the stylesheet first would visibly jump to a corner and
+    // animate back from there.
+    setSelfBadgePlacement(selfBadgePlacementFor(
       { left: d.left, top: d.top, width: d.width, height: d.height },
       { width: d.stage.width, height: d.stage.height },
-      d.bar
+      d.bar,
+      d.insets
     ));
-    applySelfBadgeCorner();
+    return;
   }
+  // A press that went nowhere on a TUCKED badge means "bring it back" — the
+  // sliver is a handle, not a picture, so it is never a pin. Handled on the
+  // release rather than on the click because a badge tucked under the control
+  // stack never sees a click of its own: the bottom bar is over it and hands
+  // the press on (selfBadgeAtPoint).
+  if (_selfBadgePlacement.tucked) {
+    _selfBadgeSwallowClick = true;
+    setSelfBadgePlacement({
+      side: _selfBadgePlacement.side, pos: _selfBadgePlacement.pos, tucked: false
+    });
+    return;
+  }
+  applySelfBadgePlacement();
 }
 
 function initSelfVideoBadge() {
   var badge = document.getElementById('video-stage-self');
   if (!badge || badge._voxalDragWired) return;
   badge._voxalDragWired = true;
-  applySelfBadgeCorner();
+  applySelfBadgePlacement();
   badge.addEventListener('pointerdown', _onSelfBadgePointerDown);
   // The tile inside the badge carries the click-to-pin handler every tile has,
-  // and a drag ends with a click. Swallow that one in the capture phase, or
-  // moving the badge would also blow it up to the focus slot.
+  // and both a drag and an un-tuck end with a click. Swallow that one in the
+  // capture phase, or moving the badge would also blow it up to the focus slot.
+  // The flag is cleared on the next press, so a click the badge never sees
+  // cannot leave the one after it swallowed.
   badge.addEventListener('click', function(e) {
-    if (!_selfBadgeDragged) return;
-    _selfBadgeDragged = false;
+    if (!_selfBadgeSwallowClick) return;
+    _selfBadgeSwallowClick = false;
     e.preventDefault();
     e.stopPropagation();
   }, true);
