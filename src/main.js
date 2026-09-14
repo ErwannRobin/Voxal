@@ -2875,6 +2875,13 @@ function displayShortcut(raw) {
 
 var _editShortcutIconHtml = '<button id="btn-edit-shortcut" class="btn-icon shortcut-edit-inline" title="Change shortcut"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></button>';
 
+// What the talk button says on a touch screen. There is no keyboard to name and
+// no shortcut to edit, so the phone hint is a plain string rather than the
+// `Hold <kbd>Space</kbd> …` markup pttHintHtml() builds — and it names the thing
+// the finger is actually on, which is the mic itself.
+var PTT_HINT_MOBILE          = 'Hold the mic to talk · x2 for hands-free';
+var PTT_HINT_MOBILE_FREEHAND = 'Hands-free · tap to stop';
+
 function pttHintHtml(prefix, suffix) {
   return prefix + '<kbd id="shortcut-hint-kbd">' + displayShortcut(shortcutStr) + '</kbd>' + _editShortcutIconHtml + suffix;
 }
@@ -5021,30 +5028,12 @@ function applyChatDock() {
   document.body.classList.toggle('chat-side', chatBesideRoom());
   // Read after the two above: both change where the drawer lands, and this is
   // a measurement of where it landed.
-  var overlay = chatOverlaysRoom();
-  document.body.classList.toggle('chat-overlay', overlay);
-  // Measured only when something is going to read it. Both this and
-  // chatOverlaysRoom() force a layout, and applyChatDock() runs on every stage
-  // update — including the one that switches the room into the immersive
-  // stage, where a flush mid-change starts the header's slide-away transition
-  // from a state the user never saw. With the drawer shut neither measurement
-  // is taken and that update stays a pure class change.
-  if (overlay) publishRoomBarInset();
-}
-
-// How much of the bottom of the window the control stack occupies. The immersive
-// stage measures its own (`--stage-inset-bottom`, from a stage-relative box);
-// this is the same number for every other regime, and it exists so the scrim
-// behind an overlaying chat drawer can stop above the talk button there too. A
-// scrim that swallowed that tap would break the one rule this whole layout is
-// built around.
-function publishRoomBarInset() {
-  var root = document.documentElement.style;
-  var bar = document.querySelector('#screen-room .room-bottom-bar');
-  var box = bar ? bar.getBoundingClientRect() : null;
-  if (!box || !box.height) { root.removeProperty('--room-bar-inset'); return; }
-  root.setProperty('--room-bar-inset',
-    Math.max(0, Math.round(window.innerHeight - box.top)) + 'px');
+  document.body.classList.toggle('chat-overlay', chatOverlaysRoom());
+  // There used to be a `--room-bar-inset` measured here, so the scrim behind an
+  // overlaying chat drawer could stop above the talk button. The scrim stops
+  // nowhere now — it covers the window and the bar is lifted OVER it — so the
+  // measurement (and the layout flush it forced on every stage update) is gone
+  // with it.
 }
 
 // --- Chat: open by default on a desktop --------------------------------------
@@ -11472,17 +11461,15 @@ function setFreeHand(active) {
   if (!active) $('ptt-btn').classList.remove('active');
 
   if (active) {
-    var isMobile = window.Capacitor && window.Capacitor.isNativePlatform();
-    if (isMobile) {
-      $('ptt-hint').textContent = 'Hands-free · tap to stop';
+    if (IS_MOBILE_DEVICE) {
+      $('ptt-hint').textContent = PTT_HINT_MOBILE_FREEHAND;
     } else {
       $('ptt-hint').innerHTML = pttHintHtml('Hands-free · press ', ' to stop');
     }
     $('ptt-status').textContent = '\u25cf Live';
   } else {
-    var isMobile = window.Capacitor && window.Capacitor.isNativePlatform();
-    if (isMobile) {
-      $('ptt-hint').textContent = 'Hold to talk · double-tap for hands-free';
+    if (IS_MOBILE_DEVICE) {
+      $('ptt-hint').textContent = PTT_HINT_MOBILE;
     } else {
       $('ptt-hint').innerHTML = pttHintHtml('Hold ', ' anywhere to talk · x2 for hands-free');
     }
@@ -12204,9 +12191,11 @@ function noteStageSpeaker(peerId, active) {
 // Screen button). The stage background stays full-bleed, so the video still
 // reaches the physical edges.
 //
-// Anything above the tiles is inset by a small constant instead: the only thing
-// permanently up there is the top drag handle.
-var STAGE_HANDLE_CLEARANCE = 26;
+// Nothing above the tiles insets them either. The room header lies ON the
+// picture, exactly as the dock does, and comes and goes with the chrome — so if
+// it reserved height the video would reflow every time you tapped it away. What
+// IS measured from it is `--stage-inset-top`, which places the self-view badge's
+// top corners clear of the header while the header is on screen.
 
 function applyImmersiveStageInsets(gridEl) {
   if (!gridEl) return;
@@ -12231,13 +12220,18 @@ function applyImmersiveStageInsets(gridEl) {
   var bar = document.querySelector('.room-bottom-bar');
   var barBox = bar ? bar.getBoundingClientRect() : null;
 
-  // Nothing is up there while the chrome is away — the handle went with it.
-  var insetTop = stageChromeHidden() ? 0 : STAGE_HANDLE_CLEARANCE;
+  // The header is gone with the chrome; while it is up it lies on the picture.
+  var header = document.querySelector('#screen-room .room-header');
+  var headerH = (!stageChromeHidden() && header) ? header.getBoundingClientRect().height : 0;
+  var insetTop = Math.round(headerH);
   var insetBottom = (barBox && barBox.height)
     ? Math.max(0, Math.round(stageBox.bottom - barBox.top))
     : 0;
 
-  gridEl.style.paddingTop = insetTop + 'px';
+  // Zero, always: the tiles run full-bleed UNDER the header for the same reason
+  // they run full-bleed under the dock, and a padding that came and went with
+  // the chrome would reflow the whole stage on every tap.
+  gridEl.style.paddingTop = '0px';
   // The tiles run full-bleed UNDER the dock. It is a translucent panel lying on
   // the picture, not a bar the video has to stop above — which is the whole
   // reason a tap can put it away and reveal what was behind it.
@@ -12364,7 +12358,6 @@ function updateVideoStage() {
   if (active) requestStageWakeLock(); else releaseStageWakeLock();
   if (active && mode === 'immersive') {
     initStagePanelHandles();
-    publishStageHeaderHeight();
   } else {
     // Leaving immersive (or the stage entirely) must not strand a panel open
     // over a layout that no longer has anywhere to slide it back to.
@@ -12461,13 +12454,19 @@ function releaseStageWakeLock() {
 
 // `sign` is the direction of the GESTURE that opens the panel, not the direction
 // of the transform that hides it — they are opposites, and conflating them is
-// how the drag ends up refusing to open. The header hides upward and is opened
-// by pulling DOWN (+y); the roster lives off the LEFT edge and is opened by
-// pulling right (+x); the chat lives off the right and is opened by pulling
-// left (-x). Each handle sits on the edge its panel comes from, so the gesture
-// and the panel agree.
+// how the drag ends up refusing to open. The roster lives off the LEFT edge and
+// is opened by pulling right (+x); the chat lives off the right and is opened by
+// pulling left (-x). Each handle sits on the edge its panel comes from, so the
+// gesture and the panel agree.
+//
+// The room header is NOT one of them any more. It used to be pulled down by a
+// handle of its own, parked at `top: env(safe-area-inset-top)` — which on a PWA
+// and in the Capacitor apps is under the system status bar, where the OS eats
+// the gesture and the header (with Settings, the room code and Leave on it) can
+// never be reached at all. It now simply comes and goes with the rest of the
+// chrome: one tap on the video puts everything away, another brings it back.
+// See the `stage-chrome-hidden` rules in styles.css.
 var STAGE_PANELS = {
-  header: { cls: 'stage-header-open', panel: '.room-header', handle: 'stage-handle-header', axis: 'y', sign: 1 },
   roster: { cls: 'stage-roster-open', panel: '.room-peers-panel', handle: 'stage-handle-roster', axis: 'x', sign: 1 }
 };
 
@@ -12480,7 +12479,7 @@ var CHAT_DRAG_PANEL = {
   cls: 'chat-open', panel: '.room-chat-panel', handle: 'stage-handle-chat', axis: 'x', sign: -1
 };
 
-var DRAGGABLE_PANELS = ['header', 'roster', 'chat'];
+var DRAGGABLE_PANELS = ['roster', 'chat'];
 
 function panelSpec(which) {
   return which === 'chat' ? CHAT_DRAG_PANEL : STAGE_PANELS[which];
@@ -12526,7 +12525,6 @@ function setStagePanel(which, open) {
     var el = document.getElementById(STAGE_PANELS[key].handle);
     if (el) el.setAttribute('aria-expanded', String(stagePanelOpen(key)));
   });
-  publishStageHeaderHeight();
 }
 
 function closeStagePanels() {
@@ -12535,15 +12533,6 @@ function closeStagePanels() {
     var el = document.getElementById(STAGE_PANELS[key].handle);
     if (el) el.setAttribute('aria-expanded', 'false');
   });
-}
-
-// The top handle rides down with the header so it stays the thing you grab to
-// close it, which means it needs the header's real height.
-function publishStageHeaderHeight() {
-  var header = document.querySelector('#screen-room .room-header');
-  if (!header) return;
-  var h = header.getBoundingClientRect().height;
-  if (h) document.documentElement.style.setProperty('--stage-header-height', Math.round(h) + 'px');
 }
 
 function relayoutVideoStage() {
@@ -12662,7 +12651,6 @@ function setStageChrome(hidden) {
     applyImmersiveStageInsets(grid);
     layoutVideoStageGrid(grid, grid.children.length);
   }
-  publishRoomBarInset();
 }
 
 function toggleStageChrome() { setStageChrome(!_stageChromeHidden); }
@@ -12684,7 +12672,7 @@ function _onStageTap(e) {
   if (!stageChromeToggles()) return;
   if (_stagePinPressFired) return;          // the long press already acted
   if (_stageTapOnChrome(e)) return;
-  if (stagePanelOpen('header') || stagePanelOpen('roster') || chatPanelOpen()) return;
+  if (stagePanelOpen('roster') || chatPanelOpen()) return;
   toggleStageChrome();
 }
 
@@ -13277,8 +13265,9 @@ async function startVideoShare() {
   // nobody catches a frame of the unprocessed room.
   localVideoStream = await maybeApplyVideoEffects(rawStream);
   localVideoActive = true;
-  // Auto-activate hands-free when sharing camera
-  if (!freeHandMode) setFreeHand(true);
+  // Turning a camera on says nothing about whether you want the room to hear
+  // you: this is a push-to-talk app, and switching the mic live on somebody's
+  // behalf is the one thing it must never do by itself.
   await publishLocalTrack('video', localVideoStream);
   updateVideoModeUI();
   // Fire and forget: the flip button appears a tick later if there is a second
@@ -17046,9 +17035,14 @@ window.addEventListener('DOMContentLoaded', function() {
     var _micSourceRow = $('settings-audio-mic-row'); if (_micSourceRow) _micSourceRow.style.display = 'none';
     var _videoSection = $('settings-video'); if (_videoSection) _videoSection.style.display = 'none';
     var _devPopoutBtn = $('btn-popout-dev-log'); if (_devPopoutBtn) _devPopoutBtn.style.display = 'none';
-    $('ptt-hint').textContent = 'Hold to talk · double-tap for hands-free';
     $('btn-copy').title = 'Copy room code';
   }
+  // The hint follows the DEVICE, not the wrapper. Installed to the home screen
+  // a phone runs the plain web build, and the markup in index.html starts out
+  // telling it to hold a key it does not have — so any touch device gets the
+  // plain sentence, native app and mobile browser alike. Written last so it
+  // wins over whatever the markup shipped.
+  if (IS_MOBILE_DEVICE) $('ptt-hint').textContent = PTT_HINT_MOBILE;
 
   $('btn-create').addEventListener('click', function() {
     if (!beginHomeAction()) return;

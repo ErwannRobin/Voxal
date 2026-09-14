@@ -647,18 +647,21 @@
              title="Drag to move your self-view"></div>
       </div>
 
-      <!-- Immersive (phone) video mode only: the header and the participant list
-           slide off-screen and are pulled back over the video by these handles.
-           Direct children of #screen-room so they stack against the panels in
-           the same context. -->
+      <!-- Immersive (phone) video mode only: the participant list slides
+           off-screen and is pulled back over the video by its handle. Direct
+           children of #screen-room so they stack against the panels in the same
+           context.
+
+           The room header has no handle: it comes and goes with the rest of the
+           chrome. A handle of its own had to live at the very top of the screen,
+           which on a PWA and in the native apps is under the system status bar,
+           where the gesture never reaches the page. -->
       <div id="stage-panel-scrim" class="stage-panel-scrim"></div>
-      <button id="stage-handle-header" class="stage-handle stage-handle-top" type="button"
-              aria-label="Show the room header" aria-expanded="false"></button>
       <!-- Participants pull in from the left edge, the conversation from the
            right. Each handle is on the side its panel lives on, so the gesture
-           and the panel agree. The roster's and the header's belong to the
-           immersive phone stage; the chat's is the only way into the chat, so
-           it is on screen in every room — voice-only ones included. -->
+           and the panel agree. The roster's belongs to the immersive phone
+           stage; the chat's is the only way into the chat, so it is on screen in
+           every room — voice-only ones included. -->
       <button id="stage-handle-roster" class="stage-handle stage-handle-left" type="button"
               aria-label="Show the participant list" aria-expanded="false"></button>
       <button id="stage-handle-chat" class="stage-handle stage-handle-right stage-handle-icon" type="button"

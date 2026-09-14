@@ -1057,6 +1057,22 @@ test.describe('the chat as a column of the room', () => {
     });
   });
 
+  // It is the one control that is on screen in every single room, and it used to
+  // be the only one that changed colour under your thumb: muted grey shut,
+  // accent open. The drawer sliding in says "the chat is showing" a good deal
+  // louder than a purple icon does.
+  test('the handle keeps its colour whether the drawer is open or shut', async ({ page }) => {
+    const colour = () => page.evaluate(() =>
+      getComputedStyle(document.getElementById('stage-handle-chat')).color);
+    await page.evaluate(() => toggleChatPanel(false));
+    const shut = await colour();
+    await page.evaluate(() => toggleChatPanel(true));
+    await page.waitForTimeout(300);
+    expect(await page.evaluate(() =>
+      document.getElementById('stage-handle-chat').getAttribute('aria-expanded'))).toBe('true');
+    expect(await colour()).toBe(shut);
+  });
+
   test('the unread count rides on that handle and clears when the chat opens', async ({ page }) => {
     await page.evaluate(() => toggleChatPanel(false));
     const shut = await page.evaluate(() => {

@@ -87,8 +87,13 @@ test.describe('sharing your camera', () => {
     ]);
     expect(seen.offers).toHaveLength(2);
     expect(seen.offers[0].topology).toBe('p2p');
-    // Sharing your face while holding a key would be absurd — it latches.
-    expect(seen.freeHand).toBe(true);
+    // And it says NOTHING about the microphone. It used to latch hands-free —
+    // "sharing your face while holding a key would be absurd" — but this is a
+    // push-to-talk app, and opening a live microphone on somebody's behalf,
+    // because they pressed a camera button, is the one thing it must not do.
+    // (A ?video=1 link still arrives hands-free: that link asks for it by name,
+    // and sets it itself — see unit-auto-video.spec.js.)
+    expect(seen.freeHand).toBe(false);
   });
 
   test('a second start is a no-op', async ({ page }) => {
