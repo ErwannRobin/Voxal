@@ -1327,6 +1327,15 @@ kbd {
     min-height: 0;
   }
   html.is-web body:not(.embed-tiny):not(.video-stage) #screen-room .room-bottom-bar .room-controls { margin-top: 0; }
+  /* One mic, one size. The `min-width: 640px` block grows the talk button to
+     96px for a tablet, and a phone on its SIDE is 844px wide — so it grew there
+     too, on a 390px-tall screen, while the same phone's video room draws it at
+     62. Turning a camera on must not resize the control the app is for. */
+  html.is-web body:not(.embed-tiny):not(.video-stage) #screen-room .ptt-btn {
+    width: 62px;
+    height: 62px;
+    font-size: 24px;
+  }
   /* Peers list = 2/3 column, full height, scrolls. */
   html.is-web body:not(.embed-tiny):not(.video-stage) #screen-room .room-peers-panel {
     grid-area: peers;
@@ -1394,7 +1403,7 @@ kbd {
     width: min(var(--chat-width, 360px), 42vw);
   }
   html.is-web body:not(.embed-tiny):not(.video-stage).chat-open .stage-handle-right {
-    right: calc(min(var(--chat-width, 360px), 42vw) + max(env(safe-area-inset-right), 0px));
+    right: min(var(--chat-width, 360px), 42vw);
   }
 }
 
@@ -1828,8 +1837,13 @@ body.video-stage-immersive.chat-open .stage-handle-left { display: none; }
   transition: left 0.25s ease;
 }
 .stage-handle-left::before { width: 4px; height: 34px; }
+/* The panel is anchored at `left: 0` and carries the inset as PADDING, so its
+   visible edge is its width and nothing more. Adding the inset here as well —
+   which the first version did — parks the handle a notch's width out in the
+   picture, attached to nothing. Zero in portrait, which is why it looked right;
+   sideways on a notched phone it is 44-59px of daylight. */
 body.video-stage-immersive.stage-roster-open .stage-handle-left {
-  left: calc(min(300px, 82vw) + max(env(safe-area-inset-left), 0px));
+  left: min(300px, 82vw);
 }
 
 /* Right-centre: pulls the conversation in. This one wears the chat icon rather
@@ -1848,10 +1862,10 @@ body.video-stage-immersive.stage-roster-open .stage-handle-left {
 /* An open drawer carries the handle out on its edge, so the offset has to be
    the width that regime's panel actually takes — never a fourth number. */
 body.chat-open .stage-handle-right {
-  right: calc(min(var(--chat-width, 360px), 92vw) + max(env(safe-area-inset-right), 0px));
+  right: min(var(--chat-width, 360px), 92vw);
 }
 body.video-stage-immersive.chat-open .stage-handle-right {
-  right: calc(min(360px, 88vw) + max(env(safe-area-inset-right), 0px));
+  right: min(360px, 88vw);
 }
 /* While the separator is being dragged the handle rides on its edge, and an
    eased `right` makes it chase the pointer a quarter of a second behind the
@@ -1970,12 +1984,82 @@ body.video-stage-immersive #screen-room.active {
    bar and still dead centre of the gesture, which is the rule this layout is
    built around. */
 @media (orientation: landscape) and (max-height: 600px) {
+  /* ── Sideways the chrome is a column, not two bars ─────────────────
+     A phone on its side is 390px tall and the chrome was eating that height at
+     both ends: a band of header across the top, a row of buttons across the
+     bottom. Sideways there is width to spare and no height at all, so both move
+     into one rail down the left-hand side and the picture gets the screen.
+
+     Two things stay where they are. The talk button keeps the bottom of the
+     screen, in the middle, because that is where the thumb goes and it is the
+     one control that must never move. And the rail overlays the picture like
+     the rest of the chrome — nothing is reserved, so a tap that puts it away
+     reveals what was behind it rather than reflowing the tiles.
+
+     The rail starts inboard of the roster's drag handle (22px, hard against the
+     edge), so the two are never on top of each other. `--rail-x` is that offset,
+     declared once: the slide-away transform has to be exactly the rail's own
+     width plus its distance from the edge, or the chrome hides with a corner
+     still showing. */
+  body.video-stage-immersive #screen-room {
+    --rail-x: calc(max(env(safe-area-inset-left), 0px) + 26px);
+  }
+  body.video-stage-immersive #screen-room .room-header {
+    left: var(--rail-x);
+    right: auto;
+    top: max(calc(var(--stage-safe-top) + 8px), 8px);
+    width: max-content;
+    max-width: min(46vw, 260px);
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    transform: translateX(calc(-100% - var(--rail-x)));
+  }
+  body.video-stage-immersive:not(.stage-chrome-hidden) #screen-room .room-header {
+    transform: translateX(0);
+  }
+  /* A column has no far end to push the Leave button to. */
+  body.video-stage-immersive #screen-room .room-header .room-actions-spacer { display: none; }
+  body.video-stage-immersive #screen-room .room-header .room-actions { align-self: stretch; }
+
+  /* The buttons leave the bottom bar altogether and stack under the header.
+     Fixed, so they are out of the bar's flow: what is left down there is the
+     mic alone, centred by the grid below, and the bar shrinks to it — which is
+     height the ribbon and the self-view get back through
+     `--stage-inset-bottom`. `--stage-rail-top` is the header's measured bottom
+     edge (applyImmersiveStageInsets), so the stack sits under a header of
+     whatever height, in viewport coordinates because this is fixed too. */
+  body.video-stage-immersive #screen-room .room-bottom-bar .room-controls {
+    position: fixed;
+    left: var(--rail-x);
+    top: calc(var(--stage-rail-top, 64px) + 8px);
+    width: max-content;
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+    transition: transform 0.25s ease;
+  }
+  body.video-stage-immersive #screen-room .room-bottom-bar .ctrl-row {
+    flex-direction: column;
+    align-items: flex-start;
+    flex-wrap: nowrap;
+  }
+  /* It leaves by sliding out with the header rather than blinking away: it is
+     fixed, so it costs the layout nothing either way, and half the chrome
+     sliding while the other half vanishes reads as two different controls. */
+  body.video-stage-immersive.stage-chrome-hidden #screen-room .room-bottom-bar .room-controls {
+    visibility: visible;
+    transform: translateX(calc(-100% - var(--rail-x)));
+  }
+
   /* Three tracks, the mic in the middle one: side by side in a flex row the mic
-     and the button beside it are centred TOGETHER, which leaves the mic itself
-     sitting left of centre — and on a phone held sideways the thumb goes to the
-     middle of the screen, not to the middle of a group. The outer tracks are
-     equal, so the mic lands on the centre line whatever the row beside it
-     weighs (one button, three, or none at all). */
+     and anything beside it are centred TOGETHER, which leaves the mic itself
+     sitting off the centre line — and the thumb goes to the middle of the
+     screen, not to the middle of a group. The outer tracks are equal, so the
+     mic lands on the line whatever else is in the bar. */
   body.video-stage-immersive #screen-room .room-bottom-bar {
     display: grid;
     grid-template-columns: 1fr auto 1fr;
@@ -1984,16 +2068,6 @@ body.video-stage-immersive #screen-room.active {
     column-gap: 16px;
   }
   body.video-stage-immersive #screen-room .room-bottom-bar .ptt-area { grid-column: 2; }
-  body.video-stage-immersive #screen-room .room-bottom-bar .room-controls {
-    grid-column: 3;
-    justify-self: start;
-    margin-top: 0;
-    padding-top: 0;
-    border-top: none;
-  }
-  /* Side by side with the mic there is width to spare and no height at all, so
-     the buttons stay on one line rather than wrapping into a second. */
-  body.video-stage-immersive #screen-room .room-bottom-bar .ctrl-row { flex-wrap: nowrap; }
   body.video-stage-immersive #screen-room .ptt-btn { width: 62px; height: 62px; font-size: 24px; }
   /* Both lines go entirely — space, not just ink. The reserve upright is there
      to keep the mic on the pixel it occupies in a voice room, and sideways
@@ -2215,8 +2289,14 @@ body.video-stage-immersive #screen-room .video-stage-ribbon .video-tile { border
   display: block;
   background: #000;
 }
+/* These two are the DEFAULT, in force until the first frame says what shape the
+   picture actually is: applyStageVideoFit() then writes `object-fit` inline, per
+   tile, from that shape against the tile's own (see stageVideoFit). Starting
+   from `contain` means the worst case is a moment of black bars — starting from
+   `cover` would be a moment of somebody's cropped face. */
 .video-stage-focus .video-tile video { object-fit: contain; }
-/* A screen share must never be mirrored, and cropping it loses content. */
+/* A screen share must never be mirrored, and cropping it loses content — the
+   one tile the measurement never overrides. */
 .video-tile-screen video { object-fit: contain; }
 /* Self-view is mirrored — an unmirrored self-view reads as wrong to everyone.
    ...except on the rear camera, where you are filming the scene in front of the

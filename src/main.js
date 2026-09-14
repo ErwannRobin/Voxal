@@ -11704,6 +11704,59 @@ function videoStageFocusKey(tiles) {
   return '';
 }
 
+// --- How a picture is fitted to its tile --------------------------------------
+//
+// A camera FILLS its tile and is cropped to fit. That is what every video call
+// does, and on a phone held sideways it is the difference between a face and a
+// face between two black bars — the screen's shape is never the camera's.
+//
+// But filling is only right while the crop is one you can afford, and the two
+// crops are not the same thing — which is why there are two limits and not one.
+//
+// A tile NARROWER than the picture crops the SIDES, and a face sits in the
+// middle of a frame: that is what every phone video call does to a landscape
+// camera held up to a portrait screen, and it is allowed generously.
+//
+// A tile WIDER than the picture crops the TOP AND BOTTOM — and off an upright
+// frame that is somebody's head. So it is barely allowed at all: past a little,
+// the whole picture is shown with bars beside it instead.
+//
+// A shared SCREEN is never cropped, at any shape: the corner cut off is the
+// line of code being discussed.
+var STAGE_FIT_CROP_SIDES = 4;     // the tile is narrower than the picture
+var STAGE_FIT_CROP_ENDS = 1.4;    // the tile is wider: this one cuts heads off
+
+// Pure. `kind` is the tile's own, and both ratios are width ÷ height.
+function stageVideoFit(videoAspect, boxAspect, kind) {
+  if (kind === 'screen') return 'contain';
+  if (!(videoAspect > 0) || !(boxAspect > 0)) return 'cover';
+  var mismatch = Math.max(videoAspect / boxAspect, boxAspect / videoAspect);
+  var limit = boxAspect < videoAspect ? STAGE_FIT_CROP_SIDES : STAGE_FIT_CROP_ENDS;
+  return mismatch > limit ? 'contain' : 'cover';
+}
+
+// Measured, per tile, on every layout pass — a tile's shape changes with the
+// window, the tile count and the panel beside it, and the picture's own shape is
+// only known once the stream has produced a frame (hence the `loadedmetadata`
+// hook below). The stylesheet's `object-fit` is the answer until then.
+function applyStageVideoFit() {
+  var stage = document.getElementById('video-stage');
+  if (!stage) return;
+  var vids = stage.querySelectorAll('.video-tile video');
+  for (var i = 0; i < vids.length; i++) {
+    var vid = vids[i];
+    var tile = vid.parentElement;
+    if (!tile) continue;
+    var box = tile.getBoundingClientRect();
+    if (!box.width || !box.height) continue;
+    var fit = stageVideoFit(
+      vid.videoWidth / vid.videoHeight,
+      box.width / box.height,
+      tile.classList.contains('video-tile-screen') ? 'screen' : 'camera');
+    if (vid.style.objectFit !== fit) vid.style.objectFit = fit;
+  }
+}
+
 function _buildVideoTile(tile) {
   var el = document.createElement('div');
   el.className = 'video-tile video-tile-' + tile.kind + (tile.self ? ' video-tile-self' : '');
@@ -11717,6 +11770,11 @@ function _buildVideoTile(tile) {
   // Every tile is muted: audio travels on its own MediaConnection and is already
   // being played by the audio pipeline. Unmuting here would double every voice.
   vid.muted = true;
+  // The intrinsic size arrives with the first frame, not with the element, and
+  // it is half of what decides whether this picture fills its tile or is shown
+  // whole. A camera that switches orientation mid-call fires this again.
+  vid.addEventListener('loadedmetadata', applyStageVideoFit);
+  vid.addEventListener('resize', applyStageVideoFit);
   el.appendChild(vid);
 
   var placeholder = document.createElement('div');
@@ -11954,10 +12012,11 @@ function renderVideoStage(tiles, focusKey, badgeKey) {
   if (ribbonWrap) ribbonWrap.classList.toggle('hidden', !split.ribbonKeys.length);
   layoutVideoStageGrid(gridEl, focusKey ? 0 : split.gridKeys.length);
   updateStageRibbonOverflow();
-  // After the layout, not before: the badge is placed from its own measured box,
-  // and it was `hidden` — so unmeasurable — until two lines ago. The grid's own
-  // pass calls this too, but it is skipped entirely while a tile is pinned.
+  // After the layout, not before: both are placed from measured boxes, and the
+  // badge was `hidden` — so unmeasurable — until two lines ago. The grid's own
+  // pass calls the badge too, but it is skipped entirely while a tile is pinned.
   applySelfBadgePlacement();
+  applyStageVideoFit();
 }
 
 // The space the grid has to work with, in content-box terms and independent of
@@ -12226,6 +12285,8 @@ function applyImmersiveStageInsets(gridEl) {
     if (ribbonWrap) ribbonWrap.style.removeProperty('padding-bottom');
     document.documentElement.style.removeProperty('--stage-inset-top');
     document.documentElement.style.removeProperty('--stage-inset-bottom');
+    document.documentElement.style.removeProperty('--stage-inset-left');
+    document.documentElement.style.removeProperty('--stage-rail-top');
     applySelfBadgePlacement();
     return;
   }
@@ -12237,9 +12298,21 @@ function applyImmersiveStageInsets(gridEl) {
   var barBox = bar ? bar.getBoundingClientRect() : null;
 
   // The header is gone with the chrome; while it is up it lies on the picture.
+  //
+  // Which EDGE it lies on is measured, never re-derived from the media query
+  // that decides it: upright it is a band across the top of the stage, sideways
+  // a rail down the left-hand side with the control buttons under it. A header
+  // that does not span the stage is that rail — and then the stage's own no-go
+  // margin is on the left, not the top, which is the difference between a
+  // self-view that clears the chrome and one parked on top of it.
   var header = document.querySelector('#screen-room .room-header');
-  var headerH = (!stageChromeHidden() && header) ? header.getBoundingClientRect().height : 0;
-  var insetTop = Math.round(headerH);
+  var headerBox = header ? header.getBoundingClientRect() : null;
+  var rail = !!headerBox && headerBox.width > 0 && headerBox.width < stageBox.width * 0.6;
+  var chromeUp = !stageChromeHidden();
+  var insetTop = (headerBox && chromeUp && !rail) ? Math.round(headerBox.height) : 0;
+  var insetLeft = (headerBox && chromeUp && rail)
+    ? Math.max(0, Math.round(headerBox.right - stageBox.left))
+    : 0;
   var insetBottom = (barBox && barBox.height)
     ? Math.max(0, Math.round(stageBox.bottom - barBox.top))
     : 0;
@@ -12262,6 +12335,16 @@ function applyImmersiveStageInsets(gridEl) {
   // control stack) and the panel scrim (must stop above the talk button).
   document.documentElement.style.setProperty('--stage-inset-top', insetTop + 'px');
   document.documentElement.style.setProperty('--stage-inset-bottom', insetBottom + 'px');
+  document.documentElement.style.setProperty('--stage-inset-left', insetLeft + 'px');
+  // Where the rail's buttons start, in VIEWPORT coordinates — they are fixed,
+  // like the header they hang under. Published while the chrome is away too:
+  // the rail leaves sideways, so its vertical geometry is still the truth, and
+  // dropping the value would jump the stack before it slid out.
+  if (rail && headerBox) {
+    document.documentElement.style.setProperty('--stage-rail-top', Math.round(headerBox.bottom) + 'px');
+  } else {
+    document.documentElement.style.removeProperty('--stage-rail-top');
+  }
   // The slots beside the mic are measured from that same control stack, and a
   // badge parked in one has to be handed back to an edge the moment the stack
   // stops having room for it (a phone turned on its side).
@@ -12903,7 +12986,10 @@ function stageBadgeInsets() {
   var px = function(name) { return parseFloat(css.getPropertyValue(name)) || 0; };
   var immersive = document.body.classList.contains('video-stage-immersive');
   return {
-    left: 0,
+    // Sideways the chrome is a rail down the left of the stage, so that is where
+    // the margin is; upright it is the header across the top. One or the other,
+    // never both — applyImmersiveStageInsets() measures which.
+    left: immersive ? px('--stage-inset-left') : 0,
     right: 0,
     top: immersive ? px('--stage-inset-top') : 0,
     bottom: (immersive ? px('--stage-inset-bottom') : 0) + px('--stage-ribbon-height')

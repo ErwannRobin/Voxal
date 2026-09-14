@@ -821,6 +821,62 @@ test.describe('the self-view badge', () => {
   });
 });
 
+// A camera fills its tile and is cropped to fit — the screen's shape is never
+// the camera's, and on a phone that is the difference between a face and a face
+// between two black bars. What stops it is the crop becoming one you cannot
+// afford, and the two crops are not the same thing: the sides of a frame are
+// usually nothing, the top of one is somebody's head.
+test.describe('fitting a picture to its tile', () => {
+  test('a camera fills a tile that is narrower than it — the sides go', async ({ page }) => {
+    const at = (v, b) => callFn(page, 'stageVideoFit', v, b, 'camera');
+    expect(await at(16 / 9, 390 / 844)).toBe('cover');   // phone upright, full screen
+    expect(await at(16 / 9, 422 / 390)).toBe('cover');   // two tiles, sideways
+    expect(await at(16 / 9, 524 / 654)).toBe('cover');   // one tile on a desktop stage
+    expect(await at(16 / 9, 16 / 9)).toBe('cover');
+  });
+
+  test('…and fills a tile that is wider only while the crop is small', async ({ page }) => {
+    const at = (v, b) => callFn(page, 'stageVideoFit', v, b, 'camera');
+    // A 16:9 camera on a phone held sideways: fills the screen, ends trimmed.
+    expect(await at(16 / 9, 844 / 390)).toBe('cover');
+    // An upright phone camera on that same screen would lose the head: whole.
+    expect(await at(9 / 16, 844 / 390)).toBe('contain');
+    // A 4:3 webcam there, too — a third of its height is a face.
+    expect(await at(4 / 3, 844 / 390)).toBe('contain');
+  });
+
+  test('a shared screen is never cropped, at any shape', async ({ page }) => {
+    expect(await callFn(page, 'stageVideoFit', 16 / 9, 16 / 9, 'screen')).toBe('contain');
+    expect(await callFn(page, 'stageVideoFit', 16 / 9, 844 / 390, 'screen')).toBe('contain');
+  });
+
+  test('a picture whose shape is not known yet fills, as the grid always did', async ({ page }) => {
+    expect(await callFn(page, 'stageVideoFit', 0, 16 / 9, 'camera')).toBe('cover');
+    expect(await callFn(page, 'stageVideoFit', 16 / 9, 0, 'camera')).toBe('cover');
+  });
+
+  test('the choice is written onto the tile that is on screen', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
+    });
+    await giveStream(page, 'p1', 'camera');
+    // The intrinsic size arrives with the first frame; a seeded MediaStream has
+    // no frames, so it is stood in for here.
+    const fitFor = (w, h) => page.evaluate(({ w, h }) => {
+      const vid = document.querySelector('#video-stage-grid .video-tile video');
+      Object.defineProperty(vid, 'videoWidth', { value: w, configurable: true });
+      Object.defineProperty(vid, 'videoHeight', { value: h, configurable: true });
+      applyStageVideoFit();
+      return vid.style.objectFit;
+    }, { w, h });
+    // The tile is taller than it is wide here, so a landscape camera fills it…
+    expect(await fitFor(1280, 720)).toBe('cover');
+    // …and one turned on its side is shown whole rather than losing its ends.
+    expect(await fitFor(200, 1280)).toBe('contain');
+  });
+});
+
 test.describe('tile state cues', () => {
   test('talking lands on the tile as well as the roster row', async ({ page }) => {
     await enterRoom(page, {

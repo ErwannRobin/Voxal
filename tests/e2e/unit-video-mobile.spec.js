@@ -865,6 +865,73 @@ test.describe('the immersive stage held sideways', () => {
     }
   });
 
+  // The picture wants the height, and the chrome was taking it at both ends.
+  // Header and buttons are one column down the left now; only the mic is left
+  // along the bottom, and it did not move.
+  test('the header and the buttons are a column down the left', async ({ page }) => {
+    await withVideo(page);
+    const seen = await page.evaluate(() => {
+      const box = (sel) => {
+        const b = document.querySelector(sel).getBoundingClientRect();
+        return { left: Math.round(b.left), right: Math.round(b.right),
+                 top: Math.round(b.top), bottom: Math.round(b.bottom), w: Math.round(b.width) };
+      };
+      return { header: box('#screen-room .room-header'), ctrls: box('#screen-room .room-controls'),
+               bar: box('.room-bottom-bar'), w: window.innerWidth };
+    });
+    // A column, not a band: the header takes a fraction of the width…
+    expect(seen.header.w).toBeLessThan(seen.w / 2);
+    // …the buttons are under it, on the same left edge…
+    expect(seen.ctrls.left).toBe(seen.header.left);
+    expect(seen.ctrls.top).toBeGreaterThanOrEqual(seen.header.bottom);
+    // …and they are out of the bottom bar, which is now the mic and nothing else.
+    expect(seen.ctrls.bottom).toBeLessThan(seen.bar.top);
+  });
+
+  // It starts inboard of the roster's handle, or the two are on top of each
+  // other — the handle is hard against the edge and always reachable.
+  test('the column clears the handle it shares an edge with', async ({ page }) => {
+    await withVideo(page);
+    const seen = await page.evaluate(() => ({
+      handle: Math.round(document.getElementById('stage-handle-roster').getBoundingClientRect().right),
+      rail: Math.round(document.querySelector('#screen-room .room-header').getBoundingClientRect().left),
+    }));
+    expect(seen.rail).toBeGreaterThanOrEqual(seen.handle);
+  });
+
+  // The rail is chrome: a tap on the picture takes it away, and it leaves
+  // sideways — the whole of it, with no corner left showing.
+  test('the column slides off the screen with the rest of the chrome', async ({ page }) => {
+    await withVideo(page);
+    await page.evaluate(() => setStageChrome(true));
+    await page.waitForTimeout(350);
+    const seen = await page.evaluate(() => ({
+      header: Math.round(document.querySelector('#screen-room .room-header').getBoundingClientRect().right),
+      ctrls: Math.round(document.querySelector('#screen-room .room-controls').getBoundingClientRect().right),
+      inset: getComputedStyle(document.documentElement).getPropertyValue('--stage-inset-left').trim(),
+    }));
+    expect(seen.header).toBeLessThanOrEqual(0);
+    expect(seen.ctrls).toBeLessThanOrEqual(0);
+    // …and the stage's left margin goes with it: there is nothing to clear.
+    expect(seen.inset).toBe('0px');
+  });
+
+  // The self-view has to clear the rail the same way it clears the header
+  // upright — one margin or the other, never both.
+  test('the stage margin moves to the side the chrome is on', async ({ page }) => {
+    await withVideo(page);
+    const seen = await page.evaluate(() => {
+      const cs = getComputedStyle(document.documentElement);
+      return {
+        left: cs.getPropertyValue('--stage-inset-left').trim(),
+        top: cs.getPropertyValue('--stage-inset-top').trim(),
+        header: Math.round(document.querySelector('#screen-room .room-header').getBoundingClientRect().right),
+      };
+    });
+    expect(seen.top).toBe('0px');
+    expect(seen.left).toBe(seen.header + 'px');
+  });
+
   // Sideways there is no voice layout to match, so both lines go entirely:
   // reserved, the sentence lifts the mic off the bottom of a 390px screen and
   // its width shoves the buttons a hundred pixels out from the mic.

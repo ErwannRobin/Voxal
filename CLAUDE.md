@@ -125,6 +125,27 @@ tiles never reflow when it moves: `applyImmersiveStageInsets()` pins the grid's
 height) only for things that must clear it — the self-view badge's top corners
 and the self camera tile's own flip/background buttons.
 
+**Sideways that chrome is a rail down the left.** A phone on its side has no
+height to give and width to spare, so the header and the control buttons become
+one fixed column on the left edge (inboard of the roster handle) and only the
+talk button stays along the bottom, in the middle, where the thumb goes. The
+buttons being `position: fixed` takes them out of the bar's grid, so the bar
+shrinks to the mic. Which edge the chrome is on is **measured, not re-derived
+from the media query that does it**: a header narrower than 60% of the stage is
+the rail, and the stage's no-go margin then moves from `--stage-inset-top` to
+`--stage-inset-left` — one or the other, never both. `--stage-rail-top` (the
+header's measured bottom, in viewport coordinates) is where the button stack
+hangs from.
+
+**A picture fills its tile, unless the crop is one you cannot afford.**
+`stageVideoFit()` chooses `object-fit` per tile from the picture's own shape
+against the tile's, and it uses TWO limits because the two crops differ: a tile
+narrower than the picture loses the sides (a face is in the middle — allowed
+generously) while a tile wider loses the top and bottom (that is the head —
+barely allowed at all). A shared screen is never cropped at any shape.
+`applyStageVideoFit()` re-runs on every layout pass and on each video's
+`loadedmetadata`, since the intrinsic size arrives with the first frame.
+
 `.room-bottom-bar` itself **paints nothing** in video mode: there is no slab
 behind the controls, in either orientation. Each control carries the glass
 instead (`--glass-tint` / `--glass-sheen` / `--glass-blur`, declared on the bar),

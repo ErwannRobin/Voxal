@@ -37,6 +37,44 @@ base.describe('landscape reflow (mobile web)', () => {
   });
 });
 
+// One mic, one size. A phone on its side is 844px wide, which trips the
+// `min-width: 640px` block meant for a tablet and grew the talk button to 96px
+// — on a 390px-tall screen, and next to a video room drawing the same button at
+// 62. Turning a camera on must not resize the control the app is for.
+base.describe('the talk button sideways', () => {
+  base.use({ hasTouch: true, isMobile: true });
+
+  const micSize = (page) => page.evaluate(() => {
+    const b = document.getElementById('ptt-btn').getBoundingClientRect();
+    return { w: Math.round(b.width), h: Math.round(b.height) };
+  });
+
+  base('a voice room sideways draws the same mic as a video room', async ({ page }) => {
+    await page.setViewportSize({ width: 844, height: 390 });
+    await page.goto('/');
+    await enterRoom(page);
+    expect(await micSize(page)).toEqual({ w: 62, h: 62 });
+
+    // …and the video room it is matching, on the same screen.
+    await page.evaluate(() => {
+      const c = connections.get('p1');
+      c.videoActive = true;
+      c.remoteVideoStream = new MediaStream();
+      localVideoActive = true;
+      updatePeerList();
+    });
+    expect(await page.evaluate(() => document.body.classList.contains('video-stage-immersive'))).toBe(true);
+    expect(await micSize(page)).toEqual({ w: 62, h: 62 });
+  });
+
+  base('upright it keeps the size the thumb expects', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+    await enterRoom(page);
+    expect(await micSize(page)).toEqual({ w: 80, h: 80 });
+  });
+});
+
 base.describe('desktop is unaffected', () => {
   base('tall landscape desktop keeps the flex stack', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });

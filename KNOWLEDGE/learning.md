@@ -511,6 +511,55 @@ The single worst thing in this round, and it had been shipping:
 - **No slab sideways.** One short row of controls does not need a blurred plank
   covering a third of a face behind it; the controls carry the glass themselves.
 
+### Sideways again: the chrome is a column, and a fit is two limits
+
+- **A handle that rides its panel's edge must not add the safe-area inset.** The
+  panels are anchored at `left: 0` / `right: 0` and carry the inset as
+  **padding**, so the visible edge is the width and nothing else. The open-state
+  handle offsets added `max(env(safe-area-inset-*), 0px)` on top of the width,
+  which is zero in portrait — where it was checked — and 44–59px on a notched
+  phone **sideways**, exactly where the user saw the handle floating in the
+  picture attached to nothing. Closed, the inset is right: that keeps the tab out
+  from under the notch.
+- **`@media (min-width: 640px)` is a phone on its side.** A landscape phone is
+  844px wide, so the block meant to grow the talk button for a tablet grew it to
+  96px on a 390px-tall screen — while the same phone's *video* room drew it at 62,
+  because the immersive landscape block says so. A room must not resize the
+  control the whole app is for because a camera came on. The landscape voice grid
+  now pins the same 62.
+- **Sideways the chrome is a rail, not two bands.** A header across the top and a
+  row of buttons across the bottom cost a 390px-tall screen a third of its
+  height; sideways there is width to spare instead. Both are one fixed column
+  down the left, the talk button stays bottom-centre (the thumb goes to the
+  middle of the *screen*), and the rail starts inboard of the roster handle so
+  the two are never on the same pixels.
+  - The buttons are `position: fixed`, which takes them **out of the bottom
+    bar's grid** — so the bar shrinks to the mic, and `--stage-inset-bottom`
+    hands that height back to the ribbon and the self-view.
+  - Which edge the chrome is on is **measured, not re-derived from the media
+    query**: a header narrower than 60% of the stage IS the rail. That is what
+    moves the stage's no-go margin from `--stage-inset-top` to
+    `--stage-inset-left` — one or the other, never both — so the self-view
+    clears the chrome sideways the same way it clears the header upright.
+  - The rail leaves sideways (`translateX`), so its **vertical** geometry stays
+    true while the chrome is away; `--stage-rail-top` (the header's measured
+    bottom, in viewport coordinates, since the buttons are fixed too) is
+    published even then, or the stack jumps before it slides out.
+- **One crop limit is not enough, and the symmetry is a trap.** Fitting a picture
+  to a tile by the ratio mismatch alone cannot tell a phone held upright showing
+  a 16:9 camera (mismatch 3.85, and cropping the sides is what every video call
+  does) from a phone held sideways showing an upright camera (mismatch 3.84, and
+  cropping the ends takes the head off). They are the same number. So
+  `stageVideoFit()` picks its limit from the DIRECTION of the crop: a tile
+  narrower than the picture loses the sides and is allowed 4×; a tile wider loses
+  the top and bottom and is allowed 1.4×. A shared screen is never cropped at
+  any shape.
+  - The intrinsic size arrives with the **first frame**, not with the element, so
+    the choice is re-made on `loadedmetadata` and `resize` as well as on every
+    layout pass, and the stylesheet's `object-fit` is the answer until then.
+    Starting from `contain` means the worst case is a moment of black bars;
+    starting from `cover` would be a moment of somebody's cropped face.
+
 ### Running the suite in this container (updated)
 
 `/opt/pw-browsers` ships Chromium **1194**; `@playwright/test` 1.63 wants
