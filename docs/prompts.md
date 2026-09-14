@@ -1,12 +1,49 @@
 # LLM integration prompts
 
 Copy-paste prompts for coding agents (Claude Code, Cursor, Copilot, Codex,
-ChatGPT…) that integrate, deploy, fork or extend Voxal.
+ChatGPT…) that embed, deploy or connect to Voxal.
 
 Every prompt is deliberately **short**. None of them tries to describe Voxal —
 each one tells the agent *which document to download and read first*, then
 states the goal and the constraints. That keeps the prompt small, keeps the
 agent accurate, and means a prompt never goes stale when a doc changes.
+
+---
+
+## At a glance
+
+Twelve prompts, three groups. Pick the row that matches what you are doing.
+
+| | I want to… | Prompt | Reads |
+|---|---|---|---|
+| **A1** | Put a voice room on a page, no code | [Drop a voice room into a page](#a1-drop-a-voice-room-into-a-page) | iframe embed |
+| **A2** | Drive the room from my own buttons, and react to who is talking | [Control the room from my page](#a2-control-the-room-from-my-page-postmessage-bridge) | iframe embed |
+| **A3** | A reusable `<VoxalRoom>` component | [Wrap the embed as a framework component](#a3-wrap-the-embed-as-a-framework-component) | iframe embed |
+| **A4** | Make an existing embed production-safe | [Lock the embed down](#a4-lock-the-embed-down-for-production) | iframe embed |
+| **A5** | Make rooms work behind a corporate firewall | [Give the embed our own TURN relay](#a5-give-the-embed-our-own-turn-relay) | iframe embed · TURN & ICE |
+| **A6** | A link that opens with the camera already on | [Make a "video call" link](#a6-make-a-video-call-link-instead-of-push-to-talk) | iframe embed · video routing |
+| **B1** | Host the app on my own domain | [Deploy the web app](#b1-deploy-the-web-app) | deployment |
+| **B2** | Make connections reliable for users with no account | [Stand up anonymous TURN credentials](#b2-stand-up-anonymous-turn-credentials) | deployment · TURN & ICE |
+| **B3** | Run the relay myself | [Self-host a coturn relay](#b3-self-host-a-coturn-relay) | TURN & ICE |
+| **B4** | Keep video usable in bigger rooms | [Enable the optional SFU for video](#b4-enable-the-optional-sfu-for-video) | video routing · deployment |
+| **B5** | Depend on no public infrastructure at all | [Self-host signaling and assets](#b5-self-host-signaling-and-assets) | deployment · architecture |
+| **C1** | Sign my users in without a second login | [Integrate Voxal Connect sign-in](#c1-integrate-voxal-connect-sign-in) | deployment · iframe embed |
+
+**Group A — embedding** puts Voxal inside a page you already have, using the
+hosted app at `web.voxal.app`. Nothing to deploy, no API key, no SDK: a standard
+`<iframe>` and a `postMessage` bridge.
+
+**Group B — running Voxal yourself** is for when you want your own domain, your
+own relay, or no dependency on public infrastructure. Every piece is optional
+and degrades safely: deploy before the accounts exist and the app falls back
+rather than breaks.
+
+**Group C — accounts** connects an existing user base to Voxal's presence
+sign-in, so people are not asked to log in twice.
+
+Working *on* Voxal rather than with it — features, native builds, tests — is a
+different job with a different entry point: read
+[`CLAUDE.md`](../CLAUDE.md) and [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ---
 
@@ -41,6 +78,9 @@ Hosted web app: https://web.voxal.app
 
 Raw base URL for all of these:
 `https://raw.githubusercontent.com/ErwannRobin/Voxal/main/`
+
+The whole set is listed, not only what the prompts below fetch — use it when
+writing your own.
 
 | Document | Path | Covers |
 |---|---|---|
@@ -225,136 +265,9 @@ Deliver the config changes and a checklist of what is now self-hosted.
 
 ---
 
-## C — Native apps
+## C — Accounts and presence
 
-### C1. Fork and rebrand the mobile apps
-
-```text
-Download and read:
-- https://raw.githubusercontent.com/ErwannRobin/Voxal/main/docs/mobile.md
-- https://raw.githubusercontent.com/ErwannRobin/Voxal/main/docs/release.md
-
-Task: rebrand the iOS and Android apps as <App name> under <bundle id>.
-- Change app identity, icons, deep-link/app-link domains and signing.
-- List the files that must change on each platform, and the sync step required
-  after any web asset change.
-Deliver a step-by-step fork checklist. Flag anything that needs a paid
-developer account.
-```
-
-### C2. Build and sign the desktop app
-
-```text
-Download and read:
-- https://raw.githubusercontent.com/ErwannRobin/Voxal/main/docs/release.md
-- https://raw.githubusercontent.com/ErwannRobin/Voxal/main/README.md
-- https://raw.githubusercontent.com/ErwannRobin/Voxal/main/CLAUDE.md
-
-Task: produce a signed desktop build for <macOS | Windows | Linux>.
-- Use the repo's own make targets rather than inventing commands.
-- Cover the custom URL scheme registration and why a dev run cannot do it.
-- List signing prerequisites and the version files kept in sync by a release.
-```
-
----
-
-## D — Working on the Voxal codebase
-
-### D1. Add a frontend feature
-
-```text
-Download and read https://raw.githubusercontent.com/ErwannRobin/Voxal/main/CLAUDE.md
-in full before editing anything, then read the source files it points you to.
-
-Task: implement <feature> in the Voxal frontend.
-Hard constraints from that document:
-- No framework, no bundler, no new dependency without asking.
-- Guard every desktop-only or mobile-only path by platform detection.
-- Use the documented microphone and camera helpers; never call getUserMedia or
-  stop tracks directly.
-- Any new setting needs a storage key documented in the same table.
-- Run the repo's sync step after touching web assets, and run the test suite.
-Show me the plan before you write code.
-```
-
-### D2. Add a desktop (Tauri) command
-
-```text
-Download and read the "Adding a Tauri IPC command" section of
-https://raw.githubusercontent.com/ErwannRobin/Voxal/main/CLAUDE.md, plus
-https://raw.githubusercontent.com/ErwannRobin/Voxal/main/docs/architecture.md.
-
-Task: expose <native capability> to the frontend.
-- Follow all four steps in that section, including the capability/permission
-  declaration — a missing permission fails silently at runtime.
-- Keep the JS call site guarded so web and mobile are unaffected.
-Deliver the Rust side, the JS call site, and the permission change.
-```
-
-### D3. Write tests for a change
-
-```text
-Download and read:
-- https://raw.githubusercontent.com/ErwannRobin/Voxal/main/CLAUDE.md (Commands section)
-- https://raw.githubusercontent.com/ErwannRobin/Voxal/main/CONTRIBUTING.md
-
-Task: add tests covering <change>.
-- Choose the right suite: fast UI/logic, multi-peer WebRTC, Rust, or API.
-- Import the test helpers the repo's own specs import, not the framework
-  directly, so coverage instrumentation still works.
-- Multi-peer specs must carry the tag that keeps them out of the fast suite.
-Run the suite and paste the real output, including failures.
-```
-
-### D4. Debug a connection failure
-
-```text
-Download and read:
-- https://raw.githubusercontent.com/ErwannRobin/Voxal/main/docs/turn-and-ice.md
-- https://raw.githubusercontent.com/ErwannRobin/Voxal/main/docs/video-routing.md (Debugging)
-
-Symptoms: <what the user sees — no audio, black tile, missing peer, one-way
-audio, works on wifi but not on the office network…>
-Environment: <browser/app, OS, network>.
-
-Walk through the documented resolution order and diagnostics in that order,
-tell me which layer is failing, and what to change. Ask for the specific logs
-or badge states you need rather than guessing.
-```
-
-### D5. Change anything touching host migration
-
-```text
-Download and read:
-- https://raw.githubusercontent.com/ErwannRobin/Voxal/main/docs/host-migration.md
-- https://raw.githubusercontent.com/ErwannRobin/Voxal/main/docs/architecture.md
-- https://raw.githubusercontent.com/ErwannRobin/Voxal/main/CLAUDE.md
-
-Task: <change> in the signaling / peer-list / migration path.
-- Preserve the invariants that document states: the authoritative successor
-  chain, the room state machine, and audio links that must survive a handoff.
-- Explain the split-brain implications of your change before implementing it.
-- Run the multi-peer test suite, not just the fast one.
-```
-
-### D6. Extend camera background effects
-
-```text
-Download and read https://raw.githubusercontent.com/ErwannRobin/Voxal/main/docs/video-effects.md
-in full — it is long, and the pipeline details matter.
-
-Task: <add an effect | change a control | tune quality/performance>.
-- Keep all segmentation local; no frame may leave the device.
-- Do not renegotiate the connection for a change that is only a shader uniform.
-- Respect the documented teardown path so the camera is really released.
-Explain which part of the pipeline you are touching before you edit.
-```
-
----
-
-## E — Accounts and presence
-
-### E1. Integrate Voxal Connect sign-in
+### C1. Integrate Voxal Connect sign-in
 
 ```text
 Download and read:
@@ -383,7 +296,7 @@ The pattern that works:
 3. **State the invariants.** Voice is never server-routed; PeerJS is vendored,
    never CDN-loaded; platform-specific code is always guarded. An agent that is
    not told will happily break all three.
-4. **Ask for the plan first** on anything touching the codebase.
+4. **Ask for the plan first** on anything non-trivial, before code is written.
 5. **Placeholders in `<angle brackets>`** so it is obvious what you must replace.
 
 Found a prompt that works better? Pull requests to this page are welcome —
