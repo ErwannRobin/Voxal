@@ -566,10 +566,15 @@ The single worst thing in this round, and it had been shipping:
   - A header that is a grid ROW cannot hide by sliding: `translateY(-100%)` moves
     it by its own height and leaves the top of it on screen (a fixed band ran off
     the top because its height WAS its offset). Ink, not space — `visibility`.
-  - The stage's no-go margin is no longer "top or left": the talk column can be
-    on the bottom, the right or the left (`data-hand`), so `stageChromeInsets()`
-    measures the bar's box against the stage and answers with whichever side it
-    hugs. Measured, not read off the attribute that moved it.
+  - **The talk button is the exception, and the button row is why.** Everything
+    else went back to the landscape room's own places; the mic did not stay in
+    its 1/3 column because the three labelled buttons under it do not fit in
+    263px — wrapped, they walk up the screen. It takes the bottom of the room,
+    full width and centred, which is also where the thumb goes when the picture
+    is the whole window. The inset stays a single bottom band in both
+    orientations, so the measurement stayed simple: the side-column branch
+    written for the rail was dead the moment the mic came back to the middle,
+    and went.
 - **One crop limit is not enough, and the symmetry is a trap.** Fitting a picture
   to a tile by the ratio mismatch alone cannot tell a phone held upright showing
   a 16:9 camera (mismatch 3.85, and cropping the sides is what every video call

@@ -137,12 +137,14 @@ the room's own chrome stands on it (header and talk column at `z-index: 21`,
 panels at 40). A control the user has already learned never moves because a
 picture arrived.
 
-`applyImmersiveStageInsets()` therefore measures **which side** the talk column
-is on: `stageChromeInsets()` is pure and returns one of `bottom` (upright, a band
-across the stage), `right` or `left` (sideways, a column) — measured from the
-bar's own box against the stage, never re-derived from the media query or from
-`data-hand`. `--stage-inset-top` is always the header's bottom. The self-view
-badge and the ribbon read all four.
+The talk button is the one deliberate exception, and it earns it: the picture is
+the whole window sideways, so it leaves the grid's talk column and takes the
+bottom of the room, full width and centred, with its buttons on ONE line
+underneath (three labelled buttons do not fit in a 263px column, and wrapped
+they walk up the screen). The hint and the status line are `display: none`
+there for the same reason — they sit between the mic and that row. So
+`--stage-inset-bottom` is the band the controls stand in, in both orientations,
+and `--stage-inset-top` is the header's bottom.
 
 In that layout the header is a row of the room's grid, so hiding the chrome
 takes its **ink, not its space** (`visibility`), exactly as the control row does
@@ -172,7 +174,8 @@ never `display`; a border goes `transparent`, never `none`). The bar is
 bottom-anchored, so anything that collapses drags the talk button down — and the
 mic has to be on the same pixel in a voice room and a video one. Upright the hint
 and the status line are therefore reserved; **sideways** they are `display: none`,
-because there is no voice layout to line up with there.
+because the talk button has left the landscape room's talk column and there is no
+line-up left to keep.
 
 `--stage-safe-top` (`:root`, floored at 24px under `html.is-native`) is what
 keeps the header's buttons clear of an overlaid status bar. The immersive stage

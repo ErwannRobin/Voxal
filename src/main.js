@@ -12272,33 +12272,6 @@ function noteStageSpeaker(peerId, active) {
 // IS measured from it is `--stage-inset-top`, which places the self-view badge's
 // top corners clear of the header while the header is on screen.
 
-// Pure: which side of the stage the talk column is standing on, and how much of
-// the stage it covers. Upright the control stack is a band across the BOTTOM;
-// sideways the landscape room puts it in a column down one side — the right by
-// default, the left for a left-handed user — and the stage's no-go margin has to
-// follow it there, or the self-view parks under the mic.
-//
-// Measured, never re-derived from the media query or the `data-hand` attribute
-// that decide it: one measurement cannot disagree with the layout the way two
-// copies of the same rule can. A bar that does not span the stage is a column,
-// and the side it hugs is the side it is nearest.
-var STAGE_COLUMN_MAX_SHARE = 0.6;
-
-function stageChromeInsets(barBox, stageBox) {
-  var out = { top: 0, right: 0, bottom: 0, left: 0 };
-  if (!barBox || !stageBox || !(barBox.height > 0) || !(stageBox.width > 0)) return out;
-  if (barBox.width >= stageBox.width * STAGE_COLUMN_MAX_SHARE) {
-    out.bottom = Math.max(0, Math.round(stageBox.bottom - barBox.top));
-    return out;
-  }
-  if ((barBox.left - stageBox.left) > (stageBox.right - barBox.right)) {
-    out.right = Math.max(0, Math.round(stageBox.right - barBox.left));
-  } else {
-    out.left = Math.max(0, Math.round(barBox.right - stageBox.left));
-  }
-  return out;
-}
-
 function applyImmersiveStageInsets(gridEl) {
   if (!gridEl) return;
   var stage = document.getElementById('video-stage');
@@ -12312,8 +12285,6 @@ function applyImmersiveStageInsets(gridEl) {
     if (ribbonWrap) ribbonWrap.style.removeProperty('padding-bottom');
     document.documentElement.style.removeProperty('--stage-inset-top');
     document.documentElement.style.removeProperty('--stage-inset-bottom');
-    document.documentElement.style.removeProperty('--stage-inset-left');
-    document.documentElement.style.removeProperty('--stage-inset-right');
     applySelfBadgePlacement();
     return;
   }
@@ -12334,8 +12305,13 @@ function applyImmersiveStageInsets(gridEl) {
   var insetTop = (headerBox && chromeUp)
     ? Math.max(0, Math.round(headerBox.bottom - stageBox.top))
     : 0;
-  // …and the talk column costs it whichever side it is standing on.
-  var insets = stageChromeInsets(barBox, stageBox);
+  // …and the control stack costs it the band it stands in at the bottom, in
+  // both orientations: sideways the talk button leaves the landscape room's
+  // talk column and takes the centre line, because the picture is the whole
+  // window and that is where the thumb goes.
+  var insetBottom = (barBox && barBox.height)
+    ? Math.max(0, Math.round(stageBox.bottom - barBox.top))
+    : 0;
 
   // Zero, always: the tiles run full-bleed UNDER the header for the same reason
   // they run full-bleed under the dock, and a padding that came and went with
@@ -12349,21 +12325,13 @@ function applyImmersiveStageInsets(gridEl) {
   // of faces behind the talk button is not a picture with a panel on it, it is
   // three people you cannot see.
   gridEl.style.paddingBottom = '0px';
-  // The ribbon clears whichever edge the controls are on — under them upright,
-  // beside them sideways.
-  if (ribbonWrap) {
-    ribbonWrap.style.paddingBottom = ribbonOpen ? insets.bottom + 'px' : '';
-    ribbonWrap.style.paddingRight = ribbonOpen ? insets.right + 'px' : '';
-    ribbonWrap.style.paddingLeft = ribbonOpen ? insets.left + 'px' : '';
-  }
+  if (ribbonWrap) ribbonWrap.style.paddingBottom = ribbonOpen ? insetBottom + 'px' : '';
   // Published on the root, not the stage, because two things outside the stage
   // need them: the self-view badge (edge-anchored, would otherwise park on the
   // control stack) and the panel scrim (must stop clear of the talk button).
   var root = document.documentElement.style;
   root.setProperty('--stage-inset-top', insetTop + 'px');
-  root.setProperty('--stage-inset-bottom', insets.bottom + 'px');
-  root.setProperty('--stage-inset-left', insets.left + 'px');
-  root.setProperty('--stage-inset-right', insets.right + 'px');
+  root.setProperty('--stage-inset-bottom', insetBottom + 'px');
   // The slots beside the mic are measured from that same control stack, and a
   // badge parked in one has to be handed back to an edge the moment the stack
   // stops having room for it (a phone turned on its side).
@@ -13011,11 +12979,8 @@ function stageBadgeInsets() {
   var px = function(name) { return parseFloat(css.getPropertyValue(name)) || 0; };
   var immersive = document.body.classList.contains('video-stage-immersive');
   return {
-    // The header is always the top one; the talk column is whichever side it is
-    // standing on — the bottom upright, the left or right sideways. One of the
-    // three, never two: applyImmersiveStageInsets() measures which.
-    left: immersive ? px('--stage-inset-left') : 0,
-    right: immersive ? px('--stage-inset-right') : 0,
+    left: 0,
+    right: 0,
     top: immersive ? px('--stage-inset-top') : 0,
     bottom: (immersive ? px('--stage-inset-bottom') : 0) + px('--stage-ribbon-height')
   };

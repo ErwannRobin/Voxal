@@ -833,30 +833,21 @@ test.describe('the immersive stage held sideways', () => {
     expect(seen.gapRight).toBe(0);
   });
 
-  // The one that matters: sideways, a room with a camera on IS the landscape
-  // room. Every control keeps the pixel it has when nobody is sharing anything,
-  // so this measures them either side of a camera being switched on rather than
-  // asserting it in a comment.
-  test('every control is where the voice room puts it', async ({ page }) => {
+  // Sideways, a room with a camera on IS the landscape room — same grid, same
+  // header row, same panel behind the same handle. The talk button is the one
+  // deliberate exception (see below), so the header is what this pins: it keeps
+  // the pixel it has when nobody is sharing anything, measured either side of a
+  // camera being switched on rather than asserted in a comment.
+  test('the room keeps its shape when a camera comes on', async ({ page }) => {
     await enterRoom(page, {
       knownPeerIds: ['p1'],
       connections: [{ id: 'p1', pseudo: 'Alice', open: true }],
     });
-    const boxes = () => page.evaluate(() => {
-      const box = (sel) => {
-        const el = document.querySelector(sel);
-        const r = el.getBoundingClientRect();
-        return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)];
-      };
-      return {
-        header: box('#screen-room .room-header'),
-        bar: box('#screen-room .room-bottom-bar'),
-        mic: box('#ptt-btn'),
-        controls: box('#screen-room .room-controls'),
-        hint: box('#ptt-hint'),
-      };
+    const header = () => page.evaluate(() => {
+      const r = document.querySelector('#screen-room .room-header').getBoundingClientRect();
+      return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)];
     });
-    const voice = await boxes();
+    const voice = await header();
     expect(await page.evaluate(() => document.body.classList.contains('video-stage'))).toBe(false);
 
     await page.evaluate(() => {
@@ -866,8 +857,47 @@ test.describe('the immersive stage held sideways', () => {
       updatePeerList();
     });
     expect(await page.evaluate(() => document.body.classList.contains('video-stage-immersive'))).toBe(true);
-    expect(await boxes()).toEqual(voice);
+    expect(await header()).toEqual(voice);
   });
+
+  // The talk button leaves the grid's talk column when there is a picture: the
+  // picture is the whole window, so the control it is for belongs on the centre
+  // line — where the thumb goes — with its buttons on ONE line underneath.
+  test('the talk button is on the centre line, its buttons on one line under it',
+    async ({ page }) => {
+      await withVideo(page);
+      // The camera and screen buttons are hidden until the room offers them;
+      // what is being measured here is the row, so show the row.
+      await page.evaluate(() => {
+        ['btn-share-camera', 'btn-share-screen'].forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) el.classList.remove('hidden');
+        });
+      });
+      const seen = await page.evaluate(() => {
+        const mic = document.getElementById('ptt-btn').getBoundingClientRect();
+        const row = document.querySelector('#screen-room .ctrl-row').getBoundingClientRect();
+        const btns = [...document.querySelectorAll('#screen-room .ctrl-row .room-action-btn')]
+          .filter((b) => !b.classList.contains('hidden'))
+          .map((b) => b.getBoundingClientRect());
+        return {
+          micCentre: Math.round(mic.left + mic.width / 2),
+          rowCentre: Math.round(row.left + row.width / 2),
+          screenCentre: Math.round(window.innerWidth / 2),
+          below: row.top >= mic.bottom,
+          count: btns.length,
+          // One line: every button shares a top edge.
+          tops: [...new Set(btns.map((b) => Math.round(b.top)))].length,
+          bottom: Math.round(window.innerHeight - row.bottom),
+        };
+      });
+      expect(Math.abs(seen.micCentre - seen.screenCentre)).toBeLessThanOrEqual(1);
+      expect(Math.abs(seen.rowCentre - seen.screenCentre)).toBeLessThanOrEqual(1);
+      expect(seen.below).toBe(true);
+      expect(seen.count).toBeGreaterThanOrEqual(3);
+      expect(seen.tops).toBe(1);
+      expect(seen.bottom).toBeGreaterThan(0);
+    });
 
   // The participants are a whole panel again — opaque, full height, off the
   // screen until its handle is pulled. Not a column of floating cards standing
@@ -896,34 +926,25 @@ test.describe('the immersive stage held sideways', () => {
     await expect.poll(async () => (await state()).right).toBe(parked.width);
   });
 
-  // The talk column stands on one side of the picture, so that is the side the
-  // stage has to keep clear — for the self-view, and for the ribbon.
-  test('the stage margin follows the talk column to its side', async ({ page }) => {
+  // The control stack stands in a band at the bottom of the picture, so that is
+  // what the stage has to keep clear — for the self-view, and for the ribbon.
+  test('the stage margin is the band the controls stand in', async ({ page }) => {
     await withVideo(page);
-    const insets = () => page.evaluate(() => {
+    const seen = await page.evaluate(() => {
       const cs = getComputedStyle(document.documentElement);
+      const bar = document.querySelector('#screen-room .room-bottom-bar').getBoundingClientRect();
+      const stage = document.getElementById('video-stage').getBoundingClientRect();
       return {
-        left: cs.getPropertyValue('--stage-inset-left').trim(),
-        right: cs.getPropertyValue('--stage-inset-right').trim(),
         bottom: cs.getPropertyValue('--stage-inset-bottom').trim(),
+        top: cs.getPropertyValue('--stage-inset-top').trim(),
+        band: Math.round(stage.bottom - bar.top) + 'px',
+        header: Math.round(
+          document.querySelector('#screen-room .room-header').getBoundingClientRect().bottom
+          - stage.top) + 'px',
       };
     });
-    const bar = await page.evaluate(() => {
-      const b = document.querySelector('#screen-room .room-bottom-bar').getBoundingClientRect();
-      return { left: Math.round(b.left), width: window.innerWidth };
-    });
-    expect(await insets()).toEqual({
-      left: '0px', right: (bar.width - bar.left) + 'px', bottom: '0px',
-    });
-
-    // Left-handed: the column changes sides, and so does the margin.
-    await page.evaluate(() => {
-      document.documentElement.dataset.hand = 'left';
-      updatePeerList();
-    });
-    await expect.poll(async () => (await insets()).left).not.toBe('0px');
-    expect((await insets()).right).toBe('0px');
-    await page.evaluate(() => { delete document.documentElement.dataset.hand; });
+    expect(seen.bottom).toBe(seen.band);
+    expect(seen.top).toBe(seen.header);
   });
 
   // A tap on the picture still clears the chrome — and the mic, which is not
@@ -969,16 +990,16 @@ test.describe('the immersive stage held sideways', () => {
     }
   });
 
-  // They used to be hidden here: sideways there was no voice layout to line the
-  // mic up with, and reserved they shoved the buttons out from it. Sideways IS
-  // the voice layout now, so the hint and the status line stand where they
-  // always stood — under the mic, in the talk column.
-  test('the hint and the status line are where the voice room has them', async ({ page }) => {
+  // Both lines go — space, not just ink. They sit BETWEEN the mic and its
+  // buttons, and on a 390px screen that gap is what pushes the buttons up into
+  // the picture. Upright they are reserved so the mic keeps the pixel it has in
+  // a voice room; sideways the talk button has left that column anyway.
+  test('the hint and the status line take no room at all', async ({ page }) => {
     await withVideo(page);
     expect(await page.evaluate(() => ({
       hint: getComputedStyle(document.getElementById('ptt-hint')).display,
       status: getComputedStyle(document.getElementById('ptt-status')).display,
-    }))).toEqual({ hint: 'block', status: 'block' });
+    }))).toEqual({ hint: 'none', status: 'none' });
   });
 });
 
