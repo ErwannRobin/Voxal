@@ -125,32 +125,29 @@ tiles never reflow when it moves: `applyImmersiveStageInsets()` pins the grid's
 height) only for things that must clear it — the self-view badge's top corners
 and the self camera tile's own flip/background buttons.
 
-**Sideways that chrome is a rail down the left.** A phone on its side has no
-height to give and width to spare, so the header, the control buttons **and the
-roster** become one fixed column on the left edge (inboard of the roster handle)
-and only the talk button stays along the bottom, in the middle, where the thumb
-goes. All three take `--rail-w`, or it reads as three floating cards rather than
-a column. The buttons being `position: fixed` takes them out of the bar's grid,
-so the bar shrinks to the mic. Which edge the chrome is on is **measured, not
-re-derived from the media query that does it** (`isStageRail()`): a header
-narrower than 60% of the stage is the rail, and the stage's no-go margin then
-moves from `--stage-inset-top` to `--stage-inset-left` — one or the other, never
-both. `--stage-rail-top` (the header's measured bottom, in viewport coordinates)
-is where the button stack hangs from, and `--stage-rail-peers-top` (the buttons'
-measured bottom) is where the roster does.
+**Sideways, a room with a camera on IS the landscape room.** The landscape
+reflow (`@media (orientation: landscape) and (max-height: 600px)`) is the room's
+layout whether or not anybody is sharing: same grid, header across the top, talk
+column on one side (`data-hand` picks which), participants behind their handle.
+It is qualified `:not(.video-stage-desktop)` — the **desktop** stage is the one
+regime with a room shape of its own, and `updateVideoStage()` publishes that
+class for it. What video adds is a LAYER, not a layout: `#video-stage` is
+absolute against the room at `z-index: 0`, so the picture fills the window and
+the room's own chrome stands on it (header and talk column at `z-index: 21`,
+panels at 40). A control the user has already learned never moves because a
+picture arrived.
 
-That roster is the **same** roster, not a second one: sideways `.room-peers-panel`
-stops sliding and docks as the rail's bottom block, always up, so the left handle
-has nothing to pull and goes. It keeps the participants card the **voice**
-landscape room puts in its own left column — same surface, border and rows — so a
-camera coming on does not restyle the room; the immersive rule that strips that
-card is right for the portrait panel (which carries a surface of its own) and is
-put back here, where the docked panel carries none. The header and the buttons
-keep their row shape for the same reason, which is also what leaves the height to
-the participants. `applyStageRailRoster()` is the only JS in it: it measures
-whether the rows fit and, when they do not, adds `crowded` — the tiny embed's
-name-only capsules, two to a line — measured per pass, never counted, since it
-depends on the phone's height as much as on the size of the room.
+`applyImmersiveStageInsets()` therefore measures **which side** the talk column
+is on: `stageChromeInsets()` is pure and returns one of `bottom` (upright, a band
+across the stage), `right` or `left` (sideways, a column) — measured from the
+bar's own box against the stage, never re-derived from the media query or from
+`data-hand`. `--stage-inset-top` is always the header's bottom. The self-view
+badge and the ribbon read all four.
+
+In that layout the header is a row of the room's grid, so hiding the chrome
+takes its **ink, not its space** (`visibility`), exactly as the control row does
+— sliding it by its own height would leave the top of it on screen, and pulling
+it out of the flow would reflow the room.
 
 **A picture fills its tile, unless the crop is one you cannot afford.**
 `stageVideoFit()` chooses `object-fit` per tile from the picture's own shape

@@ -545,34 +545,31 @@ The single worst thing in this round, and it had been shipping:
     true while the chrome is away; `--stage-rail-top` (the header's measured
     bottom, in viewport coordinates, since the buttons are fixed too) is
     published even then, or the stack jumps before it slides out.
-- **The rail earned a third tenant: the roster — and it has to be THE roster.**
-  The first attempt drew a read-only summary of names beside the sliding roster
-  panel, which is two left columns on a screen that has no room for one. Sideways
-  the panel itself docks as the rail's bottom block instead: always up, one
-  column, and the left handle goes because there is nothing left to pull. Deleting
-  the second list took a renderer, an element and a `rail-peer-<id>` id space with
-  it — the merge is smaller than the thing it replaced, which is the sign it was
-  the right one.
-  - **And it has to LOOK like the roster.** The first docking gave every row its
-    own pill, which is a list nobody else in the app has: the voice landscape
-    room already puts a participants card in its own left column, and that card
-    — surface, border, 10px radius, 8px padding, plain 6px rows — is what the
-    video column has to be, or turning a camera on restyles the room. The
-    immersive rule that strips the card is right for the PORTRAIT panel, which
-    carries a surface of its own, and has to be put back for the docked one,
-    which does not. The test for it compares the two on one page, either side of
-    a camera being switched on.
-  - The header and the buttons keep the row shape they have everywhere else,
-    which is also what leaves the height to the participants: stacked as columns
-    they ate 140px of a 390px screen.
-  - Names while they fit, name-only capsules two to a line when they do not,
-    decided by **measuring** (`scrollHeight > clientHeight`), not by counting
-    heads: whether they fit depends on the phone's height as much as on the
-    room's size. Cleared before measuring and only ever tightened within a pass,
-    so it cannot oscillate.
-  - The docking rule has to be written **twice** — plain and with
-    `.stage-roster-open` — because the sliding rule it undoes carries that class
-    and would otherwise out-specify it.
+- **The rail was the wrong idea, twice over, and the fix was a deletion.** First
+  it grew a roster of its own beside the sliding panel (two left columns), then
+  the panel was docked into it (one column, but a column of floating cards that
+  looked like nothing else in the app). What was actually wanted was already
+  written: the **landscape voice reflow**. Sideways, a room with a camera on is
+  that room — the same grid, the same header row, the same talk column, the same
+  participants panel behind the same handle — with the picture as a LAYER behind
+  it (`#video-stage` at `z-index: 0`, the chrome at 21). Every rail rule, both
+  roster implementations, `--rail-x`/`--rail-w`, `--stage-rail-top`,
+  `--stage-rail-peers-top` and two JS helpers went; the landscape rules simply
+  stopped excluding video.
+  - The exclusion is now `:not(.video-stage-desktop)` — the DESKTOP stage is the
+    one regime with a room shape of its own — and `updateVideoStage()` publishes
+    that class. "Not the desktop stage" is the honest condition; "has video at
+    all" never was.
+  - The test that matters measures the two on one page, either side of a camera
+    being switched on: header, bar, mic, controls and hint must land on the same
+    pixels.
+  - A header that is a grid ROW cannot hide by sliding: `translateY(-100%)` moves
+    it by its own height and leaves the top of it on screen (a fixed band ran off
+    the top because its height WAS its offset). Ink, not space — `visibility`.
+  - The stage's no-go margin is no longer "top or left": the talk column can be
+    on the bottom, the right or the left (`data-hand`), so `stageChromeInsets()`
+    measures the bar's box against the stage and answers with whichever side it
+    hugs. Measured, not read off the attribute that moved it.
 - **One crop limit is not enough, and the symmetry is a trap.** Fitting a picture
   to a tile by the ratio mismatch alone cannot tell a phone held upright showing
   a 16:9 camera (mismatch 3.85, and cropping the sides is what every video call

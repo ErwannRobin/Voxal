@@ -833,16 +833,120 @@ test.describe('the immersive stage held sideways', () => {
     expect(seen.gapRight).toBe(0);
   });
 
-  // The thumb goes to the middle of the SCREEN, not to the middle of a group.
-  // Laid out as a plain centred row, the mic and the button beside it are
-  // centred together and the mic ends up left of the line.
-  test('the mic is on the centre line, whatever is beside it', async ({ page }) => {
-    await withVideo(page);
-    const centres = await page.evaluate(() => {
-      const b = document.getElementById('ptt-btn').getBoundingClientRect();
-      return { mic: Math.round(b.left + b.width / 2), screen: Math.round(window.innerWidth / 2) };
+  // The one that matters: sideways, a room with a camera on IS the landscape
+  // room. Every control keeps the pixel it has when nobody is sharing anything,
+  // so this measures them either side of a camera being switched on rather than
+  // asserting it in a comment.
+  test('every control is where the voice room puts it', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true }],
     });
-    expect(Math.abs(centres.mic - centres.screen)).toBeLessThanOrEqual(1);
+    const boxes = () => page.evaluate(() => {
+      const box = (sel) => {
+        const el = document.querySelector(sel);
+        const r = el.getBoundingClientRect();
+        return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)];
+      };
+      return {
+        header: box('#screen-room .room-header'),
+        bar: box('#screen-room .room-bottom-bar'),
+        mic: box('#ptt-btn'),
+        controls: box('#screen-room .room-controls'),
+        hint: box('#ptt-hint'),
+      };
+    });
+    const voice = await boxes();
+    expect(await page.evaluate(() => document.body.classList.contains('video-stage'))).toBe(false);
+
+    await page.evaluate(() => {
+      const c = connections.get('p1');
+      c.videoActive = true;
+      c.remoteVideoStream = new MediaStream();
+      updatePeerList();
+    });
+    expect(await page.evaluate(() => document.body.classList.contains('video-stage-immersive'))).toBe(true);
+    expect(await boxes()).toEqual(voice);
+  });
+
+  // The participants are a whole panel again — opaque, full height, off the
+  // screen until its handle is pulled. Not a column of floating cards standing
+  // on the picture, which is what a rail down the left turned them into.
+  test('the participants are a whole panel behind their handle', async ({ page }) => {
+    await withVideo(page);
+    const state = () => page.evaluate(() => {
+      const el = document.getElementById('room-peers-panel');
+      const r = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      return {
+        right: Math.round(r.right), width: Math.round(r.width),
+        position: cs.position, bg: cs.backgroundColor,
+        handle: getComputedStyle(document.getElementById('stage-handle-roster')).display,
+      };
+    });
+    const parked = await state();
+    expect(parked.right).toBeLessThanOrEqual(0);        // off the left edge
+    expect(parked.position).toBe('fixed');
+    expect(parked.handle).toBe('flex');                  // …and a handle to pull
+    // Opaque: a panel, not a wash over the video behind it.
+    expect(parked.bg).not.toContain('rgba');
+    expect(parked.bg).not.toBe('transparent');
+
+    await page.evaluate(() => setStagePanel('roster', true));
+    await expect.poll(async () => (await state()).right).toBe(parked.width);
+  });
+
+  // The talk column stands on one side of the picture, so that is the side the
+  // stage has to keep clear — for the self-view, and for the ribbon.
+  test('the stage margin follows the talk column to its side', async ({ page }) => {
+    await withVideo(page);
+    const insets = () => page.evaluate(() => {
+      const cs = getComputedStyle(document.documentElement);
+      return {
+        left: cs.getPropertyValue('--stage-inset-left').trim(),
+        right: cs.getPropertyValue('--stage-inset-right').trim(),
+        bottom: cs.getPropertyValue('--stage-inset-bottom').trim(),
+      };
+    });
+    const bar = await page.evaluate(() => {
+      const b = document.querySelector('#screen-room .room-bottom-bar').getBoundingClientRect();
+      return { left: Math.round(b.left), width: window.innerWidth };
+    });
+    expect(await insets()).toEqual({
+      left: '0px', right: (bar.width - bar.left) + 'px', bottom: '0px',
+    });
+
+    // Left-handed: the column changes sides, and so does the margin.
+    await page.evaluate(() => {
+      document.documentElement.dataset.hand = 'left';
+      updatePeerList();
+    });
+    await expect.poll(async () => (await insets()).left).not.toBe('0px');
+    expect((await insets()).right).toBe('0px');
+    await page.evaluate(() => { delete document.documentElement.dataset.hand; });
+  });
+
+  // A tap on the picture still clears the chrome — and the mic, which is not
+  // chrome, does not move a pixel while it happens.
+  test('a tap clears the chrome without moving the talk button', async ({ page }) => {
+    await withVideo(page);
+    const mic = () => page.evaluate(() => {
+      const b = document.getElementById('ptt-btn').getBoundingClientRect();
+      return [Math.round(b.x), Math.round(b.y)];
+    });
+    const before = await mic();
+    await page.evaluate(() => setStageChrome(true));
+    await page.waitForTimeout(350);
+    const seen = await page.evaluate(() => ({
+      header: getComputedStyle(document.querySelector('#screen-room .room-header')).visibility,
+      controls: getComputedStyle(document.querySelector('#screen-room .room-controls')).visibility,
+      handles: getComputedStyle(document.getElementById('stage-handle-roster')).display,
+      // The header keeps its space — it is a row of the room's grid here, not a
+      // band lying on the picture, so pulling it out would reflow the room.
+      insetTop: getComputedStyle(document.documentElement).getPropertyValue('--stage-inset-top').trim(),
+    }));
+    expect(seen).toEqual({ header: 'hidden', controls: 'hidden', handles: 'none', insetTop: '0px' });
+    expect(await mic()).toEqual(before);
   });
 
   // Sideways carries the same glass as upright — it used to be the only place
@@ -865,206 +969,16 @@ test.describe('the immersive stage held sideways', () => {
     }
   });
 
-  // The picture wants the height, and the chrome was taking it at both ends.
-  // Header and buttons are one column down the left now; only the mic is left
-  // along the bottom, and it did not move.
-  test('the header and the buttons are blocks stacked down the left', async ({ page }) => {
-    await withVideo(page);
-    const seen = await page.evaluate(() => {
-      const box = (sel) => {
-        const b = document.querySelector(sel).getBoundingClientRect();
-        return { left: Math.round(b.left), right: Math.round(b.right),
-                 top: Math.round(b.top), bottom: Math.round(b.bottom), w: Math.round(b.width) };
-      };
-      return { header: box('#screen-room .room-header'), ctrls: box('#screen-room .room-controls'),
-               bar: box('.room-bottom-bar'), w: window.innerWidth };
-    });
-    // A column, not a band: the header takes a fraction of the width…
-    expect(seen.header.w).toBeLessThan(seen.w / 2);
-    // …the buttons are under it, on the same left edge…
-    expect(seen.ctrls.left).toBe(seen.header.left);
-    expect(seen.ctrls.top).toBeGreaterThanOrEqual(seen.header.bottom);
-    // …and they are out of the bottom bar, which is now the mic and nothing else.
-    expect(seen.ctrls.bottom).toBeLessThan(seen.bar.top);
-  });
-
-  // It starts inboard of the roster's handle, or the two are on top of each
-  // other — the handle is hard against the edge and always reachable.
-  test('the column clears the handle it shares an edge with', async ({ page }) => {
-    await withVideo(page);
-    const seen = await page.evaluate(() => ({
-      handle: Math.round(document.getElementById('stage-handle-roster').getBoundingClientRect().right),
-      rail: Math.round(document.querySelector('#screen-room .room-header').getBoundingClientRect().left),
-    }));
-    expect(seen.rail).toBeGreaterThanOrEqual(seen.handle);
-  });
-
-  // The rail is chrome: a tap on the picture takes it away, and it leaves
-  // sideways — the whole of it, with no corner left showing.
-  test('the column slides off the screen with the rest of the chrome', async ({ page }) => {
-    await withVideo(page);
-    await page.evaluate(() => setStageChrome(true));
-    await page.waitForTimeout(350);
-    const seen = await page.evaluate(() => ({
-      header: Math.round(document.querySelector('#screen-room .room-header').getBoundingClientRect().right),
-      ctrls: Math.round(document.querySelector('#screen-room .room-controls').getBoundingClientRect().right),
-      inset: getComputedStyle(document.documentElement).getPropertyValue('--stage-inset-left').trim(),
-    }));
-    expect(seen.header).toBeLessThanOrEqual(0);
-    expect(seen.ctrls).toBeLessThanOrEqual(0);
-    // …and the stage's left margin goes with it: there is nothing to clear.
-    expect(seen.inset).toBe('0px');
-  });
-
-  // The self-view has to clear the rail the same way it clears the header
-  // upright — one margin or the other, never both.
-  test('the stage margin moves to the side the chrome is on', async ({ page }) => {
-    await withVideo(page);
-    const seen = await page.evaluate(() => {
-      const cs = getComputedStyle(document.documentElement);
-      return {
-        left: cs.getPropertyValue('--stage-inset-left').trim(),
-        top: cs.getPropertyValue('--stage-inset-top').trim(),
-        header: Math.round(document.querySelector('#screen-room .room-header').getBoundingClientRect().right),
-      };
-    });
-    expect(seen.top).toBe('0px');
-    expect(seen.left).toBe(seen.header + 'px');
-  });
-
-  // One column, not a column with a drawer coming out on top of it: sideways
-  // the roster IS the bottom of the rail, always up, and the handle that used
-  // to pull it over the picture has nothing left to do.
-  test('the roster is the bottom of the column, not a second one', async ({ page }) => {
-    await withVideo(page);
-    const seen = await page.evaluate(() => {
-      const panel = document.getElementById('room-peers-panel').getBoundingClientRect();
-      const ctrls = document.querySelector('#screen-room .room-controls').getBoundingClientRect();
-      const bar = document.querySelector('.room-bottom-bar').getBoundingClientRect();
-      return {
-        left: Math.round(panel.left), rail: Math.round(ctrls.left),
-        width: Math.round(panel.width), railWidth: Math.round(ctrls.width),
-        below: panel.top >= ctrls.bottom,
-        clearsTheMic: panel.bottom <= bar.top,
-        // Up without anyone opening it, and nothing to open it with.
-        onScreen: panel.left >= 0 && panel.width > 0,
-        handle: getComputedStyle(document.getElementById('stage-handle-roster')).display,
-        names: [...document.querySelectorAll('#peers-list .peer-name')].map((n) => n.textContent),
-      };
-    });
-    expect(seen.left).toBe(seen.rail);
-    expect(seen.width).toBe(seen.railWidth);
-    expect(seen.below).toBe(true);
-    expect(seen.clearsTheMic).toBe(true);
-    expect(seen.onScreen).toBe(true);
-    expect(seen.handle).toBe('none');
-    expect(seen.names).toEqual(['Alice', 'Bob']);
-  });
-
-  // The whole point of docking the real panel: a room must not look like a
-  // different app because a camera came on. The participants card in the video
-  // column is the participants card in the VOICE column — same surface, same
-  // border, same rows — so this compares the two on one page, either side of a
-  // camera being switched on.
-  test('it is the voice room\'s own participants card, unchanged', async ({ page }) => {
-    await enterRoom(page, {
-      knownPeerIds: ['p1', 'p2'],
-      connections: [
-        { id: 'p1', pseudo: 'Alice', open: true },
-        { id: 'p2', pseudo: 'Bob', open: true },
-      ],
-    });
-    const look = () => page.evaluate(() => {
-      const list = document.getElementById('peers-list');
-      const item = list.querySelector('.peer-item');
-      const l = getComputedStyle(list);
-      const i = getComputedStyle(item);
-      return {
-        card: [l.backgroundColor, l.borderTopWidth, l.borderTopColor, l.borderRadius, l.padding, l.gap],
-        row: [i.backgroundColor, i.borderRadius, i.padding, i.fontSize],
-        // Room for a row means room for what is on it.
-        controls: !!item.querySelector('.btn-icon, .peer-cam-btn'),
-        crowded: list.classList.contains('crowded'),
-      };
-    });
-    const voice = await look();
-    expect(await page.evaluate(() => document.body.classList.contains('video-stage'))).toBe(false);
-
-    await page.evaluate(() => {
-      const c = connections.get('p1');
-      c.videoActive = true;
-      c.remoteVideoStream = new MediaStream();
-      updatePeerList();
-    });
-    expect(await page.evaluate(() => document.body.classList.contains('video-stage-immersive'))).toBe(true);
-
-    const video = await look();
-    expect(video.card).toEqual(voice.card);
-    expect(video.row).toEqual(voice.row);
-    expect(video.controls).toBe(true);
-    expect(video.crowded).toBe(false);
-  });
-
-  // More people than room: name only, two to a line.
-  test('past what fits, the rows become name-only capsules two to a line', async ({ page }) => {
-    await enterRoom(page, {
-      knownPeerIds: Array.from({ length: 12 }, (_, i) => 'p' + i),
-      connections: Array.from({ length: 12 }, (_, i) => ({
-        id: 'p' + i, pseudo: 'Participant ' + i, open: true, videoActive: i === 0,
-      })),
-    });
-    const seen = await page.evaluate(() => {
-      const list = document.getElementById('peers-list');
-      const item = list.querySelector('.peer-item');
-      return {
-        crowded: list.classList.contains('crowded'),
-        columns: getComputedStyle(list).gridTemplateColumns.split(' ').length,
-        narrower: item.getBoundingClientRect().width < list.getBoundingClientRect().width * 0.6,
-        dot: getComputedStyle(item.querySelector('.peer-dot')).display,
-        scrolls: getComputedStyle(list).overflowY,
-        // Whoever the row is (your own included), its name survives the squeeze.
-        name: item.textContent.trim().length > 0,
-      };
-    });
-    expect(seen.crowded).toBe(true);
-    expect(seen.columns).toBe(2);
-    expect(seen.narrower).toBe(true);
-    expect(seen.dot).toBe('none');
-    expect(seen.scrolls).toBe('auto');
-    expect(seen.name).toBe(true);
-  });
-
-  // It is part of the chrome now, so it leaves with it — and turning the phone
-  // back gives it its old life as a panel behind a handle.
-  test('the docked roster is chrome sideways and a panel upright', async ({ page }) => {
-    await withVideo(page);
-    await page.evaluate(() => setStageChrome(true));
-    await page.waitForTimeout(350);
-    expect(await page.evaluate(() =>
-      Math.round(document.getElementById('room-peers-panel').getBoundingClientRect().right)))
-      .toBeLessThanOrEqual(0);
-
-    await page.evaluate(() => setStageChrome(false));
-    await page.setViewportSize(PHONE);
-    await expect
-      .poll(async () => page.evaluate(() => ({
-        // Off to the left until its handle is pulled, exactly as before.
-        parked: getComputedStyle(document.getElementById('room-peers-panel')).transform,
-        handle: getComputedStyle(document.getElementById('stage-handle-roster')).display,
-        crowded: document.getElementById('peers-list').classList.contains('crowded'),
-      })))
-      .toEqual({ parked: 'matrix(1, 0, 0, 1, -300, 0)', handle: 'flex', crowded: false });
-  });
-
-  // Sideways there is no voice layout to match, so both lines go entirely:
-  // reserved, the sentence lifts the mic off the bottom of a 390px screen and
-  // its width shoves the buttons a hundred pixels out from the mic.
-  test('the hint and the status line take no room at all', async ({ page }) => {
+  // They used to be hidden here: sideways there was no voice layout to line the
+  // mic up with, and reserved they shoved the buttons out from it. Sideways IS
+  // the voice layout now, so the hint and the status line stand where they
+  // always stood — under the mic, in the talk column.
+  test('the hint and the status line are where the voice room has them', async ({ page }) => {
     await withVideo(page);
     expect(await page.evaluate(() => ({
       hint: getComputedStyle(document.getElementById('ptt-hint')).display,
       status: getComputedStyle(document.getElementById('ptt-status')).display,
-    }))).toEqual({ hint: 'none', status: 'none' });
+    }))).toEqual({ hint: 'block', status: 'block' });
   });
 });
 

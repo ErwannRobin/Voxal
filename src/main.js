@@ -11704,30 +11704,6 @@ function videoStageFocusKey(tiles) {
   return '';
 }
 
-// --- The roster, in the rail ---------------------------------------------------
-//
-// Sideways the roster is not a panel that slides over the picture: it IS the
-// bottom of the chrome's rail, under the buttons, always up — one column rather
-// than a column plus a drawer that comes out on top of it. The stylesheet does
-// the docking (it is the same media query that makes the rail); the one thing
-// only JS can decide is whether the rows fit.
-//
-// They do, and the roster is itself: a row per person, controls and all. They do
-// not, and the rows become the tiny embed's capsules — name only, two to a line
-// — which is the same chip answering the same question, more people than room.
-// MEASURED, never counted: whether they fit depends on the phone's height as
-// much as on the size of the room.
-function applyStageRailRoster() {
-  var list = document.getElementById('peers-list');
-  if (!list) return;
-  // Cleared first, so a room that empties out gets its rows back, and only ever
-  // tightened once within a pass — capsules are smaller than rows, so this
-  // cannot oscillate.
-  list.classList.remove('crowded');
-  if (!inRoom || !stageChromeIsRail()) return;
-  if (list.scrollHeight > list.clientHeight) list.classList.add('crowded');
-}
-
 // --- How a picture is fitted to its tile --------------------------------------
 //
 // A camera FILLS its tile and is cropped to fit. That is what every video call
@@ -12041,10 +12017,6 @@ function renderVideoStage(tiles, focusKey, badgeKey) {
   // pass calls the badge too, but it is skipped entirely while a tile is pinned.
   applySelfBadgePlacement();
   applyStageVideoFit();
-  // Last: it is measured against the rail the insets above just placed, and it
-  // has to stand down the moment the stage does — renderVideoStage([]) is the
-  // one call that happens on every one of those.
-  applyStageRailRoster();
 }
 
 // The space the grid has to work with, in content-box terms and independent of
@@ -12300,22 +12272,31 @@ function noteStageSpeaker(peerId, active) {
 // IS measured from it is `--stage-inset-top`, which places the self-view badge's
 // top corners clear of the header while the header is on screen.
 
-// Pure: the chrome is a rail down the left rather than a band across the top.
-// Decided by measurement — a header that does not span the stage is the rail —
-// so the JS and the media query that lays it out can never disagree.
-var STAGE_RAIL_MAX_SHARE = 0.6;
+// Pure: which side of the stage the talk column is standing on, and how much of
+// the stage it covers. Upright the control stack is a band across the BOTTOM;
+// sideways the landscape room puts it in a column down one side — the right by
+// default, the left for a left-handed user — and the stage's no-go margin has to
+// follow it there, or the self-view parks under the mic.
+//
+// Measured, never re-derived from the media query or the `data-hand` attribute
+// that decide it: one measurement cannot disagree with the layout the way two
+// copies of the same rule can. A bar that does not span the stage is a column,
+// and the side it hugs is the side it is nearest.
+var STAGE_COLUMN_MAX_SHARE = 0.6;
 
-function isStageRail(headerWidth, stageWidth) {
-  return headerWidth > 0 && stageWidth > 0 && headerWidth < stageWidth * STAGE_RAIL_MAX_SHARE;
-}
-
-// Whether the room is wearing that rail right now.
-function stageChromeIsRail() {
-  if (!document.body.classList.contains('video-stage-immersive')) return false;
-  var stage = document.getElementById('video-stage');
-  var header = document.querySelector('#screen-room .room-header');
-  if (!stage || !header) return false;
-  return isStageRail(header.getBoundingClientRect().width, stage.getBoundingClientRect().width);
+function stageChromeInsets(barBox, stageBox) {
+  var out = { top: 0, right: 0, bottom: 0, left: 0 };
+  if (!barBox || !stageBox || !(barBox.height > 0) || !(stageBox.width > 0)) return out;
+  if (barBox.width >= stageBox.width * STAGE_COLUMN_MAX_SHARE) {
+    out.bottom = Math.max(0, Math.round(stageBox.bottom - barBox.top));
+    return out;
+  }
+  if ((barBox.left - stageBox.left) > (stageBox.right - barBox.right)) {
+    out.right = Math.max(0, Math.round(stageBox.right - barBox.left));
+  } else {
+    out.left = Math.max(0, Math.round(barBox.right - stageBox.left));
+  }
+  return out;
 }
 
 function applyImmersiveStageInsets(gridEl) {
@@ -12332,7 +12313,7 @@ function applyImmersiveStageInsets(gridEl) {
     document.documentElement.style.removeProperty('--stage-inset-top');
     document.documentElement.style.removeProperty('--stage-inset-bottom');
     document.documentElement.style.removeProperty('--stage-inset-left');
-    document.documentElement.style.removeProperty('--stage-rail-top');
+    document.documentElement.style.removeProperty('--stage-inset-right');
     applySelfBadgePlacement();
     return;
   }
@@ -12344,24 +12325,17 @@ function applyImmersiveStageInsets(gridEl) {
   var barBox = bar ? bar.getBoundingClientRect() : null;
 
   // The header is gone with the chrome; while it is up it lies on the picture.
-  //
-  // Which EDGE it lies on is measured, never re-derived from the media query
-  // that decides it: upright it is a band across the top of the stage, sideways
-  // a rail down the left-hand side with the control buttons under it. A header
-  // that does not span the stage is that rail — and then the stage's own no-go
-  // margin is on the left, not the top, which is the difference between a
-  // self-view that clears the chrome and one parked on top of it.
+  // It is a band across the top in both orientations — upright a fixed one on
+  // the stage, sideways the landscape room's own header row above it — so what
+  // it costs the picture is always measured downwards from the stage's top.
   var header = document.querySelector('#screen-room .room-header');
   var headerBox = header ? header.getBoundingClientRect() : null;
-  var rail = isStageRail(headerBox ? headerBox.width : 0, stageBox.width);
   var chromeUp = !stageChromeHidden();
-  var insetTop = (headerBox && chromeUp && !rail) ? Math.round(headerBox.height) : 0;
-  var insetLeft = (headerBox && chromeUp && rail)
-    ? Math.max(0, Math.round(headerBox.right - stageBox.left))
+  var insetTop = (headerBox && chromeUp)
+    ? Math.max(0, Math.round(headerBox.bottom - stageBox.top))
     : 0;
-  var insetBottom = (barBox && barBox.height)
-    ? Math.max(0, Math.round(stageBox.bottom - barBox.top))
-    : 0;
+  // …and the talk column costs it whichever side it is standing on.
+  var insets = stageChromeInsets(barBox, stageBox);
 
   // Zero, always: the tiles run full-bleed UNDER the header for the same reason
   // they run full-bleed under the dock, and a padding that came and went with
@@ -12375,30 +12349,21 @@ function applyImmersiveStageInsets(gridEl) {
   // of faces behind the talk button is not a picture with a panel on it, it is
   // three people you cannot see.
   gridEl.style.paddingBottom = '0px';
-  if (ribbonWrap) ribbonWrap.style.paddingBottom = ribbonOpen ? insetBottom + 'px' : '';
-  // Published on the root, not the stage, because two things outside the stage
-  // need them: the self-view badge (corner-anchored, would otherwise park on the
-  // control stack) and the panel scrim (must stop above the talk button).
-  document.documentElement.style.setProperty('--stage-inset-top', insetTop + 'px');
-  document.documentElement.style.setProperty('--stage-inset-bottom', insetBottom + 'px');
-  document.documentElement.style.setProperty('--stage-inset-left', insetLeft + 'px');
-  // Where the rail's buttons start, in VIEWPORT coordinates — they are fixed,
-  // like the header they hang under. Published while the chrome is away too:
-  // the rail leaves sideways, so its vertical geometry is still the truth, and
-  // dropping the value would jump the stack before it slid out.
-  if (rail && headerBox) {
-    document.documentElement.style.setProperty('--stage-rail-top', Math.round(headerBox.bottom) + 'px');
-    // …and where the roster under them starts. Measured after the line above,
-    // so the buttons have already been moved by it; their own height is theirs
-    // (one control or four), which is why this is not arithmetic on a constant.
-    var ctrls = document.querySelector('#screen-room .room-bottom-bar .room-controls');
-    var ctrlsBox = ctrls ? ctrls.getBoundingClientRect() : null;
-    var peersTop = (ctrlsBox && ctrlsBox.height) ? ctrlsBox.bottom : headerBox.bottom;
-    document.documentElement.style.setProperty('--stage-rail-peers-top', Math.round(peersTop + 10) + 'px');
-  } else {
-    document.documentElement.style.removeProperty('--stage-rail-top');
-    document.documentElement.style.removeProperty('--stage-rail-peers-top');
+  // The ribbon clears whichever edge the controls are on — under them upright,
+  // beside them sideways.
+  if (ribbonWrap) {
+    ribbonWrap.style.paddingBottom = ribbonOpen ? insets.bottom + 'px' : '';
+    ribbonWrap.style.paddingRight = ribbonOpen ? insets.right + 'px' : '';
+    ribbonWrap.style.paddingLeft = ribbonOpen ? insets.left + 'px' : '';
   }
+  // Published on the root, not the stage, because two things outside the stage
+  // need them: the self-view badge (edge-anchored, would otherwise park on the
+  // control stack) and the panel scrim (must stop clear of the talk button).
+  var root = document.documentElement.style;
+  root.setProperty('--stage-inset-top', insetTop + 'px');
+  root.setProperty('--stage-inset-bottom', insets.bottom + 'px');
+  root.setProperty('--stage-inset-left', insets.left + 'px');
+  root.setProperty('--stage-inset-right', insets.right + 'px');
   // The slots beside the mic are measured from that same control stack, and a
   // badge parked in one has to be handed back to an edge the moment the stack
   // stops having room for it (a phone turned on its side).
@@ -12500,6 +12465,12 @@ function updateVideoStage() {
   // Both classes obey the same rule: set ONLY while a camera or screen is
   // genuinely live, so an audio-only room still renders byte-identically.
   document.body.classList.toggle('video-stage-immersive', active && mode === 'immersive');
+  // The DESKTOP stage is the one regime with a room shape of its own (stage
+  // left, rail right). Everything else — a voice room, and the phone stage,
+  // which is the landscape room with a picture behind it — keeps the layout it
+  // would have had anyway, and the stylesheet says so by excluding this class
+  // rather than by excluding "has video at all".
+  document.body.classList.toggle('video-stage-desktop', active && mode === 'desktop');
   applyChatDock();
   // On the Mac a live stage is also a window size. The resize lands async, so
   // the mode above may still say 'immersive' for one tick — the resize event
@@ -13040,11 +13011,11 @@ function stageBadgeInsets() {
   var px = function(name) { return parseFloat(css.getPropertyValue(name)) || 0; };
   var immersive = document.body.classList.contains('video-stage-immersive');
   return {
-    // Sideways the chrome is a rail down the left of the stage, so that is where
-    // the margin is; upright it is the header across the top. One or the other,
-    // never both — applyImmersiveStageInsets() measures which.
+    // The header is always the top one; the talk column is whichever side it is
+    // standing on — the bottom upright, the left or right sideways. One of the
+    // three, never two: applyImmersiveStageInsets() measures which.
     left: immersive ? px('--stage-inset-left') : 0,
-    right: 0,
+    right: immersive ? px('--stage-inset-right') : 0,
     top: immersive ? px('--stage-inset-top') : 0,
     bottom: (immersive ? px('--stage-inset-bottom') : 0) + px('--stage-ribbon-height')
   };
