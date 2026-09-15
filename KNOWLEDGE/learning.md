@@ -1533,3 +1533,19 @@ seems too sharp".
   it went red purely on the clock. A test about calendar days has to be anchored
   to one (yesterday midday), never to an offset in hours.
 
+
+- **A link preview dies silently on a dead hostname.** Sharing
+  `https://web.voxal.app/?room=demo` showed no card because `index.html`'s
+  `og:image`/`twitter:image`/`og:url` still pointed at `ptt.voxal.app`, which
+  **has no DNS record any more** (`web.voxal.app` resolves to Vercel;
+  `ptt.voxal.app` is `NXDOMAIN`). A scraper that cannot resolve the image host
+  just drops the image — there is no error anywhere, and the page itself is
+  perfectly healthy, so the bug looks like "OG is broken" rather than "one host
+  is gone". When a preview misbehaves, resolve every absolute URL in the head
+  before reading any code: `getent hosts <host>` is the whole test.
+  Same reason the OG host should be the one `VOXAL_WEB_URL` hands out — the
+  domain people are actually sent to is the domain the card must live on.
+  **Still pointing at `ptt.voxal.app` and therefore still broken:** the mobile
+  seg-assets base (`video-effects.js`), the native anon-TURN and SFU endpoints
+  (`main.js`), the Website button in `about.html`, and the iOS/Android
+  associated-domain declarations.
