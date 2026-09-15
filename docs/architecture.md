@@ -27,6 +27,14 @@ never application state, and no Cloudflare DataChannel is used. See [Video
 routing](video-routing.md) for the full design, including the privacy
 distinction from TURN relaying and the backend authorization model.
 
+### Diagrams
+
+[`topology.html`](topology.html) draws the three cases end to end — a voice-only
+room (join sequence, steady-state star vs. mesh, which server sees what, host
+migration), a two-peer video call, and video above two participants (mesh vs.
+SFU side by side, uplink cost, and the SFU control plane). Open it with
+`make docs`.
+
 ## Room lifecycle
 
 1. Host creates a room and gets a PeerJS ID.

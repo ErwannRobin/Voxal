@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+  :root { color-scheme: light dark; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>Voxal Room Topology</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg:        #F1F2F5;
+    --surface:   #FFFFFF;
+    --surface-2: #E7EAEF;
+    --ink:       #14181F;
+    --ink-dim:   #59636F;
+    --rule:      #D2D7DE;
+    --signal:    #6B4FD0;
+    --audio:     #0F7D62;
+    --video:     #2463C4;
+    --relay:     #B06511;
+    --shadow:    0 1px 2px rgba(20,24,31,.06), 0 8px 24px rgba(20,24,31,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:        #0C0F13;
+      --surface:   #151A21;
+      --surface-2: #1D232B;
+      --ink:       #E5E9EF;
+      --ink-dim:   #939DAB;
+      --rule:      #2A313B;
+      --signal:    #A897F7;
+      --audio:     #35C49B;
+      --video:     #71A8F7;
+      --relay:     #EBA84E;
+      --shadow:    0 1px 2px rgba(0,0,0,.4), 0 10px 28px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:        #0C0F13;
+    --surface:   #151A21;
+    --surface-2: #1D232B;
+    --ink:       #E5E9EF;
+    --ink-dim:   #939DAB;
+    --rule:      #2A313B;
+    --signal:    #A897F7;
+    --audio:     #35C49B;
+    --video:     #71A8F7;
+    --relay:     #EBA84E;
+    --shadow:    0 1px 2px rgba(0,0,0,.4), 0 10px 28px rgba(0,0,0,.35);
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 15px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; padding-inline: 20px; padding-block: 0 72px; }
+  .prose { max-width: 68ch; }
+
+  h1, h2, h3 { font-family: 'Archivo', sans-serif; text-wrap: balance; margin: 0; }
+  h1 { font-size: clamp(30px, 6vw, 46px); font-weight: 700; letter-spacing: -.024em; line-height: 1.06; }
+  h2 { font-size: clamp(21px, 3.6vw, 27px); font-weight: 600; letter-spacing: -.015em; }
+  h3 { font-size: 16px; font-weight: 600; letter-spacing: -.005em; }
+  p  { margin: 0; }
+
+  .eyebrow {
+    font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 500;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--ink-dim);
+  }
+  code, .mono { font-family: 'IBM Plex Mono', monospace; font-size: .89em; }
+  code {
+    background: var(--surface-2); border-radius: 4px; padding: .1em .36em;
+    word-break: break-word;
+  }
+
+  /* ---- masthead ---- */
+  header.top { padding-block: 56px 36px; display: flex; flex-direction: column; gap: 20px; }
+  .lede { font-size: 17px; color: var(--ink-dim); max-width: 62ch; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+  .verdicts { display: flex; flex-wrap: wrap; gap: 10px; }
+  .verdict {
+    display: flex; flex-direction: column; gap: 2px; flex: 1 1 210px;
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 8px;
+    padding: 12px 14px; box-shadow: var(--shadow);
+  }
+  .verdict b { font-family: 'Archivo', sans-serif; font-size: 15px; font-weight: 600; }
+  .verdict span { font-size: 12.5px; color: var(--ink-dim); }
+  .verdict.sig  { border-left: 3px solid var(--signal); }
+  .verdict.aud  { border-left: 3px solid var(--audio); }
+  .verdict.vid  { border-left: 3px solid var(--video); }
+
+  /* ---- sections ---- */
+  section { padding-block: 40px 0; border-top: 1px solid var(--rule); margin-top: 44px; }
+  .sec-head { display: flex; flex-direction: column; gap: 8px; margin-bottom: 26px; }
+  .sec-head .kicker { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .count {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 500;
+    border: 1px solid var(--rule); border-radius: 100px; padding: 2px 10px;
+    color: var(--ink-dim); background: var(--surface); white-space: nowrap;
+  }
+
+  .stack { display: flex; flex-direction: column; gap: 22px; }
+
+  /* ---- figures ---- */
+  figure { margin: 0; }
+  .figbox {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 10px;
+    padding: 18px 16px 14px; box-shadow: var(--shadow);
+  }
+  .scroller { overflow-x: auto; }
+  .scroller > svg { display: block; width: 100%; min-width: 620px; height: auto; }
+  figcaption {
+    font-size: 13px; color: var(--ink-dim); margin-top: 12px;
+    padding-top: 11px; border-top: 1px solid var(--rule);
+  }
+  figcaption b { color: var(--ink); font-weight: 600; }
+
+  /* ---- svg primitives ---- */
+  .nbox  { fill: var(--surface); stroke: var(--rule); stroke-width: 1.2; }
+  .nbox2 { fill: var(--surface-2); stroke: var(--rule); stroke-width: 1.2; }
+  .ghost { fill: none; stroke: var(--ink-dim); stroke-width: 1.2; stroke-dasharray: 4 4; opacity: .45; }
+  .hostfill { fill: var(--surface-2); stroke: var(--signal); stroke-width: 2; }
+  .lane  { stroke: var(--ink-dim); stroke-width: 1; stroke-dasharray: 3 5; opacity: .35; }
+  .rule  { stroke: var(--rule); stroke-width: 1; }
+
+  .ln-sig    { stroke: var(--signal); stroke-width: 1.6; fill: none; }
+  .ln-sig-d  { stroke: var(--signal); stroke-width: 1.5; fill: none; stroke-dasharray: 6 4; }
+  .ln-audio  { stroke: var(--audio);  stroke-width: 2.3; fill: none; }
+  .ln-audio-d{ stroke: var(--audio);  stroke-width: 2;   fill: none; stroke-dasharray: 6 4; }
+  .ln-video  { stroke: var(--video);  stroke-width: 2.3; fill: none; }
+  .ln-relay  { stroke: var(--relay);  stroke-width: 2.3; fill: none; }
+  .ln-ink    { stroke: var(--ink-dim); stroke-width: 1.4; fill: none; }
+  .ln-ink-d  { stroke: var(--ink-dim); stroke-width: 1.4; fill: none; stroke-dasharray: 5 4; }
+  .ln-dead   { stroke: var(--ink-dim); stroke-width: 1.4; fill: none; stroke-dasharray: 3 4; opacity: .4; }
+  .ln-thick  { stroke-width: 3.2; }
+
+  .ah-sig   { fill: var(--signal); }
+  .ah-audio { fill: var(--audio); }
+  .ah-video { fill: var(--video); }
+  .ah-relay { fill: var(--relay); }
+  .ah-ink   { fill: var(--ink-dim); }
+
+  .t   { font-family: 'IBM Plex Sans', sans-serif; font-size: 11.5px; fill: var(--ink); }
+  .td  { font-family: 'IBM Plex Sans', sans-serif; font-size: 11.5px; fill: var(--ink-dim); }
+  .tm  { font-family: 'IBM Plex Mono', monospace;  font-size: 10.5px; fill: var(--ink); }
+  .tmd { font-family: 'IBM Plex Mono', monospace;  font-size: 10px;   fill: var(--ink-dim); }
+  .tb  { font-family: 'Archivo', sans-serif; font-size: 12.5px; font-weight: 600; fill: var(--ink); }
+  .tt  { font-family: 'Archivo', sans-serif; font-size: 13.5px; font-weight: 600; fill: var(--ink); }
+  .tk  { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; letter-spacing: .13em; fill: var(--ink-dim); }
+  .c-sig { fill: var(--signal); } .c-aud { fill: var(--audio); }
+  .c-vid { fill: var(--video); }  .c-rel { fill: var(--relay); }
+
+  /* ---- legend ---- */
+  .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 22px; }
+  .leg { display: flex; gap: 11px; align-items: flex-start; }
+  .leg svg { flex: none; margin-top: 6px; }
+  .leg b { font-family: 'Archivo', sans-serif; font-size: 13px; font-weight: 600; display: block; }
+  .leg span { font-size: 12.5px; color: var(--ink-dim); }
+
+  /* ---- data blocks ---- */
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px;
+           background: var(--rule); border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+  .fact { background: var(--surface); padding: 12px 14px; }
+  .fact dt { font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: .1em;
+             text-transform: uppercase; color: var(--ink-dim); margin-bottom: 3px; }
+  .fact dd { margin: 0; font-family: 'Archivo', sans-serif; font-size: 16px; font-weight: 600;
+             font-variant-numeric: tabular-nums; }
+  .fact dd small { font-weight: 500; font-size: 11.5px; color: var(--ink-dim); display: block;
+                   font-family: 'IBM Plex Sans', sans-serif; letter-spacing: 0; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: .1em;
+       text-transform: uppercase; color: var(--ink-dim); font-weight: 500; white-space: nowrap; }
+  td:first-child { white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: 0; }
+  .tablebox { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px;
+              box-shadow: var(--shadow); overflow-x: auto; }
+
+  .pill { display: inline-block; font-family: 'IBM Plex Mono', monospace; font-size: 10.5px;
+          border-radius: 100px; padding: 2px 9px; white-space: nowrap; border: 1px solid; }
+  .pill.p2p   { color: var(--audio); border-color: var(--audio); }
+  .pill.sfu   { color: var(--relay); border-color: var(--relay); }
+  .pill.ask   { color: var(--signal); border-color: var(--signal); }
+
+  .note {
+    background: var(--surface-2); border-radius: 8px; padding: 14px 16px; font-size: 13.5px;
+    border-left: 3px solid var(--relay);
+  }
+  .note b { font-weight: 600; }
+
+  @media (max-width: 560px) {
+    .wrap { padding-inline: 16px; }
+    header.top { padding-block: 34px 26px; }
+  }
+</style>
+</head>
+<body>
+<svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
+  <defs>
+    <marker id="ar-sig" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-sig"/></marker>
+    <marker id="ar-audio" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-audio"/></marker>
+    <marker id="ar-video" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-video"/></marker>
+    <marker id="ar-relay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-relay"/></marker>
+    <marker id="ar-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-ink"/></marker>
+  </defs>
+</svg>
+
+<div class="wrap">
+
+  <header class="top">
+    <p class="eyebrow">Voxal · WebRTC architecture reference</p>
+    <h1>How a Voxal room is wired</h1>
+    <p class="lede">Three planes, drawn from <code>src/main.js</code>. Signalling is a <strong>star</strong> through the host. Audio is a <strong>full mesh</strong>, peer to peer, always — no media server touches it under any setting. Camera and screen are their own meshes, and are the only thing that may move to a relay when a room grows.</p>
+    <div class="verdicts">
+      <div class="verdict sig"><b>Signalling — star</b><span>DataConnection to the host. Room code = the host's PeerJS id.</span></div>
+      <div class="verdict aud"><b>Audio — mesh, always</b><span>Opus 32 kbps. Direct, or TURN-relayed. Never decoded by a server.</span></div>
+      <div class="verdict vid"><b>Video — mesh, then SFU</b><span>Peer to peer up to 2 people; above that the default routes it through Cloudflare.</span></div>
+    </div>
+  </header>
+
+  <!-- ================= LEGEND ================= -->
+  <section style="border-top:0; margin-top:0; padding-block:0">
+    <div class="figbox">
+      <p class="eyebrow" style="margin-bottom:14px">Reading the diagrams</p>
+      <div class="legend">
+        <div class="leg">
+          <svg width="44" height="10" viewBox="0 0 44 10" role="img" aria-label="Dashed violet line"><line class="ln-sig-d" x1="1" y1="5" x2="43" y2="5"/></svg>
+          <div><b>Signalling</b><span>PeerJS <code>DataConnection</code>. Control messages only — no media.</span></div>
+        </div>
+        <div class="leg">
+          <svg width="44" height="10" viewBox="0 0 44 10" role="img" aria-label="Solid green line"><line class="ln-audio" x1="1" y1="5" x2="43" y2="5"/></svg>
+          <div><b>Audio media</b><span>A <code>MediaConnection</code> carrying voice. Always peer to peer.</span></div>
+        </div>
+        <div class="leg">
+          <svg width="44" height="10" viewBox="0 0 44 10" role="img" aria-label="Solid blue line"><line class="ln-video" x1="1" y1="5" x2="43" y2="5"/></svg>
+          <div><b>Camera / screen media</b><span>Separate <code>MediaConnection</code> sets, independent of audio.</span></div>
+        </div>
+        <div class="leg">
+          <svg width="44" height="10" viewBox="0 0 44 10" role="img" aria-label="Solid grey line"><line class="ln-ink" x1="1" y1="5" x2="43" y2="5"/></svg>
+          <div><b>HTTPS</b><span>A plain request to a serverless endpoint. Setup only.</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= CASE 1 ================= -->
+  <section>
+    <div class="sec-head">
+      <div class="kicker">
+        <p class="eyebrow">The main case</p>
+        <span class="count">2–N participants · voice only</span>
+      </div>
+      <h2>A simple voice room</h2>
+      <p class="prose" style="color:var(--ink-dim)">One person creates a room and becomes the host. The room code <em>is</em> their PeerJS id, so there is nothing to look up. Everyone else connects to the host for control, and to each other for sound.</p>
+    </div>
+
+    <div class="stack">
+
+      <!-- FIG 1: join sequence -->
+      <figure class="figbox">
+        <p class="eyebrow" style="margin-bottom:6px">Figure 1 · Joining</p>
+        <div class="scroller">
+          <svg viewBox="0 0 840 664" role="img" aria-label="Sequence diagram of a peer joining a Voxal voice room: fetching TURN credentials over HTTPS, opening a PeerJS session, negotiating a DataConnection to the host through the broker, exchanging hello and peer-list, then opening a direct audio MediaConnection to every peer on the roster.">
+            <!-- lanes -->
+            <rect class="nbox" x="25" y="8" width="140" height="34" rx="6"/>
+            <text class="tb" x="95" y="30" text-anchor="middle">Joiner</text>
+            <rect class="nbox2" x="185" y="8" width="140" height="34" rx="6"/>
+            <text class="tb" x="255" y="30" text-anchor="middle">voxal.app API</text>
+            <rect class="nbox2" x="345" y="8" width="140" height="34" rx="6"/>
+            <text class="tb" x="415" y="30" text-anchor="middle">PeerJS broker</text>
+            <rect class="nbox" x="515" y="8" width="140" height="34" rx="6"/>
+            <text class="tb" x="585" y="30" text-anchor="middle">Host</text>
+            <rect class="nbox" x="690" y="8" width="120" height="34" rx="6"/>
+            <text class="tb" x="750" y="30" text-anchor="middle">Peer C</text>
+
+            <line class="lane" x1="95"  y1="46" x2="95"  y2="640"/>
+            <line class="lane" x1="255" y1="46" x2="255" y2="640"/>
+            <line class="lane" x1="415" y1="46" x2="415" y2="640"/>
+            <line class="lane" x1="585" y1="46" x2="585" y2="640"/>
+            <line class="lane" x1="750" y1="46" x2="750" y2="640"/>
+
+            <!-- phase 1 -->
+            <text class="tk" x="25" y="70">1 · GET READY</text>
+            <text class="tm" x="175" y="84" text-anchor="middle">GET /api/ice-servers</text>
+            <line class="ln-ink" x1="95" y1="90" x2="255" y2="90" marker-end="url(#ar-ink)"/>
+            <text class="tmd" x="175" y="106" text-anchor="middle">short-lived TURN credentials</text>
+            <line class="ln-ink-d" x1="255" y1="112" x2="95" y2="112" marker-end="url(#ar-ink)"/>
+
+            <text class="tm" x="255" y="140" text-anchor="middle">new Peer() — websocket to broker</text>
+            <line class="ln-sig" x1="95" y1="146" x2="415" y2="146" marker-end="url(#ar-sig)"/>
+            <text class="tmd" x="255" y="162" text-anchor="middle">peer.id (a fresh UUID)</text>
+            <line class="ln-sig-d" x1="415" y1="168" x2="95" y2="168" marker-end="url(#ar-sig)"/>
+
+            <!-- phase 2 -->
+            <text class="tk" x="25" y="198">2 · SIGNALLING LINK</text>
+            <text class="tm" x="255" y="212" text-anchor="middle">connect(roomCode) — SDP offer + ICE candidates</text>
+            <line class="ln-sig" x1="95" y1="218" x2="415" y2="218" marker-end="url(#ar-sig)"/>
+            <text class="tm" x="500" y="234" text-anchor="middle">relayed to the host</text>
+            <line class="ln-sig" x1="415" y1="240" x2="585" y2="240" marker-end="url(#ar-sig)"/>
+            <text class="tm" x="340" y="256" text-anchor="middle">answer + candidates (back through the broker)</text>
+            <line class="ln-sig" x1="585" y1="262" x2="95" y2="262" marker-end="url(#ar-sig)"/>
+
+            <text class="tb" x="340" y="286" text-anchor="middle">DataConnection open — DTLS / SCTP, direct</text>
+            <line class="ln-sig ln-thick" x1="95" y1="292" x2="585" y2="292" marker-end="url(#ar-sig)" marker-start="url(#ar-sig)"/>
+            <text class="tmd" x="340" y="307" text-anchor="middle">the broker is out of the path from here on</text>
+
+            <!-- phase 3 -->
+            <text class="tk" x="25" y="336">3 · ROSTER</text>
+            <text class="tm" x="340" y="350" text-anchor="middle">hello {pseudo, protocolVersion: 3, appVersion}</text>
+            <line class="ln-sig" x1="95" y1="356" x2="585" y2="356" marker-end="url(#ar-sig)"/>
+            <text class="tm" x="340" y="372" text-anchor="middle">pseudo-assigned — the host owns the name, and de-duplicates it</text>
+            <line class="ln-sig" x1="585" y1="378" x2="95" y2="378" marker-end="url(#ar-sig)"/>
+            <text class="tm" x="340" y="394" text-anchor="middle">peer-list {peers, hostId, deputyId, successorIds} + chat-history</text>
+            <line class="ln-sig" x1="585" y1="400" x2="95" y2="400" marker-end="url(#ar-sig)"/>
+            <text class="tm" x="668" y="416" text-anchor="middle">peer-joined, then peer-list to all</text>
+            <line class="ln-sig" x1="585" y1="422" x2="750" y2="422" marker-end="url(#ar-sig)"/>
+
+            <!-- phase 4 -->
+            <text class="tk" x="25" y="452">4 · SOUND</text>
+            <text class="tm c-aud" x="340" y="466" text-anchor="middle">peer.call(host, micStream) — Opus, in-band FEC</text>
+            <line class="ln-audio" x1="95" y1="472" x2="585" y2="472" marker-end="url(#ar-audio)"/>
+            <text class="tm c-aud" x="422" y="494" text-anchor="middle">peer.call(peerC, micStream) — one call per roster entry</text>
+            <line class="ln-audio" x1="95" y1="500" x2="750" y2="500" marker-end="url(#ar-audio)"/>
+            <text class="tmd" x="422" y="522" text-anchor="middle">answered with C's own mic — one full-duplex connection per pair</text>
+            <line class="ln-audio-d" x1="750" y1="528" x2="95" y2="528" marker-end="url(#ar-audio)"/>
+
+            <!-- phase 5 -->
+            <text class="tk" x="25" y="558">5 · WHILE TALKING</text>
+            <text class="tm" x="340" y="572" text-anchor="middle">heartbeat every 2 s · a 7 s gap starts a migration</text>
+            <line class="ln-sig-d" x1="95" y1="578" x2="585" y2="578" marker-end="url(#ar-sig)" marker-start="url(#ar-sig)"/>
+            <text class="tm" x="340" y="602" text-anchor="middle">talking {active: true} — push-to-talk pressed</text>
+            <line class="ln-sig" x1="95" y1="608" x2="585" y2="608" marker-end="url(#ar-sig)"/>
+            <text class="tm" x="668" y="624" text-anchor="middle">fanned out to every peer</text>
+            <line class="ln-sig" x1="585" y1="630" x2="750" y2="630" marker-end="url(#ar-sig)"/>
+          </svg>
+        </div>
+        <figcaption><b>The broker only introduces people.</b> It carries the SDP offer, answer and ICE candidates, then drops out — every later message and every audio packet goes peer to peer. A joiner opens a call to <em>every</em> name in <code>peer-list</code>, not just to the host.</figcaption>
+      </figure>
+
+      <!-- FIG 2: two planes -->
+      <figure class="figbox">
+        <p class="eyebrow" style="margin-bottom:6px">Figure 2 · Steady state, 4 people</p>
+        <div class="scroller">
+          <svg viewBox="0 0 780 382" role="img" aria-label="Two panels with the same four participants. Left: signalling is a star, three dashed links from each peer to the host. Right: audio is a full mesh, six links joining every pair.">
+            <text class="tt" x="190" y="24" text-anchor="middle">Signalling — star</text>
+            <text class="td" x="190" y="44" text-anchor="middle">everything routes through the host</text>
+            <text class="tt" x="570" y="24" text-anchor="middle">Audio — full mesh</text>
+            <text class="td" x="570" y="44" text-anchor="middle">every pair, directly</text>
+
+            <line class="rule" x1="380" y1="60" x2="380" y2="350"/>
+
+            <!-- left: star -->
+            <line class="ln-sig-d" x1="208.4" y1="113.4" x2="281.6" y2="186.6" marker-end="url(#ar-sig)" marker-start="url(#ar-sig)"/>
+            <line class="ln-sig-d" x1="190" y1="121" x2="190" y2="289" marker-end="url(#ar-sig)" marker-start="url(#ar-sig)"/>
+            <line class="ln-sig-d" x1="171.6" y1="113.4" x2="98.4" y2="186.6" marker-end="url(#ar-sig)" marker-start="url(#ar-sig)"/>
+            <circle class="hostfill" cx="190" cy="95" r="26"/>
+            <text class="tm" x="190" y="99" text-anchor="middle">HOST</text>
+            <circle class="nbox" cx="300" cy="205" r="26"/><text class="tm" x="300" y="209" text-anchor="middle">A</text>
+            <circle class="nbox" cx="190" cy="315" r="26"/><text class="tm" x="190" y="319" text-anchor="middle">B</text>
+            <circle class="nbox" cx="80"  cy="205" r="26"/><text class="tm" x="80"  y="209" text-anchor="middle">C</text>
+            <text class="tmd" x="190" y="366" text-anchor="middle">3 DataConnections · N−1</text>
+
+            <!-- right: mesh -->
+            <line class="ln-audio" x1="588.4" y1="113.4" x2="661.6" y2="186.6"/>
+            <line class="ln-audio" x1="570" y1="121" x2="570" y2="289"/>
+            <line class="ln-audio" x1="551.6" y1="113.4" x2="478.4" y2="186.6"/>
+            <line class="ln-audio" x1="661.6" y1="223.4" x2="588.4" y2="296.6"/>
+            <line class="ln-audio" x1="551.6" y1="296.6" x2="478.4" y2="223.4"/>
+            <line class="ln-audio" x1="654" y1="205" x2="486" y2="205"/>
+            <circle class="hostfill" cx="570" cy="95" r="26"/>
+            <text class="tm" x="570" y="99" text-anchor="middle">HOST</text>
+            <circle class="nbox" cx="680" cy="205" r="26"/><text class="tm" x="680" y="209" text-anchor="middle">A</text>
+            <circle class="nbox" cx="570" cy="315" r="26"/><text class="tm" x="570" y="319" text-anchor="middle">B</text>
+            <circle class="nbox" cx="460" cy="205" r="26"/><text class="tm" x="460" y="209" text-anchor="middle">C</text>
+            <text class="tmd" x="570" y="366" text-anchor="middle">6 links · N(N−1)/2</text>
+          </svg>
+        </div>
+        <figcaption><b>Same four people, two different shapes.</b> The host is special for control only — it stamps names, owns the clock for chat, and publishes the successor chain. For sound it is just another peer, and losing it costs no audio link between the survivors.</figcaption>
+      </figure>
+
+      <!-- FIG 3: who sees what -->
+      <figure class="figbox">
+        <p class="eyebrow" style="margin-bottom:6px">Figure 3 · Network flow — what each server sees</p>
+        <div class="scroller">
+          <svg viewBox="0 0 800 438" role="img" aria-label="Your browser talks HTTPS to three setup services — the PeerJS broker, the ICE servers endpoint and the optional presence API — while the media path runs directly to the other peer, passing through a TURN relay only when a direct path fails.">
+            <!-- browser -->
+            <rect class="nbox" x="40" y="172" width="160" height="66" rx="8"/>
+            <text class="tb" x="120" y="200" text-anchor="middle">Your browser</text>
+            <text class="tmd" x="120" y="218" text-anchor="middle">main.js + PeerJS</text>
+
+            <!-- bus -->
+            <path class="ln-ink" d="M200,205 H300"/>
+            <path class="ln-ink" d="M300,205 V58 H466" marker-end="url(#ar-ink)"/>
+            <path class="ln-ink" d="M300,205 V128 H466" marker-end="url(#ar-ink)"/>
+            <path class="ln-ink" d="M300,205 V198 H466" marker-end="url(#ar-ink)"/>
+            <text class="tk" x="306" y="252">HTTPS · SETUP ONLY</text>
+
+            <!-- services -->
+            <rect class="nbox2" x="470" y="30" width="290" height="56" rx="8"/>
+            <text class="tb" x="484" y="52">PeerJS broker</text>
+            <text class="tmd" x="484" y="70">sees peer ids, SDP and ICE — never the media</text>
+
+            <rect class="nbox2" x="470" y="100" width="290" height="56" rx="8"/>
+            <text class="tb" x="484" y="122">/api/ice-servers</text>
+            <text class="tmd" x="484" y="140">sees your IP · returns short-lived TURN credentials</text>
+
+            <rect class="nbox2" x="470" y="170" width="290" height="56" rx="8"/>
+            <text class="tb" x="484" y="192">Presence API <tspan class="tmd">(optional)</tspan></text>
+            <text class="tmd" x="484" y="210">room directory when signed in · never media</text>
+
+            <!-- media path -->
+            <path class="ln-audio ln-thick" d="M120,238 V335 H250"/>
+            <path class="ln-audio ln-thick" d="M410,335 H600" marker-end="url(#ar-audio)"/>
+            <text class="tb c-aud" x="150" y="322">media — audio (and P2P video)</text>
+
+            <rect class="nbox" x="250" y="308" width="160" height="54" rx="8" stroke-dasharray="5 4"/>
+            <text class="tb" x="330" y="330" text-anchor="middle">TURN relay</text>
+            <text class="tmd" x="330" y="348" text-anchor="middle">only if direct fails</text>
+
+            <rect class="nbox" x="600" y="302" width="160" height="66" rx="8"/>
+            <text class="tb" x="680" y="330" text-anchor="middle">The other peer</text>
+            <text class="tmd" x="680" y="348" text-anchor="middle">DTLS-SRTP, end to end</text>
+
+            <text class="td" x="40" y="400">A TURN relay forwards <tspan class="tm">encrypted</tspan> DTLS-SRTP. It cannot decode what it carries.</text>
+            <text class="tb" x="40" y="422">No voice packet ever enters a media server — that boundary is permanent.</text>
+          </svg>
+        </div>
+        <figcaption><b>Four parties, and only one of them is in the media path.</b> <code>fetchIceServers()</code> resolves the first source that answers: an embedding page, your organisation, metered.ca, this deployment's <code>/api/ice-servers</code>, then public STUN. The relay is a fallback for blocked networks, not a hop the app prefers.</figcaption>
+      </figure>
+
+      <!-- FIG 4: migration -->
+      <figure class="figbox">
+        <p class="eyebrow" style="margin-bottom:6px">Figure 4 · Losing the host</p>
+        <div class="scroller">
+          <svg viewBox="0 0 820 264" role="img" aria-label="Three panels: a running room with a deputy named in every peer-list; the host gone and its heartbeat missed for seven seconds; the deputy promoted to host with the signalling star re-formed and the audio links between the surviving peers untouched.">
+            <text class="tt" x="135" y="24" text-anchor="middle">1 · running</text>
+            <text class="tt" x="410" y="24" text-anchor="middle">2 · host lost</text>
+            <text class="tt" x="685" y="24" text-anchor="middle">3 · migrated</text>
+            <line class="rule" x1="272" y1="40" x2="272" y2="240"/>
+            <line class="rule" x1="548" y1="40" x2="548" y2="240"/>
+
+            <!-- panel 1 -->
+            <line class="ln-sig-d" x1="147" y1="90" x2="185" y2="128"/>
+            <line class="ln-sig-d" x1="135" y1="96" x2="135" y2="184"/>
+            <line class="ln-sig-d" x1="123" y1="90" x2="85" y2="128"/>
+            <circle class="hostfill" cx="135" cy="78" r="18"/><text class="tmd" x="135" y="82" text-anchor="middle">H</text>
+            <circle class="nbox" cx="197" cy="140" r="18"/><text class="tmd" x="197" y="144" text-anchor="middle">A</text>
+            <circle class="nbox" cx="135" cy="202" r="18"/><text class="tmd" x="135" y="206" text-anchor="middle">B</text>
+            <circle class="nbox" cx="73"  cy="140" r="18"/><text class="tmd" x="73"  y="144" text-anchor="middle">C</text>
+            <text class="tmd" x="135" y="240" text-anchor="middle">successorIds: [A, B, C]</text>
+
+            <!-- panel 2 -->
+            <line class="ln-dead" x1="422" y1="90" x2="460" y2="128"/>
+            <line class="ln-dead" x1="410" y1="96" x2="410" y2="184"/>
+            <line class="ln-dead" x1="398" y1="90" x2="360" y2="128"/>
+            <circle class="ghost" cx="410" cy="78" r="18"/>
+            <line class="ln-ink" x1="401" y1="69" x2="419" y2="87"/>
+            <line class="ln-ink" x1="419" y1="69" x2="401" y2="87"/>
+            <circle class="nbox" cx="472" cy="140" r="18"/><text class="tmd" x="472" y="144" text-anchor="middle">A</text>
+            <circle class="nbox" cx="410" cy="202" r="18"/><text class="tmd" x="410" y="206" text-anchor="middle">B</text>
+            <circle class="nbox" cx="348" cy="140" r="18"/><text class="tmd" x="348" y="144" text-anchor="middle">C</text>
+            <line class="ln-audio" x1="424" y1="190" x2="458" y2="154"/>
+            <line class="ln-audio" x1="396" y1="190" x2="362" y2="154"/>
+            <line class="ln-audio" x1="454" y1="140" x2="366" y2="140"/>
+            <text class="tmd" x="410" y="240" text-anchor="middle">no heartbeat for 7 s</text>
+
+            <!-- panel 3 -->
+            <line class="ln-sig-d" x1="734" y1="154" x2="700" y2="190"/>
+            <line class="ln-sig-d" x1="729" y1="140" x2="641" y2="140"/>
+            <circle class="ghost" cx="685" cy="78" r="18"/>
+            <circle class="hostfill" cx="747" cy="140" r="18"/><text class="tmd" x="747" y="144" text-anchor="middle">A</text>
+            <circle class="nbox" cx="685" cy="202" r="18"/><text class="tmd" x="685" y="206" text-anchor="middle">B</text>
+            <circle class="nbox" cx="623" cy="140" r="18"/><text class="tmd" x="623" y="144" text-anchor="middle">C</text>
+            <line class="ln-audio ln-thick" x1="671" y1="190" x2="637" y2="154"/>
+            <text class="tmd c-aud" x="612" y="182">kept</text>
+            <text class="tmd" x="685" y="240" text-anchor="middle">A is host · first peer-list confirms</text>
+          </svg>
+        </div>
+        <figcaption><b>The chain is published, not elected on the spot.</b> Every <code>peer-list</code> and every heartbeat carries <code>deputyId</code> and <code>successorIds</code>, so when the host goes quiet each peer already knows who is next. Audio links to non-host peers are never torn down during a migration — only the star is rebuilt.</figcaption>
+      </figure>
+
+      <dl class="facts">
+        <div class="fact"><dt>Microphone</dt><dd>16 kHz<small>mono · EC + AGC on · 48 kHz on the RNNoise path</small></dd></div>
+        <div class="fact"><dt>Codec</dt><dd>Opus<small>≤ 32 kbps · in-band FEC · DTX off</small></dd></div>
+        <div class="fact"><dt>Heartbeat</dt><dd>2 s<small>7 s silence starts a migration</small></dd></div>
+        <div class="fact"><dt>Protocol</dt><dd>v3<small>additive and tolerant · skew is expected</small></dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <!-- ================= CASE 2 ================= -->
+  <section>
+    <div class="sec-head">
+      <div class="kicker">
+        <p class="eyebrow">A heavier case</p>
+        <span class="count">2 participants · camera + screen</span>
+      </div>
+      <h2>Video between two peers</h2>
+      <p class="prose" style="color:var(--ink-dim)">Nothing about the room changes. Turning a camera on adds a second, entirely separate <code>MediaConnection</code> set — it does not ride the audio one, and it does not renegotiate it.</p>
+    </div>
+
+    <div class="stack">
+
+      <figure class="figbox">
+        <p class="eyebrow" style="margin-bottom:6px">Figure 5 · One pair, four channels</p>
+        <div class="scroller">
+          <svg viewBox="0 0 780 320" role="img" aria-label="Two peers joined by four independent channels: one DataConnection for control messages, and three separate MediaConnections for audio, camera and screen share.">
+            <rect class="nbox" x="30" y="78" width="120" height="164" rx="8"/>
+            <text class="tb" x="90" y="152" text-anchor="middle">Peer A</text>
+            <text class="tmd" x="90" y="170" text-anchor="middle">host</text>
+            <rect class="nbox" x="630" y="78" width="120" height="164" rx="8"/>
+            <text class="tb" x="690" y="160" text-anchor="middle">Peer B</text>
+
+            <text class="tm c-sig" x="390" y="102" text-anchor="middle">DataConnection — hello · peer-list · talking · chat · video-offer</text>
+            <line class="ln-sig-d" x1="150" y1="110" x2="630" y2="110" marker-end="url(#ar-sig)" marker-start="url(#ar-sig)"/>
+
+            <text class="tm c-aud" x="390" y="146" text-anchor="middle">MediaConnection · audio — Opus ≤ 32 kbps</text>
+            <line class="ln-audio" x1="150" y1="154" x2="630" y2="154" marker-end="url(#ar-audio)" marker-start="url(#ar-audio)"/>
+
+            <text class="tm c-vid" x="390" y="190" text-anchor="middle">MediaConnection · camera — ≤ 600 kbps each way</text>
+            <line class="ln-video" x1="150" y1="198" x2="630" y2="198" marker-end="url(#ar-video)" marker-start="url(#ar-video)"/>
+
+            <text class="tm c-vid" x="390" y="234" text-anchor="middle">MediaConnection · screen — ≤ 1.5 Mbps, never cropped</text>
+            <line class="ln-video" x1="150" y1="242" x2="630" y2="242" marker-end="url(#ar-video)" marker-start="url(#ar-video)"/>
+
+            <rect class="nbox2" x="150" y="270" width="480" height="34" rx="6"/>
+            <text class="tm" x="390" y="292" text-anchor="middle">participants = 2 · not over the threshold (&gt; 2) · stays peer to peer</text>
+          </svg>
+        </div>
+        <figcaption><b>Three media kinds, three independent sets.</b> That separation is why the blur slider, a camera flip, or a mid-call microphone change never disturbs the others: each is a track swap or a shader uniform on its own connection. The <code>video-offer</code> that announces a camera travels the signalling star, like every other control message.</figcaption>
+      </figure>
+
+      <div class="figbox">
+        <p class="eyebrow" style="margin-bottom:6px">The routing decision · <code class="mono">selectVideoTopology()</code></p>
+        <div class="tablebox" style="box-shadow:none; border:0">
+          <table>
+            <thead>
+              <tr><th>Your setting</th><th>2 participants</th><th>3 or more</th><th>Reason code</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><b>Allow relay</b><br><span style="color:var(--ink-dim);font-size:12px">default</span></td>
+                <td><span class="pill p2p">P2P</span></td>
+                <td><span class="pill sfu">SFU</span></td>
+                <td><code>preference-allow-sfu</code></td>
+              </tr>
+              <tr>
+                <td><b>Prefer direct</b></td>
+                <td><span class="pill p2p">P2P</span></td>
+                <td><span class="pill ask">P2P + asks you</span></td>
+                <td><code>p2p-unsuitable</code></td>
+              </tr>
+              <tr>
+                <td><b>Direct only</b></td>
+                <td><span class="pill p2p">P2P</span></td>
+                <td><span class="pill p2p">P2P</span><br><span style="color:var(--ink-dim);font-size:12px">video may fail to establish</span></td>
+                <td><code>preference-p2p-only</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p style="font-size:13px;color:var(--ink-dim);margin-top:12px">The function is pure — no network, no DOM — and can only return <code>sfu</code> when the preference is <em>Allow relay</em>. If no SFU is configured on the deployment, every row falls back to P2P with <code>sfu-unavailable</code>. Audio is never passed through this function at all.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= CASE 3 ================= -->
+  <section>
+    <div class="sec-head">
+      <div class="kicker">
+        <p class="eyebrow">Where the mesh breaks</p>
+        <span class="count">3+ participants · camera + screen</span>
+      </div>
+      <h2>Video with more than two</h2>
+      <p class="prose" style="color:var(--ink-dim)">Above two people, a video mesh costs each publisher one full upload per viewer. This is the one place Voxal will move media onto a server — and it moves the picture only.</p>
+    </div>
+
+    <div class="stack">
+
+      <figure class="figbox">
+        <p class="eyebrow" style="margin-bottom:6px">Figure 6 · The same four people, two ways</p>
+        <div class="scroller">
+          <svg viewBox="0 0 800 520" role="img" aria-label="Top panel: four peers sharing camera over a full mesh, six links, each publisher uploading three copies. Bottom panel: the same four peers publishing one copy each to a Cloudflare SFU, which forwards three copies down to each of them.">
+            <text class="tt" x="24" y="26">Full mesh · each publisher uploads N−1 copies</text>
+            <path class="ln-video" d="M120,180 Q210,138 300,180"/>
+            <path class="ln-video" d="M300,180 Q390,138 480,180"/>
+            <path class="ln-video" d="M480,180 Q570,138 660,180"/>
+            <path class="ln-video" d="M120,180 Q300,102 480,180"/>
+            <path class="ln-video" d="M300,180 Q480,102 660,180"/>
+            <path class="ln-video" d="M120,180 Q390,64 660,180"/>
+            <circle class="nbox" cx="120" cy="200" r="20"/><text class="tmd" x="120" y="204" text-anchor="middle">A</text>
+            <circle class="nbox" cx="300" cy="200" r="20"/><text class="tmd" x="300" y="204" text-anchor="middle">B</text>
+            <circle class="nbox" cx="480" cy="200" r="20"/><text class="tmd" x="480" y="204" text-anchor="middle">C</text>
+            <circle class="nbox" cx="660" cy="200" r="20"/><text class="tmd" x="660" y="204" text-anchor="middle">D</text>
+            <text class="tm" x="24" y="238">6 video links · 3 × 600 kbps = <tspan class="tb">1.8 Mbps up</tspan> from every camera</text>
+
+            <line class="rule" x1="24" y1="258" x2="776" y2="258"/>
+
+            <text class="tt" x="24" y="296">Through the SFU · one up, N−1 down</text>
+            <rect x="310" y="320" width="180" height="48" rx="8" fill="var(--surface-2)" stroke="var(--relay)" stroke-width="1.6"/>
+            <text class="tb" x="400" y="340" text-anchor="middle">Cloudflare Realtime</text>
+            <text class="tmd c-rel" x="400" y="357" text-anchor="middle">decrypts in order to forward</text>
+
+            <path class="ln-relay" d="M110,450 L330,370" marker-end="url(#ar-relay)"/>
+            <path class="ln-relay" d="M290,450 L370,370" marker-end="url(#ar-relay)"/>
+            <path class="ln-relay" d="M470,450 L410,370" marker-end="url(#ar-relay)"/>
+            <path class="ln-relay" d="M650,450 L450,370" marker-end="url(#ar-relay)"/>
+            <path class="ln-video" d="M348,370 L130,450" marker-end="url(#ar-video)"/>
+            <path class="ln-video" d="M388,370 L310,450" marker-end="url(#ar-video)"/>
+            <path class="ln-video" d="M428,370 L490,450" marker-end="url(#ar-video)"/>
+            <path class="ln-video" d="M468,370 L670,450" marker-end="url(#ar-video)"/>
+            <circle class="nbox" cx="120" cy="470" r="20"/><text class="tmd" x="120" y="474" text-anchor="middle">A</text>
+            <circle class="nbox" cx="300" cy="470" r="20"/><text class="tmd" x="300" y="474" text-anchor="middle">B</text>
+            <circle class="nbox" cx="480" cy="470" r="20"/><text class="tmd" x="480" y="474" text-anchor="middle">C</text>
+            <circle class="nbox" cx="660" cy="470" r="20"/><text class="tmd" x="660" y="474" text-anchor="middle">D</text>
+            <text class="tm c-rel" x="24" y="404">up: 1 × 600 kbps</text>
+            <text class="tm c-vid" x="640" y="404">down: 3 × 600 kbps</text>
+            <text class="tm" x="24" y="506">Audio is identical in both: <tspan class="c-aud">6 peer-to-peer links</tspan>, never through the SFU.</text>
+          </svg>
+        </div>
+        <figcaption><b>Only the blue and amber lines move.</b> The decision is re-run whenever the roster changes — debounced 1.5 s and memoised on the participant count — so someone who started sharing in a two-person room is migrated when the third person arrives, rather than staying on a mesh for the life of the call. Migrating costs viewers a brief interruption in the picture; audio is untouched.</figcaption>
+      </figure>
+
+      <figure class="figbox">
+        <p class="eyebrow" style="margin-bottom:6px">Figure 7 · Uplink per publisher, camera at 600 kbps</p>
+        <div class="scroller">
+          <svg viewBox="0 0 760 336" role="img" aria-label="Grouped bar chart of uplink per publisher: the mesh grows from 1264 kbps at three participants to 4424 kbps at eight, while the SFU path stays between 664 and 824 kbps because only the audio mesh grows.">
+            <rect x="470" y="8" width="16" height="9" rx="2" fill="var(--video)"/>
+            <text class="tmd" x="492" y="17">full mesh</text>
+            <rect x="580" y="8" width="16" height="9" rx="2" fill="var(--relay)"/>
+            <text class="tmd" x="602" y="17">SFU (audio still meshed)</text>
+
+            <line class="ln-ink-d" x1="56" y1="208.7" x2="730" y2="208.7" opacity=".6"/>
+            <text class="tmd" x="56" y="203">1 Mbps</text>
+
+            <rect fill="var(--video)" x="86"  y="195.7" width="34" height="62.3"/>
+            <rect fill="var(--relay)" x="126" y="225.3" width="34" height="32.7"/>
+            <text class="tmd" x="103" y="189" text-anchor="middle">1264</text>
+            <text class="tmd" x="143" y="219" text-anchor="middle">664</text>
+
+            <rect fill="var(--video)" x="220" y="164.6" width="34" height="93.4"/>
+            <rect fill="var(--relay)" x="260" y="223.7" width="34" height="34.3"/>
+            <text class="tmd" x="237" y="158" text-anchor="middle">1896</text>
+            <text class="tmd" x="277" y="217" text-anchor="middle">696</text>
+
+            <rect fill="var(--video)" x="354" y="133.4" width="34" height="124.6"/>
+            <rect fill="var(--relay)" x="394" y="222.1" width="34" height="35.9"/>
+            <text class="tmd" x="371" y="127" text-anchor="middle">2528</text>
+            <text class="tmd" x="411" y="216" text-anchor="middle">728</text>
+
+            <rect fill="var(--video)" x="488" y="102.3" width="34" height="155.7"/>
+            <rect fill="var(--relay)" x="528" y="220.5" width="34" height="37.5"/>
+            <text class="tmd" x="505" y="96" text-anchor="middle">3160</text>
+            <text class="tmd" x="545" y="214" text-anchor="middle">760</text>
+
+            <rect fill="var(--video)" x="622" y="40" width="34" height="218"/>
+            <rect fill="var(--relay)" x="662" y="217.4" width="34" height="40.6"/>
+            <text class="tmd" x="639" y="34" text-anchor="middle">4424</text>
+            <text class="tmd" x="679" y="211" text-anchor="middle">824</text>
+
+            <line class="rule" x1="56" y1="258" x2="730" y2="258"/>
+            <text class="tmd" x="123" y="276" text-anchor="middle">3</text>
+            <text class="tmd" x="257" y="276" text-anchor="middle">4</text>
+            <text class="tmd" x="391" y="276" text-anchor="middle">5</text>
+            <text class="tmd" x="525" y="276" text-anchor="middle">6</text>
+            <text class="tmd" x="659" y="276" text-anchor="middle">8</text>
+            <text class="tmd" x="393" y="298" text-anchor="middle">people in the room</text>
+            <text class="tmd" x="56" y="322">kbps uploaded by one person with a camera on, audio included</text>
+          </svg>
+        </div>
+        <figcaption><b>The SFU line is nearly flat because only audio still grows.</b> At eight people the mesh asks for 4.4 Mbps up from every camera — past a normal home uplink — while the relayed path asks for 824 kbps, of which 224 kbps is the audio mesh that never leaves peer to peer. At two people both paths are identical (632 kbps), which is why the threshold sits where it does.</figcaption>
+      </figure>
+
+      <figure class="figbox">
+        <p class="eyebrow" style="margin-bottom:6px">Figure 8 · The SFU control plane</p>
+        <div class="scroller">
+          <svg viewBox="0 0 840 478" role="img" aria-label="Sequence diagram: the publisher mints a capability token from the sfu-session endpoint, negotiates through the sfu-track endpoint which holds the Cloudflare app secret, publishes media, then announces a providerRef over Voxal's own signalling star. The viewer mints its own token, pulls the remote track, answers Cloudflare's offer through the renegotiate endpoint, and receives media.">
+            <rect class="nbox" x="15" y="8" width="140" height="34" rx="6"/>
+            <text class="tb" x="85" y="30" text-anchor="middle">Publisher</text>
+            <rect class="nbox2" x="195" y="8" width="140" height="34" rx="6"/>
+            <text class="tb" x="265" y="30" text-anchor="middle">/api/sfu-session</text>
+            <rect class="nbox2" x="375" y="8" width="140" height="34" rx="6"/>
+            <text class="tb" x="445" y="30" text-anchor="middle">/api/sfu-track</text>
+            <rect class="nbox2" x="555" y="8" width="140" height="34" rx="6"/>
+            <text class="tb" x="625" y="30" text-anchor="middle">Cloudflare</text>
+            <rect class="nbox" x="725" y="8" width="110" height="34" rx="6"/>
+            <text class="tb" x="780" y="30" text-anchor="middle">Viewer</text>
+
+            <line class="lane" x1="85"  y1="46" x2="85"  y2="456"/>
+            <line class="lane" x1="265" y1="46" x2="265" y2="456"/>
+            <line class="lane" x1="445" y1="46" x2="445" y2="456"/>
+            <line class="lane" x1="625" y1="46" x2="625" y2="456"/>
+            <line class="lane" x1="780" y1="46" x2="780" y2="456"/>
+
+            <text class="tk" x="15" y="72">MAY I?</text>
+            <text class="tm" x="175" y="88" text-anchor="middle">{roomCode, participantId, kind, action: 'publish'}</text>
+            <line class="ln-ink" x1="85" y1="94" x2="265" y2="94" marker-end="url(#ar-ink)"/>
+            <text class="tmd" x="175" y="110" text-anchor="middle">capability · HMAC · 300 s · 30 per IP per minute</text>
+            <line class="ln-ink-d" x1="265" y1="116" x2="85" y2="116" marker-end="url(#ar-ink)"/>
+
+            <text class="tk" x="15" y="146">NEGOTIATE</text>
+            <text class="tm" x="265" y="162" text-anchor="middle">capability + offer + tracks[{location:'local', mid, trackName}]</text>
+            <line class="ln-ink" x1="85" y1="168" x2="445" y2="168" marker-end="url(#ar-ink)"/>
+            <text class="tm" x="535" y="184" text-anchor="middle">sessions/new → tracks/new</text>
+            <line class="ln-ink" x1="445" y1="190" x2="625" y2="190" marker-end="url(#ar-ink)"/>
+            <text class="tmd" x="535" y="206" text-anchor="middle">sessionId + answer</text>
+            <line class="ln-ink-d" x1="625" y1="212" x2="445" y2="212" marker-end="url(#ar-ink)"/>
+            <line class="ln-ink-d" x1="445" y1="234" x2="85" y2="234" marker-end="url(#ar-ink)"/>
+            <text class="tmd" x="265" y="228" text-anchor="middle">sessionDescription — the app secret never leaves the server</text>
+
+            <text class="tb c-rel" x="265" y="262" text-anchor="middle">media up — DTLS-SRTP</text>
+            <line class="ln-relay ln-thick" x1="85" y1="270" x2="625" y2="270" marker-end="url(#ar-relay)"/>
+
+            <text class="tk" x="15" y="300">TELL THE ROOM</text>
+            <text class="tm c-sig" x="432" y="316" text-anchor="middle">video-offer {topology:'sfu', providerRef:{sessionId, trackName}} — relayed by the host</text>
+            <line class="ln-sig" x1="85" y1="322" x2="780" y2="322" marker-end="url(#ar-sig)"/>
+
+            <text class="tk" x="15" y="352">VIEWER PULLS</text>
+            <text class="tm" x="522" y="368" text-anchor="middle">action: 'subscribe' → capability</text>
+            <line class="ln-ink" x1="780" y1="374" x2="265" y2="374" marker-end="url(#ar-ink)"/>
+            <text class="tm" x="612" y="396" text-anchor="middle">tracks[{location:'remote', sessionId, trackName}]</text>
+            <line class="ln-ink" x1="780" y1="402" x2="445" y2="402" marker-end="url(#ar-ink)"/>
+            <text class="tmd" x="612" y="418" text-anchor="middle">Cloudflare replies with an OFFER · requiresImmediateRenegotiation</text>
+            <line class="ln-ink-d" x1="445" y1="424" x2="780" y2="424" marker-end="url(#ar-ink)"/>
+            <text class="tm" x="612" y="440" text-anchor="middle">POST /api/sfu-renegotiate {answer}</text>
+            <line class="ln-ink" x1="780" y1="446" x2="445" y2="446" marker-end="url(#ar-ink)"/>
+            <text class="tb c-vid" x="702" y="466" text-anchor="middle">media down</text>
+            <line class="ln-video ln-thick" x1="625" y1="472" x2="780" y2="472" marker-end="url(#ar-video)"/>
+          </svg>
+        </div>
+        <figcaption><b>Two endpoints, and only one of them holds a secret.</b> <code>/api/sfu-session</code> is the cheap, rate-limited "may I?" — it never talks to Cloudflare. <code>/api/sfu-track</code> verifies that token and is the only place the Cloudflare app secret is used. The <code>providerRef</code> that names the track travels over Voxal's own signalling star; no Cloudflare data channel is used for application state.</figcaption>
+      </figure>
+
+      <div class="note">
+        <b>The relay is not the TURN relay.</b> A TURN server forwards opaque encrypted DTLS-SRTP and cannot decode it. An SFU decrypts media in order to forward it selectively — so with the default <em>Allow relay</em> setting, camera and screen in a room of three or more can technically be seen by Cloudflare. A <span class="mono">☁ Relayed</span> badge appears on those tiles. Voice is never affected under any setting.
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= WIRE ================= -->
+  <section>
+    <div class="sec-head">
+      <div class="kicker"><p class="eyebrow">Reference</p><span class="count">protocol v3</span></div>
+      <h2>What travels the star</h2>
+      <p class="prose" style="color:var(--ink-dim)">Every message below rides a <code>DataConnection</code>. Peers send to the host; the host is the only party that fans out.</p>
+    </div>
+    <div class="tablebox">
+      <table>
+        <thead><tr><th>Message</th><th>Direction</th><th>What it carries</th></tr></thead>
+        <tbody>
+          <tr><td><code>hello</code></td><td>joiner → host</td><td>pseudo, protocolVersion, appVersion</td></tr>
+          <tr><td><code>pseudo-assigned</code></td><td>host → peer</td><td>the name the host actually granted, de-duplicated</td></tr>
+          <tr><td><code>peer-list</code></td><td>host → peer</td><td>the whole roster, plus <code>hostId</code>, <code>deputyId</code>, <code>successorIds</code> — the authoritative view</td></tr>
+          <tr><td><code>peer-joined</code> / <code>peer-left</code> / <code>peer-renamed</code></td><td>host → all</td><td>roster deltas between full lists</td></tr>
+          <tr><td><code>talking</code></td><td>peer → host → all</td><td>push-to-talk state</td></tr>
+          <tr><td><code>heartbeat</code></td><td>host ↔ peers</td><td>every 2 s, carrying the successor chain again</td></tr>
+          <tr><td><code>video-offer</code> / <code>screen-offer</code></td><td>peer → host → all</td><td><code>topology</code> (<code>p2p</code> or <code>sfu</code>) and, when relayed, <code>providerRef</code></td></tr>
+          <tr><td><code>video-call-peer</code></td><td>host → P2P sharers</td><td>"a newcomer arrived — call them with your camera". Not sent for an SFU sharer: the newcomer subscribes on its own.</td></tr>
+          <tr><td><code>chat</code> / <code>chat-edit</code></td><td>peer → host → all, sender included</td><td>the host stamps sender and time, so the echo back is the ack</td></tr>
+          <tr><td><code>chat-history</code></td><td>host → joiner</td><td>the transcript so far, from the host's own replica</td></tr>
+          <tr><td><code>redirect</code></td><td>peer → joiner</td><td>"the host moved" — sent by a peer someone tried to join after a migration</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="prose" style="color:var(--ink-dim);font-size:13px;margin-top:16px">Drawn from <code>src/main.js</code>, <code>api/_sfu.js</code>, <code>docs/video-routing.md</code> and <code>docs/turn-and-ice.md</code>. Bitrates are the configured ceilings (<code>OPUS_MAX_BITRATE</code> 32 kbps, <code>CAMERA_MAX_BITRATE</code> 600 kbps, <code>SCREEN_MAX_BITRATE</code> 1.5 Mbps), not measured averages.</p>
+  </section>
+
+</div>
+</body>
+</html>

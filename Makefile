@@ -396,5 +396,6 @@ clean:
 
 docs:
 	@echo "Serving architecture docs on http://localhost:8090"
+	@echo "  flows: /architecture.html   topology diagrams: /topology.html"
 	@open http://localhost:8090/architecture.html 2>/dev/null || true
 	python3 -m http.server 8090 -d docs
