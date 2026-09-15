@@ -33,13 +33,18 @@ distinction from TURN relaying and the backend authorization model.
 three cases end to end — a voice-only room (join sequence, steady-state star vs.
 mesh, which server sees what, host migration), a two-peer video call, and video
 above two participants (mesh vs. SFU side by side, uplink cost, and the SFU
-control plane). The [flow explorer](https://erwannrobin.github.io/Voxal/architecture.html)
-covers the same system component by component.
+control plane). [Room Lab](https://erwannrobin.github.io/Voxal/topology-lab.html) is the
+interactive one: add people, hand out cameras, change the routing preference and
+watch the star, the mesh and the video links rearrange, with a log of the wire
+messages each action would send. The
+[flow explorer](https://erwannrobin.github.io/Voxal/architecture.html) covers the
+same system component by component.
 
-Both are served from GitHub Pages out of this folder. GitHub renders a `.html`
+All three are served from GitHub Pages out of this folder. GitHub renders a `.html`
 file in the repository as source, not as a page, so link the Pages URL rather
 than the file. Locally, `make docs` serves them on `http://localhost:8090`
-(sources: [`topology.html`](topology.html), [`architecture.html`](architecture.html)).
+(sources: [`topology.html`](topology.html), [`topology-lab.html`](topology-lab.html),
+[`architecture.html`](architecture.html)).
 
 ## Room lifecycle
 
