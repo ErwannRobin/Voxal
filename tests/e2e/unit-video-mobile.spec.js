@@ -833,16 +833,141 @@ test.describe('the immersive stage held sideways', () => {
     expect(seen.gapRight).toBe(0);
   });
 
-  // The thumb goes to the middle of the SCREEN, not to the middle of a group.
-  // Laid out as a plain centred row, the mic and the button beside it are
-  // centred together and the mic ends up left of the line.
-  test('the mic is on the centre line, whatever is beside it', async ({ page }) => {
-    await withVideo(page);
-    const centres = await page.evaluate(() => {
-      const b = document.getElementById('ptt-btn').getBoundingClientRect();
-      return { mic: Math.round(b.left + b.width / 2), screen: Math.round(window.innerWidth / 2) };
+  // Sideways, a room with a camera on IS the landscape room — same grid, same
+  // header row, same panel behind the same handle. The talk button is the one
+  // deliberate exception (see below), so the header is what this pins: it keeps
+  // the pixel it has when nobody is sharing anything, measured either side of a
+  // camera being switched on rather than asserted in a comment.
+  test('the room keeps its shape when a camera comes on', async ({ page }) => {
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true }],
     });
-    expect(Math.abs(centres.mic - centres.screen)).toBeLessThanOrEqual(1);
+    const header = () => page.evaluate(() => {
+      const r = document.querySelector('#screen-room .room-header').getBoundingClientRect();
+      return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)];
+    });
+    const voice = await header();
+    expect(await page.evaluate(() => document.body.classList.contains('video-stage'))).toBe(false);
+
+    await page.evaluate(() => {
+      const c = connections.get('p1');
+      c.videoActive = true;
+      c.remoteVideoStream = new MediaStream();
+      updatePeerList();
+    });
+    expect(await page.evaluate(() => document.body.classList.contains('video-stage-immersive'))).toBe(true);
+    expect(await header()).toEqual(voice);
+  });
+
+  // The talk button leaves the grid's talk column when there is a picture: the
+  // picture is the whole window, so the control it is for belongs on the centre
+  // line — where the thumb goes — with its buttons on ONE line underneath.
+  test('the talk button is on the centre line, its buttons on one line under it',
+    async ({ page }) => {
+      await withVideo(page);
+      // The camera and screen buttons are hidden until the room offers them;
+      // what is being measured here is the row, so show the row.
+      await page.evaluate(() => {
+        ['btn-share-camera', 'btn-share-screen'].forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) el.classList.remove('hidden');
+        });
+      });
+      const seen = await page.evaluate(() => {
+        const mic = document.getElementById('ptt-btn').getBoundingClientRect();
+        const row = document.querySelector('#screen-room .ctrl-row').getBoundingClientRect();
+        const btns = [...document.querySelectorAll('#screen-room .ctrl-row .room-action-btn')]
+          .filter((b) => !b.classList.contains('hidden'))
+          .map((b) => b.getBoundingClientRect());
+        return {
+          micCentre: Math.round(mic.left + mic.width / 2),
+          rowCentre: Math.round(row.left + row.width / 2),
+          screenCentre: Math.round(window.innerWidth / 2),
+          below: row.top >= mic.bottom,
+          count: btns.length,
+          // One line: every button shares a top edge.
+          tops: [...new Set(btns.map((b) => Math.round(b.top)))].length,
+          bottom: Math.round(window.innerHeight - row.bottom),
+        };
+      });
+      expect(Math.abs(seen.micCentre - seen.screenCentre)).toBeLessThanOrEqual(1);
+      expect(Math.abs(seen.rowCentre - seen.screenCentre)).toBeLessThanOrEqual(1);
+      expect(seen.below).toBe(true);
+      expect(seen.count).toBeGreaterThanOrEqual(3);
+      expect(seen.tops).toBe(1);
+      expect(seen.bottom).toBeGreaterThan(0);
+    });
+
+  // The participants are a whole panel again — opaque, full height, off the
+  // screen until its handle is pulled. Not a column of floating cards standing
+  // on the picture, which is what a rail down the left turned them into.
+  test('the participants are a whole panel behind their handle', async ({ page }) => {
+    await withVideo(page);
+    const state = () => page.evaluate(() => {
+      const el = document.getElementById('room-peers-panel');
+      const r = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      return {
+        right: Math.round(r.right), width: Math.round(r.width),
+        position: cs.position, bg: cs.backgroundColor,
+        handle: getComputedStyle(document.getElementById('stage-handle-roster')).display,
+      };
+    });
+    const parked = await state();
+    expect(parked.right).toBeLessThanOrEqual(0);        // off the left edge
+    expect(parked.position).toBe('fixed');
+    expect(parked.handle).toBe('flex');                  // …and a handle to pull
+    // Opaque: a panel, not a wash over the video behind it.
+    expect(parked.bg).not.toContain('rgba');
+    expect(parked.bg).not.toBe('transparent');
+
+    await page.evaluate(() => setStagePanel('roster', true));
+    await expect.poll(async () => (await state()).right).toBe(parked.width);
+  });
+
+  // The control stack stands in a band at the bottom of the picture, so that is
+  // what the stage has to keep clear — for the self-view, and for the ribbon.
+  test('the stage margin is the band the controls stand in', async ({ page }) => {
+    await withVideo(page);
+    const seen = await page.evaluate(() => {
+      const cs = getComputedStyle(document.documentElement);
+      const bar = document.querySelector('#screen-room .room-bottom-bar').getBoundingClientRect();
+      const stage = document.getElementById('video-stage').getBoundingClientRect();
+      return {
+        bottom: cs.getPropertyValue('--stage-inset-bottom').trim(),
+        top: cs.getPropertyValue('--stage-inset-top').trim(),
+        band: Math.round(stage.bottom - bar.top) + 'px',
+        header: Math.round(
+          document.querySelector('#screen-room .room-header').getBoundingClientRect().bottom
+          - stage.top) + 'px',
+      };
+    });
+    expect(seen.bottom).toBe(seen.band);
+    expect(seen.top).toBe(seen.header);
+  });
+
+  // A tap on the picture still clears the chrome — and the mic, which is not
+  // chrome, does not move a pixel while it happens.
+  test('a tap clears the chrome without moving the talk button', async ({ page }) => {
+    await withVideo(page);
+    const mic = () => page.evaluate(() => {
+      const b = document.getElementById('ptt-btn').getBoundingClientRect();
+      return [Math.round(b.x), Math.round(b.y)];
+    });
+    const before = await mic();
+    await page.evaluate(() => setStageChrome(true));
+    await page.waitForTimeout(350);
+    const seen = await page.evaluate(() => ({
+      header: getComputedStyle(document.querySelector('#screen-room .room-header')).visibility,
+      controls: getComputedStyle(document.querySelector('#screen-room .room-controls')).visibility,
+      handles: getComputedStyle(document.getElementById('stage-handle-roster')).display,
+      // The header keeps its space — it is a row of the room's grid here, not a
+      // band lying on the picture, so pulling it out would reflow the room.
+      insetTop: getComputedStyle(document.documentElement).getPropertyValue('--stage-inset-top').trim(),
+    }));
+    expect(seen).toEqual({ header: 'hidden', controls: 'hidden', handles: 'none', insetTop: '0px' });
+    expect(await mic()).toEqual(before);
   });
 
   // Sideways carries the same glass as upright — it used to be the only place
@@ -865,9 +990,10 @@ test.describe('the immersive stage held sideways', () => {
     }
   });
 
-  // Sideways there is no voice layout to match, so both lines go entirely:
-  // reserved, the sentence lifts the mic off the bottom of a 390px screen and
-  // its width shoves the buttons a hundred pixels out from the mic.
+  // Both lines go — space, not just ink. They sit BETWEEN the mic and its
+  // buttons, and on a 390px screen that gap is what pushes the buttons up into
+  // the picture. Upright they are reserved so the mic keeps the pixel it has in
+  // a voice room; sideways the talk button has left that column anyway.
   test('the hint and the status line take no room at all', async ({ page }) => {
     await withVideo(page);
     expect(await page.evaluate(() => ({

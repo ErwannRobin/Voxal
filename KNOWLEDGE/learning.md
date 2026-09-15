@@ -282,7 +282,33 @@ Copilot should read this file at the start of every session.
   - **On your own row the icon shows/hides your *self-view*, and must not touch the stream.** It briefly called `startVideoShare`/`stopVideoShare` and that was wrong: the footer Camera button already owns whether you transmit, and two controls for one stream is how you end up switching off a camera you only meant to stop looking at. It toggles `camera:self` in the same `_hiddenStageKeys` set as everyone else, and is therefore only rendered where a self-view exists to hide — `localVideoActive && videoStageAvailable()`, never as an "off" affordance for a camera that is not on.
 - **The stage and the floating viewer are alternatives, never both.** `videoStageAvailable()` gates on `IS_TINY_EMBED`, `html.is-web` and a `matchMedia('(min-width: 861px)')` check, matching the CSS. Where it is false — mobile, tiny embed, narrow web (**and, until the desktop-window work below, Tauri desktop**, which was on its WebviewWindow pop-out) — the icon opens/closes `openVideoViewer()`/`openScreenViewer()`; where it is true the same press shows/hides that peer's tile. Both readings are "am I watching this person", which is why one icon can carry both.
 - **The self-view is a draggable badge, not a tile — except when it is the only camera.** `selfBadgeTileKey()` minimizes `camera:self` into `#video-stage-self` whenever another *camera* tile is visible (a screen share doesn't count — alone with someone's screen you are still the only face), and an explicit pin outranks minimising in either direction. `renderVideoStage()` gained a third container and routes by key, so the badge↔grid transition **moves the same element** and never reassigns `srcObject` (which would flash the tile — the counting test now covers this path too).
-  - **Corner-anchored, not free-floating.** Dropping the badge at an arbitrary offset means the next window resize parks it over someone's face; four `[data-corner]` CSS rules survive every size with no state to recompute, so the drag is really a *pick a corner* gesture that snaps on release (by the badge's **centre**, so the snap lands where it looks like you let go).
+  - **Edge-anchored, not free-floating — and four corners were not enough.** Dropping the badge at an arbitrary offset means the next window resize parks it over someone's face, so it is anchored. The first version anchored it to the four **corners**, and that read as a bug: let go halfway down a side and it flew off to a corner you did not pick. It now stores an **edge plus a fraction along it** (`left:0.42`), which survives every size for the same reason a corner does — there is nothing to recompute, only a fraction to multiply — while landing where you actually let go. Still decided by the badge's **centre**, so the snap is where it looks like you dropped it.
+    - `selfBadgePlacementFor()` and `selfBadgeOffsets()` are pure and are exact inverses, via the one `_selfBadgeTravel()` that both read. They must be: anything else and the badge drifts a few pixels every time it is picked up and put down.
+    - The offsets are **inline**, written by `applySelfBadgePlacement()` from measured boxes; the `[data-corner]` rules in the stylesheet are only the fallback that holds the badge before it has ever been measured (it is `hidden`, so unmeasurable, until the render that reveals it — hence the explicit call at the END of `renderVideoStage()`, after the layout).
+    - **Do not hand the badge back to the stylesheet before re-placing it.** `applySelfBadgePlacement()` measures, and measuring flushes layout — so clearing the inline offsets first makes the badge visibly jump to a corner and animate back from there.
+  - **`touch-action: none` on the badge is not enough to own the gesture.** It is
+    read off the element the touch **started** on, and the press that reaches
+    the badge sometimes starts somewhere else: parked beside the mic (or tucked
+    under the bottom edge) the badge lies *under* the control bar, which
+    forwards the press (`selfBadgeAtPoint()`). The bar says `manipulation`
+    (inherited from `body`), so the browser panned the room out from under the
+    drag. Three things fix it, and all three are needed:
+    - a non-passive `touchmove` on `document` that `preventDefault()`s for the
+      length of the drag (a *passive* listener may not call it at all);
+    - `touch-action: none` on the bar itself while the badge is parked there
+      (`body.self-badge-on-bar`), because on WebKit the compositor decides at
+      **touchstart** whether it may scroll, and by the first `touchmove` it can
+      be too late;
+    - `setPointerCapture()` — but **only once the press has become a drag**, past
+      `SELF_BADGE_DRAG_SLOP`. A captured pointer delivers its `click` to the
+      capturing element, so capturing at `pointerdown` silently took
+      click-to-pin away from the tile inside the badge. The test for the plain
+      click is what caught it.
+  - **`pointercancel` is not `pointerup`.** The system taking the gesture back (a
+    second finger, an edge swipe, a call arriving) is not a choice of where the
+    badge goes, so it restores the stored placement instead of committing
+    wherever the drag had reached.
+  - **Dragged off the stage, it tucks rather than springing back.** Pushed past a border by more than `SELF_BADGE_TUCK_MIN`, the drop leaves it under that border with `SELF_BADGE_PEEK` showing. That sliver is a *handle*, not a picture: its own controls are hidden, and the click-to-pin every tile carries is swallowed there — a tap means "bring it back", which is the only way back in. The drag itself is clamped to leave that same sliver, so a badge can never be pushed somewhere no pointer can reach it.
   - **Listen for `pointermove`/`pointerup` on the window, not on the badge.** The pointer routinely leaves a 200px badge mid-drag; a `pointerup` delivered elsewhere would leave it glued to the cursor. The listeners are added on `pointerdown` and removed on release.
   - **A drag ends with a `click`, and every tile has a click-to-pin handler**, so moving the badge would also blow it up into the focus slot. A capture-phase listener on the badge swallows exactly that one click when the pointer moved more than `SELF_BADGE_DRAG_SLOP`; a genuine click still pins.
 - **Every tile is `muted`.** Audio travels on its own MediaConnection and is already played by the audio pipeline; an unmuted tile double-plays every voice.
@@ -484,6 +510,85 @@ The single worst thing in this round, and it had been shipping:
   are `display: none`: there is no voice layout to line up with there anyway.
 - **No slab sideways.** One short row of controls does not need a blurred plank
   covering a third of a face behind it; the controls carry the glass themselves.
+
+### Sideways again: the chrome is a column, and a fit is two limits
+
+- **A handle that rides its panel's edge must not add the safe-area inset.** The
+  panels are anchored at `left: 0` / `right: 0` and carry the inset as
+  **padding**, so the visible edge is the width and nothing else. The open-state
+  handle offsets added `max(env(safe-area-inset-*), 0px)` on top of the width,
+  which is zero in portrait — where it was checked — and 44–59px on a notched
+  phone **sideways**, exactly where the user saw the handle floating in the
+  picture attached to nothing. Closed, the inset is right: that keeps the tab out
+  from under the notch.
+- **`@media (min-width: 640px)` is a phone on its side.** A landscape phone is
+  844px wide, so the block meant to grow the talk button for a tablet grew it to
+  96px on a 390px-tall screen — while the same phone's *video* room drew it at 62,
+  because the immersive landscape block says so. A room must not resize the
+  control the whole app is for because a camera came on. The landscape voice grid
+  now pins the same 62.
+- **Sideways the chrome is a rail, not two bands.** A header across the top and a
+  row of buttons across the bottom cost a 390px-tall screen a third of its
+  height; sideways there is width to spare instead. Both are one fixed column
+  down the left, the talk button stays bottom-centre (the thumb goes to the
+  middle of the *screen*), and the rail starts inboard of the roster handle so
+  the two are never on the same pixels.
+  - The buttons are `position: fixed`, which takes them **out of the bottom
+    bar's grid** — so the bar shrinks to the mic, and `--stage-inset-bottom`
+    hands that height back to the ribbon and the self-view.
+  - Which edge the chrome is on is **measured, not re-derived from the media
+    query**: a header narrower than 60% of the stage IS the rail. That is what
+    moves the stage's no-go margin from `--stage-inset-top` to
+    `--stage-inset-left` — one or the other, never both — so the self-view
+    clears the chrome sideways the same way it clears the header upright.
+  - The rail leaves sideways (`translateX`), so its **vertical** geometry stays
+    true while the chrome is away; `--stage-rail-top` (the header's measured
+    bottom, in viewport coordinates, since the buttons are fixed too) is
+    published even then, or the stack jumps before it slides out.
+- **The rail was the wrong idea, twice over, and the fix was a deletion.** First
+  it grew a roster of its own beside the sliding panel (two left columns), then
+  the panel was docked into it (one column, but a column of floating cards that
+  looked like nothing else in the app). What was actually wanted was already
+  written: the **landscape voice reflow**. Sideways, a room with a camera on is
+  that room — the same grid, the same header row, the same talk column, the same
+  participants panel behind the same handle — with the picture as a LAYER behind
+  it (`#video-stage` at `z-index: 0`, the chrome at 21). Every rail rule, both
+  roster implementations, `--rail-x`/`--rail-w`, `--stage-rail-top`,
+  `--stage-rail-peers-top` and two JS helpers went; the landscape rules simply
+  stopped excluding video.
+  - The exclusion is now `:not(.video-stage-desktop)` — the DESKTOP stage is the
+    one regime with a room shape of its own — and `updateVideoStage()` publishes
+    that class. "Not the desktop stage" is the honest condition; "has video at
+    all" never was.
+  - The test that matters measures the two on one page, either side of a camera
+    being switched on: header, bar, mic, controls and hint must land on the same
+    pixels.
+  - A header that is a grid ROW cannot hide by sliding: `translateY(-100%)` moves
+    it by its own height and leaves the top of it on screen (a fixed band ran off
+    the top because its height WAS its offset). Ink, not space — `visibility`.
+  - **The talk button is the exception, and the button row is why.** Everything
+    else went back to the landscape room's own places; the mic did not stay in
+    its 1/3 column because the three labelled buttons under it do not fit in
+    263px — wrapped, they walk up the screen. It takes the bottom of the room,
+    full width and centred, which is also where the thumb goes when the picture
+    is the whole window. The inset stays a single bottom band in both
+    orientations, so the measurement stayed simple: the side-column branch
+    written for the rail was dead the moment the mic came back to the middle,
+    and went.
+- **One crop limit is not enough, and the symmetry is a trap.** Fitting a picture
+  to a tile by the ratio mismatch alone cannot tell a phone held upright showing
+  a 16:9 camera (mismatch 3.85, and cropping the sides is what every video call
+  does) from a phone held sideways showing an upright camera (mismatch 3.84, and
+  cropping the ends takes the head off). They are the same number. So
+  `stageVideoFit()` picks its limit from the DIRECTION of the crop: a tile
+  narrower than the picture loses the sides and is allowed 4×; a tile wider loses
+  the top and bottom and is allowed 1.4×. A shared screen is never cropped at
+  any shape.
+  - The intrinsic size arrives with the **first frame**, not with the element, so
+    the choice is re-made on `loadedmetadata` and `resize` as well as on every
+    layout pass, and the stylesheet's `object-fit` is the answer until then.
+    Starting from `contain` means the worst case is a moment of black bars;
+    starting from `cover` would be a moment of somebody's cropped face.
 
 ### Running the suite in this container (updated)
 

@@ -125,6 +125,41 @@ tiles never reflow when it moves: `applyImmersiveStageInsets()` pins the grid's
 height) only for things that must clear it — the self-view badge's top corners
 and the self camera tile's own flip/background buttons.
 
+**Sideways, a room with a camera on IS the landscape room.** The landscape
+reflow (`@media (orientation: landscape) and (max-height: 600px)`) is the room's
+layout whether or not anybody is sharing: same grid, header across the top, talk
+column on one side (`data-hand` picks which), participants behind their handle.
+It is qualified `:not(.video-stage-desktop)` — the **desktop** stage is the one
+regime with a room shape of its own, and `updateVideoStage()` publishes that
+class for it. What video adds is a LAYER, not a layout: `#video-stage` is
+absolute against the room at `z-index: 0`, so the picture fills the window and
+the room's own chrome stands on it (header and talk column at `z-index: 21`,
+panels at 40). A control the user has already learned never moves because a
+picture arrived.
+
+The talk button is the one deliberate exception, and it earns it: the picture is
+the whole window sideways, so it leaves the grid's talk column and takes the
+bottom of the room, full width and centred, with its buttons on ONE line
+underneath (three labelled buttons do not fit in a 263px column, and wrapped
+they walk up the screen). The hint and the status line are `display: none`
+there for the same reason — they sit between the mic and that row. So
+`--stage-inset-bottom` is the band the controls stand in, in both orientations,
+and `--stage-inset-top` is the header's bottom.
+
+In that layout the header is a row of the room's grid, so hiding the chrome
+takes its **ink, not its space** (`visibility`), exactly as the control row does
+— sliding it by its own height would leave the top of it on screen, and pulling
+it out of the flow would reflow the room.
+
+**A picture fills its tile, unless the crop is one you cannot afford.**
+`stageVideoFit()` chooses `object-fit` per tile from the picture's own shape
+against the tile's, and it uses TWO limits because the two crops differ: a tile
+narrower than the picture loses the sides (a face is in the middle — allowed
+generously) while a tile wider loses the top and bottom (that is the head —
+barely allowed at all). A shared screen is never cropped at any shape.
+`applyStageVideoFit()` re-runs on every layout pass and on each video's
+`loadedmetadata`, since the intrinsic size arrives with the first frame.
+
 `.room-bottom-bar` itself **paints nothing** in video mode: there is no slab
 behind the controls, in either orientation. Each control carries the glass
 instead (`--glass-tint` / `--glass-sheen` / `--glass-blur`, declared on the bar),
@@ -139,7 +174,8 @@ never `display`; a border goes `transparent`, never `none`). The bar is
 bottom-anchored, so anything that collapses drags the talk button down — and the
 mic has to be on the same pixel in a voice room and a video one. Upright the hint
 and the status line are therefore reserved; **sideways** they are `display: none`,
-because there is no voice layout to line up with there.
+because the talk button has left the landscape room's talk column and there is no
+line-up left to keep.
 
 `--stage-safe-top` (`:root`, floored at 24px under `html.is-native`) is what
 keeps the header's buttons clear of an overlaid status bar. The immersive stage
@@ -221,7 +257,7 @@ off↔on at all. See `docs/video-effects.md`.
 | `chat-width` | `CHAT_WIDTH_KEY` | Width of the chat drawer in px, set by dragging its separator (`#chat-resizer`). Clamped to `CHAT_WIDTH_MIN`–`CHAT_WIDTH_MAX` and to 90% of the window on read, so a narrower window never leaves the drawer hanging off |
 | `chat-collapsed` | `CHAT_COLLAPSED_KEY` | Present (`1`) only when the drawer was deliberately folded away. Absent means "never chosen" = expanded, which is what makes a desktop room open the chat on entry (`chatOpensOnEntry()` → `applyChatAutoOpen()`, called from `showScreen('room')`). Written by the collapse icon in the chat header and by the edge handle — never by leaving a room. A close that did not go through those still suppresses the auto-open for the rest of that room, via `_chatCollapsedHere` |
 | `emoji-recent` | `EMOJI_RECENT_KEY` | The emoji picker's Recent row, most recent first, capped at `EMOJI_RECENT_MAX`. Seeded from `CHAT_REACTIONS` rather than starting empty |
-| `self-video-corner` | `SELF_VIDEO_CORNER_KEY` | Where the minimized self-view badge was dragged: a corner of the stage (`tl` / `tr` / `bl` / `br`), or the band either side of the mic on a phone (`barl` / `barr`). A band slot exists only while `selfBadgeBarSlots()` measures room for it; a badge parked in one is drawn at a corner meanwhile, without losing the choice (`effectiveSelfBadgeCorner()`) |
+| `self-video-corner` | `SELF_VIDEO_CORNER_KEY` | Where the minimized self-view badge was dragged. An edge of the stage and how far along it, as `<side>:<pos>` (`left` / `right` / `top` / `bottom`, `pos` `0`–`1`) — with `:tuck` appended when it was pushed off that border and left there, showing only `SELF_BADGE_PEEK` of itself. Or the band either side of the mic on a phone (`barl` / `barr`), which exists only while `selfBadgeBarSlots()` measures room for it; a badge parked in one is drawn at an edge meanwhile, without losing the choice (`effectiveSelfBadgePlacement()`). A corner written by an older build (`tl` / `tr` / `bl` / `br`) still reads as the same spot |
 | `room-active` | `ROOM_ACTIVE_KEY` | Transient. Main window → preferences window: a call is live, so `settings.html` must not run its `getUserMedia` device-label probe (it would kill the call). Cleared on leave and on load |
 | `echo-test-request` | `ECHO_BRIDGE_REQUEST_KEY` | Transient. Desktop preferences window → main window: `{action:'start'\|'stop', at}` (see below) |
 | `echo-test-state` | `ECHO_BRIDGE_STATE_KEY` | Transient. Main window → preferences window: `{running, text, kind, at}` |
