@@ -121,6 +121,7 @@ Room flow (high level):
 - [Required checks — no merge on red tests](docs/required-checks.md)
 - [iframe embed parameters and bridge](docs/iframe-embed.md)
 - [LLM integration prompts — ready-made prompts for coding agents](docs/prompts.md)
+- [Room Lab — build a room and watch the links form](https://erwannrobin.github.io/Voxal/topology-lab.html) (source: [`docs/topology-lab.html`](docs/topology-lab.html))
 - [Ring a friend — design proposal (not implemented)](docs/ring-a-friend.md)
 - [Recent daily updates](docs/updates/2026-06-15.md)
 
