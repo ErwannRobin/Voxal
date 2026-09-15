@@ -108,9 +108,19 @@ Room flow (high level):
 4. Camera and screen-share form their own independent link sets, which `selectVideoTopology()` may route through the SFU instead.
 5. If host disconnects, successor/deputy migration elects a new host without dropping active media links.
 
+**See it drawn:** [topology diagrams](https://erwannrobin.github.io/Voxal/topology.html) — the join
+sequence, star vs. mesh at four people, what each server sees, host migration, and how video
+changes above two participants. [Room Lab](https://erwannrobin.github.io/Voxal/topology-lab.html)
+lets you build a room yourself and watch the links form, and the
+[flow explorer](https://erwannrobin.github.io/Voxal/architecture.html) walks the same system
+component by component.
+
 ## Documentation
 
 - [Architecture & protocol](docs/architecture.md)
+- [Topology diagrams — voice room, two-peer video, larger rooms](https://erwannrobin.github.io/Voxal/topology.html) (source: [`docs/topology.html`](docs/topology.html))
+- [Architecture flow explorer](https://erwannrobin.github.io/Voxal/architecture.html) (source: [`docs/architecture.html`](docs/architecture.html))
+- [Room Lab — build a room and watch the links form](https://erwannrobin.github.io/Voxal/topology-lab.html) (source: [`docs/topology-lab.html`](docs/topology-lab.html))
 - [Host migration deep dive](docs/host-migration.md)
 - [Video routing — mesh vs. SFU, and why audio never relays](docs/video-routing.md)
 - [Camera background effects](docs/video-effects.md)
