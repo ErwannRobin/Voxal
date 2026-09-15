@@ -18,21 +18,30 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Voxal" />
 
-    <!-- Open Graph -->
+    <!-- Open Graph.
+         The image and canonical URL MUST point at a host that actually
+         resolves: a scraper cannot follow a dead name, and a shared room link
+         then previews with no card at all. `ptt.voxal.app` was the static host
+         once and no longer has a DNS record — `web.voxal.app` is the one
+         `VOXAL_WEB_URL` in main.js hands out, so the card lives there too. -->
     <meta property="og:type"        content="website" />
     <meta property="og:site_name"   content="Voxal" />
     <meta property="og:title"       content="Join a Voxal room" />
     <meta property="og:description" content="P2P push-to-talk — no account, no server. Works in any browser." />
-    <meta property="og:image"       content="https://ptt.voxal.app/assets/social-card.png" />
-    <meta property="og:image:width" content="1200" />
-    <meta property="og:image:height" content="630" />
-    <meta property="og:url"         content="https://ptt.voxal.app" />
+    <meta property="og:image"            content="https://web.voxal.app/assets/social-card.png" />
+    <meta property="og:image:secure_url" content="https://web.voxal.app/assets/social-card.png" />
+    <meta property="og:image:type"       content="image/png" />
+    <meta property="og:image:width"      content="1200" />
+    <meta property="og:image:height"     content="630" />
+    <meta property="og:image:alt"        content="Voxal — push-to-talk voice chat" />
+    <meta property="og:url"         content="https://web.voxal.app/" />
 
     <!-- Twitter / X -->
     <meta name="twitter:card"        content="summary_large_image" />
     <meta name="twitter:title"       content="Join a Voxal room" />
     <meta name="twitter:description" content="P2P push-to-talk — no account, no server. Works in any browser." />
-    <meta name="twitter:image"       content="https://ptt.voxal.app/assets/social-card.png" />
+    <meta name="twitter:image"       content="https://web.voxal.app/assets/social-card.png" />
+    <meta name="twitter:image:alt"   content="Voxal — push-to-talk voice chat" />
 
     <link rel="stylesheet" href="styles.css" />
     <script src="version.js"></script>

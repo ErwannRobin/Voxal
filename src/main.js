@@ -487,7 +487,12 @@ function handleDeepLink(urlStr) {
   try {
     const url = new URL(urlStr);
 
-    // ── Universal Links: https://ptt.voxal.app/*?room=<id> (and voxal.app aliases) ──
+    // ── Universal Links: https://web.voxal.app/*?room=<id> (and voxal.app aliases) ──
+    //
+    // `ptt.voxal.app` stays on this list although the name no longer resolves:
+    // an installed build cannot un-share the invites it already handed out, and
+    // a host we refuse here is a link that dead-ends instead of joining. It is
+    // an ACCEPTED alias only — nothing we hand out points at it any more.
     if ((url.protocol === 'https:' || url.protocol === 'http:') &&
         (url.hostname === 'ptt.voxal.app' ||
          url.hostname === 'voxal.app' ||
@@ -925,12 +930,12 @@ function applyIframeConfig(msg) {
 // secret and hands out SHORT-LIVED credentials (see api/ice-servers.js). This is
 // what gives users with no account a working relay.
 
-const DEFAULT_ANON_TURN_URL = 'https://ptt.voxal.app/api/ice-servers';
+const DEFAULT_ANON_TURN_URL = 'https://web.voxal.app/api/ice-servers';
 
 // Where to ask for anonymous credentials.
 //   - explicit override wins (self-hosters, tests);
 //   - on plain web over http(s) use a SAME-ORIGIN path, so a self-hosted deploy
-//     automatically uses its own endpoint rather than ptt.voxal.app's quota;
+//     automatically uses its own endpoint rather than web.voxal.app's quota;
 //   - native (Capacitor/Tauri) has no same-origin server — the page is loaded
 //     from capacitor:// or the Tauri asset protocol — so it needs the absolute URL.
 function anonymousTurnUrl() {
@@ -945,9 +950,9 @@ function anonymousTurnUrl() {
 // Same same-origin-on-web / absolute-on-native resolution as anonymousTurnUrl()
 // above, plus a JSON override for the mesh E2E harness. This never applies to
 // audio — see VIDEO_ROUTING_KEY.
-const DEFAULT_SFU_SESSION_URL     = 'https://ptt.voxal.app/api/sfu-session';
-const DEFAULT_SFU_TRACK_URL       = 'https://ptt.voxal.app/api/sfu-track';
-const DEFAULT_SFU_RENEGOTIATE_URL = 'https://ptt.voxal.app/api/sfu-renegotiate';
+const DEFAULT_SFU_SESSION_URL     = 'https://web.voxal.app/api/sfu-session';
+const DEFAULT_SFU_TRACK_URL       = 'https://web.voxal.app/api/sfu-track';
+const DEFAULT_SFU_RENEGOTIATE_URL = 'https://web.voxal.app/api/sfu-renegotiate';
 
 function _sfuServerOverride() {
   try {
@@ -18183,7 +18188,7 @@ window.addEventListener('DOMContentLoaded', function() {
   }
 
   // iOS/Android: deep links come back via @capacitor/app appUrlOpen.
-  // Handles both voxal:// custom scheme and https://ptt.voxal.app App Links.
+  // Handles both voxal:// custom scheme and https://web.voxal.app App Links.
   if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
     var CapApp = window.Capacitor.Plugins.App;
     CapApp.addListener('appUrlOpen', function(data) {

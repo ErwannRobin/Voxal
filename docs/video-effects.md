@@ -428,7 +428,7 @@ URL of the static site:
 - **Web** — same-origin `assets/seg/`. No CORS involved, and the existing
   `Cross-Origin-Embedder-Policy: require-corp` header is satisfied for free.
 - **Tauri** — same-origin too, because the runtime is inside the app bundle.
-- **Capacitor** — `https://ptt.voxal.app/assets/seg/`, overridable with
+- **Capacitor** — `https://web.voxal.app/assets/seg/`, overridable with
   `localStorage['seg-assets-url']` for self-hosters and tests. This fetch is
   cross-origin from `capacitor://localhost`, which is why `vercel.json` sets
   `Access-Control-Allow-Origin: *` on `/assets/seg/(.*)`. That path is also
@@ -436,9 +436,12 @@ URL of the static site:
   kept in CacheStorage (`voxal-seg-v1`) and handed to MediaPipe as a blob URL,
   so it is downloaded once per device rather than once per launch.
 
-> **`ptt.voxal.app`, not `voxal.app`.** The static site is served from
-> `ptt.voxal.app` — the same host `DEFAULT_ANON_TURN_URL` and the SFU endpoints
-> point at. `presenceBase()` / `localStorage['service-url']` is the *presence
+> **`web.voxal.app`, not `voxal.app`.** The static site is served from
+> `web.voxal.app` — the same host `DEFAULT_ANON_TURN_URL` and the SFU endpoints
+> point at. (It was `ptt.voxal.app` until that name lost its DNS record; a host
+> that does not resolve fails exactly as loudly as the wrong host does, which is
+> to say not at all.)
+> `presenceBase()` / `localStorage['service-url']` is the *presence
 > API*, which defaults to a Supabase edge function and has never served static
 > assets. Pointing the runtime at it is invisible on the web (same-origin wins
 > there) and breaks the feature outright on the apps.

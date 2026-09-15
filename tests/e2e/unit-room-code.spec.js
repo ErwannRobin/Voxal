@@ -13,11 +13,11 @@ test.describe('normalizeRoomCode', () => {
   });
 
   test('extracts the room UUID from a full invite URL', async ({ page }) => {
-    expect(await callFn(page, 'normalizeRoomCode', `https://ptt.voxal.app/?room=${UUID}`)).toBe(UUID);
+    expect(await callFn(page, 'normalizeRoomCode', `https://web.voxal.app/?room=${UUID}`)).toBe(UUID);
   });
 
   test('decodes a percent-encoded room param', async ({ page }) => {
-    const code = await callFn(page, 'normalizeRoomCode', `https://ptt.voxal.app/?room=${encodeURIComponent(UUID)}`);
+    const code = await callFn(page, 'normalizeRoomCode', `https://web.voxal.app/?room=${encodeURIComponent(UUID)}`);
     expect(code).toBe(UUID);
   });
 

@@ -1533,3 +1533,28 @@ seems too sharp".
   it went red purely on the clock. A test about calendar days has to be anchored
   to one (yesterday midday), never to an offset in hours.
 
+
+- **A link preview dies silently on a dead hostname.** Sharing
+  `https://web.voxal.app/?room=demo` showed no card because `index.html`'s
+  `og:image`/`twitter:image`/`og:url` still pointed at `ptt.voxal.app`, which
+  **has no DNS record any more** (`web.voxal.app` resolves to Vercel;
+  `ptt.voxal.app` is `NXDOMAIN`). A scraper that cannot resolve the image host
+  just drops the image — there is no error anywhere, and the page itself is
+  perfectly healthy, so the bug looks like "OG is broken" rather than "one host
+  is gone". When a preview misbehaves, resolve every absolute URL in the head
+  before reading any code: `getent hosts <host>` is the whole test.
+  Same reason the OG host should be the one `VOXAL_WEB_URL` hands out — the
+  domain people are actually sent to is the domain the card must live on.
+  The card was only the visible half. The same dead host was also the mobile
+  seg-assets base (`video-effects.js`), the native anon-TURN and SFU endpoints
+  (`main.js`), the Website button in `about.html`, and the iOS/Android
+  associated-domain declarations — all moved to `web.voxal.app` too. Two of
+  those do **not** take effect by deploying: an entitlement and an intent-filter
+  live in the binary, so Universal Links and App Links stay broken on every
+  installed build until it is replaced and re-verified.
+
+  The one place the retired host must STAY is `handleDeepLink()`'s accepted-host
+  list. A shipped build cannot un-share the invites it already handed out, so a
+  retired host is removed from what you *hand out* long before it is removed
+  from what you *accept* — `unit-deep-link-auth.spec.js` pins that asymmetry so
+  a later tidy-up does not quietly break old links.

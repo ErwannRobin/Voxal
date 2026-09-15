@@ -583,12 +583,17 @@ var VideoEffects = (function () {
   //     absolute URL of the static site.
   //
   // That last line is the one that matters: this must point at the host serving
-  // src/, which is ptt.voxal.app. It is NOT presenceBase()/`service-url` —
+  // src/, which is web.voxal.app. It is NOT presenceBase()/`service-url` —
   // that is the presence API, which defaults to a Supabase edge function and
   // has never served static assets. Getting this wrong is silent on the web and
   // breaks the whole feature on the desktop and mobile apps.
+  //
+  // It was `ptt.voxal.app` until that name lost its DNS record, which is
+  // exactly the failure this comment warns about wearing a different hat: a
+  // host that cannot be resolved is as useless as a host that serves the wrong
+  // thing, and both are invisible from a browser tab.
 
-  var DEFAULT_SEG_BASE = 'https://ptt.voxal.app/' + ASSET_DIR;
+  var DEFAULT_SEG_BASE = 'https://web.voxal.app/' + ASSET_DIR;
   var SEG_BASE_KEY = 'seg-assets-url';
 
   function isTauri() { return !!window.__TAURI__; }

@@ -91,7 +91,10 @@ test.describe('voxal://join', () => {
 test.describe('universal links', () => {
   const UUID = '11111111-2222-3333-4444-555555555555';
 
-  test('an https invite for our own host joins the room', async ({ page }) => {
+  // ptt.voxal.app is a RETIRED host — its DNS record is gone and nothing we
+  // hand out names it any more. It stays accepted, and tested, because an
+  // installed build cannot un-share the invites it already sent.
+  test('an https invite for a retired host still joins the room', async ({ page }) => {
     const joins = await page.evaluate((uuid) => {
       handleDeepLink('https://ptt.voxal.app/?room=' + uuid);
       return window.__joins;
@@ -119,7 +122,7 @@ test.describe('universal links', () => {
 
   test('a token in the URL signs in instead of joining', async ({ page }) => {
     const seen = await page.evaluate(() => {
-      handleDeepLink('https://ptt.voxal.app/auth/callback?token=tok-1');
+      handleDeepLink('https://web.voxal.app/auth/callback?token=tok-1');
       return { token: localStorage.getItem('presence-api-token'), joins: window.__joins };
     });
     expect(seen).toEqual({ token: 'tok-1', joins: [] });

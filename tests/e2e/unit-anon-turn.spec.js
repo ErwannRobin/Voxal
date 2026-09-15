@@ -9,7 +9,7 @@ test.describe('anonymousTurnUrl', () => {
   test('uses a same-origin path on plain web', async ({ page }) => {
     await page.goto('/');
     // Same-origin means a self-hosted deploy automatically uses its own
-    // endpoint rather than spending ptt.voxal.app's quota.
+    // endpoint rather than spending web.voxal.app's quota.
     expect(await page.evaluate(() => window.anonymousTurnUrl())).toBe('/api/ice-servers');
   });
 
@@ -29,7 +29,7 @@ test.describe('anonymousTurnUrl', () => {
     await page.goto('/');
     // Under capacitor:// or the Tauri asset protocol a relative path resolves
     // to nothing, so the absolute default is required.
-    expect(await page.evaluate(() => window.anonymousTurnUrl())).toBe('https://ptt.voxal.app/api/ice-servers');
+    expect(await page.evaluate(() => window.anonymousTurnUrl())).toBe('https://web.voxal.app/api/ice-servers');
   });
 });
 
