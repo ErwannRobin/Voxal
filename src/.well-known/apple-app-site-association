@@ -7,7 +7,7 @@
         "components": [
           {
             "/": "/*",
-            "comment": "Any URL on ptt.voxal.app — app checks for ?room= param and joins if present"
+            "comment": "Any URL on web.voxal.app — app checks for ?room= param and joins if present"
           }
         ]
       }

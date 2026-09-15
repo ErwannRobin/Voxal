@@ -1545,7 +1545,16 @@ seems too sharp".
   before reading any code: `getent hosts <host>` is the whole test.
   Same reason the OG host should be the one `VOXAL_WEB_URL` hands out — the
   domain people are actually sent to is the domain the card must live on.
-  **Still pointing at `ptt.voxal.app` and therefore still broken:** the mobile
+  The card was only the visible half. The same dead host was also the mobile
   seg-assets base (`video-effects.js`), the native anon-TURN and SFU endpoints
   (`main.js`), the Website button in `about.html`, and the iOS/Android
-  associated-domain declarations.
+  associated-domain declarations — all moved to `web.voxal.app` too. Two of
+  those do **not** take effect by deploying: an entitlement and an intent-filter
+  live in the binary, so Universal Links and App Links stay broken on every
+  installed build until it is replaced and re-verified.
+
+  The one place the retired host must STAY is `handleDeepLink()`'s accepted-host
+  list. A shipped build cannot un-share the invites it already handed out, so a
+  retired host is removed from what you *hand out* long before it is removed
+  from what you *accept* — `unit-deep-link-auth.spec.js` pins that asymmetry so
+  a later tidy-up does not quietly break old links.

@@ -84,8 +84,8 @@ For production-grade deployments:
 Web sign-in returns over **https**, not the `voxal://` custom scheme:
 
 ```
-app  → voxal.app/connect?state=…&responseMode=redirect&redirect_uri=https://ptt.voxal.app/auth/callback
-     ← 302 https://ptt.voxal.app/auth/callback?token=…&state=…
+app  → voxal.app/connect?state=…&responseMode=redirect&redirect_uri=https://web.voxal.app/auth/callback
+     ← 302 https://web.voxal.app/auth/callback?token=…&state=…
 ```
 
 The token is validated against the stored `state`, then stripped from the URL

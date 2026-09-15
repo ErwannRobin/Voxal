@@ -152,7 +152,7 @@ before the account exists.
   plural, so it throttles a hot instance rather than a distributed attack. Move
   it to a real store (Vercel KV / Upstash) if you ever see quota burn.
 - Clients resolve the endpoint as **same-origin `/api/ice-servers`** on the web —
-  so a self-hosted deployment automatically uses its own, not `ptt.voxal.app`'s —
+  so a self-hosted deployment automatically uses its own, not `web.voxal.app`'s —
   and the absolute URL on native, which has no same-origin server. Override with
   `localStorage['anon-turn-url']`.
 - A public endpoint is inherently harvestable. Short TTLs bound the damage from a

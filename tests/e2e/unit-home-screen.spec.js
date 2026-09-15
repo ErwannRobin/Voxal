@@ -145,7 +145,7 @@ test.describe('the room-code field', () => {
     const value = await page.evaluate(async () => {
       const uuid = '11111111-2222-3333-4444-555555555555';
       const input = document.getElementById('input-code');
-      input.value = 'https://ptt.voxal.app/?room=' + uuid;
+      input.value = 'https://web.voxal.app/?room=' + uuid;
       input.dispatchEvent(new Event('paste', { bubbles: true }));
       await new Promise((r) => setTimeout(r, 20));
       return input.value;
@@ -282,7 +282,7 @@ test.describe('copying and sharing', () => {
     await page.evaluate(() => {
       navigator.share = undefined;
       navigator.clipboard.writeText = () => Promise.resolve();
-      shareInviteLink('https://ptt.voxal.app/?room=x');
+      shareInviteLink('https://web.voxal.app/?room=x');
     });
     await expect(page.locator('#copy-toast')).toHaveText('Invite link copied!');
   });
@@ -292,7 +292,7 @@ test.describe('copying and sharing', () => {
       const seen = [];
       navigator.clipboard.writeText = (t) => { seen.push(t); return Promise.resolve(); };
       navigator.share = () => Promise.reject(Object.assign(new Error('cancelled'), { name: 'AbortError' }));
-      shareInviteLink('https://ptt.voxal.app/?room=x');
+      shareInviteLink('https://web.voxal.app/?room=x');
       await new Promise((r) => setTimeout(r, 20));
       return seen;
     });
@@ -304,11 +304,11 @@ test.describe('copying and sharing', () => {
       const seen = [];
       navigator.clipboard.writeText = (t) => { seen.push(t); return Promise.resolve(); };
       navigator.share = () => Promise.reject(Object.assign(new Error('blocked'), { name: 'NotAllowedError' }));
-      shareInviteLink('https://ptt.voxal.app/?room=x');
+      shareInviteLink('https://web.voxal.app/?room=x');
       await new Promise((r) => setTimeout(r, 20));
       return seen;
     });
-    expect(copied).toEqual(['https://ptt.voxal.app/?room=x']);
+    expect(copied).toEqual(['https://web.voxal.app/?room=x']);
   });
 
   test('sharing nothing does nothing', async ({ page }) => {

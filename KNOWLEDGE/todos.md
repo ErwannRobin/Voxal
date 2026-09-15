@@ -116,7 +116,7 @@ Exit criteria:
 **Goal:** Make shared room links clickable in WhatsApp, iMessage, etc.
 
 Custom scheme URLs (`voxal://`) are treated as plain text in most messaging apps.
-The fix is to share `https://ptt.voxal.app/?room=<uuid>` instead.
+The fix is to share `https://web.voxal.app/?room=<uuid>` instead.
 
 See [universal-links-aasa.md](./universal-links-aasa.md) for full setup instructions.
 
@@ -124,10 +124,16 @@ See [universal-links-aasa.md](./universal-links-aasa.md) for full setup instruct
 - AASA file at `src/.well-known/apple-app-site-association` (Team `RFJ383NTK7`, app `com.erwann.voxal.app`)
 - Xcode bundle ID updated to `com.erwann.voxal.app` (now matches `capacitor.config.json`)
 - Vercel header added to serve AASA as `application/json`
-- `ios/App/App/App.entitlements` — `applinks:ptt.voxal.app` associated domain
-- `src/main.js` — native invite links now use `https://ptt.voxal.app/` as base
-- `src/main.js` — `handleDeepLink()` handles `https://ptt.voxal.app/?room=` Universal Links
+- `ios/App/App/App.entitlements` — `applinks:web.voxal.app` associated domain
+- `src/main.js` — native invite links now use `https://web.voxal.app/` as base
+- `src/main.js` — `handleDeepLink()` handles `https://web.voxal.app/?room=` Universal Links
+  (`ptt.voxal.app` is still accepted, for invites shared before that host was retired)
 - **Requires:** deploy to Vercel to publish AASA, then rebuild iOS app in Xcode on a real device
+
+⚠️ **The host moved.** All of the above named `ptt.voxal.app` until that name
+lost its DNS record. The iOS entitlement and the Android intent-filter live in
+the binary, so both apps need a **rebuild and a re-verify**: Universal Links and
+App Links stay broken on every build already in the wild until it is replaced.
 
 ---
 
