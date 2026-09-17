@@ -1,6 +1,6 @@
 .PHONY: help run run-web gen-build-info dev debug build build-debug build-signed build-web install clean lint check test \
         test-rust test-api test-e2e test-mesh coverage coverage-rust coverage-e2e \
-        coverage-api coverage-summary coverage-badge \
+        coverage-api coverage-summary coverage-badge bench bench-audio bench-report \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
         seg-assets emoji-data
 
@@ -37,6 +37,8 @@ help:
 	@echo "  coverage-api Generate API handler coverage (node --test)"
 	@echo "  coverage-summary Print one markdown summary of whatever has been measured"
 	@echo "  coverage-badge Re-measure main.js and rewrite the README coverage badge"
+	@echo "  bench        Run the performance benchmark (bench project) and print the report"
+	@echo "  bench-report Re-print the report for the newest run, without re-measuring"
 	@echo "  clean        Remove build artifacts"
 	@echo ""
 
@@ -362,8 +364,11 @@ coverage-rust:
 # Frontend (main.js) V8 coverage collected through Playwright (COVERAGE=1 turns
 # on the monocart collector wired into the fixtures). Runs both the unit and
 # mesh projects so the multi-peer/migration glue is included in the report.
+# The projects are named explicitly: `npx playwright test` with no --project
+# would also collect the `bench` project, turning a 3-minute coverage run into a
+# 20-minute one and writing benchmark results nobody asked for.
 coverage-e2e:
-	COVERAGE=1 NODE_OPTIONS=--disable-warning=DEP0205 npx playwright test
+	COVERAGE=1 NODE_OPTIONS=--disable-warning=DEP0205 npx playwright test --project=unit --project=mesh
 	@echo "→ E2E coverage: coverage/index.html (lcov: coverage/lcov.info)"
 
 # API handler coverage, straight out of node:test. Its own directory because
@@ -387,6 +392,39 @@ coverage-summary:
 coverage-badge: coverage-e2e
 	@node scripts/coverage-report.mjs --write-badge
 	@echo "→ README badge updated. Commit README.md to publish it."
+
+# ── Benchmark ─────────────────────────────────────────────────────────────────
+#
+# Deliberately NOT part of `make test`: it takes minutes, it measures the
+# machine as much as the code, and it asserts no thresholds — a number that
+# fails a build on a shared CI runner teaches nobody anything. Read
+# docs/benchmarking.md before drawing a conclusion from the output.
+#
+# Tunable without editing anything:
+#   BENCH_SIZES=2,4,8   room sizes to sweep          (default 2,3,4,6)
+#   BENCH_HOLD_MS=60000 steady-state window per run  (default 30000)
+#   BENCH_REPS=5        repeats for join latency     (default 3)
+#   BENCH_LABEL=...     records the network conditions of this run
+#
+# One worker, always: two scenarios measured side by side would be competing
+# for the same cores and both numbers would be wrong.
+bench: bench-audio
+	@BENCH_RUN_ID=$${BENCH_RUN_ID:-$$(date +%Y%m%d-%H%M%S)}; \
+	export BENCH_RUN_ID; \
+	NODE_OPTIONS=--disable-warning=DEP0205 npx playwright test --project=bench --workers=1; \
+	echo ""; \
+	node scripts/bench-report.mjs "bench-results/$$BENCH_RUN_ID.ndjson" --csv "bench-results/$$BENCH_RUN_ID.csv"
+
+# The speech-shaped WAV Chromium's fake microphone reads. Seeded, so it is
+# byte-identical everywhere and two runs stay comparable; regenerated only when
+# it is missing, so a run never silently changes its own input.
+bench-audio: tests/bench/assets/bench-speech.wav
+
+tests/bench/assets/bench-speech.wav: scripts/gen-bench-audio.mjs
+	@node scripts/gen-bench-audio.mjs $@
+
+bench-report:
+	@node scripts/bench-report.mjs
 
 clean:
 	cd src-tauri && cargo clean

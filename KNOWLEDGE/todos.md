@@ -877,4 +877,40 @@ than assuming the keystrokes arrive in order.
 
 ---
 
+## 📊 Benchmark harness — what it does not cover yet
+
+`make bench` (see `docs/benchmarking.md`) sweeps room size, noise-suppression
+mode, join latency and host migration. Gaps, in rough priority order:
+
+- **Video is not measured at all.** Every scenario pins `video-mode-enabled:
+  false`. Camera and screen are their own full-mesh `MediaConnection` sets with
+  their own bitrate caps (`cameraMaxBitrate()`, `SCREEN_MAX_BITRATE = 1.5 Mb/s`),
+  so they dominate the bandwidth story the moment anybody turns a camera on —
+  and the audio-only numbers currently published say nothing about it.
+- **The SFU asymmetry is the most interesting thing we cannot yet show.**
+  `selectVideoTopology()` routes camera/screen through Cloudflare's Realtime SFU
+  while audio stays full mesh. The whole point is that upload steps *down* when
+  video moves to the relay while audio stays flat — that is a two-line chart
+  that would make the design self-explanatory, and it needs a reachable SFU in
+  the harness (or a stub that is honest about being one).
+- **No network shaping.** Runs are on unshaped loopback, so RTT is ~1 ms and
+  every latency number is a floor. `BENCH_LABEL` records the conditions but
+  nothing enforces them. `docs/benchmarking.md` has a `tc netem` recipe that has
+  **not** been verified end to end — it may need a `veth` pair rather than `lo`,
+  since the PeerServer broker is in-process.
+- **Mouth-to-ear latency is documented but not automated.** It is the number
+  users feel and `getStats()` cannot produce it (it omits capture, encode, the
+  80 ms `AUDIO_PLAYOUT_DELAY_BASE` jitter buffer and playout). Automating the
+  click-and-cross-correlate method needs a loopback audio device, which the
+  container does not have.
+- **No audio-quality score.** Comparing codecs and concealment under loss needs
+  ViSQOL or PESQ against the source WAV. Whether either installs cleanly in the
+  CI image is unknown — it may need its own container.
+- **CPU is a whole-room total, never per-peer**, because one Chromium serves
+  every context. Per-peer attribution would need one browser per peer, which
+  costs far more than the number is worth — but the limitation has to stay
+  printed on the report, not just known.
+
+---
+
 _Add new items above this line._

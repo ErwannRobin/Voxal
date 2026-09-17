@@ -22,6 +22,8 @@ make coverage-rust # Rust coverage via cargo-llvm-cov → src-tauri/target/llvm-
 make coverage-e2e # main.js V8 coverage via Playwright+monocart → coverage/index.html
 make coverage-api # api/ handler coverage via node --test → coverage-api/lcov.info
 make coverage-summary # one markdown table over whatever has been measured
+make bench        # performance benchmark (bench project) → report + CSV
+make bench-report # re-print the newest benchmark run without re-measuring
 make build-debug  # macOS debug bundle — registers voxal:// URL scheme
 make build        # Release build
 make seg-assets   # Stage the background-effects WASM runtime into src/assets/seg/
@@ -36,6 +38,19 @@ make release      # Bump version, build signed release, publish GitHub Release
 **macOS URL scheme:** `make dev` cannot register `voxal://` (needs a real `.app` bundle). Run `make build-debug` once, open the `.app`, then return to `make dev`. The registration persists.
 
 **E2E tests** use Playwright against `http://127.0.0.1:8080` (config: `playwright.config.js`, tests in `tests/e2e/`). Two projects: `unit` (fast, deterministic — pure-logic + UI flows; excludes `@mesh`) and `mesh` (multi-peer; only `@mesh`). Specs import `test`/`expect` from `tests/e2e/fixtures.js` (not `@playwright/test` directly) so coverage can be layered in transparently.
+
+**Benchmark** (`tests/bench/`, project `bench`) is a third project with its own
+`testDir`, so it cannot be collected by `unit` or `mesh` however they are
+grepped — `make test` and `make test-mesh` never run it. It sweeps room size,
+noise-suppression mode, join latency and host migration over real WebRTC, reads
+the app's OWN instrumentation back out (`networkUsageSnapshot()`,
+`conn.webrtcStats`), and writes NDJSON + CSV to `bench-results/` (gitignored).
+It asserts **no** performance thresholds — only liveness, so a zero means "cost
+nothing", never "never connected". Chromium's fake mic is replaced with a
+seeded speech-shaped WAV (`make bench-audio`), because the built-in 440 Hz sine
+would put Opus far below its real bitrate and understate every number. Read
+`docs/benchmarking.md` before quoting any of it: every peer shares one browser
+on loopback, so latency is a floor and CPU/RSS are whole-room totals.
 
 **Mesh tests** (`tests/e2e/mesh.spec.js`, tagged `@mesh`) spin up a real local PeerServer (the `peer` dev dep) and drive N isolated Chromium contexts through real PeerJS signaling + WebRTC — covering room formation, rename propagation, audio mesh, and host migration. They use Chromium fake-media flags + `--disable-features=WebRtcHideLocalIpsWithMdns` (loopback ICE) and run with `retries: 2`. The app points PeerJS at the local broker via `localStorage['peerjs-server']` (read by `peerServerOptions()` in `main.js`; defaults to `{}` = cloud broker in production). Kept out of `make test`/`make test-e2e` so the fast suite stays flake-free.
 
