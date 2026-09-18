@@ -8,9 +8,12 @@
     "test:rust": "cd src-tauri && cargo test",
     "test:e2e": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test --project=unit",
     "test:mesh": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test --project=mesh",
+    "test:bench": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test --project=bench --workers=1",
     "test:api": "node --test \"api/*.test.js\"",
     "test:api:coverage": "node -e \"require('fs').mkdirSync('coverage-api',{recursive:true})\" && node --test --experimental-test-coverage --test-reporter=lcov --test-reporter-destination=coverage-api/lcov.info \"api/*.test.js\"",
-    "coverage:report": "node scripts/coverage-report.mjs"
+    "coverage:report": "node scripts/coverage-report.mjs",
+    "bench:audio": "node scripts/gen-bench-audio.mjs",
+    "bench:report": "node scripts/bench-report.mjs"
   },
   "devDependencies": {
     "@mediapipe/tasks-vision": "1.0.1",

@@ -1558,3 +1558,73 @@ seems too sharp".
   retired host is removed from what you *hand out* long before it is removed
   from what you *accept* — `unit-deep-link-auth.spec.js` pins that asymmetry so
   a later tidy-up does not quietly break old links.
+
+---
+
+## Benchmarking
+
+- **Chromium's fake microphone is a 440 Hz sine, and it silently invalidates any
+  bandwidth measurement.** Opus encodes a pure tone at a small fraction of the
+  32 kb/s `OPUS_MAX_BITRATE` ceiling, so a mesh measured against
+  `--use-fake-device-for-media-stream` alone reports an upload cost far below a
+  real call's — the harness flatters itself and nothing looks wrong. Fix:
+  `--use-file-for-fake-audio-capture=<16-bit mono WAV>` pointed at a
+  speech-shaped file. `scripts/gen-bench-audio.mjs` synthesises one from a
+  **seeded** PRNG (noise → three formant resonators → 4 Hz syllabic envelope
+  with real pauses), so it is byte-identical on every machine and two runs stay
+  comparable. Measured on that source, a 2-peer speaker uploads ~46 kb/s at the
+  transport level — the 32 kb/s payload plus RTP/RTCP/STUN/DTLS.
+- **A noise suppressor will gate a synthetic benchmark source and leave you
+  timing silence.** Desktop defaults to `rnnoise` (`getNoiseSuppressionMode()`),
+  which is exactly the code path that decides the synthetic signal is not
+  speech. The benchmark therefore pins `noise-suppression: off` and measures the
+  three modes as their own scenario. Measured at 2 peers: `off` and `browser`
+  are indistinguishable, `rnnoise` costs ~8 points more of one core.
+- **`ps %cpu` cannot measure a window.** That column is an average over the
+  process's entire lifetime, so on a browser that has been up two minutes it
+  reports near-nothing however hard the measured 30 seconds worked it. Sample
+  cumulative CPU *time* (`ps -o time=`) twice and difference it over the wall
+  clock instead. The `TIME` format differs by platform (`[[DD-]HH:]MM:SS[.ss]`),
+  and so does the process selector: macOS `ps` reads `-e` as "show the
+  environment too", not "every process", so `-axo` is the portable form.
+- **`browser.process()` does not exist on the Playwright *test runner's*
+  `browser` fixture** — it is on the Node API's `Browser`, not the one the
+  fixture hands you, and the call throws `browser.process is not a function`.
+  To find the browser's processes, walk this Node process's own descendants from
+  `ps` and keep the ones whose args look like Chromium. That also lets the
+  measurement exclude node, the static server and the PeerServer broker — the
+  broker stands in for a remote signaling server, so its cost is not the
+  client's.
+- **A Playwright project with its own `testDir` cannot be reached by another
+  project's grep.** That is what keeps `tests/bench/` out of `make test` and
+  `make test-mesh` no matter how they are filtered. The one hole is
+  `npx playwright test` with no `--project`, which collects *every* project —
+  which is why `make coverage-e2e` now names `--project=unit --project=mesh`
+  explicitly instead of relying on there being only two.
+- **`usedtx=0` means listeners upload almost as much as the speaker.** Measured
+  in a 4-peer room with one talker: speaker ↑ 145 kb/s, *listener* ↑ 135 kb/s.
+  That is not a bug — `OPUS_FMTP_PARAMS` forces `usedtx=0` on purpose so the
+  receiver's jitter buffer stays warm and the first word after a PTT press is
+  not clipped. But it does mean a Voxal room's upload cost is paid by everyone
+  in it, not only whoever is speaking, which is the opposite of the intuition
+  "muted peers are free". Quote the listener column, not just the speaker one.
+- **Room CPU in the benchmark has real run-to-run variance and must not be read
+  as a precise figure.** A 4-peer all-speaking run measured *lower* than the
+  same room with one speaker (85% vs 110% of one core) purely from browser
+  warm-up ordering. The bandwidth columns are stable to a few percent; CPU is
+  not. Compare CPU only across repeated runs, and only between configurations
+  measured back to back.
+- **An inline SVG chart scaled by its `viewBox` becomes unreadable on a phone,
+  and nothing warns you.** `width:100%` on an SVG with a 760-wide viewBox means a
+  12px label renders at about 4px at 390px viewport — no overflow, no error, no
+  console warning, just text nobody can read. Fix: keep the chart at a legible
+  minimum width below the breakpoint (`min-width:620px`) and let its container
+  scroll sideways. A swipe beats a magnifying glass, and a horizontal-overflow
+  check on the *document* passes either way, so it will not catch this — look at
+  a phone-width screenshot instead.
+- **Host migration does not actually interrupt the audio.** The benchmark
+  measures two clocks — new host elected, and audio restored — expecting a gap.
+  There is almost none (7879 ms vs 7884 ms in a 3-peer run): both are just the
+  ~7 s heartbeat timeout, because `MediaConnection`s to non-host peers are never
+  torn down during migration. The room is leaderless for 7 seconds; it is never
+  silent. Worth knowing before quoting migration as an outage.

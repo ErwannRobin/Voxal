@@ -33,6 +33,16 @@ coverage
 coverage-api
 playwright-report
 
+# Benchmark output: measurements of one machine at one moment, not source.
+# Publish a run by pasting the report into a PR or an issue, never by committing
+# the raw NDJSON — a number with no machine beside it is worse than no number.
+bench-results
+
+# The benchmark's speech-shaped microphone input: ~1 MB, generated and seeded so
+# it is byte-identical on every machine (`make bench-audio`). Regenerating is
+# instant; committing it is a binary in the tree for nothing.
+tests/bench/assets/bench-speech.wav
+
 # Chrome DevTools Automatic Workspace Folders — machine-specific, never commit
 .devtools-workspace-uuid
 src/.well-known/appspecific/com.chrome.devtools.json
