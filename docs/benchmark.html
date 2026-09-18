@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en" data-theme="system">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voxal performance benchmark</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --page:#f9f9f7; --surface-1:#fcfcfb;
+  --text-primary:#0b0b0b; --text-secondary:#52514e; --muted:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
+  --series-1:#2a78d6; --series-2:#eb6834;
+  --callout:#f0efec;
+}
+/* Dark is selected, not an automatic flip: its own steps from the same ramps,
+   validated against the dark surface. Declared under both scopes so the OS
+   setting and the toggle each win where they should. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page:#0d0d0d; --surface-1:#1a1a19;
+    --text-primary:#fff; --text-secondary:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+    --series-1:#3987e5; --series-2:#d95926;
+    --callout:#232321;
+  }
+}
+:root[data-theme="dark"] {
+  --page:#0d0d0d; --surface-1:#1a1a19;
+  --text-primary:#fff; --text-secondary:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+  --series-1:#3987e5; --series-2:#d95926;
+  --callout:#232321;
+}
+* { box-sizing: border-box; }
+body {
+  margin:0; background:var(--page); color:var(--text-primary);
+  font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;
+  padding:32px 16px 64px;
+}
+.wrap { max-width:940px; margin:0 auto; }
+header { display:flex; flex-wrap:wrap; gap:16px; align-items:flex-start; justify-content:space-between; margin-bottom:8px; }
+h1 { font-size:26px; font-weight:650; margin:0 0 6px; letter-spacing:-.01em; }
+.meta { color:var(--text-secondary); font-size:13px; margin:0; }
+code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.92em;
+  background:var(--callout); padding:1px 5px; border-radius:4px; }
+.theme-toggle { background:var(--surface-1); color:var(--text-secondary); border:1px solid var(--border);
+  border-radius:8px; padding:7px 12px; font:inherit; font-size:13px; cursor:pointer; }
+.theme-toggle:hover { color:var(--text-primary); }
+
+.callout { background:var(--callout); border-radius:10px; padding:14px 16px; margin:20px 0 28px;
+  color:var(--text-secondary); font-size:13.5px; }
+.callout strong { color:var(--text-primary); }
+
+.hero-row { display:grid; grid-template-columns:minmax(250px,1fr) 1.6fr; gap:16px; margin-bottom:22px; }
+.hero, .tile { background:var(--surface-1); border:1px solid var(--border); border-radius:12px; padding:18px 20px; }
+.hero-label, .tile-label { color:var(--text-secondary); font-size:13px; }
+/* Proportional figures on the hero and the tiles: tabular-nums gives every
+   digit the width of a zero, which reads loose at display sizes. */
+.hero-value { font-size:52px; font-weight:650; line-height:1.1; margin:6px 0 8px; letter-spacing:-.02em; }
+.hero-note, .tile-note { color:var(--muted); font-size:12.5px; line-height:1.45; }
+.tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(158px,1fr)); gap:16px; }
+.tile-value { font-size:30px; font-weight:650; margin:4px 0 6px; letter-spacing:-.01em; }
+
+.card { background:var(--surface-1); border:1px solid var(--border); border-radius:12px;
+  padding:20px 22px 18px; margin-bottom:22px; }
+.card h2 { font-size:17px; font-weight:620; margin:0 0 6px; }
+.sub { color:var(--text-secondary); font-size:13.5px; margin:0 0 18px; max-width:74ch; }
+.sub strong { color:var(--text-primary); }
+.empty { color:var(--muted); font-size:13.5px; }
+
+.legend { display:flex; gap:18px; flex-wrap:wrap; margin-bottom:8px; color:var(--text-secondary); font-size:13px; }
+.legend-item { display:inline-flex; align-items:center; gap:7px; }
+.swatch { width:11px; height:11px; border-radius:3px; display:inline-block; flex:none; }
+
+/* The SVG scales with its viewBox, so at phone width a 12px label would render
+   at about 4px. Below the breakpoint the chart keeps a legible minimum width and
+   the card scrolls it sideways instead — a swipe beats a magnifying glass. */
+.chart { margin:0; overflow-x:auto; overscroll-behavior-x:contain; }
+.chart svg { width:100%; height:auto; display:block; overflow:visible; }
+.grid { stroke:var(--grid); stroke-width:1; }
+.axis { stroke:var(--axis); stroke-width:1; }
+.line { fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.dot { stroke:var(--surface-1); stroke-width:2; }
+/* Text wears text tokens, never the series colour — identity comes from the
+   coloured mark beside it. */
+.tick { fill:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+.tick-y { text-anchor:end; }
+.tick-x { text-anchor:middle; }
+.axis-title { fill:var(--text-secondary); font-size:12.5px; text-anchor:middle; }
+.end-label { fill:var(--text-secondary); font-size:12.5px; font-weight:600; }
+.cat-label { fill:var(--text-primary); font-size:13px; text-anchor:end; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+.cat-note { fill:var(--muted); font-size:11px; text-anchor:end; }
+.bar-value { fill:var(--text-secondary); font-size:12.5px; font-weight:600; }
+.hover-band { fill:transparent; }
+.hover-band:hover { fill:var(--text-primary); fill-opacity:.04; }
+.bar:hover { fill-opacity:.85; }
+
+.tooltip { position:fixed; pointer-events:none; z-index:10; opacity:0; transition:opacity .08s;
+  background:var(--surface-1); border:1px solid var(--border); border-radius:8px;
+  padding:9px 11px; font-size:12.5px; color:var(--text-primary);
+  box-shadow:0 6px 24px rgba(0,0,0,.18); min-width:168px; }
+.tooltip.on { opacity:1; }
+.tt-title { color:var(--text-secondary); font-size:11.5px; margin-bottom:5px; }
+.tt-row { display:flex; justify-content:space-between; gap:18px; }
+.tt-row + .tt-row { margin-top:3px; }
+.tt-key { display:inline-flex; align-items:center; gap:6px; color:var(--text-secondary); }
+.tt-val { font-variant-numeric:tabular-nums; font-weight:600; }
+
+.table-view { margin-top:16px; border-top:1px solid var(--border); padding-top:12px; }
+.table-view summary { cursor:pointer; color:var(--text-secondary); font-size:13px; }
+.table-view summary:hover { color:var(--text-primary); }
+.table-scroll { overflow-x:auto; margin-top:12px; }
+table { border-collapse:collapse; font-size:13px; width:100%; }
+th, td { text-align:right; padding:6px 12px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+th:first-child, td:first-child { text-align:left; font-variant-numeric:normal; }
+thead th { color:var(--text-secondary); font-weight:600; border-bottom:1px solid var(--border); }
+tbody tr + tr td { border-top:1px solid var(--grid); }
+
+.timings { display:grid; gap:18px; }
+.timing-head { font-weight:620; margin-bottom:4px; }
+.timing-body { color:var(--text-secondary); font-size:13.5px; max-width:80ch; }
+.timing-body strong { color:var(--text-primary); font-variant-numeric:tabular-nums; }
+
+.missing { color:var(--muted); font-size:13px; }
+footer { color:var(--muted); font-size:12.5px; margin-top:28px; line-height:1.6; }
+
+@media (max-width:760px) {
+  .hero-row { grid-template-columns:1fr; }
+  .hero-value { font-size:42px; }
+  .chart svg { min-width:620px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div>
+    <h1>Voxal performance benchmark</h1>
+    <p class="meta">linux/x64 &middot; 4 cores (Intel(R) Xeon(R) Processor @ 2.80GHz) &middot; network <code>unshaped-loopback</code><br>18 runs &middot; 2026-09-18T14:07:24.193Z &middot; run <code>full-1</code></p>
+  </div>
+  <button class="theme-toggle" id="theme-toggle" type="button">Theme</button>
+</header>
+
+<div class="callout">
+  <strong>Read these numbers with their limits.</strong> Every peer of a room runs in one
+  browser on one machine over loopback, so latency is a <strong>floor</strong>, not a field
+  measurement, and CPU and memory are <strong>whole-room</strong> totals that must not be divided
+  by the peer count. Nothing here asserts a threshold — the suite only checks that the call was
+  working, so a zero means &ldquo;this cost nothing&rdquo;, never &ldquo;this never connected&rdquo;.
+  See <code>docs/benchmarking.md</code>.
+</div>
+
+<section class="hero-row">
+  <div class="hero">
+    <div class="hero-label">Extra upload per peer added</div>
+    <div class="hero-value">43 kb/s</div>
+    <div class="hero-note">Audio is a full mesh, so a speaker sends one stream to every other peer. A product built on an SFU pays this once, not once per peer.</div>
+  </div>
+  <div class="tiles"><div class="tile"><div class="tile-label">Join a live room</div><div class="tile-value">246 ms</div><div class="tile-note">until the first audio, over 3 reps</div></div><div class="tile"><div class="tile-label">Host vanishes</div><div class="tile-value">7.9 s</div><div class="tile-note">until audio is back, 3 survivors</div></div><div class="tile"><div class="tile-label">Each peer, on camera</div><div class="tile-value">561 kb/s</div><div class="tile-note">extra upload per peer added, cameras on</div></div><div class="tile"><div class="tile-label">See a live room</div><div class="tile-value">586 ms</div><div class="tile-note">until every camera is on screen, over 3 reps</div></div><div class="tile"><div class="tile-label">Peak room CPU</div><div class="tile-value">217%</div><div class="tile-note">the whole room on 4 cores</div></div></div>
+</section>
+<section class="card"><h2>Upload grows with the room</h2><p class="sub">Both lines climb because audio is a full mesh. The listener line climbs too: <code>usedtx=0</code> keeps packets flowing while muted, so <strong>everyone</strong> in the room pays for the mesh, not only whoever is talking.</p><div class="legend"><span class="legend-item"><span class="swatch" style="background:var(--series-1)"></span>Speaker upload</span><span class="legend-item"><span class="swatch" style="background:var(--series-2)"></span>Listener upload</span></div><figure class="chart" id="chart-upload">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Upload by Peers in the room" preserveAspectRatio="xMidYMid meet"><line x1="66" y1="256.0" x2="648" y2="256.0" class="grid"/><text x="56" y="260.0" class="tick tick-y">0</text><line x1="66" y1="208.4" x2="648" y2="208.4" class="grid"/><text x="56" y="212.4" class="tick tick-y">50 kb/s</text><line x1="66" y1="160.8" x2="648" y2="160.8" class="grid"/><text x="56" y="164.8" class="tick tick-y">100 kb/s</text><line x1="66" y1="113.2" x2="648" y2="113.2" class="grid"/><text x="56" y="117.2" class="tick tick-y">150 kb/s</text><line x1="66" y1="65.6" x2="648" y2="65.6" class="grid"/><text x="56" y="69.6" class="tick tick-y">200 kb/s</text><line x1="66" y1="18.0" x2="648" y2="18.0" class="grid"/><text x="56" y="22.0" class="tick tick-y">250 kb/s</text><text x="66.0" y="278" class="tick tick-x">2</text><text x="211.5" y="278" class="tick tick-x">3</text><text x="357.0" y="278" class="tick tick-x">4</text><text x="648.0" y="278" class="tick tick-x">6</text><line x1="66" y1="256" x2="648" y2="256" class="axis"/><text x="357" y="294" class="axis-title">Peers in the room</text><path d="M66.0 210.0 L211.5 163.8 L357.0 117.7 L648.0 46.8" class="line" stroke="var(--series-1)"/><circle cx="66.0" cy="210.0" r="4.5" fill="var(--series-1)" class="dot"/><circle cx="211.5" cy="163.8" r="4.5" fill="var(--series-1)" class="dot"/><circle cx="357.0" cy="117.7" r="4.5" fill="var(--series-1)" class="dot"/><circle cx="648.0" cy="46.8" r="4.5" fill="var(--series-1)" class="dot"/><text x="660.0" y="50.8" class="end-label">220 kb/s</text><path d="M66.0 222.8 L211.5 173.8 L357.0 125.9 L648.0 28.9" class="line" stroke="var(--series-2)"/><circle cx="66.0" cy="222.8" r="4.5" fill="var(--series-2)" class="dot"/><circle cx="211.5" cy="173.8" r="4.5" fill="var(--series-2)" class="dot"/><circle cx="357.0" cy="125.9" r="4.5" fill="var(--series-2)" class="dot"/><circle cx="648.0" cy="28.9" r="4.5" fill="var(--series-2)" class="dot"/><text x="660.0" y="32.9" class="end-label">239 kb/s</text><rect x="-31.0" y="18" width="194.0" height="238" class="hover-band" data-title="2 peers" data-rows="[{&quot;k&quot;:&quot;Speaker upload&quot;,&quot;v&quot;:&quot;48 kb/s&quot;},{&quot;k&quot;:&quot;Listener upload&quot;,&quot;v&quot;:&quot;35 kb/s&quot;}]"/><rect x="114.5" y="18" width="194.0" height="238" class="hover-band" data-title="3 peers" data-rows="[{&quot;k&quot;:&quot;Speaker upload&quot;,&quot;v&quot;:&quot;97 kb/s&quot;},{&quot;k&quot;:&quot;Listener upload&quot;,&quot;v&quot;:&quot;86 kb/s&quot;}]"/><rect x="260.0" y="18" width="194.0" height="238" class="hover-band" data-title="4 peers" data-rows="[{&quot;k&quot;:&quot;Speaker upload&quot;,&quot;v&quot;:&quot;145 kb/s&quot;},{&quot;k&quot;:&quot;Listener upload&quot;,&quot;v&quot;:&quot;137 kb/s&quot;}]"/><rect x="551.0" y="18" width="194.0" height="238" class="hover-band" data-title="6 peers" data-rows="[{&quot;k&quot;:&quot;Speaker upload&quot;,&quot;v&quot;:&quot;220 kb/s&quot;},{&quot;k&quot;:&quot;Listener upload&quot;,&quot;v&quot;:&quot;239 kb/s&quot;}]"/></svg>
+</figure><details class="table-view"><summary>Show the numbers</summary><div class="table-scroll"><table><thead><tr><th>Peers</th><th>Speakers</th><th>Speaker up</th><th>Listener up</th><th>Listener down</th><th>RTT</th><th>Loss</th><th>Room CPU</th><th>Room RSS</th></tr></thead><tbody><tr><td>2</td><td>1</td><td>48 kb/s</td><td>35 kb/s</td><td>48 kb/s</td><td>1 ms</td><td>0.0%</td><td>30%</td><td>1085 MiB</td></tr><tr><td>3</td><td>1</td><td>97 kb/s</td><td>86 kb/s</td><td>100 kb/s</td><td>1 ms</td><td>0.0%</td><td>60%</td><td>1314 MiB</td></tr><tr><td>4</td><td>1</td><td>145 kb/s</td><td>137 kb/s</td><td>152 kb/s</td><td>1 ms</td><td>0.0%</td><td>107%</td><td>1553 MiB</td></tr><tr><td>6</td><td>1</td><td>220 kb/s</td><td>239 kb/s</td><td>254 kb/s</td><td>3 ms</td><td>0.0%</td><td>217%</td><td>2078 MiB</td></tr><tr><td>6</td><td>6</td><td>320 kb/s</td><td>—</td><td>—</td><td>2 ms</td><td>0.0%</td><td>173%</td><td>2135 MiB</td></tr></tbody></table></div></details></section>
+<section class="card"><h2>What the room costs the machine</h2><p class="sub">Every peer runs in one browser here, so this is the <strong>whole room</strong> on one machine — never divide it by the peer count. CPU also carries real run-to-run variance; compare it only across repeats, and only between configurations measured back to back.</p><figure class="chart" id="chart-cpu">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Room CPU by Peers in the room" preserveAspectRatio="xMidYMid meet"><line x1="66" y1="256.0" x2="648" y2="256.0" class="grid"/><text x="56" y="260.0" class="tick tick-y">0</text><line x1="66" y1="208.4" x2="648" y2="208.4" class="grid"/><text x="56" y="212.4" class="tick tick-y">50%</text><line x1="66" y1="160.8" x2="648" y2="160.8" class="grid"/><text x="56" y="164.8" class="tick tick-y">100%</text><line x1="66" y1="113.2" x2="648" y2="113.2" class="grid"/><text x="56" y="117.2" class="tick tick-y">150%</text><line x1="66" y1="65.6" x2="648" y2="65.6" class="grid"/><text x="56" y="69.6" class="tick tick-y">200%</text><line x1="66" y1="18.0" x2="648" y2="18.0" class="grid"/><text x="56" y="22.0" class="tick tick-y">250%</text><text x="66.0" y="278" class="tick tick-x">2</text><text x="211.5" y="278" class="tick tick-x">3</text><text x="357.0" y="278" class="tick tick-x">4</text><text x="648.0" y="278" class="tick tick-x">6</text><line x1="66" y1="256" x2="648" y2="256" class="axis"/><text x="357" y="294" class="axis-title">Peers in the room</text><path d="M66.0 227.5 L211.5 198.9 L357.0 154.5 L648.0 49.8" class="line" stroke="var(--series-1)"/><circle cx="66.0" cy="227.5" r="4.5" fill="var(--series-1)" class="dot"/><circle cx="211.5" cy="198.9" r="4.5" fill="var(--series-1)" class="dot"/><circle cx="357.0" cy="154.5" r="4.5" fill="var(--series-1)" class="dot"/><circle cx="648.0" cy="49.8" r="4.5" fill="var(--series-1)" class="dot"/><text x="660.0" y="53.8" class="end-label">217%</text><rect x="-31.0" y="18" width="194.0" height="238" class="hover-band" data-title="2 peers" data-rows="[{&quot;k&quot;:&quot;Room CPU&quot;,&quot;v&quot;:&quot;30%&quot;}]"/><rect x="114.5" y="18" width="194.0" height="238" class="hover-band" data-title="3 peers" data-rows="[{&quot;k&quot;:&quot;Room CPU&quot;,&quot;v&quot;:&quot;60%&quot;}]"/><rect x="260.0" y="18" width="194.0" height="238" class="hover-band" data-title="4 peers" data-rows="[{&quot;k&quot;:&quot;Room CPU&quot;,&quot;v&quot;:&quot;107%&quot;}]"/><rect x="551.0" y="18" width="194.0" height="238" class="hover-band" data-title="6 peers" data-rows="[{&quot;k&quot;:&quot;Room CPU&quot;,&quot;v&quot;:&quot;217%&quot;}]"/></svg>
+</figure><details class="table-view"><summary>Show the numbers</summary><div class="table-scroll"><table><thead><tr><th>Peers</th><th>Room CPU</th><th>Room RSS</th></tr></thead><tbody><tr><td>2</td><td>30%</td><td>1085 MiB</td></tr><tr><td>3</td><td>60%</td><td>1314 MiB</td></tr><tr><td>4</td><td>107%</td><td>1553 MiB</td></tr><tr><td>6</td><td>217%</td><td>2078 MiB</td></tr></tbody></table></div></details></section>
+<section class="card"><h2>What noise suppression costs</h2><p class="sub"><code>rnnoise</code> is the desktop default, so this is a cost the product pays unless someone changes it. Same room size and the same speakers in every row — only the mode changes.</p><figure class="chart" id="chart-ns">
+  <svg viewBox="0 0 760 162" role="img" aria-label="Room CPU by mode" preserveAspectRatio="xMidYMid meet"><text x="122" y="25" class="cat-label">off</text><path d="M136 10 H481.22856476390416 a4 4 0 0 1 4 4 V28 a4 4 0 0 1 -4 4 H136 Z" fill="var(--series-1)" class="bar" data-title="off" data-rows="[{&quot;k&quot;:&quot;Room CPU&quot;,&quot;v&quot;:&quot;53%&quot;}]"/><text x="495.22856476390416" y="25" class="bar-value">53%</text><text x="122" y="75" class="cat-label">browser</text><path d="M136 60 H524.8559528173004 a4 4 0 0 1 4 4 V78 a4 4 0 0 1 -4 4 H136 Z" fill="var(--series-1)" class="bar" data-title="browser" data-rows="[{&quot;k&quot;:&quot;Room CPU&quot;,&quot;v&quot;:&quot;60%&quot;}]"/><text x="538.8559528173004" y="75" class="bar-value">60%</text><text x="122" y="125" class="cat-label">rnnoise</text><text x="122" y="141" class="cat-note">desktop default</text><path d="M136 110 H612.1572756655893 a4 4 0 0 1 4 4 V128 a4 4 0 0 1 -4 4 H136 Z" fill="var(--series-1)" class="bar" data-title="rnnoise" data-rows="[{&quot;k&quot;:&quot;Room CPU&quot;,&quot;v&quot;:&quot;73%&quot;}]"/><text x="626.1572756655893" y="125" class="bar-value">73%</text></svg>
+</figure><details class="table-view"><summary>Show the numbers</summary><div class="table-scroll"><table><thead><tr><th>Mode</th><th>Peers</th><th>Speaker up</th><th>Room CPU</th><th>Room RSS</th><th>JS heap</th></tr></thead><tbody><tr><td>off</td><td>3</td><td>102 kb/s</td><td>53%</td><td>1375 MiB</td><td>4 MiB</td></tr><tr><td>browser</td><td>3</td><td>102 kb/s</td><td>60%</td><td>1372 MiB</td><td>4 MiB</td></tr><tr><td>rnnoise (default)</td><td>3</td><td>102 kb/s</td><td>73%</td><td>1397 MiB</td><td>4 MiB</td></tr></tbody></table></div></details></section>
+<section class="card"><h2>Camera: one encode per peer</h2><p class="sub">Under the <code>p2p-only</code> preference this harness pins, camera is a full mesh too — so a sharer encodes and uploads one stream <strong>per other peer</strong>, at roughly twenty times an Opus stream. The shipped default may route this through an SFU above two participants instead, and that topology is <strong>not</strong> measured here. <strong>This machine ran out of room.</strong> One browser was encoding every peer's camera at once, and when that happens the frame rate falls first — while the encoder still blames its own bitrate cap. Read the rows below as a ceiling of the harness, not of the app.</p><div class="legend"><span class="legend-item"><span class="swatch" style="background:var(--series-1)"></span>Sharer upload</span><span class="legend-item"><span class="swatch" style="background:var(--series-2)"></span>Receiver download</span></div><figure class="chart" id="chart-video-upload">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Camera bandwidth by Peers in the room, all on camera" preserveAspectRatio="xMidYMid meet"><line x1="66" y1="256.0" x2="648" y2="256.0" class="grid"/><text x="56" y="260.0" class="tick tick-y">0</text><line x1="66" y1="196.5" x2="648" y2="196.5" class="grid"/><text x="56" y="200.5" class="tick tick-y">500 kb/s</text><line x1="66" y1="137.0" x2="648" y2="137.0" class="grid"/><text x="56" y="141.0" class="tick tick-y">1.00 Mb/s</text><line x1="66" y1="77.5" x2="648" y2="77.5" class="grid"/><text x="56" y="81.5" class="tick tick-y">1.50 Mb/s</text><line x1="66" y1="18.0" x2="648" y2="18.0" class="grid"/><text x="56" y="22.0" class="tick tick-y">2.00 Mb/s</text><text x="66.0" y="278" class="tick tick-x">2</text><text x="357.0" y="278" class="tick tick-x">3</text><text x="648.0" y="278" class="tick tick-x">4</text><line x1="66" y1="256" x2="648" y2="256" class="axis"/><text x="357" y="294" class="axis-title">Peers in the room, all on camera</text><path d="M66.0 180.8 L357.0 136.1 L648.0 47.3" class="line" stroke="var(--series-1)"/><circle cx="66.0" cy="180.8" r="4.5" fill="var(--series-1)" class="dot"/><circle cx="357.0" cy="136.1" r="4.5" fill="var(--series-1)" class="dot"/><circle cx="648.0" cy="47.3" r="4.5" fill="var(--series-1)" class="dot"/><text x="660.0" y="51.3" class="end-label">1.75 Mb/s</text><path d="M66.0 181.6 L357.0 135.8 L648.0 66.8" class="line" stroke="var(--series-2)"/><circle cx="66.0" cy="181.6" r="4.5" fill="var(--series-2)" class="dot"/><circle cx="357.0" cy="135.8" r="4.5" fill="var(--series-2)" class="dot"/><circle cx="648.0" cy="66.8" r="4.5" fill="var(--series-2)" class="dot"/><text x="660.0" y="70.8" class="end-label">1.59 Mb/s</text><rect x="-79.5" y="18" width="291.0" height="238" class="hover-band" data-title="2 peers" data-rows="[{&quot;k&quot;:&quot;Sharer upload&quot;,&quot;v&quot;:&quot;632 kb/s&quot;},{&quot;k&quot;:&quot;Receiver download&quot;,&quot;v&quot;:&quot;625 kb/s&quot;}]"/><rect x="211.5" y="18" width="291.0" height="238" class="hover-band" data-title="3 peers" data-rows="[{&quot;k&quot;:&quot;Sharer upload&quot;,&quot;v&quot;:&quot;1.01 Mb/s&quot;},{&quot;k&quot;:&quot;Receiver download&quot;,&quot;v&quot;:&quot;1.01 Mb/s&quot;}]"/><rect x="502.5" y="18" width="291.0" height="238" class="hover-band" data-title="4 peers" data-rows="[{&quot;k&quot;:&quot;Sharer upload&quot;,&quot;v&quot;:&quot;1.75 Mb/s&quot;},{&quot;k&quot;:&quot;Receiver download&quot;,&quot;v&quot;:&quot;1.59 Mb/s&quot;}]"/></svg>
+</figure><details class="table-view"><summary>Show the numbers</summary><div class="table-scroll"><table><thead><tr><th>Peers</th><th>Cameras</th><th>Sharer up</th><th>Receiver down</th><th>Picture sent</th><th>Room CPU</th><th>Room RSS</th></tr></thead><tbody><tr><td>2</td><td>all (2)</td><td>632 kb/s</td><td>625 kb/s</td><td>960×540 @ 30 fps (bandwidth)</td><td>93%</td><td>1399 MiB</td></tr><tr><td>3</td><td>all (3)</td><td>1.01 Mb/s</td><td>1.01 Mb/s</td><td>853×480 @ 16 fps</td><td>223%</td><td>1799 MiB</td></tr><tr><td>4</td><td>1</td><td>1.90 Mb/s</td><td>631 kb/s</td><td>853×480 @ 30 fps</td><td>200%</td><td>1857 MiB</td></tr><tr><td>4</td><td>all (4)</td><td>1.75 Mb/s</td><td>1.59 Mb/s</td><td>853×480 @ 4 fps (bandwidth)</td><td>337%</td><td>2270 MiB</td></tr></tbody></table></div></details></section>
+<section class="card"><h2>What a camera background costs</h2><p class="sub">Segmentation runs locally — MediaPipe in WebAssembly plus a WebGL composite — so it is paid in <strong>CPU and frame rate</strong>, never on the wire. <em>Still running</em> counts the sharing peers that still had the effect on at the end: the app turns a background off in silence both when the runtime cannot start and when the device cannot sustain it, so a <code>0</code> there means the row is not the cost of the effect.</p><figure class="chart" id="chart-video-bg">
+  <svg viewBox="0 0 760 112" role="img" aria-label="Room CPU by mode" preserveAspectRatio="xMidYMid meet"><text x="122" y="25" class="cat-label">off</text><text x="122" y="41" class="cat-note">default</text><path d="M136 10 H341.5301566144618 a4 4 0 0 1 4 4 V28 a4 4 0 0 1 -4 4 H136 Z" fill="var(--series-1)" class="bar" data-title="off" data-rows="[{&quot;k&quot;:&quot;Room CPU&quot;,&quot;v&quot;:&quot;80%&quot;}]"/><text x="355.5301566144618" y="25" class="bar-value">80%</text><text x="122" y="75" class="cat-label">blur</text><text x="122" y="91" class="cat-note">the app gave up here</text><path d="M136 60 H551.0463496717871 a4 4 0 0 1 4 4 V78 a4 4 0 0 1 -4 4 H136 Z" fill="var(--series-1)" class="bar" data-title="blur" data-rows="[{&quot;k&quot;:&quot;Room CPU&quot;,&quot;v&quot;:&quot;160%&quot;}]"/><text x="565.0463496717871" y="75" class="bar-value">160%</text></svg>
+</figure><details class="table-view"><summary>Show the numbers</summary><div class="table-scroll"><table><thead><tr><th>Background</th><th>Peers</th><th>Cameras</th><th>Still running</th><th>Sharer up</th><th>Picture sent</th><th>Room CPU</th></tr></thead><tbody><tr><td>off (default)</td><td>2</td><td>1</td><td>0/1</td><td>611 kb/s</td><td>960×540 @ 30 fps</td><td>80%</td></tr><tr><td>blur</td><td>2</td><td>1</td><td>0/1</td><td>627 kb/s</td><td>1280×720 @ 30 fps</td><td>160%</td></tr></tbody></table></div></details></section>
+<section class="card"><h2>Screen share</h2><p class="sub">A screen is not a camera: its ceiling is 1.5 Mb/s rather than 600 kb/s, it is pinned to <code>maintain-resolution</code> so it drops frames rather than letters, and the peer-count downscale never touches it.</p><details class="table-view"><summary>Show the numbers</summary><div class="table-scroll"><table><thead><tr><th>Peers</th><th>Sharer up</th><th>Watcher down</th><th>Picture sent</th><th>Room CPU</th><th>Room RSS</th></tr></thead><tbody><tr><td>3</td><td>920 kb/s</td><td>460 kb/s</td><td>1280×720 @ 20 fps</td><td>130%</td><td>1558 MiB</td></tr></tbody></table></div></details></section>
+<section class="card"><h2>Timings</h2><div class="timings"><div class="timing"><div class="timing-head">Joining a call already in progress</div>
+      <div class="timing-body">Signaling opens in <strong>36 ms</strong>, and the first audio arrives at <strong>246 ms</strong>. The clock starts at the join, not at browser launch — a real user already has a browser open.</div></div><div class="timing"><div class="timing-head">Losing the host</div>
+      <div class="timing-body">A new host is elected at <strong>7099 ms</strong> and audio is back at <strong>7917 ms</strong> — the same moment, give or take, and both are simply the ~7 s heartbeat timeout. The room is leaderless for seven seconds; it is never <em>silent</em>, because audio connections to non-host peers are never torn down during a migration.</div></div><div class="timing"><div class="timing-head">Joining a room that is already on camera</div>
+      <div class="timing-body">The room is audible at <strong>322 ms</strong> and every camera in it is on screen at <strong>586 ms</strong>. Hearing and seeing are separate numbers: a picture needs its own call per sharer, a keyframe and a decoder, and the mesh builds them one at a time.</div></div></div></section>
+
+<footer>
+  Generated by <code>make bench</code> &middot; the raw run sits beside this file as
+  <code>.ndjson</code>, with a per-peer <code>.csv</code> for plotting elsewhere.<br>
+  To compare against Discord, Zoom, Teams or Jitsi, follow the external method in
+  <code>docs/benchmarking.md</code> — measuring them from outside the process is the only fair
+  way, and on macOS that means summing all four of a Tauri app's processes.
+</footer>
+</div>
+
+<div class="tooltip" id="tooltip" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  // Theme: system by default, with a toggle that beats it in both directions.
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-toggle');
+  var stored = null;
+  try { stored = localStorage.getItem('bench-theme'); } catch (e) {}
+  if (stored) { root.setAttribute('data-theme', stored); }
+  function labelFor(t) { return t === 'system' ? 'Theme' : 'Theme: ' + t; }
+  btn.textContent = labelFor(root.getAttribute('data-theme') || 'system');
+  btn.addEventListener('click', function () {
+    var order = ['system', 'light', 'dark'];
+    var next = order[(order.indexOf(root.getAttribute('data-theme') || 'system') + 1) % 3];
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('bench-theme', next); } catch (e) {}
+    btn.textContent = labelFor(next);
+  });
+
+  // Hover layer. Every value it shows is also in the table twin under its
+  // chart, so the tooltip enhances and never gates.
+  var tip = document.getElementById('tooltip');
+  function show(el, ev) {
+    var rows;
+    try { rows = JSON.parse(el.getAttribute('data-rows') || '[]'); } catch (e) { rows = []; }
+    tip.innerHTML =
+      '<div class="tt-title">' + (el.getAttribute('data-title') || '') + '</div>' +
+      rows.map(function (r, i) {
+        return '<div class="tt-row"><span class="tt-key">' +
+          '<span class="swatch" style="background:var(--series-' + (i + 1) + ')"></span>' +
+          r.k + '</span><span class="tt-val">' + r.v + '</span></div>';
+      }).join('');
+    tip.classList.add('on');
+    var w = tip.offsetWidth, h = tip.offsetHeight;
+    tip.style.left = Math.max(8, Math.min(window.innerWidth - w - 12, ev.clientX + 14)) + 'px';
+    tip.style.top = Math.max(8, ev.clientY - h - 12) + 'px';
+  }
+  function hide() { tip.classList.remove('on'); }
+  document.querySelectorAll('.hover-band,.bar').forEach(function (el) {
+    el.addEventListener('mousemove', function (ev) { show(el, ev); });
+    el.addEventListener('mouseleave', hide);
+  });
+  document.addEventListener('scroll', hide, true);
+})();
+</script>
+</body>
+</html>

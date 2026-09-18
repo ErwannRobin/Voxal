@@ -43,6 +43,12 @@ bench-results
 # instant; committing it is a binary in the tree for nothing.
 tests/bench/assets/bench-speech.wav
 
+# The benchmark's camera input, same bargain at eighty times the size: ~80 MB of
+# raw Y4M, generated and seeded (`make bench-video`). Raw frames are the only
+# format Chromium's file-backed fake camera reads, so there is no small version
+# of this file to commit.
+tests/bench/assets/bench-scene.y4m
+
 # Chrome DevTools Automatic Workspace Folders — machine-specific, never commit
 .devtools-workspace-uuid
 src/.well-known/appspecific/com.chrome.devtools.json

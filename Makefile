@@ -1,6 +1,7 @@
 .PHONY: help run run-web gen-build-info dev debug build build-debug build-signed build-web install clean lint check test \
         test-rust test-api test-e2e test-mesh coverage coverage-rust coverage-e2e \
-        coverage-api coverage-summary coverage-badge bench bench-audio bench-report \
+        coverage-api coverage-summary coverage-badge bench bench-audio bench-video \
+        bench-report bench-publish \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
         seg-assets emoji-data
 
@@ -37,8 +38,9 @@ help:
 	@echo "  coverage-api Generate API handler coverage (node --test)"
 	@echo "  coverage-summary Print one markdown summary of whatever has been measured"
 	@echo "  coverage-badge Re-measure main.js and rewrite the README coverage badge"
-	@echo "  bench        Run the performance benchmark, then write an HTML dashboard + CSV"
+	@echo "  bench        Run the performance benchmark (voice + video), then write an HTML dashboard + CSV"
 	@echo "  bench-report Re-render the newest run (HTML + CSV + markdown), without re-measuring"
+	@echo "  bench-publish Publish the newest run to docs/benchmarks.md + docs/benchmark.html"
 	@echo "  clean        Remove build artifacts"
 	@echo ""
 
@@ -401,14 +403,20 @@ coverage-badge: coverage-e2e
 # docs/benchmarking.md before drawing a conclusion from the output.
 #
 # Tunable without editing anything:
-#   BENCH_SIZES=2,4,8   room sizes to sweep          (default 2,3,4,6)
-#   BENCH_HOLD_MS=60000 steady-state window per run  (default 30000)
-#   BENCH_REPS=5        repeats for join latency     (default 3)
-#   BENCH_LABEL=...     records the network conditions of this run
+#   BENCH_SIZES=2,4,8        room sizes, voice sweep   (default 2,3,4,6)
+#   BENCH_VIDEO_SIZES=2,3    room sizes, camera sweep  (default 2,3,4 — video is
+#                            heavier: every peer encodes N-1 copies of 720p in
+#                            one browser, so the sweep stops sooner)
+#   BENCH_HOLD_MS=60000      steady-state window per run  (default 30000)
+#   BENCH_REPS=5             repeats for the join scenarios (default 3)
+#   BENCH_LABEL=...          records the network conditions of this run
+#
+# To run one half only, skip this target and name the spec:
+#   npx playwright test --project=bench tests/bench/video-bench.spec.js
 #
 # One worker, always: two scenarios measured side by side would be competing
 # for the same cores and both numbers would be wrong.
-bench: bench-audio
+bench: bench-audio bench-video
 	@BENCH_RUN_ID=$${BENCH_RUN_ID:-$$(date +%Y%m%d-%H%M%S)}; \
 	export BENCH_RUN_ID; \
 	NODE_OPTIONS=--disable-warning=DEP0205 npx playwright test --project=bench --workers=1; \
@@ -417,7 +425,8 @@ bench: bench-audio
 		--html "bench-results/$$BENCH_RUN_ID.html" \
 		--csv  "bench-results/$$BENCH_RUN_ID.csv"; \
 	echo ""; \
-	echo "→ open bench-results/$$BENCH_RUN_ID.html to read it as charts"
+	echo "→ open bench-results/$$BENCH_RUN_ID.html to read it as charts"; \
+	echo "→ make bench-publish  to put this run in docs/benchmarks.md"
 
 # The speech-shaped WAV Chromium's fake microphone reads. Seeded, so it is
 # byte-identical everywhere and two runs stay comparable; regenerated only when
@@ -427,6 +436,16 @@ bench-audio: tests/bench/assets/bench-speech.wav
 tests/bench/assets/bench-speech.wav: scripts/gen-bench-audio.mjs
 	@node scripts/gen-bench-audio.mjs $@
 
+# The same decision one layer up: the scene Chromium's fake CAMERA reads.
+# Chromium's built-in fake camera is a flat gradient with a bouncing ball, which
+# an encoder predicts almost perfectly — measured against it a camera would look
+# like it costs a fraction of what it costs. ~80 MB of raw Y4M, gitignored, and
+# regenerated only when missing.
+bench-video: tests/bench/assets/bench-scene.y4m
+
+tests/bench/assets/bench-scene.y4m: scripts/gen-bench-video.mjs
+	@node scripts/gen-bench-video.mjs $@
+
 # Re-render the newest run. Writes the dashboard beside its NDJSON so the two
 # never drift apart, and prints the markdown for pasting into a pull request.
 bench-report:
@@ -435,6 +454,27 @@ bench-report:
 	if [ -z "$$LATEST" ]; then node scripts/bench-report.mjs; exit 0; fi; \
 	node scripts/bench-report.mjs "$$LATEST" \
 		--html "$${LATEST%.ndjson}.html" --csv "$${LATEST%.ndjson}.csv"
+
+# Publish a run into the public documentation: the tables go into
+# docs/benchmarks.md between its markers, and the dashboard becomes
+# docs/benchmark.html, which GitHub Pages serves.
+#
+# Manual, like `make coverage-badge`, and for the same two reasons: CI cannot
+# commit to `main`, and numbers measured on a shared CI runner would publish the
+# runner's noise as the product's performance. Publish from a machine you can
+# name, and commit the two files afterwards.
+#
+#   make bench-publish                              # the newest run on disk
+#   make bench-publish RUN=bench-results/x.ndjson   # a particular one
+bench-publish:
+	@set -e; \
+	RUN=$${RUN:-$$(ls -1 bench-results/*.ndjson 2>/dev/null | tail -1)}; \
+	if [ -z "$$RUN" ]; then \
+		echo "No benchmark run to publish. Run \`make bench\` first." >&2; exit 1; \
+	fi; \
+	echo "→ publishing $$RUN"; \
+	node scripts/bench-report.mjs "$$RUN" --publish > /dev/null; \
+	echo "→ commit docs/benchmarks.md and docs/benchmark.html to publish them"
 
 clean:
 	cd src-tauri && cargo clean

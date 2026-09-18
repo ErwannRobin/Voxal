@@ -24,6 +24,7 @@ make coverage-api # api/ handler coverage via node --test → coverage-api/lcov.
 make coverage-summary # one markdown table over whatever has been measured
 make bench        # performance benchmark (bench project) → HTML dashboard + CSV + markdown
 make bench-report # re-render the newest benchmark run without re-measuring
+make bench-publish # put the newest run into docs/benchmarks.md + docs/benchmark.html
 make build-debug  # macOS debug bundle — registers voxal:// URL scheme
 make build        # Release build
 make seg-assets   # Stage the background-effects WASM runtime into src/assets/seg/
@@ -41,11 +42,17 @@ make release      # Bump version, build signed release, publish GitHub Release
 
 **Benchmark** (`tests/bench/`, project `bench`) is a third project with its own
 `testDir`, so it cannot be collected by `unit` or `mesh` however they are
-grepped — `make test` and `make test-mesh` never run it. It sweeps room size,
-noise-suppression mode, join latency and host migration over real WebRTC, reads
-the app's OWN instrumentation back out (`networkUsageSnapshot()`,
-`conn.webrtcStats`), and writes a self-contained HTML dashboard, NDJSON and CSV to `bench-results/`
-(gitignored). The HTML is the one to open and the one to share — it carries the
+grepped — `make test` and `make test-mesh` never run it. Two specs:
+`mesh-bench.spec.js` sweeps room size, noise-suppression mode, join latency and
+host migration for **voice**; `video-bench.spec.js` asks the same four questions
+of **camera and screen** (`video-scale`, `video-background`, `screen-share`,
+`video-join-latency`), pinned to `p2p-only` so a run states its topology rather
+than inheriting one — the SFU side is not in the harness. Both read the app's
+OWN instrumentation back out (`networkUsageSnapshot()`, `conn.webrtcStats`), and
+write a self-contained HTML dashboard, NDJSON and CSV to `bench-results/`
+(gitignored). The one thing read straight from `getStats()` is the outgoing
+picture (resolution / fps / `qualityLimitationReason`), because the app records
+audio stats only — without it a room that buckled to 320x180 would look thrifty. The HTML is the one to open and the one to share — it carries the
 machine, the network label and the caveats in the page, so a screenshot of it
 cannot be quoted without its conditions. `scripts/bench-data.mjs` builds the one
 model that the markdown and the HTML both render, so the two can never disagree
@@ -54,9 +61,16 @@ no chart library — it has to open from `file://`).
 It asserts **no** performance thresholds — only liveness, so a zero means "cost
 nothing", never "never connected". Chromium's fake mic is replaced with a
 seeded speech-shaped WAV (`make bench-audio`), because the built-in 440 Hz sine
-would put Opus far below its real bitrate and understate every number. Read
-`docs/benchmarking.md` before quoting any of it: every peer shares one browser
-on loopback, so latency is a floor and CPU/RSS are whole-room totals.
+would put Opus far below its real bitrate and understate every number; its fake
+camera is replaced for the same reason with a seeded Y4M scene
+(`make bench-video`, ~80 MB, gitignored) — a moving subject over a textured room
+with per-frame grain, since the built-in bouncing ball encodes at a fraction of
+`CAMERA_MAX_BITRATE`. A run is published to the public docs by
+`make bench-publish` (`docs/benchmarks.md` between its `<!-- bench-results -->`
+markers, plus `docs/benchmark.html`) — manual, never CI, exactly like
+`make coverage-badge` and for the same reasons. Read `docs/benchmarking.md`
+before quoting any of it: every peer shares one browser on loopback, so latency
+is a floor and CPU/RSS are whole-room totals.
 
 **Mesh tests** (`tests/e2e/mesh.spec.js`, tagged `@mesh`) spin up a real local PeerServer (the `peer` dev dep) and drive N isolated Chromium contexts through real PeerJS signaling + WebRTC — covering room formation, rename propagation, audio mesh, and host migration. They use Chromium fake-media flags + `--disable-features=WebRtcHideLocalIpsWithMdns` (loopback ICE) and run with `retries: 2`. The app points PeerJS at the local broker via `localStorage['peerjs-server']` (read by `peerServerOptions()` in `main.js`; defaults to `{}` = cloud broker in production). Kept out of `make test`/`make test-e2e` so the fast suite stays flake-free.
 

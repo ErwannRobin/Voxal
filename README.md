@@ -125,6 +125,7 @@ component by component.
 - [Video routing — mesh vs. SFU, and why audio never relays](docs/video-routing.md)
 - [Camera background effects](docs/video-effects.md)
 - [TURN & ICE configuration](docs/turn-and-ice.md)
+- [Benchmark results — what a room costs](docs/benchmarks.md) ([dashboard](https://erwannrobin.github.io/Voxal/benchmark.html), method: [`docs/benchmarking.md`](docs/benchmarking.md))
 - [Deployment & self-hosting](docs/deployment.md)
 - [Mobile build and fork guide (iOS/Android)](docs/mobile.md)
 - [Release workflow and signing](docs/release.md)
@@ -157,6 +158,8 @@ If you modify files under `src/`, sync assets for mobile builds with `make cap-s
 | `make test-mesh` | Multi-peer WebRTC E2E against a real local PeerServer |
 | `make coverage` | Rust + E2E + API coverage reports, summarised in one table |
 | `make coverage-badge` | Re-measure `main.js` and rewrite the coverage badge above |
+| `make bench` | Performance benchmark: voice and camera, real WebRTC, no thresholds |
+| `make bench-publish` | Put the newest benchmark run into the [published results](docs/benchmarks.md) |
 
 `make test` is what CI gates on: `main` takes no merge whose tests are not green
 ([how that is enforced](docs/required-checks.md)). The multi-peer `make test-mesh`

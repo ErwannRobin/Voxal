@@ -9,7 +9,7 @@
 // validated in both modes (adjacent CVD dE 24.7 light / 26.8 dark, normal-vision
 // 33.6 / 31.8, all contrast >= 3:1). Two series is the whole vocabulary — a third
 // measure gets its own chart rather than a third hue or a second y-axis.
-import { bits, mib, pct, ms, secs, num } from './bench-data.mjs';
+import { bits, mib, pct, ms, secs, num, res, fps } from './bench-data.mjs';
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -205,7 +205,12 @@ export function renderHtml(m) {
 
   const join = m.join[0];
   const migration = m.migration[0];
+  const videoJoin = m.videoJoin[0];
   const peakCpu = Math.max(...m.scale.map((r) => r.cpuPercent ?? 0), 0) || null;
+  // The video twin of the hero figure, and the reason the page has two: an
+  // audio room and a video room are two different products to a domestic
+  // uplink, and averaging them into one number would hide which one you are in.
+  const videoHero = m.marginalVideoUploadBps;
 
   // Exactly one hero figure on the page: the marginal cost of one more peer,
   // which is the number a room-size decision actually turns on — and a slope
@@ -216,6 +221,14 @@ export function renderHtml(m) {
   if (migration)
     tiles.push(
       tile('Host vanishes', secs(migration.audioRestoredMs), `until audio is back, ${migration.survivors} survivors`)
+    );
+  if (videoHero !== null && videoHero !== undefined)
+    tiles.push(
+      tile('Each peer, on camera', bits(videoHero), 'extra upload per peer added, cameras on')
+    );
+  if (videoJoin)
+    tiles.push(
+      tile('See a live room', ms(videoJoin.visibleMs), `until every camera is on screen, over ${videoJoin.reps} reps`)
     );
   if (peakCpu) tiles.push(tile('Peak room CPU', pct(peakCpu), `the whole room on ${env.cpus ?? '?'} cores`));
 
@@ -331,12 +344,119 @@ export function renderHtml(m) {
     );
   }
 
+  // ── video ──────────────────────────────────────────────────────────────────
+  //
+  // The camera's own mesh, kept apart from audio's throughout: every figure
+  // here is the `camera`/`screen` column of the bandwidth sampler, never the
+  // total, which would fold the voice call back in.
+  if (m.video.length) {
+    const xs = m.videoCurve.map((r) => r.size);
+    const body =
+      m.videoCurve.length >= 2
+        ? legend(['Sharer upload', 'Receiver download']) +
+          lineChart({
+            id: 'chart-video-upload',
+            xs,
+            xLabel: 'Peers in the room, all on camera',
+            yLabel: 'Camera bandwidth',
+            format: bits,
+            xTickLabel: (x) => String(x),
+            series: [
+              { name: 'Sharer upload', points: m.videoCurve.map((r) => ({ x: r.size, y: r.sharerUp })) },
+              { name: 'Receiver download', points: m.videoCurve.map((r) => ({ x: r.size, y: r.receiverDown })) },
+            ],
+          })
+        : '<p class="empty">Only one room size was measured — sweep at least two (<code>BENCH_VIDEO_SIZES</code>) to draw the curve.</p>';
+
+    const cpuLimited = m.video.some((r) => r.picture && r.picture.limitation === 'cpu');
+    sections.push(
+      card(
+        'Camera: one encode per peer',
+        'Under the <code>p2p-only</code> preference this harness pins, camera is a full mesh too — so a sharer encodes and uploads one stream <strong>per other peer</strong>, at roughly twenty times an Opus stream. The shipped default may route this through an SFU above two participants instead, and that topology is <strong>not</strong> measured here.' +
+          (cpuLimited || m.videoSaturatedMachine
+            ? ' <strong>This machine ran out of room.</strong> One browser was encoding every peer\'s camera at once, and when that happens the frame rate falls first — while the encoder still blames its own bitrate cap. Read the rows below as a ceiling of the harness, not of the app.'
+            : ''),
+        body +
+          table(
+            ['Peers', 'Cameras', 'Sharer up', 'Receiver down', 'Picture sent', 'Room CPU', 'Room RSS'],
+            m.video.map((r) => [
+              r.size,
+              r.allCameras ? `all (${r.cameras})` : r.cameras,
+              bits(r.sharerUp),
+              bits(r.receiverDown),
+              r.picture
+                ? `${res(r.picture)} @ ${fps(r.picture.fps)}` +
+                  (r.picture.limitation && r.picture.limitation !== 'none' ? ` (${r.picture.limitation})` : '')
+                : '—',
+              pct(r.cpuPercent),
+              mib(r.rssBytes),
+            ])
+          )
+      )
+    );
+  }
+
+  if (m.videoBackground.length) {
+    sections.push(
+      card(
+        'What a camera background costs',
+        'Segmentation runs locally — MediaPipe in WebAssembly plus a WebGL composite — so it is paid in <strong>CPU and frame rate</strong>, never on the wire. <em>Still running</em> counts the sharing peers that still had the effect on at the end: the app turns a background off in silence both when the runtime cannot start and when the device cannot sustain it, so a <code>0</code> there means the row is not the cost of the effect.',
+        barChart({
+          id: 'chart-video-bg',
+          label: 'Room CPU',
+          format: pct,
+          rows: m.videoBackground.map((r) => ({
+            label: r.mode,
+            value: r.cpuPercent,
+            note: r.isDefault
+              ? 'default'
+              : r.effects && r.effects.engaged === 0
+                ? (r.effects.dropped ? 'the app gave up here' : 'never started')
+                : null,
+          })),
+        }) +
+          table(
+            ['Background', 'Peers', 'Cameras', 'Still running', 'Sharer up', 'Picture sent', 'Room CPU'],
+            m.videoBackground.map((r) => [
+              r.mode + (r.isDefault ? ' (default)' : ''),
+              r.size,
+              r.cameras,
+              r.effects ? `${r.effects.engaged}/${r.effects.sharers}` : '—',
+              bits(r.sharerUp),
+              r.picture ? `${res(r.picture)} @ ${fps(r.picture.fps)}` : '—',
+              pct(r.cpuPercent),
+            ])
+          )
+      )
+    );
+  }
+
+  if (m.screen.length) {
+    sections.push(
+      card(
+        'Screen share',
+        'A screen is not a camera: its ceiling is 1.5 Mb/s rather than 600 kb/s, it is pinned to <code>maintain-resolution</code> so it drops frames rather than letters, and the peer-count downscale never touches it.',
+        table(
+          ['Peers', 'Sharer up', 'Watcher down', 'Picture sent', 'Room CPU', 'Room RSS'],
+          m.screen.map((r) => [
+            r.size,
+            bits(r.sharerUp),
+            bits(r.watcherDown),
+            r.picture ? `${res(r.picture)} @ ${fps(r.picture.fps)}` : '—',
+            pct(r.cpuPercent),
+            mib(r.rssBytes),
+          ])
+        )
+      )
+    );
+  }
+
   // ── timings ────────────────────────────────────────────────────────────────
   //
   // Two numbers each, and the point of both is a sentence, not a plot. A chart
   // of two near-identical values would say less than the line explaining why
   // they are near-identical.
-  if (join || migration) {
+  if (join || migration || videoJoin) {
     const rows = [];
     if (join)
       rows.push(
@@ -355,6 +475,15 @@ export function renderHtml(m) {
       )}</strong> and audio is back at <strong>${esc(
           ms(migration.audioRestoredMs)
         )}</strong> — the same moment, give or take, and both are simply the ~7 s heartbeat timeout. The room is leaderless for seven seconds; it is never <em>silent</em>, because audio connections to non-host peers are never torn down during a migration.</div></div>`
+      );
+    if (videoJoin)
+      rows.push(
+        `<div class="timing"><div class="timing-head">Joining a room that is already on camera</div>
+      <div class="timing-body">The room is audible at <strong>${esc(
+        ms(videoJoin.audibleMs)
+      )}</strong> and every camera in it is on screen at <strong>${esc(
+          ms(videoJoin.visibleMs)
+        )}</strong>. Hearing and seeing are separate numbers: a picture needs its own call per sharer, a keyframe and a decoder, and the mesh builds them one at a time.</div></div>`
       );
     sections.push(card('Timings', '', `<div class="timings">${rows.join('')}</div>`));
   }
@@ -512,7 +641,7 @@ footer { color:var(--muted); font-size:12.5px; margin-top:28px; line-height:1.6;
     env.cpuModel ? ` (${esc(env.cpuModel)})` : ''
   } &middot; network <code>${esc(env.label ?? 'unknown')}</code><br>${esc(m.runCount)} runs &middot; ${esc(
     m.at ?? ''
-  )} &middot; <code>${esc(m.file)}</code></p>
+  )} &middot; run <code>${esc(String(m.file).split('/').pop().replace(/\.ndjson$/, ''))}</code></p>
   </div>
   <button class="theme-toggle" id="theme-toggle" type="button">Theme</button>
 </header>
