@@ -22,8 +22,8 @@ make coverage-rust # Rust coverage via cargo-llvm-cov → src-tauri/target/llvm-
 make coverage-e2e # main.js V8 coverage via Playwright+monocart → coverage/index.html
 make coverage-api # api/ handler coverage via node --test → coverage-api/lcov.info
 make coverage-summary # one markdown table over whatever has been measured
-make bench        # performance benchmark (bench project) → report + CSV
-make bench-report # re-print the newest benchmark run without re-measuring
+make bench        # performance benchmark (bench project) → HTML dashboard + CSV + markdown
+make bench-report # re-render the newest benchmark run without re-measuring
 make build-debug  # macOS debug bundle — registers voxal:// URL scheme
 make build        # Release build
 make seg-assets   # Stage the background-effects WASM runtime into src/assets/seg/
@@ -44,7 +44,13 @@ make release      # Bump version, build signed release, publish GitHub Release
 grepped — `make test` and `make test-mesh` never run it. It sweeps room size,
 noise-suppression mode, join latency and host migration over real WebRTC, reads
 the app's OWN instrumentation back out (`networkUsageSnapshot()`,
-`conn.webrtcStats`), and writes NDJSON + CSV to `bench-results/` (gitignored).
+`conn.webrtcStats`), and writes a self-contained HTML dashboard, NDJSON and CSV to `bench-results/`
+(gitignored). The HTML is the one to open and the one to share — it carries the
+machine, the network label and the caveats in the page, so a screenshot of it
+cannot be quoted without its conditions. `scripts/bench-data.mjs` builds the one
+model that the markdown and the HTML both render, so the two can never disagree
+about a number; `scripts/bench-html.mjs` is the renderer (inline SVG, no CDN and
+no chart library — it has to open from `file://`).
 It asserts **no** performance thresholds — only liveness, so a zero means "cost
 nothing", never "never connected". Chromium's fake mic is replaced with a
 seeded speech-shaped WAV (`make bench-audio`), because the built-in 440 Hz sine

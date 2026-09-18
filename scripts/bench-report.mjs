@@ -1,27 +1,32 @@
-// Fold a benchmark run's NDJSON into one markdown table plus a CSV for plotting.
+// Report a benchmark run: a markdown table on stdout, a self-contained HTML
+// dashboard, and a per-peer CSV for plotting elsewhere.
 //
 // Deliberately the same shape as scripts/coverage-report.mjs: every section is
 // optional, a scenario that was not run is reported as absent rather than
 // failing, so a partial run still produces a readable report.
 //
+// All three renderings read ONE model (scripts/bench-data.mjs) so they cannot
+// disagree about a number.
+//
 // Usage:
-//   node scripts/bench-report.mjs                  # newest run in bench-results/
-//   node scripts/bench-report.mjs <file.ndjson>    # a specific run
-//   node scripts/bench-report.mjs --csv out.csv    # also write the per-peer CSV
-import { readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-
-const RESULTS_DIR = process.env.BENCH_OUT_DIR || 'bench-results';
-
-function newestRunFile() {
-  if (!existsSync(RESULTS_DIR)) return null;
-  const files = readdirSync(RESULTS_DIR).filter((f) => f.endsWith('.ndjson')).sort();
-  return files.length ? join(RESULTS_DIR, files[files.length - 1]) : null;
-}
+//   node scripts/bench-report.mjs                    # newest run in bench-results/
+//   node scripts/bench-report.mjs <file.ndjson>      # a specific run
+//   node scripts/bench-report.mjs --html out.html    # also write the dashboard
+//   node scripts/bench-report.mjs --csv out.csv      # also write the per-peer CSV
+import { writeFileSync, existsSync } from 'node:fs';
+import {
+  RESULTS_DIR, newestRunFile, loadRuns, buildModel,
+  median, bits, mib, pct, ms, num,
+} from './bench-data.mjs';
+import { renderHtml } from './bench-html.mjs';
 
 const args = process.argv.slice(2);
-const csvIdx = args.indexOf('--csv');
-const csvPath = csvIdx !== -1 ? args[csvIdx + 1] : null;
+const flag = (name) => {
+  const i = args.indexOf(name);
+  return i === -1 ? null : args[i + 1] ?? null;
+};
+const csvPath = flag('--csv');
+const htmlPath = flag('--html');
 const file = args.find((a) => a.endsWith('.ndjson')) || newestRunFile();
 
 if (!file || !existsSync(file)) {
@@ -29,41 +34,14 @@ if (!file || !existsSync(file)) {
   process.exit(0);
 }
 
-const runs = readFileSync(file, 'utf8')
-  .split('\n')
-  .filter(Boolean)
-  .map((line, i) => {
-    try {
-      return JSON.parse(line);
-    } catch {
-      console.error(`! skipping unparseable line ${i + 1} of ${file}`);
-      return null;
-    }
-  })
-  .filter(Boolean);
-
-// ── formatting ───────────────────────────────────────────────────────────────
-
-const bits = (bps) => {
-  if (bps === null || bps === undefined) return '—';
-  if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(2)} Mb/s`;
-  if (bps >= 1000) return `${Math.round(bps / 1000)} kb/s`;
-  return `${Math.round(bps)} b/s`;
-};
-const mib = (b) => (b === null || b === undefined ? '—' : `${(b / 1048576).toFixed(0)} MiB`);
-const pct = (n) => (n === null || n === undefined ? '—' : `${n.toFixed(0)}%`);
-const ms = (n) => (n === null || n === undefined ? '—' : `${Math.round(n)} ms`);
-const num = (n, d = 1) => (n === null || n === undefined ? '—' : n.toFixed(d));
-
-function median(values) {
-  const xs = values.filter((v) => typeof v === 'number' && Number.isFinite(v)).sort((a, b) => a - b);
-  if (!xs.length) return null;
-  const mid = xs.length >> 1;
-  return xs.length % 2 ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2;
+const runs = loadRuns(file);
+if (!runs.length) {
+  console.log(`${file} has no readable runs.`);
+  process.exit(0);
 }
+const m = buildModel(runs, file);
 
-const linkValues = (run, key) => run.peers.flatMap((p) => p.links.map((l) => l[key]));
-const byRole = (run, speaking) => run.peers.filter((p) => p.speaking === speaking);
+// ── markdown ─────────────────────────────────────────────────────────────────
 
 function table(headers, rows) {
   if (!rows.length) return '';
@@ -75,10 +53,10 @@ function table(headers, rows) {
 }
 
 const out = [];
-const env = runs[0].env || {};
+const env = m.env;
 out.push('# Voxal performance benchmark');
 out.push('');
-out.push(`Run \`${file}\` — ${runs.length} scenario runs, ${runs[0].at}`);
+out.push(`Run \`${file}\` — ${m.runCount} scenario runs, ${m.at}`);
 out.push('');
 out.push(
   `**Machine**: ${env.platform}/${env.arch}, ${env.cpus} cores` +
@@ -96,10 +74,7 @@ out.push(
 );
 out.push('');
 
-// ── Scenario A: mesh scale ───────────────────────────────────────────────────
-
-const scale = runs.filter((r) => r.scenario === 'mesh-scale');
-if (scale.length) {
+if (m.scale.length) {
   out.push('## Mesh scaling');
   out.push('');
   out.push(
@@ -111,45 +86,31 @@ if (scale.length) {
   out.push(
     table(
       ['Peers', 'Speakers', 'Speaker ↑', 'Listener ↑', 'Listener ↓', 'RTT p50', 'Loss p50', 'Room CPU', 'Room RSS'],
-      scale
-        .sort((a, b) => a.size - b.size || a.speakers - b.speakers)
-        .map((run) => [
-          run.size,
-          run.speakers,
-          bits(median(byRole(run, true).map((p) => p.usage.outTotal))),
-          bits(median(byRole(run, false).map((p) => p.usage.outTotal))),
-          bits(median(byRole(run, false).map((p) => p.usage.inTotal))),
-          ms(median(linkValues(run, 'rttMs'))),
-          `${num(median(linkValues(run, 'lossPercent')))}%`,
-          run.process.measured ? pct(run.process.cpuPercentOfOneCore) : '—',
-          run.process.measured ? mib(run.process.rssBytes) : '—',
-        ])
+      m.scale.map((r) => [
+        r.size,
+        r.speakers,
+        bits(r.speakerUp),
+        r.allSpeaking ? '—' : bits(r.listenerUp),
+        r.allSpeaking ? '—' : bits(r.listenerDown),
+        ms(r.rttMs),
+        `${num(r.lossPercent)}%`,
+        pct(r.cpuPercent),
+        mib(r.rssBytes),
+      ])
     )
   );
   out.push('');
-
-  // The per-peer cost of one extra peer, which is the claim worth checking.
-  const single = scale.filter((r) => r.speakers === 1).sort((a, b) => a.size - b.size);
-  if (single.length >= 2) {
-    const first = single[0];
-    const last = single[single.length - 1];
-    const upFirst = median(byRole(first, true).map((p) => p.usage.outTotal));
-    const upLast = median(byRole(last, true).map((p) => p.usage.outTotal));
-    if (upFirst && upLast) {
-      out.push(
-        `A speaker's upload went from **${bits(upFirst)}** at ${first.size} peers to ` +
-          `**${bits(upLast)}** at ${last.size} — ×${num(upLast / upFirst, 2)} for ` +
-          `×${num((last.size - 1) / (first.size - 1), 2)} the links.`
-      );
-      out.push('');
-    }
+  if (m.marginalUploadBps !== null) {
+    out.push(
+      `Every peer added costs a speaker another **${bits(m.marginalUploadBps)}** of upload ` +
+        `(least-squares slope across ${m.curve.length} room sizes). A listener pays it too — ` +
+        `\`usedtx=0\` keeps packets flowing while muted.`
+    );
+    out.push('');
   }
 }
 
-// ── Scenario B: noise suppression ────────────────────────────────────────────
-
-const ns = runs.filter((r) => r.scenario === 'noise-suppression');
-if (ns.length) {
+if (m.ns.length) {
   out.push('## Noise suppression cost');
   out.push('');
   out.push(
@@ -160,23 +121,20 @@ if (ns.length) {
   out.push(
     table(
       ['Mode', 'Peers', 'Speaker ↑', 'Room CPU', 'Room RSS', 'JS heap p50'],
-      ns.map((run) => [
-        `\`${run.storage['noise-suppression']}\``,
-        run.size,
-        bits(median(byRole(run, true).map((p) => p.usage.outTotal))),
-        run.process.measured ? pct(run.process.cpuPercentOfOneCore) : '—',
-        run.process.measured ? mib(run.process.rssBytes) : '—',
-        mib(median(run.peers.map((p) => p.jsHeapBytes))),
+      m.ns.map((r) => [
+        `\`${r.mode}\`${r.isDefault ? ' (default)' : ''}`,
+        r.size,
+        bits(r.speakerUp),
+        pct(r.cpuPercent),
+        mib(r.rssBytes),
+        mib(r.jsHeapBytes),
       ])
     )
   );
   out.push('');
 }
 
-// ── Scenario C: join latency ─────────────────────────────────────────────────
-
-const joinRuns = runs.filter((r) => r.scenario === 'join-latency');
-if (joinRuns.length) {
+if (m.join.length) {
   out.push('## Join latency');
   out.push('');
   out.push('Clock starts at the join, not at browser launch — a real user already has a browser open.');
@@ -184,16 +142,13 @@ if (joinRuns.length) {
   out.push(
     table(
       ['Room size', 'Reps', 'Signaling open', 'First audio heard'],
-      joinRuns.map((run) => [run.size, run.samples.length, ms(run.medianSignalingMs), ms(run.medianAudibleMs)])
+      m.join.map((r) => [r.size, r.reps, ms(r.signalingMs), ms(r.audibleMs)])
     )
   );
   out.push('');
 }
 
-// ── Scenario D: host migration ───────────────────────────────────────────────
-
-const migration = runs.filter((r) => r.scenario === 'host-migration');
-if (migration.length) {
+if (m.migration.length) {
   out.push('## Host migration');
   out.push('');
   out.push(
@@ -204,21 +159,25 @@ if (migration.length) {
   out.push(
     table(
       ['Room size', 'Survivors', 'New host elected', 'Audio restored'],
-      migration.map((run) => [run.size, run.survivors, ms(run.hostElectedMs), ms(run.audioRestoredMs)])
+      m.migration.map((r) => [r.size, r.survivors, ms(r.hostElectedMs), ms(r.audioRestoredMs)])
     )
   );
   out.push('');
 }
 
-const missing = ['mesh-scale', 'noise-suppression', 'join-latency', 'host-migration'].filter(
-  (s) => !runs.some((r) => r.scenario === s)
-);
-if (missing.length) {
-  out.push(`_Not measured in this run: ${missing.map((m) => `\`${m}\``).join(', ')}._`);
+if (m.missing.length) {
+  out.push(`_Not measured in this run: ${m.missing.map((s) => `\`${s}\``).join(', ')}._`);
   out.push('');
 }
 
 console.log(out.join('\n'));
+
+// ── HTML ─────────────────────────────────────────────────────────────────────
+
+if (htmlPath) {
+  writeFileSync(htmlPath, renderHtml(m));
+  console.error(`→ visual report: ${htmlPath}`);
+}
 
 // ── CSV ──────────────────────────────────────────────────────────────────────
 

@@ -906,6 +906,12 @@ mode, join latency and host migration. Gaps, in rough priority order:
 - **No audio-quality score.** Comparing codecs and concealment under loss needs
   ViSQOL or PESQ against the source WAV. Whether either installs cleanly in the
   CI image is unknown — it may need its own container.
+- **CPU needs repeats before it is worth plotting.** Two runs of the same sweep
+  on the same machine gave 30/60/110% and 30/45/90% of one core, while the
+  bandwidth columns reproduced to the kilobit (48/97/145 kb/s both times). The
+  dashboard prints the caveat on the card, but the honest fix is to run each
+  configuration three times and plot the median — the harness does not do that
+  yet, and `BENCH_REPS` currently only applies to join latency.
 - **CPU is a whole-room total, never per-peer**, because one Chromium serves
   every context. Per-peer attribution would need one browser per peer, which
   costs far more than the number is worth — but the limitation has to stay

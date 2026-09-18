@@ -12,9 +12,23 @@ benchmark ends up lying:
 ## 1. The harness
 
 ```sh
-make bench           # sweep, then print the report and write a CSV
-make bench-report    # re-print the newest run without re-measuring
+make bench           # sweep, then write the dashboard + CSV and print the markdown
+make bench-report    # re-render the newest run without re-measuring
 ```
+
+Each run produces three things beside each other in `bench-results/`:
+
+| File | For |
+|---|---|
+| `<run>.html` | **The one to open.** A self-contained dashboard — charts, a headline figure, and every chart's table twin. No network needed; it opens from `file://`. |
+| `<run>.md` (stdout) | Markdown tables, for pasting into a pull request or an issue. |
+| `<run>.csv` | One row per peer per run, for plotting somewhere else. |
+| `<run>.ndjson` | The raw measurements. |
+
+The HTML is the shareable artefact: it carries the machine, the network label and
+the caveats in the page itself, so a screenshot of it cannot be quoted without
+them. That matters more than it sounds — most misleading benchmark numbers are
+true numbers that lost their conditions on the way to the reader.
 
 Everything is tunable from the environment:
 

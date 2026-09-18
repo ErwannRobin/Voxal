@@ -1614,6 +1614,14 @@ seems too sharp".
   warm-up ordering. The bandwidth columns are stable to a few percent; CPU is
   not. Compare CPU only across repeated runs, and only between configurations
   measured back to back.
+- **An inline SVG chart scaled by its `viewBox` becomes unreadable on a phone,
+  and nothing warns you.** `width:100%` on an SVG with a 760-wide viewBox means a
+  12px label renders at about 4px at 390px viewport — no overflow, no error, no
+  console warning, just text nobody can read. Fix: keep the chart at a legible
+  minimum width below the breakpoint (`min-width:620px`) and let its container
+  scroll sideways. A swipe beats a magnifying glass, and a horizontal-overflow
+  check on the *document* passes either way, so it will not catch this — look at
+  a phone-width screenshot instead.
 - **Host migration does not actually interrupt the audio.** The benchmark
   measures two clocks — new host elected, and audio restored — expecting a gap.
   There is almost none (7879 ms vs 7884 ms in a 3-peer run): both are just the

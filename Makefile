@@ -37,8 +37,8 @@ help:
 	@echo "  coverage-api Generate API handler coverage (node --test)"
 	@echo "  coverage-summary Print one markdown summary of whatever has been measured"
 	@echo "  coverage-badge Re-measure main.js and rewrite the README coverage badge"
-	@echo "  bench        Run the performance benchmark (bench project) and print the report"
-	@echo "  bench-report Re-print the report for the newest run, without re-measuring"
+	@echo "  bench        Run the performance benchmark, then write an HTML dashboard + CSV"
+	@echo "  bench-report Re-render the newest run (HTML + CSV + markdown), without re-measuring"
 	@echo "  clean        Remove build artifacts"
 	@echo ""
 
@@ -413,7 +413,11 @@ bench: bench-audio
 	export BENCH_RUN_ID; \
 	NODE_OPTIONS=--disable-warning=DEP0205 npx playwright test --project=bench --workers=1; \
 	echo ""; \
-	node scripts/bench-report.mjs "bench-results/$$BENCH_RUN_ID.ndjson" --csv "bench-results/$$BENCH_RUN_ID.csv"
+	node scripts/bench-report.mjs "bench-results/$$BENCH_RUN_ID.ndjson" \
+		--html "bench-results/$$BENCH_RUN_ID.html" \
+		--csv  "bench-results/$$BENCH_RUN_ID.csv"; \
+	echo ""; \
+	echo "→ open bench-results/$$BENCH_RUN_ID.html to read it as charts"
 
 # The speech-shaped WAV Chromium's fake microphone reads. Seeded, so it is
 # byte-identical everywhere and two runs stay comparable; regenerated only when
@@ -423,8 +427,14 @@ bench-audio: tests/bench/assets/bench-speech.wav
 tests/bench/assets/bench-speech.wav: scripts/gen-bench-audio.mjs
 	@node scripts/gen-bench-audio.mjs $@
 
+# Re-render the newest run. Writes the dashboard beside its NDJSON so the two
+# never drift apart, and prints the markdown for pasting into a pull request.
 bench-report:
-	@node scripts/bench-report.mjs
+	@set -e; \
+	LATEST=$$(ls -1 bench-results/*.ndjson 2>/dev/null | tail -1); \
+	if [ -z "$$LATEST" ]; then node scripts/bench-report.mjs; exit 0; fi; \
+	node scripts/bench-report.mjs "$$LATEST" \
+		--html "$${LATEST%.ndjson}.html" --csv "$${LATEST%.ndjson}.csv"
 
 clean:
 	cd src-tauri && cargo clean
