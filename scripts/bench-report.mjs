@@ -18,9 +18,10 @@ import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { basename } from 'node:path';
 import {
   RESULTS_DIR, newestRunFile, loadRuns, buildModel,
-  median, bits, mib, pct, ms, num, res, fps,
+  median, bits, mib, bytes, count, pct, ms, num, res, fps,
 } from './bench-data.mjs';
 import { renderHtml } from './bench-html.mjs';
+import { HISTORY_FILE, loadHistory, appendRun, trend, delta } from './bench-history.mjs';
 
 const args = process.argv.slice(2);
 const flag = (name) => {
@@ -42,6 +43,44 @@ if (!runs.length) {
   process.exit(0);
 }
 const m = buildModel(runs, file);
+
+// ── Version history ──────────────────────────────────────────────────────────
+//
+// Appended BEFORE the report is rendered, so that a publish's own numbers are
+// the newest row of the trend table it prints rather than being absent from it.
+// The markers in docs/benchmarks.md are validated first: a publish that is
+// going to fail must not leave a row behind in the history file.
+const PUBLISH_MD = 'docs/benchmarks.md';
+const PUBLISH_HTML = 'docs/benchmark.html';
+const BLOCK_START = '<!-- bench-results -->';
+const BLOCK_END = '<!-- /bench-results -->';
+const publishing = args.includes('--publish');
+
+let publishPage = null;
+if (publishing) {
+  if (!existsSync(PUBLISH_MD)) {
+    console.error(`bench-report: ${PUBLISH_MD} does not exist — nothing published.`);
+    process.exit(1);
+  }
+  publishPage = readFileSync(PUBLISH_MD, 'utf8');
+  if (
+    publishPage.indexOf(BLOCK_START) === -1 ||
+    publishPage.indexOf(BLOCK_END) === -1 ||
+    publishPage.indexOf(BLOCK_END) < publishPage.indexOf(BLOCK_START)
+  ) {
+    console.error(
+      `bench-report: no ${BLOCK_START} … ${BLOCK_END} markers in ${PUBLISH_MD}, nothing written.`
+    );
+    process.exit(1);
+  }
+  const { total } = appendRun(m, basename(file, '.ndjson'));
+  console.error(`bench-report: recorded this run in ${HISTORY_FILE} (${total} runs kept).`);
+}
+
+// The trend is read whether or not this invocation publishes: a plain
+// `make bench-report` should still be able to say "slower than last release".
+const history = trend(loadHistory());
+const historyDelta = delta(history.rows);
 
 // ── markdown ─────────────────────────────────────────────────────────────────
 
@@ -66,6 +105,16 @@ out.push(
     `, ${mib(env.totalMemBytes)} RAM, node ${env.node}`
 );
 out.push(`**Network**: \`${env.label}\``);
+if (m.build.version || m.build.commit) {
+  out.push(
+    `**Build**: ${m.build.version ? `v${m.build.version}` : 'unknown version'}` +
+      (m.build.commit ? ` @ \`${m.build.commit}\`` : '') +
+      (m.build.branch && m.build.branch !== 'HEAD' ? ` (${m.build.branch})` : '') +
+      // A dirty tree is stated, not hidden: these numbers cannot be reproduced
+      // from the commit beside them.
+      (m.build.dirty ? ' — **uncommitted changes in the tree**' : '')
+  );
+}
 out.push('');
 out.push(
   '> Every peer of a room runs in one Chromium on one machine over loopback. ' +
@@ -75,6 +124,195 @@ out.push(
     'See `docs/benchmarking.md`.'
 );
 out.push('');
+
+// ── app-level ────────────────────────────────────────────────────────────────
+
+if (m.startup) {
+  const c = m.startup.cold;
+  const w = m.startup.warm;
+  out.push('## Startup');
+  out.push('');
+  out.push(
+    'Two loads, because they are two different people. **Cold** is a first visit with an ' +
+      'empty cache — it pays for every byte of the shell. **Warm** is the same person ' +
+      'tomorrow: the bytes are cached, so what is left is parse, execute and boot, which is ' +
+      'the half that gets worse without the download getting bigger.'
+  );
+  out.push('');
+  out.push(
+    '_Interactive_ is `domContentLoadedEventEnd`, and for this app that genuinely is the ' +
+      'moment it works: `main.js` is a classic script at the end of `<body>`, so parsing ' +
+      'blocks on it and the bootstrap runs in a `DOMContentLoaded` listener that has to ' +
+      'return before the mark is taken.'
+  );
+  out.push('');
+  out.push(
+    table(
+      ['Load', 'First paint', 'Interactive p50', 'Interactive p95', 'Everything loaded', 'Transferred'],
+      [
+        [
+          `Cold (×${m.startup.reps})`,
+          ms(c.fcpMs?.p50),
+          ms(c.interactiveMs?.p50),
+          ms(c.interactiveMs?.p95),
+          ms(c.loadMs?.p50),
+          bytes(m.startup.shell?.resources?.transferBytes),
+        ],
+        [
+          `Warm (×${m.startup.reps})`,
+          ms(w.fcpMs?.p50),
+          ms(w.interactiveMs?.p50),
+          ms(w.interactiveMs?.p95),
+          ms(w.loadMs?.p50),
+          bytes(w.transferBytes),
+        ],
+      ]
+    )
+  );
+  out.push('');
+  if (m.startup.shell?.resources) {
+    const sh = m.startup.shell;
+    out.push(
+      `The shell is **${bytes(sh.resources.decodedBytes)}** over **${sh.resources.count}** requests, ` +
+        `of which **${bytes(sh.scripts.decodedBytes)}** is script. ` +
+        'The segmentation runtime (~12 MB of MediaPipe WASM) is **not** in that figure — it is ' +
+        'fetched lazily, the first time somebody turns a camera background on.'
+    );
+    out.push('');
+    if (sh.byFile?.length) {
+      out.push(
+        table(
+          ['Heaviest files', 'Decoded', 'Transferred'],
+          sh.byFile.slice(0, 6).map((f) => [`\`${f.name}\``, bytes(f.decodedBytes), bytes(f.transferBytes)])
+        )
+      );
+      out.push('');
+    }
+  }
+  out.push(
+    '> **Loopback, uncompressed, no TLS.** The harness serves `src/` straight off disk, so ' +
+      'the transfer half of these numbers is a floor and the *Transferred* column is closer ' +
+      'to the raw size than to what a browser pulls from `web.voxal.app`. What the table is ' +
+      'honestly good for is the boot cost, the asset budget, and the delta between two ' +
+      'versions measured the same way.'
+  );
+  out.push('');
+  out.push(
+    '> **The warm row\'s *Transferred* belongs to the server, not to the app.** What a reload ' +
+      'can take from the cache is decided by the cache headers the static server sends, and ' +
+      'those are the harness\'s, not production\'s. The warm row\'s *timings* are still the ' +
+      'app\'s own — parse, compile and boot with the bytes already in hand.'
+  );
+  out.push('');
+}
+
+if (m.connect) {
+  out.push('## Cold path to a live call');
+  out.push('');
+  out.push(
+    'The *Join latency* section further down starts its clock at the join, because somebody ' +
+      'already in a call has the app open. This one starts it at the open, because somebody ' +
+      'who was sent a link does not: load the shell, reach the broker, negotiate, hear the ' +
+      'room. It is the number a link recipient actually experiences, and the only one that ' +
+      'regresses when the shell gets heavier.'
+  );
+  out.push('');
+  out.push(
+    table(
+      ['Journey', 'Reps', 'App usable', 'Then…', 'Total'],
+      [
+        [
+          'Open → hosting a room',
+          m.connect.reps,
+          ms(m.connect.create.loadMs),
+          `${ms(m.connect.create.actionMs)} to a room code`,
+          `**${ms(m.connect.create.totalMs)}**`,
+        ],
+        [
+          `Open → hearing a live ${m.connect.roomSize}-peer room`,
+          m.connect.reps,
+          ms(m.connect.join.loadMs),
+          `${ms(m.connect.join.signalingMs)} signaling, ${ms(m.connect.join.audibleMs)} to first audio`,
+          `**${ms(m.connect.join.totalMs)}**`,
+        ],
+      ]
+    )
+  );
+  out.push('');
+}
+
+if (m.memory) {
+  const mem = m.memory;
+  out.push('## Memory footprint');
+  out.push('');
+  out.push(
+    'Every figure below is taken after a forced collection (`HeapProfiler.collectGarbage`) ' +
+      'and read from the same CDP counters DevTools shows — `performance.memory` is quantized ' +
+      'to 100 KB buckets, which is wide enough to hide a room\'s worth of growth.'
+  );
+  out.push('');
+  out.push(
+    table(
+      ['State', 'JS heap', 'DOM nodes', 'Listeners'],
+      [
+        ['Idle, home screen', bytes(mem.idle.heapBytes), count(mem.idle.domNodes), count(mem.idle.listeners)],
+        [
+          `In a ${mem.size}-peer call`,
+          bytes(mem.room.heapBytes),
+          count(mem.room.domNodes),
+          count(mem.room.listeners),
+        ],
+      ]
+    )
+  );
+  out.push('');
+  out.push(
+    `### Join / leave churn (${mem.churnCycles} cycles)`
+  );
+  out.push('');
+  out.push(
+    'One peer joining and leaving the same live room over and over — the shape of a long ' +
+      'day of calls. Growth is measured from the **first** cycle, never from a page that has ' +
+      'never joined: the first join allocates structures that are then reused, and counting ' +
+      'that one-time cost as growth would report a leak in a page that has none.'
+  );
+  out.push('');
+  out.push(
+    table(
+      ['Measure', 'After cycle 1', `After cycle ${mem.churnCycles}`, 'Growth', 'Per rejoin'],
+      [
+        [
+          'JS heap',
+          bytes(mem.churn.baseline?.heapBytes),
+          bytes(mem.churn.cycles[mem.churn.cycles.length - 1]?.heapBytes),
+          bytes(mem.churn.heapGrowthBytes),
+          bytes(mem.churn.perCycleHeapBytes),
+        ],
+        [
+          'DOM nodes',
+          count(mem.churn.baseline?.domNodes),
+          count(mem.churn.cycles[mem.churn.cycles.length - 1]?.domNodes),
+          count(mem.churn.nodeGrowth),
+          '—',
+        ],
+        [
+          'Listeners',
+          count(mem.churn.baseline?.listeners),
+          count(mem.churn.cycles[mem.churn.cycles.length - 1]?.listeners),
+          count(mem.churn.listenerGrowth),
+          '—',
+        ],
+      ]
+    )
+  );
+  out.push('');
+  out.push(
+    '_A fixed step between cycle 1 and cycle N is a one-off; a **per-rejoin** figure that ' +
+      'holds steady is a leak._ Neither is asserted here — this table is evidence to read, ' +
+      'not a gate, and a heap figure moves for reasons a benchmark cannot see.'
+  );
+  out.push('');
+}
 
 if (m.scale.length) {
   out.push('## Mesh scaling');
@@ -329,6 +567,117 @@ if (m.videoJoin.length) {
   out.push('');
 }
 
+// ── across versions ──────────────────────────────────────────────────────────
+//
+// The only section that is not about this run. Everything above says what the
+// app costs; this says whether that is more than it used to.
+
+if (history.rows.length) {
+  out.push('## Across versions');
+  out.push('');
+  out.push(
+    `The last ${Math.min(history.rows.length, 10)} published runs, newest last, from ` +
+      `\`${HISTORY_FILE}\` — a thin summary of each \`make bench-publish\`, committed so the ` +
+      'trend survives the raw measurements, which are not.'
+  );
+  out.push('');
+  const shown = history.rows.slice(-10);
+  out.push(
+    table(
+      ['Version', 'Commit', 'Date', 'Startup', 'Cold join', 'Shell', 'Idle heap', 'Room heap', 'Per-peer ↑'],
+      shown.map((r) => [
+        (r.version ? `v${r.version}` : '—') + (r.dirty ? ' ⚠︎' : ''),
+        r.commit ? `\`${r.commit}\`` : '—',
+        String(r.at).slice(0, 10),
+        ms(r.metrics.startupInteractiveMs),
+        ms(r.metrics.coldJoinMs),
+        bytes(r.metrics.shellBytes),
+        bytes(r.metrics.idleHeapBytes),
+        bytes(r.metrics.roomHeapBytes),
+        bits(r.metrics.marginalUploadBps),
+      ])
+    )
+  );
+  out.push('');
+  if (shown.some((r) => r.dirty)) {
+    out.push('_⚠︎ measured on a tree with uncommitted changes — not reproducible from the commit beside it._');
+    out.push('');
+  }
+
+  if (historyDelta) {
+    // Only the measures where both runs have a number, and only where the move
+    // is bigger than the noise a benchmark of this kind produces run to run.
+    const NOISE_PCT = 5;
+    const NAMES = {
+      startupInteractiveMs: ['Startup (interactive)', ms],
+      startupFcpMs: ['First paint', ms],
+      warmInteractiveMs: ['Warm startup', ms],
+      shellBytes: ['Shell weight', bytes],
+      scriptBytes: ['Script weight', bytes],
+      coldCreateMs: ['Open → hosting', ms],
+      coldJoinMs: ['Open → hearing a room', ms],
+      joinAudibleMs: ['Join a live room', ms],
+      migrationAudioMs: ['Host migration', ms],
+      idleHeapBytes: ['Idle heap', bytes],
+      roomHeapBytes: ['In-room heap', bytes],
+      churnHeapPerCycleBytes: ['Heap per rejoin', bytes],
+      marginalUploadBps: ['Upload per peer added', bits],
+      marginalVideoUploadBps: ['Video upload per peer', bits],
+    };
+    const moved = Object.entries(NAMES)
+      .map(([key, [label, fmt]]) => ({ key, label, fmt, d: historyDelta.metrics[key] }))
+      .filter((r) => r.d && r.d.pct !== null && Math.abs(r.d.pct) >= NOISE_PCT);
+
+    const fromLabel = historyDelta.from.version ? `v${historyDelta.from.version}` : historyDelta.from.commit || 'the previous run';
+    const toLabel = historyDelta.to.version ? `v${historyDelta.to.version}` : historyDelta.to.commit || 'this run';
+    out.push(`### ${fromLabel} → ${toLabel}`);
+    out.push('');
+    if (!moved.length) {
+      out.push(`Nothing moved by more than ${NOISE_PCT}%. Every measure above is within the run-to-run noise of this harness.`);
+      out.push('');
+    } else {
+      out.push(
+        table(
+          ['Measure', fromLabel, toLabel, 'Change'],
+          moved.map((r) => [
+            r.label,
+            r.fmt(r.d.from),
+            r.fmt(r.d.to),
+            // Lower is better for every measure in this table, so the arrow can
+            // be read the same way in every row without a per-metric direction.
+            `${r.d.pct > 0 ? '▲' : '▼'} ${Math.abs(r.d.pct).toFixed(0)}%`,
+          ])
+        )
+      );
+      out.push('');
+      out.push(
+        `_Only moves of ${NOISE_PCT}% or more are listed, and ▲ is worse in every row — lower ` +
+          'is better for all of them. A move here is a lead to investigate, not a verdict: ' +
+          'two runs on the same machine days apart still differ by what else that machine was doing.'
+      );
+      out.push('');
+    }
+  }
+
+  if (history.incomparable.length) {
+    out.push(
+      `> **${history.incomparable.length} earlier run(s) are not in the table above**, because ` +
+        'they were measured on a different machine or under a different network label. ' +
+        'They are still in the history file. A trend line drawn through two different ' +
+        'laptops shows the laptops, not the app.'
+    );
+    out.push('');
+  }
+} else if (m.startup || m.connect || m.memory) {
+  out.push('## Across versions');
+  out.push('');
+  out.push(
+    `No history yet — \`${HISTORY_FILE}\` is written by \`make bench-publish\`, one line per ` +
+      'published run. After two publishes this section becomes a trend.'
+  );
+  out.push('');
+}
+
 if (m.missing.length) {
   out.push(`_Not measured in this run: ${m.missing.map((s) => `\`${s}\``).join(', ')}._`);
   out.push('');
@@ -348,26 +697,17 @@ console.log(out.join('\n'));
 // published figures are as fresh as the last person who ran this — which is why
 // the block carries the run's date, machine and network label, and why the page
 // says in its own words how to tell whether it has gone stale.
+//
+// The third thing a publish writes is one line in docs/bench-history.ndjson.
+// That happened at the top of this file, before the report was rendered, so
+// this run's own numbers are the newest row of the trend table it prints. The
+// markers below were validated there too — a publish that is going to fail must
+// not leave a row behind in the history.
 
-const PUBLISH_MD = 'docs/benchmarks.md';
-const PUBLISH_HTML = 'docs/benchmark.html';
-const BLOCK_START = '<!-- bench-results -->';
-const BLOCK_END = '<!-- /bench-results -->';
-
-if (args.includes('--publish')) {
-  if (!existsSync(PUBLISH_MD)) {
-    console.error(`bench-report: ${PUBLISH_MD} does not exist — nothing published.`);
-    process.exit(1);
-  }
-  const page = readFileSync(PUBLISH_MD, 'utf8');
+if (publishing) {
+  const page = publishPage;
   const from = page.indexOf(BLOCK_START);
   const to = page.indexOf(BLOCK_END);
-  if (from === -1 || to === -1 || to < from) {
-    console.error(
-      `bench-report: no ${BLOCK_START} … ${BLOCK_END} markers in ${PUBLISH_MD}, nothing written.`
-    );
-    process.exit(1);
-  }
 
   // The stdout report minus its own H1: the page already has a title, and two
   // of them would render as a document with no body above the fold. And the
@@ -394,7 +734,7 @@ if (args.includes('--publish')) {
   ].join('\n');
 
   writeFileSync(PUBLISH_MD, page.slice(0, from) + block + page.slice(to + BLOCK_END.length));
-  writeFileSync(PUBLISH_HTML, renderHtml(m));
+  writeFileSync(PUBLISH_HTML, renderHtml(m, history, historyDelta));
   console.error(
     `bench-report: published ${m.runCount} runs (${m.at}, \`${m.env.label}\`) ` +
       `to ${PUBLISH_MD} and ${PUBLISH_HTML}.`
@@ -410,7 +750,7 @@ if (args.includes('--publish')) {
 // ── HTML ─────────────────────────────────────────────────────────────────────
 
 if (htmlPath) {
-  writeFileSync(htmlPath, renderHtml(m));
+  writeFileSync(htmlPath, renderHtml(m, history, historyDelta));
   console.error(`→ visual report: ${htmlPath}`);
 }
 
@@ -424,7 +764,7 @@ if (csvPath) {
      'out_camera_bps', 'in_camera_bps', 'out_screen_bps', 'in_screen_bps',
      'sent_width', 'sent_height', 'sent_fps', 'quality_limitation', 'effects_engaged',
      'rtt_ms_p50', 'jitter_ms_p50', 'loss_pct_p50', 'js_heap_bytes',
-     'room_cpu_pct', 'room_rss_bytes', 'net_label'].join(','),
+     'room_cpu_pct', 'room_rss_bytes', 'net_label', 'app_version', 'commit'].join(','),
   ];
   for (const run of runs) {
     if (!Array.isArray(run.peers)) continue;
@@ -451,6 +791,8 @@ if (csvPath) {
         run.process?.cpuPercentOfOneCore?.toFixed(1) ?? '',
         run.process?.rssBytes ?? '',
         run.env?.label ?? '',
+        run.env?.build?.version ?? '',
+        run.env?.build?.commit ?? '',
       ].join(','));
     }
   }

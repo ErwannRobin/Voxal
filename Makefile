@@ -1,7 +1,7 @@
 .PHONY: help run run-web gen-build-info dev debug build build-debug build-signed build-web install clean lint check test \
         test-rust test-api test-e2e test-mesh coverage coverage-rust coverage-e2e \
-        coverage-api coverage-summary coverage-badge bench bench-audio bench-video \
-        bench-report bench-publish \
+        coverage-api coverage-summary coverage-badge bench bench-app bench-audio bench-video \
+        bench-report bench-publish bench-history \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
         seg-assets emoji-data
 
@@ -38,9 +38,11 @@ help:
 	@echo "  coverage-api Generate API handler coverage (node --test)"
 	@echo "  coverage-summary Print one markdown summary of whatever has been measured"
 	@echo "  coverage-badge Re-measure main.js and rewrite the README coverage badge"
-	@echo "  bench        Run the performance benchmark (voice + video), then write an HTML dashboard + CSV"
+	@echo "  bench        Run the performance benchmark (voice + video + app), then write an HTML dashboard + CSV"
+	@echo "  bench-app    Run only the app benchmark: startup, time to connect, memory"
 	@echo "  bench-report Re-render the newest run (HTML + CSV + markdown), without re-measuring"
 	@echo "  bench-publish Publish the newest run to docs/benchmarks.md + docs/benchmark.html"
+	@echo "  bench-history Print how the app's numbers have moved across published versions"
 	@echo "  clean        Remove build artifacts"
 	@echo ""
 
@@ -408,10 +410,15 @@ coverage-badge: coverage-e2e
 #                            heavier: every peer encodes N-1 copies of 720p in
 #                            one browser, so the sweep stops sooner)
 #   BENCH_HOLD_MS=60000      steady-state window per run  (default 30000)
-#   BENCH_REPS=5             repeats for the join scenarios (default 3)
+#   BENCH_REPS=5             repeats for the join and startup scenarios (default 3)
+#   BENCH_CHURN_CYCLES=10    join/leave cycles in the memory scenario (default 5)
 #   BENCH_LABEL=...          records the network conditions of this run
 #
-# To run one half only, skip this target and name the spec:
+# Three specs, and the app one runs first by name: startup and memory are the
+# scenarios most affected by a machine that has already been encoding video for
+# twenty minutes, so they are measured on a cold one.
+#
+# To run one part only, use `make bench-app` or name the spec:
 #   npx playwright test --project=bench tests/bench/video-bench.spec.js
 #
 # One worker, always: two scenarios measured side by side would be competing
@@ -427,6 +434,29 @@ bench: bench-audio bench-video
 	echo ""; \
 	echo "→ open bench-results/$$BENCH_RUN_ID.html to read it as charts"; \
 	echo "→ make bench-publish  to put this run in docs/benchmarks.md"
+
+# The app half on its own: startup, the cold path into a call, and the memory
+# footprint (tests/bench/app-bench.spec.js). Minutes rather than tens of
+# minutes, and the only part of the benchmark that is worth running on every
+# change to the shell — a script added to index.html moves these numbers and
+# nothing else in the suite would notice.
+#
+# Depends on the microphone input but NOT on the 80 MB camera scene: these
+# scenarios never start a video capture, and Chromium opens the file-backed
+# fake camera when a capture starts, not when the flag is parsed.
+#
+# Publishing works the same as a full run — the report says which scenarios are
+# absent, and the history row leaves them as gaps rather than zeroes.
+bench-app: bench-audio
+	@BENCH_RUN_ID=$${BENCH_RUN_ID:-app-$$(date +%Y%m%d-%H%M%S)}; \
+	export BENCH_RUN_ID; \
+	NODE_OPTIONS=--disable-warning=DEP0205 npx playwright test --project=bench --workers=1 \
+		tests/bench/app-bench.spec.js; \
+	echo ""; \
+	node scripts/bench-report.mjs "bench-results/$$BENCH_RUN_ID.ndjson" \
+		--html "bench-results/$$BENCH_RUN_ID.html"; \
+	echo ""; \
+	echo "→ open bench-results/$$BENCH_RUN_ID.html to read it as charts"
 
 # The speech-shaped WAV Chromium's fake microphone reads. Seeded, so it is
 # byte-identical everywhere and two runs stay comparable; regenerated only when
@@ -474,7 +504,18 @@ bench-publish:
 	fi; \
 	echo "→ publishing $$RUN"; \
 	node scripts/bench-report.mjs "$$RUN" --publish > /dev/null; \
-	echo "→ commit docs/benchmarks.md and docs/benchmark.html to publish them"
+	echo "→ commit docs/benchmarks.md, docs/benchmark.html and docs/bench-history.ndjson"
+
+# How the app's numbers have moved across published versions. Reads
+# docs/bench-history.ndjson — one line per `make bench-publish` — and reports
+# nothing else: it never measures and never writes.
+#
+# The history is the reason the raw runs can stay gitignored. It is also the
+# reason the publish step carries the machine and the network label: rows
+# measured somewhere else are kept but left out of the trend, because a line
+# drawn through two different laptops shows the laptops.
+bench-history:
+	@node scripts/bench-history.mjs
 
 clean:
 	cd src-tauri && cargo clean

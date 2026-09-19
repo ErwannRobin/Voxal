@@ -23,8 +23,10 @@ make coverage-e2e # main.js V8 coverage via Playwright+monocart → coverage/ind
 make coverage-api # api/ handler coverage via node --test → coverage-api/lcov.info
 make coverage-summary # one markdown table over whatever has been measured
 make bench        # performance benchmark (bench project) → HTML dashboard + CSV + markdown
+make bench-app    # only the app half: startup, time to connect, memory footprint
 make bench-report # re-render the newest benchmark run without re-measuring
 make bench-publish # put the newest run into docs/benchmarks.md + docs/benchmark.html
+make bench-history # how the app's numbers moved across published versions
 make build-debug  # macOS debug bundle — registers voxal:// URL scheme
 make build        # Release build
 make seg-assets   # Stage the background-effects WASM runtime into src/assets/seg/
@@ -42,15 +44,22 @@ make release      # Bump version, build signed release, publish GitHub Release
 
 **Benchmark** (`tests/bench/`, project `bench`) is a third project with its own
 `testDir`, so it cannot be collected by `unit` or `mesh` however they are
-grepped — `make test` and `make test-mesh` never run it. Two specs:
-`mesh-bench.spec.js` sweeps room size, noise-suppression mode, join latency and
-host migration for **voice**; `video-bench.spec.js` asks the same four questions
+grepped — `make test` and `make test-mesh` never run it. Three specs:
+`app-bench.spec.js` measures the app before any call (`app-startup`,
+`app-connect`, `app-memory` — it runs first by name, so startup and memory are
+taken on a machine that has not yet spent twenty minutes encoding video, and
+`make bench-app` runs it alone); `mesh-bench.spec.js` sweeps room size,
+noise-suppression mode, join latency and host migration for **voice**;
+`video-bench.spec.js` asks the same four questions
 of **camera and screen** (`video-scale`, `video-background`, `screen-share`,
 `video-join-latency`), pinned to `p2p-only` so a run states its topology rather
-than inheriting one — the SFU side is not in the harness. Both read the app's
-OWN instrumentation back out (`networkUsageSnapshot()`, `conn.webrtcStats`), and
+than inheriting one — the SFU side is not in the harness. All three read the
+app's OWN instrumentation back out (`networkUsageSnapshot()`,
+`conn.webrtcStats`, Navigation/Paint Timing, CDP `Performance.getMetrics`), and
 write a self-contained HTML dashboard, NDJSON and CSV to `bench-results/`
-(gitignored). The one thing read straight from `getStats()` is the outgoing
+(gitignored).
+
+The one thing read straight from `getStats()` is the outgoing
 picture (resolution / fps / `qualityLimitationReason`), because the app records
 audio stats only — without it a room that buckled to 320x180 would look thrifty. The HTML is the one to open and the one to share — it carries the
 machine, the network label and the caveats in the page, so a screenshot of it
@@ -71,6 +80,22 @@ markers, plus `docs/benchmark.html`) — manual, never CI, exactly like
 `make coverage-badge` and for the same reasons. Read `docs/benchmarking.md`
 before quoting any of it: every peer shares one browser on loopback, so latency
 is a floor and CPU/RSS are whole-room totals.
+
+The app half turns on two facts that a refactor could quietly break. Readiness
+is `domContentLoadedEventEnd` **because** `main.js` is a classic script at the
+end of `<body>` and the bootstrap runs in a `DOMContentLoaded` listener — add
+`defer` or make it a module and that mark stops meaning "usable". And heap
+figures come from CDP after a forced `HeapProfiler.collectGarbage`, never from
+`performance.memory`, which is quantized to 100 KB buckets.
+
+**Across versions**: `make bench-publish` also appends one summary line to
+`docs/bench-history.ndjson` — the only benchmark output that IS committed, and
+what the *Across versions* section of the report and dashboard is drawn from
+(`make bench-history` prints it). Each row carries the version, commit, machine
+and network label; rows whose machine or label differ from the newest are kept
+but left out of the trend, and an unmeasured scenario is stored as `null` rather
+than `0`. `scripts/bench-history.mjs` owns the file; nothing but a publish
+writes to it.
 
 **Mesh tests** (`tests/e2e/mesh.spec.js`, tagged `@mesh`) spin up a real local PeerServer (the `peer` dev dep) and drive N isolated Chromium contexts through real PeerJS signaling + WebRTC — covering room formation, rename propagation, audio mesh, and host migration. They use Chromium fake-media flags + `--disable-features=WebRtcHideLocalIpsWithMdns` (loopback ICE) and run with `retries: 2`. The app points PeerJS at the local broker via `localStorage['peerjs-server']` (read by `peerServerOptions()` in `main.js`; defaults to `{}` = cloud broker in production). Kept out of `make test`/`make test-e2e` so the fast suite stays flake-free.
 

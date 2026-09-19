@@ -10,6 +10,11 @@ numbers can be read without running anything.
   this page).
 - **[How it is measured, and what the numbers are not](benchmarking.md)** — read
   this before quoting anything below.
+- **`docs/bench-history.ndjson`** — one line per published run, so the numbers
+  can be followed across versions rather than only read at one. It appears with
+  the first `make bench-publish` after this harness landed; `make bench-history`
+  prints it as a table, and the *Across versions* section below is drawn from
+  it.
 - **[Why audio is a mesh and video may not be](video-routing.md)** — the design
   decision most of these numbers are a consequence of.
 
@@ -40,9 +45,9 @@ make bench            # measure (minutes, one worker, no thresholds)
 make bench-publish    # write the tables here and the dashboard beside them
 ```
 
-`make bench-publish` overwrites everything between the markers below and
-rewrites `docs/benchmark.html`; then both files are committed. Nothing in CI
-touches them — a benchmark measured on a shared CI runner would publish the
+`make bench-publish` overwrites everything between the markers below, rewrites
+`docs/benchmark.html` and appends one summary line to `bench-history.ndjson`;
+then all three files are committed. Nothing in CI touches them — a benchmark measured on a shared CI runner would publish the
 runner's noise as the product's performance, and `main` takes no direct push in
 any case (see [required checks](required-checks.md)).
 
