@@ -880,17 +880,37 @@ than assuming the keystrokes arrive in order.
 ## 📊 Benchmark harness — what it does not cover yet
 
 `make bench` (see `docs/benchmarking.md`) sweeps room size, noise-suppression
-mode, join latency and host migration for voice, and room size, background
-effect, screen share and join latency for video. Results are published to
-`docs/benchmarks.md` + `docs/benchmark.html` by `make bench-publish`. Gaps, in
-rough priority order:
+mode, join latency and host migration for voice; room size, background effect,
+screen share and join latency for video; and startup, the cold path into a call
+and the memory footprint for the app itself. Results are published to
+`docs/benchmarks.md` + `docs/benchmark.html` by `make bench-publish`, which also
+appends one summary line to `docs/bench-history.ndjson` — the trend across
+versions (`make bench-history`). Gaps, in rough priority order:
 
+- ~~**Nothing measures the app itself — startup, time to connect, memory.**~~
+  **Done.** `tests/bench/app-bench.spec.js` covers cold and warm startup with
+  the shell's asset budget (`app-startup`), the link-recipient journey from
+  opening the app to hearing a live room (`app-connect`), and idle / in-room /
+  join-leave-churn memory read from CDP after a forced collection
+  (`app-memory`). Two things it still cannot see: **the desktop and mobile
+  apps**, since it measures the web shell in Chromium — a Tauri cold start pays
+  for a process launch and a WebView, and a Capacitor one for an app launch,
+  neither of which is in these numbers; and **a real network**, since the shell
+  is served off disk on loopback, so the transfer half of every startup figure
+  is a floor rather than a download time.
 - ~~**Video is not measured at all.**~~ **Done.**
   `tests/bench/video-bench.spec.js` covers the camera mesh (`video-scale`), the
   background effect (`video-background`), screen share (`screen-share`) and
   "how long until I see the room" (`video-join-latency`), with the picture the
   encoder actually sustained recorded beside every bandwidth figure. It measures
   the **mesh** side only — see the next item.
+- **The version history has no guard against being published from two
+  different machines.** `docs/bench-history.ndjson` records the machine and the
+  network label of every row and leaves the non-matching ones out of the trend,
+  which is honest but quiet: publish from a second laptop and the trend simply
+  gets shorter, with a line of prose saying so. A warning at publish time —
+  "this machine has no history; the trend will not include this row" — would be
+  a few lines in `scripts/bench-history.mjs`.
 - **Nothing keeps the published page honest about its own age.** `make
   bench-publish` writes the run's date, machine and label into
   `docs/benchmarks.md`, and a human is expected to notice when that is old. A

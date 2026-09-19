@@ -9,7 +9,7 @@
 // validated in both modes (adjacent CVD dE 24.7 light / 26.8 dark, normal-vision
 // 33.6 / 31.8, all contrast >= 3:1). Two series is the whole vocabulary — a third
 // measure gets its own chart rather than a third hue or a second y-axis.
-import { bits, mib, pct, ms, secs, num, res, fps } from './bench-data.mjs';
+import { bits, mib, bytes, count, pct, ms, secs, num, res, fps } from './bench-data.mjs';
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -199,7 +199,7 @@ const tile = (label, value, note) =>
 
 // ── page ─────────────────────────────────────────────────────────────────────
 
-export function renderHtml(m) {
+export function renderHtml(m, history = { rows: [], incomparable: [] }, historyDelta = null) {
   const env = m.env || {};
   const sections = [];
 
@@ -217,6 +217,14 @@ export function renderHtml(m) {
   // over the whole sweep is harder to cherry-pick than a ratio between two
   // chosen sizes.
   const tiles = [];
+  // The app-level pair goes first: they are the numbers that describe the
+  // product to somebody who has not joined anything yet.
+  if (m.startup?.cold?.interactiveMs?.p50 !== undefined && m.startup?.cold?.interactiveMs?.p50 !== null)
+    tiles.push(
+      tile('App usable', ms(m.startup.cold.interactiveMs.p50), `cold load, ${m.startup.reps} reps`)
+    );
+  if (m.connect?.join?.totalMs !== undefined && m.connect?.join?.totalMs !== null)
+    tiles.push(tile('Link → hearing the room', ms(m.connect.join.totalMs), 'opening the app included'));
   if (join) tiles.push(tile('Join a live room', ms(join.audibleMs), `until the first audio, over ${join.reps} reps`));
   if (migration)
     tiles.push(
@@ -244,6 +252,127 @@ export function renderHtml(m) {
   </div>
   <div class="tiles">${tiles.join('')}</div>
 </section>`);
+
+  // ── starting the app ───────────────────────────────────────────────────────
+  //
+  // Before any of the call figures, because it is what happens before any call.
+  // Two bars rather than a line: cold and warm are two categories, not two
+  // points on a trend, and a line between them would imply something in
+  // between them exists.
+  if (m.startup) {
+    const c = m.startup.cold;
+    const w = m.startup.warm;
+    const sh = m.startup.shell || {};
+    sections.push(
+      card(
+        'Starting the app',
+        'Two loads, two different people. <strong>Cold</strong> is a first visit with an empty cache — it pays for every byte of the shell. <strong>Warm</strong> is the same person tomorrow: the bytes are cached, so what is left is parse, execute and boot. <em>Interactive</em> is <code>domContentLoadedEventEnd</code>, which for this app really is the moment it works — <code>main.js</code> is a classic script at the end of <code>&lt;body&gt;</code> and the bootstrap runs in a <code>DOMContentLoaded</code> listener that has to return before the mark is taken.',
+        barChart({
+          id: 'chart-startup',
+          label: 'Time to interactive',
+          format: ms,
+          rows: [
+            { label: 'Cold load', value: c?.interactiveMs?.p50, note: `${bytes(sh.resources?.transferBytes)} transferred` },
+            { label: 'Warm load', value: w?.interactiveMs?.p50, note: `${bytes(w?.transferBytes)} transferred` },
+          ],
+        }) +
+          table(
+            ['Load', 'First paint', 'Interactive p50', 'Interactive p95', 'Everything loaded', 'Transferred'],
+            [
+              ['Cold', ms(c?.fcpMs?.p50), ms(c?.interactiveMs?.p50), ms(c?.interactiveMs?.p95), ms(c?.loadMs?.p50), bytes(sh.resources?.transferBytes)],
+              ['Warm', ms(w?.fcpMs?.p50), ms(w?.interactiveMs?.p50), ms(w?.interactiveMs?.p95), ms(w?.loadMs?.p50), bytes(w?.transferBytes)],
+            ]
+          ) +
+          (sh.byFile?.length
+            ? table(
+                ['Heaviest files in the shell', 'Decoded', 'Transferred'],
+                sh.byFile.slice(0, 8).map((f) => [f.name, bytes(f.decodedBytes), bytes(f.transferBytes)])
+              )
+            : '') +
+          `<p class="note">The shell is <strong>${esc(bytes(sh.resources?.decodedBytes))}</strong> over ${esc(
+            String(sh.resources?.count ?? '—')
+          )} requests, <strong>${esc(
+            bytes(sh.scripts?.decodedBytes)
+          )}</strong> of it script. The segmentation runtime (~12&nbsp;MB of MediaPipe WASM) is not in that figure: it is fetched lazily, the first time somebody turns a camera background on. And the harness serves <code>src/</code> straight off disk with no compression and no TLS, so the transfer column is a floor — read it as an asset budget, not as a download time. The warm row's transfer figure is the harness's cache headers rather than production's; its <em>timings</em> are still the app's own, parse and boot with the bytes already in hand.</p>`
+      )
+    );
+  }
+
+  // ── getting into a call ────────────────────────────────────────────────────
+  if (m.connect) {
+    sections.push(
+      card(
+        'From a link to a live call',
+        'The <em>Timings</em> card further down starts its clock at the join, because somebody already in a call has the app open. This one starts it at the open, because somebody who was sent a link does not: load the shell, reach the broker, negotiate, hear the room. It is the only timing that regresses when the shell gets heavier.',
+        barChart({
+          id: 'chart-cold-connect',
+          label: 'Total, from opening the app',
+          format: ms,
+          rows: [
+            {
+              label: 'Open → hosting',
+              value: m.connect.create?.totalMs,
+              note: `${ms(m.connect.create?.loadMs)} app + ${ms(m.connect.create?.actionMs)} broker`,
+            },
+            {
+              label: 'Open → hearing',
+              value: m.connect.join?.totalMs,
+              note: `${ms(m.connect.join?.loadMs)} app + ${ms(m.connect.join?.audibleMs)} to first audio`,
+            },
+          ],
+        }) +
+          table(
+            ['Journey', 'Reps', 'App usable', 'Signaling', 'First audio', 'Total'],
+            [
+              ['Open → hosting a room', m.connect.reps, ms(m.connect.create?.loadMs), ms(m.connect.create?.actionMs), '—', ms(m.connect.create?.totalMs)],
+              [
+                `Open → hearing a live ${m.connect.roomSize}-peer room`,
+                m.connect.reps,
+                ms(m.connect.join?.loadMs),
+                ms(m.connect.join?.signalingMs),
+                ms(m.connect.join?.audibleMs),
+                ms(m.connect.join?.totalMs),
+              ],
+            ]
+          )
+      )
+    );
+  }
+
+  // ── memory ─────────────────────────────────────────────────────────────────
+  //
+  // The churn table is the part worth the space. An idle figure sizes a device;
+  // a per-rejoin figure is the one that ruins a long day of calls.
+  if (m.memory) {
+    const mem = m.memory;
+    const last = mem.churn?.cycles?.[mem.churn.cycles.length - 1];
+    sections.push(
+      card(
+        'Memory footprint',
+        'Taken after a forced collection and read from the same CDP counters DevTools shows — <code>performance.memory</code> is quantized to 100&nbsp;KB buckets, which is wide enough to hide a whole room of growth.',
+        table(
+          ['State', 'JS heap', 'DOM nodes', 'Listeners'],
+          [
+            ['Idle, home screen', bytes(mem.idle?.heapBytes), count(mem.idle?.domNodes), count(mem.idle?.listeners)],
+            [`In a ${mem.size}-peer call`, bytes(mem.room?.heapBytes), count(mem.room?.domNodes), count(mem.room?.listeners)],
+          ]
+        ) +
+          (mem.churn?.cycles?.length
+            ? table(
+                ['Join / leave churn', 'After cycle 1', `After cycle ${mem.churnCycles}`, 'Growth', 'Per rejoin'],
+                [
+                  ['JS heap', bytes(mem.churn.baseline?.heapBytes), bytes(last?.heapBytes), bytes(mem.churn.heapGrowthBytes), bytes(mem.churn.perCycleHeapBytes)],
+                  ['DOM nodes', count(mem.churn.baseline?.domNodes), count(last?.domNodes), count(mem.churn.nodeGrowth), '—'],
+                  ['Listeners', count(mem.churn.baseline?.listeners), count(last?.listeners), count(mem.churn.listenerGrowth), '—'],
+                ]
+              )
+            : '') +
+          `<p class="note">Growth is measured from the <strong>first</strong> cycle, never from a page that has never joined: a room's first join allocates structures that are then reused, and counting that one-time cost as growth would report a leak in a page that has none. A fixed step between cycle 1 and cycle ${esc(
+            String(mem.churnCycles ?? '—')
+          )} is a one-off; a per-rejoin figure that holds steady is a leak. Neither is asserted — this is evidence to read, not a gate.</p>`
+      )
+    );
+  }
 
   // ── mesh scaling ───────────────────────────────────────────────────────────
   if (m.curve.length) {
@@ -488,6 +617,110 @@ export function renderHtml(m) {
     sections.push(card('Timings', '', `<div class="timings">${rows.join('')}</div>`));
   }
 
+  // ── across versions ────────────────────────────────────────────────────────
+  //
+  // The only card that is not about this run. Bars over versions rather than a
+  // line: releases are not evenly spaced in time, and a line drawn across them
+  // would put a slope between two points that says nothing about the weeks
+  // between them.
+  //
+  // Only rows measured on the same machine under the same network label are
+  // plotted at all — a trend through two different laptops shows the laptops.
+  if (history.rows?.length) {
+    const shown = history.rows.slice(-8);
+    const versionLabel = (r) =>
+      (r.version ? `v${r.version}` : r.commit || String(r.at).slice(0, 10)) + (r.dirty ? ' ⚠︎' : '');
+
+    const trendCharts = [];
+    if (shown.some((r) => r.metrics.startupInteractiveMs !== null))
+      trendCharts.push(
+        barChart({
+          id: 'chart-history-startup',
+          label: 'Time to interactive, cold load',
+          format: ms,
+          rows: shown.map((r) => ({ label: versionLabel(r), value: r.metrics.startupInteractiveMs, note: String(r.at).slice(0, 10) })),
+        })
+      );
+    if (shown.some((r) => r.metrics.coldJoinMs !== null))
+      trendCharts.push(
+        barChart({
+          id: 'chart-history-join',
+          label: 'Open the app → hear a live room',
+          format: ms,
+          rows: shown.map((r) => ({ label: versionLabel(r), value: r.metrics.coldJoinMs, note: String(r.at).slice(0, 10) })),
+        })
+      );
+
+    const deltaRows = [];
+    if (historyDelta) {
+      const NOISE_PCT = 5;
+      const NAMES = {
+        startupInteractiveMs: ['Startup (interactive)', ms],
+        startupFcpMs: ['First paint', ms],
+        warmInteractiveMs: ['Warm startup', ms],
+        shellBytes: ['Shell weight', bytes],
+        scriptBytes: ['Script weight', bytes],
+        coldCreateMs: ['Open → hosting', ms],
+        coldJoinMs: ['Open → hearing a room', ms],
+        joinAudibleMs: ['Join a live room', ms],
+        migrationAudioMs: ['Host migration', ms],
+        idleHeapBytes: ['Idle heap', bytes],
+        roomHeapBytes: ['In-room heap', bytes],
+        churnHeapPerCycleBytes: ['Heap per rejoin', bytes],
+        marginalUploadBps: ['Upload per peer added', bits],
+        marginalVideoUploadBps: ['Video upload per peer', bits],
+      };
+      for (const [key, [label, fmt]] of Object.entries(NAMES)) {
+        const d = historyDelta.metrics[key];
+        if (!d || d.pct === null || Math.abs(d.pct) < NOISE_PCT) continue;
+        // ▲ reads as "worse" in every row of this table, because lower is
+        // better for all of them. The arrow carries it, not a colour.
+        deltaRows.push([label, fmt(d.from), fmt(d.to), `${d.pct > 0 ? '▲' : '▼'} ${Math.abs(d.pct).toFixed(0)}%`]);
+      }
+    }
+
+    const fromLabel = historyDelta ? versionLabel(historyDelta.from) : '';
+    const toLabel = historyDelta ? versionLabel(historyDelta.to) : '';
+
+    sections.push(
+      card(
+        'Across versions',
+        `The last ${shown.length} published run${shown.length === 1 ? '' : 's'}, from <code>docs/bench-history.ndjson</code> — a thin summary of each <code>make bench-publish</code>, committed so the trend survives the raw measurements, which are not.`,
+        trendCharts.join('') +
+          table(
+            ['Version', 'Commit', 'Date', 'Startup', 'Cold join', 'Shell', 'Idle heap', 'Room heap', 'Per-peer ↑'],
+            shown.map((r) => [
+              versionLabel(r),
+              r.commit || '—',
+              String(r.at).slice(0, 10),
+              ms(r.metrics.startupInteractiveMs),
+              ms(r.metrics.coldJoinMs),
+              bytes(r.metrics.shellBytes),
+              bytes(r.metrics.idleHeapBytes),
+              bytes(r.metrics.roomHeapBytes),
+              bits(r.metrics.marginalUploadBps),
+            ])
+          ) +
+          (historyDelta
+            ? deltaRows.length
+              ? table([`${fromLabel} → ${toLabel}`, fromLabel, toLabel, 'Change'], deltaRows) +
+                `<p class="note">Only moves of 5% or more are listed, and <strong>▲ is worse</strong> in every row — lower is better for all of them. A move here is a lead to investigate, not a verdict: two runs on the same machine days apart still differ by what else that machine was doing.</p>`
+              : `<p class="note">Nothing moved by more than 5% between ${esc(fromLabel)} and ${esc(
+                  toLabel
+                )}. Every measure is within this harness's run-to-run noise.</p>`
+            : '') +
+          (shown.some((r) => r.dirty)
+            ? `<p class="note">⚠︎ measured on a tree with uncommitted changes — not reproducible from the commit beside it.</p>`
+            : '') +
+          (history.incomparable?.length
+            ? `<p class="note"><strong>${esc(
+                String(history.incomparable.length)
+              )} earlier run(s) are not shown</strong>, because they were measured on a different machine or under a different network label. They are still in the history file. A trend line drawn through two different laptops shows the laptops, not the app.</p>`
+            : '')
+      )
+    );
+  }
+
   if (m.missing.length) {
     sections.push(
       `<p class="missing">Not measured in this run: ${m.missing.map((s) => `<code>${esc(s)}</code>`).join(', ')}.</p>`
@@ -623,6 +856,11 @@ tbody tr + tr td { border-top:1px solid var(--grid); }
 .timing-body strong { color:var(--text-primary); font-variant-numeric:tabular-nums; }
 
 .missing { color:var(--muted); font-size:13px; }
+/* A caveat that belongs to one card rather than to the page: smaller than the
+   body, above the muted floor, and width-limited like .sub so it reads as prose
+   and not as a second subtitle. */
+.note { color:var(--text-secondary); font-size:13px; margin:14px 0 0; max-width:74ch; }
+.note strong { color:var(--text-primary); }
 footer { color:var(--muted); font-size:12.5px; margin-top:28px; line-height:1.6; }
 
 @media (max-width:760px) {
@@ -641,7 +879,16 @@ footer { color:var(--muted); font-size:12.5px; margin-top:28px; line-height:1.6;
     env.cpuModel ? ` (${esc(env.cpuModel)})` : ''
   } &middot; network <code>${esc(env.label ?? 'unknown')}</code><br>${esc(m.runCount)} runs &middot; ${esc(
     m.at ?? ''
-  )} &middot; run <code>${esc(String(m.file).split('/').pop().replace(/\.ndjson$/, ''))}</code></p>
+  )} &middot; run <code>${esc(String(m.file).split('/').pop().replace(/\.ndjson$/, ''))}</code>${
+    // The build these numbers belong to. Without it the page is a set of
+    // figures with nothing to compare them to — and a dirty tree is said out
+    // loud, because such a run cannot be reproduced from the commit beside it.
+    m.build?.version || m.build?.commit
+      ? `<br>${m.build.version ? `v${esc(m.build.version)}` : 'unknown version'}${
+          m.build.commit ? ` &middot; <code>${esc(m.build.commit)}</code>` : ''
+        }${m.build.dirty ? ' &middot; <strong>uncommitted changes</strong>' : ''}`
+      : ''
+  }</p>
   </div>
   <button class="theme-toggle" id="theme-toggle" type="button">Theme</button>
 </header>

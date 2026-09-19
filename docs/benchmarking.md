@@ -41,13 +41,15 @@ Everything is tunable from the environment:
 | `BENCH_SIZES` | `2,3,4,6` | Room sizes for the voice sweep |
 | `BENCH_VIDEO_SIZES` | `2,3,4` | Room sizes for the camera sweep. Smaller on purpose: every peer encodes N−1 copies of 720p inside one browser |
 | `BENCH_HOLD_MS` | `30000` | Steady-state window per run |
-| `BENCH_REPS` | `3` | Repeats for the two join-latency scenarios |
+| `BENCH_REPS` | `3` | Repeats for the join-latency, startup and cold-connect scenarios |
+| `BENCH_CHURN_CYCLES` | `5` | Join → leave cycles in the memory scenario |
 | `BENCH_LABEL` | `unshaped-loopback` | Recorded with the run — use it to name the network conditions |
 | `BENCH_OUT_DIR` | `bench-results` | Where the NDJSON and CSV land |
 
-To run one half only, name the spec instead of using the target:
+To run one part only, use the app target or name the spec:
 
 ```sh
+make bench-app                                              # startup, connect, memory
 npx playwright test --project=bench tests/bench/video-bench.spec.js
 ```
 
@@ -59,6 +61,15 @@ into the public page with `make bench-publish` (§3), or pasted into a pull
 request for a one-off comparison.
 
 ### What it measures
+
+The app itself (`tests/bench/app-bench.spec.js`), which is what the product
+costs before anybody has said a word into it:
+
+| Scenario | Question |
+|---|---|
+| `app-startup` | How long until the app is usable, cold and warm — and how heavy is the shell that has to arrive first? |
+| `app-connect` | Somebody was sent a link. How long from opening it to hosting a room, or to hearing a live one? |
+| `app-memory` | What does it hold idle, what does a call add, and does leaving and rejoining a room leave anything behind? |
 
 Voice (`tests/bench/mesh-bench.spec.js`):
 
@@ -126,6 +137,37 @@ than asking you to remember them:
   app quietly falls back to the plain camera. The *Still running* column counts
   the peers that still had it on at the end — a `0` there means the row is not
   the cost of the effect, whatever its CPU figure says.
+
+The app-level scenarios have three of their own, and they are the ones most
+easily misread:
+
+- **The static server is not production.** `src/` is served straight off disk on
+  loopback, uncompressed and without TLS, so the *transfer* half of every
+  startup figure is a floor. The *Transferred* column is an asset budget, not a
+  download time. What the timings honestly measure is parse, compile and boot —
+  which is most of what a release can make worse.
+- **The warm-load transfer figure belongs to the server.** What a reload takes
+  from the cache is decided by the cache headers the static server sends, and
+  those are the harness's. Its *timings* are still the app's: the same work with
+  the bytes already in hand.
+- **`domContentLoadedEventEnd` is the readiness mark, and that is a fact about
+  this app's structure**, not a convention. `main.js` is a classic script at the
+  end of `<body>` — no `defer`, no module — so parsing blocks on it, and the
+  bootstrap runs in a `DOMContentLoaded` listener that has to return before the
+  mark is taken. Move `main.js` to a module or add `defer` and this metric stops
+  meaning "usable"; fix the metric in the same commit.
+- **Heap figures are CDP's, after a forced collection.** `performance.memory` is
+  quantized to 100 KB buckets unless Chromium is launched with
+  `--enable-precise-memory-info` — wide enough to hide a room's worth of growth
+  — so the numbers come from `Performance.getMetrics` and every one of them is
+  taken after `HeapProfiler.collectGarbage`. The record says which source
+  produced each figure; a `performance.memory` figure and a CDP figure are not
+  the same measurement and should not be compared.
+- **The churn table's baseline is cycle 1, not cycle 0.** A room's first join
+  allocates structures that are then reused. Measuring growth from a page that
+  has never joined would report that one-time cost as a leak. What a leak looks
+  like here is a *per-rejoin* figure that holds steady across cycles; a single
+  step between cycle 1 and cycle N is a one-off.
 
 ### Why the microphone is a file
 
@@ -223,6 +265,40 @@ that will not change:
 So the page is only ever as fresh as the last person who ran it, and it says so
 in its own words: the block carries the run's date, machine and network label.
 Refresh it before a release, or whenever a change moves the media path.
+
+### Tracking versions: `docs/bench-history.ndjson`
+
+A publish also appends **one line** to `docs/bench-history.ndjson`, which *is*
+committed — the only benchmark output that is. It holds a thin summary of each
+published run: the version, the commit, the machine, and a dozen headline
+figures (startup, cold connect, shell weight, idle and in-room heap, per-rejoin
+growth, marginal upload). Not the whole run — a full NDJSON is mostly per-peer
+detail that means nothing a month later. What survives is what a release note
+would quote.
+
+```sh
+make bench-history    # the trend, and what moved since the previous run
+```
+
+That file is the reason the raw runs can stay gitignored, and it is what the
+*Across versions* section of the report and the dashboard are drawn from. Three
+rules keep it honest:
+
+- **Only `make bench-publish` writes to it.** Never `make bench`, never CI —
+  same reason as the page itself.
+- **Rows measured somewhere else are kept, but left out of the trend.** Every
+  row carries the machine (down to the CPU model) and the network label, and a
+  row that does not match the newest one is counted and reported rather than
+  plotted. A trend line drawn through two different laptops shows the laptops.
+- **A missing scenario is a gap, not a zero.** Publishing a partial run (say,
+  `make bench-app` alone) leaves the measures it did not take as `null`. A
+  fabricated zero in a history file is a regression that never happened, and
+  somebody will spend an afternoon chasing it.
+
+Republishing the same run id replaces its row rather than adding a second one,
+so a correction stays a correction. And a run measured on a tree with
+uncommitted changes is marked `dirty` in the file and `⚠︎` in the tables: the
+numbers are real, but they cannot be reproduced from the commit beside them.
 
 ## 4. Comparing against other products
 

@@ -1674,3 +1674,48 @@ seems too sharp".
   ~7 s heartbeat timeout, because `MediaConnection`s to non-host peers are never
   torn down during migration. The room is leaderless for 7 seconds; it is never
   silent. Worth knowing before quoting migration as an outage.
+- **`performance.memory` is quantized to 100 KB buckets, which is wider than
+  most of what a memory benchmark is looking for.** Chromium rounds
+  `usedJSHeapSize` unless it is launched with `--enable-precise-memory-info`,
+  so a leak of a few tens of kilobytes per rejoin is invisible in it and a
+  deliberate saving looks like noise. CDP's `Performance.getMetrics` reports
+  `JSHeapUsedSize` exactly, and it comes with `Nodes`, `JSEventListeners` and
+  `Documents` — the three counters that actually catch a leak in this app,
+  since a heap figure can stay flat while roster rows, chat rows and `<audio>`
+  elements pile up. Playwright reaches it with
+  `page.context().newCDPSession(page)`, and `HeapProfiler.collectGarbage` is
+  what makes two samples comparable at all: without a forced collection the
+  difference between them is mostly what the allocator had not swept yet.
+- **A memory benchmark's baseline must be the FIRST cycle, not a fresh page.**
+  A room's first join allocates structures that are then reused, so measuring
+  growth from a page that has never joined reports that one-time cost as a leak
+  and sends somebody chasing it for an afternoon. Join, leave, *then* take the
+  baseline; a leak is a per-rejoin figure that holds steady, not a single step.
+- **`domContentLoadedEventEnd` is a real readiness mark for this app, and only
+  because of how `index.html` is built.** `main.js` is a classic script at the
+  end of `<body>` — no `defer`, no module — so parsing blocks on it, and the
+  bootstrap runs in a `DOMContentLoaded` listener, which has to return before
+  the mark is taken. By then `createRoom()` exists and a click does something.
+  Add `defer`, or move to modules, and the number keeps being emitted while
+  quietly meaning something else; `tests/bench/app-metrics.js` would have to
+  change in the same commit.
+- **`inRoom` is a `let`, so `window.inRoom` is `undefined`.** Top-level `let`
+  and `const` in a classic script are lexical globals and never become
+  properties of `window`, unlike `var` and function declarations (`leaveRoom`
+  is on `window`; `inRoom` is not). In a `page.evaluate()` it has to be read as
+  a bare identifier, which is why `getState()` guards every one of them with
+  `typeof`. A benchmark that polled `window.inRoom` would wait forever on a
+  peer that had joined perfectly.
+- **LCP is not in the performance timeline as an ordinary entry.**
+  `performance.getEntriesByType('largest-contentful-paint')` returns nothing;
+  it needs a `PerformanceObserver` with `buffered: true`, and one created and
+  read in the same tick can still come back empty on a page that has plainly
+  painted — two `requestAnimationFrame`s of grace fixes it. FCP, by contrast,
+  is a normal `paint` entry.
+- **A "warm load" measures the static server as much as the app.** What a
+  reload can take from the cache is decided by the cache headers the server
+  sends, so the warm *transfer* figure belongs to the harness, not to
+  production — with a server that sends none, a warm reload re-downloads
+  everything and the column repeats the cold one. The warm *timings* are still
+  the app's own: the same parse, compile and boot with the bytes in hand, and
+  they came out roughly twice as fast as cold in this container.

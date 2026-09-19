@@ -68,6 +68,24 @@ export const bits = (bps) => {
   return `${Math.round(bps)} b/s`;
 };
 export const mib = (b) => (b === null || b === undefined ? '—' : `${(b / 1048576).toFixed(0)} MiB`);
+/**
+ * Bytes at whatever scale they happen to be.
+ *
+ * `mib()` rounds to whole mebibytes, which is right for a process RSS and
+ * useless for an asset budget or a per-cycle heap delta — both of which live
+ * in the tens of kibibytes, where whole MiB prints every value as "0 MiB".
+ * Signed, because the numbers it formats are usually differences and a
+ * negative one is information, not an error.
+ */
+export const bytes = (b) => {
+  if (b === null || b === undefined) return '—';
+  const sign = b < 0 ? '−' : '';
+  const n = Math.abs(b);
+  if (n >= 1048576) return `${sign}${(n / 1048576).toFixed(n >= 10485760 ? 0 : 1)} MiB`;
+  if (n >= 1024) return `${sign}${(n / 1024).toFixed(n >= 10240 ? 0 : 1)} KiB`;
+  return `${sign}${Math.round(n)} B`;
+};
+export const count = (n) => (n === null || n === undefined ? '—' : `${n < 0 ? '−' : ''}${Math.abs(Math.round(n))}`);
 export const pct = (n) => (n === null || n === undefined ? '—' : `${n.toFixed(0)}%`);
 export const ms = (n) => (n === null || n === undefined ? '—' : `${Math.round(n)} ms`);
 export const res = (r) =>
@@ -233,9 +251,51 @@ export function buildModel(runs, file) {
 
   const videoJoinRuns = runs.filter((r) => r.scenario === 'video-join-latency');
 
+  // ── app-level ──────────────────────────────────────────────────────────────
+  //
+  // What the product costs before anybody speaks: how long it takes to become
+  // usable, how long it takes to be in a call from a standing start, and what
+  // it holds in memory while it sits there. These are the figures the version
+  // history is built from — they drift release by release without any one
+  // change looking expensive.
+  const startupRun = runs.find((r) => r.scenario === 'app-startup') || null;
+  const startup = startupRun
+    ? {
+        reps: startupRun.reps,
+        app: startupRun.app || {},
+        cold: startupRun.cold,
+        warm: startupRun.warm,
+        shell: startupRun.shell,
+      }
+    : null;
+
+  const connectRun = runs.find((r) => r.scenario === 'app-connect') || null;
+  const connect = connectRun
+    ? { reps: connectRun.reps, roomSize: connectRun.roomSize, create: connectRun.create, join: connectRun.join }
+    : null;
+
+  const memoryRun = runs.find((r) => r.scenario === 'app-memory') || null;
+  const memory = memoryRun
+    ? {
+        size: memoryRun.size,
+        churnCycles: memoryRun.churnCycles,
+        idle: memoryRun.idle,
+        room: memoryRun.room,
+        churn: memoryRun.churn,
+        process: memoryRun.process,
+      }
+    : null;
+
   return {
     file,
     env,
+    // The build these numbers belong to. Carried at the top level because
+    // everything that compares two runs — the history table, a release note —
+    // needs it before it needs any measurement.
+    build: env.build || {},
+    startup,
+    connect,
+    memory,
     at: runs[0]?.at || null,
     runCount: runs.length,
     scale,
@@ -281,6 +341,7 @@ export function buildModel(runs, file) {
     missing: [
       'mesh-scale', 'noise-suppression', 'join-latency', 'host-migration',
       'video-scale', 'video-background', 'screen-share', 'video-join-latency',
+      'app-startup', 'app-connect', 'app-memory',
     ].filter((s) => !runs.some((r) => r.scenario === s)),
   };
 }
