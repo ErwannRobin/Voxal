@@ -880,13 +880,30 @@ than assuming the keystrokes arrive in order.
 ## 📊 Benchmark harness — what it does not cover yet
 
 `make bench` (see `docs/benchmarking.md`) sweeps room size, noise-suppression
-mode, join latency and host migration. Gaps, in rough priority order:
+mode, join latency and host migration for voice, and room size, background
+effect, screen share and join latency for video. Results are published to
+`docs/benchmarks.md` + `docs/benchmark.html` by `make bench-publish`. Gaps, in
+rough priority order:
 
-- **Video is not measured at all.** Every scenario pins `video-mode-enabled:
-  false`. Camera and screen are their own full-mesh `MediaConnection` sets with
-  their own bitrate caps (`cameraMaxBitrate()`, `SCREEN_MAX_BITRATE = 1.5 Mb/s`),
-  so they dominate the bandwidth story the moment anybody turns a camera on —
-  and the audio-only numbers currently published say nothing about it.
+- ~~**Video is not measured at all.**~~ **Done.**
+  `tests/bench/video-bench.spec.js` covers the camera mesh (`video-scale`), the
+  background effect (`video-background`), screen share (`screen-share`) and
+  "how long until I see the room" (`video-join-latency`), with the picture the
+  encoder actually sustained recorded beside every bandwidth figure. It measures
+  the **mesh** side only — see the next item.
+- **Nothing keeps the published page honest about its own age.** `make
+  bench-publish` writes the run's date, machine and label into
+  `docs/benchmarks.md`, and a human is expected to notice when that is old. A
+  check that fails CI when the page predates a release, or a release-checklist
+  line, would be cheap — the release flow already syncs half a dozen files.
+- **The camera scene is a synthetic subject, not a face.** `gen-bench-video.mjs`
+  draws an ellipse head over a textured room, which is enough to keep the
+  encoder busy and to give MediaPipe something to segment — but a real face has
+  detail the model responds to differently, so the background-effect *quality*
+  (not its cost) is not represented at all.
+- **Screen share captures a headless virtual screen.** What it encodes is not a
+  real desktop with text, a moving window and a cursor, so it is the video
+  number most worth re-measuring by hand on a real machine.
 - **The SFU asymmetry is the most interesting thing we cannot yet show.**
   `selectVideoTopology()` routes camera/screen through Cloudflare's Realtime SFU
   while audio stays full mesh. The whole point is that upload steps *down* when

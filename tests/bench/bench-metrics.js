@@ -88,6 +88,140 @@ export function audibleCount(page) {
 }
 
 /**
+ * How many remote cameras this peer can actually see right now.
+ *
+ * The video equivalent of audibleCount(), and read the same way — from the
+ * stream the app attached to the connection, with a live track on it. Counting
+ * `conn.videoActive` instead would count what the *signaling* claims, which is
+ * exactly the failure a video benchmark has to be able to see: a tile that is
+ * announced and black costs bandwidth and shows nothing.
+ */
+export function visibleVideoCount(page) {
+  return page.evaluate(() => {
+    let n = 0;
+    connections.forEach((conn) => {
+      const s = conn.remoteVideoStream;
+      if (s && s.getVideoTracks().some((t) => t.readyState === 'live')) n++;
+    });
+    return n;
+  });
+}
+
+/**
+ * How many remote cameras this peer has actually decoded a frame of.
+ *
+ * Stricter than visibleVideoCount(), and the right clock for "when could I see
+ * them": a track goes `live` the moment it is attached, which on a mesh is
+ * before the keyframe arrives and before the decoder has produced anything.
+ * The difference is small on loopback and is not small on a real link, so the
+ * join scenario waits on this one.
+ */
+export function decodedVideoCount(page) {
+  return page.evaluate(async () => {
+    const pcs = [];
+    connections.forEach((conn) => videoPeerConnections(conn).forEach((pc) => pcs.push(pc)));
+    let n = 0;
+    for (const pc of pcs) {
+      let reports;
+      try {
+        reports = await pc.getStats();
+      } catch (_) {
+        continue;
+      }
+      let decoded = false;
+      reports.forEach((r) => {
+        if (r.type === 'inbound-rtp' && r.kind === 'video' && (r.framesDecoded || 0) > 0) decoded = true;
+      });
+      if (decoded) n++;
+    }
+    return n;
+  });
+}
+
+/** Same, for screen shares. */
+export function visibleScreenCount(page) {
+  return page.evaluate(() => {
+    let n = 0;
+    connections.forEach((conn) => {
+      const s = conn.remoteScreenStream;
+      if (s && s.getVideoTracks().some((t) => t.readyState === 'live')) n++;
+    });
+    return n;
+  });
+}
+
+/**
+ * What the encoder actually produced, per outgoing video link.
+ *
+ * The one measurement here that does NOT come from the app's own
+ * instrumentation, and deliberately so: `conn.webrtcStats` reads
+ * `kind === 'audio'` only, so the app records nothing about the picture it
+ * sends. Without this the report could not tell a 720p30 room from one where
+ * the machine buckled and every peer quietly dropped to 320x180 at 4 fps — and
+ * a bandwidth figure taken at that resolution says nothing about the app.
+ *
+ * `qualityLimitationReason` is the honest half of it: `cpu` means the harness
+ * ran out of machine, not that the app is thrifty.
+ */
+export function videoQuality(page, kind = 'camera') {
+  return page.evaluate(async (kind) => {
+    const pcs = [];
+    connections.forEach((conn) => {
+      const set = kind === 'screen' ? screenPeerConnections(conn) : videoPeerConnections(conn);
+      set.forEach((pc) => pcs.push(pc));
+    });
+
+    const send = [];
+    const recv = [];
+    for (const pc of pcs) {
+      let reports;
+      try {
+        reports = await pc.getStats();
+      } catch (_) {
+        continue;
+      }
+      reports.forEach((r) => {
+        if (r.type === 'outbound-rtp' && r.kind === 'video') {
+          send.push({
+            width: r.frameWidth ?? null,
+            height: r.frameHeight ?? null,
+            fps: r.framesPerSecond ?? null,
+            limitation: r.qualityLimitationReason || null,
+            encoder: r.encoderImplementation || null,
+          });
+        }
+        if (r.type === 'inbound-rtp' && r.kind === 'video') {
+          recv.push({
+            width: r.frameWidth ?? null,
+            height: r.frameHeight ?? null,
+            fps: r.framesPerSecond ?? null,
+            framesDropped: r.framesDropped ?? null,
+          });
+        }
+      });
+    }
+    return { send, recv };
+  }, kind);
+}
+
+/**
+ * Whether the background effect is really running on this peer's camera.
+ *
+ * Required, not diagnostic. `maybeApplyVideoEffects()` falls back to the raw
+ * stream whenever the segmentation runtime cannot start — missing WASM, no
+ * WebGL — and says so only in a toast. A benchmark that did not check would
+ * report "blur costs nothing" for a run in which blur never happened.
+ */
+export function effectsState(page) {
+  return page.evaluate(() => ({
+    mode: (typeof VideoEffects !== 'undefined' && VideoEffects.readMode)
+      ? VideoEffects.readMode()
+      : localStorage.getItem('video-background') || 'off',
+    engaged: !!(typeof localVideoStream !== 'undefined' && localVideoStream && localVideoStream._effectsProcessor),
+  }));
+}
+
+/**
  * Reduce one peer's usage history to steady-state bits/second.
  *
  * Two samples are deliberately thrown away. The first sample inside the window
