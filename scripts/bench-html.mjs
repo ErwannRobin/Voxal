@@ -939,13 +939,39 @@ ${body}
   function show(el, ev) {
     var rows;
     try { rows = JSON.parse(el.getAttribute('data-rows') || '[]'); } catch (e) { rows = []; }
-    tip.innerHTML =
-      '<div class="tt-title">' + (el.getAttribute('data-title') || '') + '</div>' +
-      rows.map(function (r, i) {
-        return '<div class="tt-row"><span class="tt-key">' +
-          '<span class="swatch" style="background:var(--series-' + (i + 1) + ')"></span>' +
-          r.k + '</span><span class="tt-val">' + r.v + '</span></div>';
-      }).join('');
+    // Nodes, never markup. A title is a scenario label and a row carries the
+    // machine and the network name, and getAttribute() hands back exactly what
+    // esc() encoded on the way in - so innerHTML here would re-open every one
+    // of them as HTML.
+    tip.textContent = '';
+
+    var title = document.createElement('div');
+    title.className = 'tt-title';
+    title.textContent = el.getAttribute('data-title') || '';
+    tip.appendChild(title);
+
+    rows.forEach(function (r, i) {
+      var row = document.createElement('div');
+      row.className = 'tt-row';
+
+      var key = document.createElement('span');
+      key.className = 'tt-key';
+
+      var swatch = document.createElement('span');
+      swatch.className = 'swatch';
+      swatch.style.background = 'var(--series-' + (i + 1) + ')';
+      key.appendChild(swatch);
+      key.appendChild(document.createTextNode(r && r.k != null ? String(r.k) : ''));
+
+      var val = document.createElement('span');
+      val.className = 'tt-val';
+      val.textContent = r && r.v != null ? String(r.v) : '';
+
+      row.appendChild(key);
+      row.appendChild(val);
+      tip.appendChild(row);
+    });
+
     tip.classList.add('on');
     var w = tip.offsetWidth, h = tip.offsetHeight;
     tip.style.left = Math.max(8, Math.min(window.innerWidth - w - 12, ev.clientX + 14)) + 'px';

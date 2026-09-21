@@ -1719,3 +1719,20 @@ seems too sharp".
   everything and the column repeats the cold one. The warm *timings* are still
   the app's own: the same parse, compile and boot with the bytes in hand, and
   they came out roughly twice as fast as cold in this container.
+- **`docs/benchmark.html` is a build output, so a fix that lands only there is
+  undone by the next publish.** It is emitted verbatim from the template
+  literal at the end of `scripts/bench-html.mjs`, and `make bench-publish`
+  overwrites it. A code-scanning alert filed against a line of the page (the
+  first one was the tooltip's `innerHTML`, "DOM text reinterpreted as HTML")
+  therefore has to be fixed in the generator, with the page brought back into
+  step — otherwise the alert reappears on the next run and nobody knows why.
+  The two blocks are byte-identical by construction: `diff` the region between
+  the `Hover layer` comment and the closing `</html>` and the only difference
+  should be the ``` ` ``` that closes the template literal.
+- **Escaping on the way in does not survive `getAttribute()`.** The charts put
+  labels into `data-title` / `data-rows` through `esc()`, but the browser
+  decodes an attribute when it is read back, so the value that reaches the
+  tooltip is the raw text again. Handing it to `innerHTML` re-opens it as
+  markup. The tooltip is built with `createElement` + `textContent` instead;
+  only the swatch's `--series-N` colour, which is an index the generator owns,
+  is still assembled as a string.

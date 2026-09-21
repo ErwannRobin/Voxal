@@ -215,6 +215,10 @@ footer { color:var(--muted); font-size:12.5px; margin-top:28px; line-height:1.6;
   function show(el, ev) {
     var rows;
     try { rows = JSON.parse(el.getAttribute('data-rows') || '[]'); } catch (e) { rows = []; }
+    // Nodes, never markup. A title is a scenario label and a row carries the
+    // machine and the network name, and getAttribute() hands back exactly what
+    // esc() encoded on the way in - so innerHTML here would re-open every one
+    // of them as HTML.
     tip.textContent = '';
 
     var title = document.createElement('div');
@@ -233,11 +237,11 @@ footer { color:var(--muted); font-size:12.5px; margin-top:28px; line-height:1.6;
       swatch.className = 'swatch';
       swatch.style.background = 'var(--series-' + (i + 1) + ')';
       key.appendChild(swatch);
-      key.appendChild(document.createTextNode((r && r.k != null) ? String(r.k) : ''));
+      key.appendChild(document.createTextNode(r && r.k != null ? String(r.k) : ''));
 
       var val = document.createElement('span');
       val.className = 'tt-val';
-      val.textContent = (r && r.v != null) ? String(r.v) : '';
+      val.textContent = r && r.v != null ? String(r.v) : '';
 
       row.appendChild(key);
       row.appendChild(val);
