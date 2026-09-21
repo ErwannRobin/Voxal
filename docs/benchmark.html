@@ -212,42 +212,29 @@ footer { color:var(--muted); font-size:12.5px; margin-top:28px; line-height:1.6;
   // Hover layer. Every value it shows is also in the table twin under its
   // chart, so the tooltip enhances and never gates.
   var tip = document.getElementById('tooltip');
+  // Values go in as text, never as markup: esc() escapes a label on the way
+  // into data-title / data-rows, but getAttribute() decodes it again on the
+  // way out, so innerHTML here would re-open every one of them as HTML.
+  function node(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (text != null) { n.textContent = text; }
+    return n;
+  }
   function show(el, ev) {
     var rows;
     try { rows = JSON.parse(el.getAttribute('data-rows') || '[]'); } catch (e) { rows = []; }
-    // Nodes, never markup. A title is a scenario label and a row carries the
-    // machine and the network name, and getAttribute() hands back exactly what
-    // esc() encoded on the way in - so innerHTML here would re-open every one
-    // of them as HTML.
     tip.textContent = '';
-
-    var title = document.createElement('div');
-    title.className = 'tt-title';
-    title.textContent = el.getAttribute('data-title') || '';
-    tip.appendChild(title);
-
+    tip.append(node('div', 'tt-title', el.getAttribute('data-title') || ''));
     rows.forEach(function (r, i) {
-      var row = document.createElement('div');
-      row.className = 'tt-row';
-
-      var key = document.createElement('span');
-      key.className = 'tt-key';
-
-      var swatch = document.createElement('span');
-      swatch.className = 'swatch';
+      var swatch = node('span', 'swatch');
       swatch.style.background = 'var(--series-' + (i + 1) + ')';
-      key.appendChild(swatch);
-      key.appendChild(document.createTextNode(r && r.k != null ? String(r.k) : ''));
-
-      var val = document.createElement('span');
-      val.className = 'tt-val';
-      val.textContent = r && r.v != null ? String(r.v) : '';
-
-      row.appendChild(key);
-      row.appendChild(val);
-      tip.appendChild(row);
+      var key = node('span', 'tt-key');
+      key.append(swatch, r.k == null ? '' : String(r.k));
+      var row = node('div', 'tt-row');
+      row.append(key, node('span', 'tt-val', r.v));
+      tip.append(row);
     });
-
     tip.classList.add('on');
     var w = tip.offsetWidth, h = tip.offsetHeight;
     tip.style.left = Math.max(8, Math.min(window.innerWidth - w - 12, ev.clientX + 14)) + 'px';

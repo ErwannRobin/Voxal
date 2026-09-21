@@ -1735,4 +1735,7 @@ seems too sharp".
   tooltip is the raw text again. Handing it to `innerHTML` re-opens it as
   markup. The tooltip is built with `createElement` + `textContent` instead;
   only the swatch's `--series-N` colour, which is an index the generator owns,
-  is still assembled as a string.
+  is still assembled as a string. Keep the key's label a **bare text node**
+  next to the swatch, the way the concatenated markup had it — `.tt-key` is
+  `display:inline-flex`, so wrapping it in a `<span>` turns an anonymous flex
+  item into a real one and is a change to the box tree for no reason.
