@@ -12,7 +12,7 @@ two places, because either one alone leaves a hole:
 ## 1. The aggregate check
 
 `.github/workflows/tests.yml` ends with a job named **`All tests green`**. It
-`needs:` every gating job (Rust tests on Linux, Rust tests on macOS, API tests,
+`needs:` every gating job (Lint, Rust tests on Linux, Rust tests on macOS, API tests,
 E2E unit) and runs with `if: always()`, so it reports even when a dependency
 failed, was skipped, or the run was cancelled — anything other than `success` on
 any dependency fails it, with one narrow exception: a job may be `skipped` when

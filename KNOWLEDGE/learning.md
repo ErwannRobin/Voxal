@@ -1760,3 +1760,27 @@ seems too sharp".
 - **Never cache what CodeQL must watch being compiled.** A cached `DerivedData`
   or Gradle build output lets the build skip compilation and CodeQL extracts
   nothing. Cache fetched sources only (SPM `SourcePackages`, `~/.gradle/caches`).
+
+## Git hooks and ESLint
+
+- **Hooks are plain `sh` in `.githooks/`, enabled by `core.hooksPath`**, not
+  husky or lefthook: the repo avoids dependencies on purpose, and the whole
+  mechanism is one `git config`. `npm install`'s `prepare` runs
+  `scripts/install-hooks.mjs`, which **must never fail an install**. Vercel's
+  build and CI run `npm ci` with no `.git` (or with `CI` set), and a
+  `core.hooksPath` someone set for another tool is left alone.
+- **A partially staged file is linted from the index** (`git show :path |
+  eslint --stdin --stdin-filename path`). Linting the working tree would check
+  code that is not being committed, and pass or fail the wrong thing.
+- **ESLint and classic scripts:** `src/*.js` share one global scope, so
+  top-level declarations are globals other files use. That is why the config
+  uses `vars: 'local'` for unused-vars, declares each cross-file global by hand
+  under `languageOptions.globals`, and sets `no-redeclare` with
+  `builtinGlobals: false` (otherwise the file that declares a global is flagged
+  for redeclaring it). Tests turn `no-undef` off: `page.evaluate` callbacks
+  reach hundreds of `main.js` globals.
+- **The first ESLint pass found a test that asserts less than it says:**
+  `unit-sfu-resilience.spec.js` "gives up after the retry budget" counts
+  over-budget calls in `extra` but never checks it. Asserting it needs care
+  (retries scheduled earlier can fire late), so it carries a TODO rather than a
+  rushed fix.

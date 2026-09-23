@@ -2477,7 +2477,7 @@ var _pendingMicAction = null; // function to re-run after mic permission is gran
 function showMicDeniedError(retryFn) {
   _pendingMicAction = retryFn || null;
 
-  var hint = '';
+  var hint;
   var ua = navigator.userAgent || '';
   if (window.Capacitor && window.Capacitor.isNativePlatform()) {
     if (/iPhone|iPad|iPod/i.test(ua)) {
@@ -5197,7 +5197,7 @@ function chatQuickReactionFor(text) {
   var rest = s.slice(1).trim();
   if (!rest) return null;
   if (isChatEmoji(rest)) return rest;
-  var code = /^:?([a-z0-9_+\-]{1,64}):?$/i.exec(rest);
+  var code = /^:?([a-z0-9_+-]{1,64}):?$/i.exec(rest);
   if (!code) return null;
   var hit = emojiForShortcode(code[1]);
   return hit || null;
@@ -5645,7 +5645,7 @@ function chatSuggestOpen() { return !!_chatSuggest; }
 // time of day has a ':'.
 function chatSuggestQueryAt(value, caret) {
   var head = value.slice(0, caret);
-  var emoji = /(^|\s)(:)([a-z0-9_+\-]*)$/i.exec(head);
+  var emoji = /(^|\s)(:)([a-z0-9_+-]*)$/i.exec(head);
   if (emoji) {
     return { kind: 'emoji', from: caret - (emoji[3].length + 1), to: caret, query: emoji[3] };
   }
@@ -7966,7 +7966,6 @@ async function sampleInboundFromPeerConnections(pcs, audioEl) {
 // Our own microphone energy over the window, so "you were silent" is
 // distinguishable from "your audio never arrived".
 async function sampleLocalMicEnergy() {
-  var conn = null;
   var pcs = [];
   connections.forEach(function(c) { pcs = pcs.concat(audioPeerConnections(c)); });
   for (var i = 0; i < pcs.length; i++) {
@@ -9116,7 +9115,7 @@ function updatePeerList() {
 
     if (window._updateTinyPeersToggle) window._updateTinyPeersToggle();
     if (_isIframe && inRoom) {
-      var peers = [{
+      let peers = [{
         id: peer ? peer.id : 'self',
         pseudo: displayPseudoForSelf(),
         pseudoColor: pseudoColorForSelf(),
@@ -9379,7 +9378,7 @@ function updatePeerList() {
 
   // Notify the parent iframe of the current peer list
   if (_isIframe && inRoom) {
-    var peers = [{
+    let peers = [{
       id: peer ? peer.id : 'self',
       pseudo: displayPseudoForSelf(),
       pseudoColor: pseudoColorForSelf(),
@@ -15061,7 +15060,7 @@ function popOutVideoViewer() {
         });
       } else if (vid.webkitSetPresentationMode) {
         vid.webkitSetPresentationMode('picture-in-picture');
-        var panel = document.getElementById('video-viewer-panel');
+        let panel = document.getElementById('video-viewer-panel');
         if (panel) panel.classList.add('pip-active');
       } else {
         showCopyToast('Picture-in-Picture not available');
@@ -15537,7 +15536,6 @@ function initiateHostMigration(failedOrOldHostId) {
       _migrationCandidateId = null;
       console.warn('[migration] Candidate ' + migrationPeerLabel(failedOrOldHostId) + ' failed; re-electing.');
       proceedWithHostElection();
-    } else {
     }
     // else: stale event, ignore
     return;

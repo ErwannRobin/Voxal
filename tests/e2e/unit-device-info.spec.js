@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { seedRoom, callFn } from './_helpers.js';
+import { seedRoom } from './_helpers.js';
 
 // Dev-mode device-info diagnostics: on-demand collection, the "i" button
 // visibility gate, the sharing opt-out preference, and the host relay of

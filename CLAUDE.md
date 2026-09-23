@@ -13,6 +13,8 @@ make install      # First-time setup: npm install + cargo fetch (with preflight 
 make dev          # Tauri desktop — hot reload (primary dev workflow)
 make run-web      # Serve src/ on http://localhost:8080 (web-only testing)
 make check        # Rust type-check without building (fast feedback, no tests)
+make lint         # ESLint (all JS) + cargo fmt --check — what the pre-commit hook runs on staged files
+make hooks        # (Re)enable the git hooks in .githooks/ — npm install already does it
 make test         # Full suite: Rust type-check + Rust unit tests + Playwright E2E
 make test-rust    # Rust unit tests only
 make test-e2e     # Fast Playwright E2E (unit project: pure-logic + UI flows)
@@ -39,6 +41,8 @@ make release      # Bump version, build signed release, publish GitHub Release
 ```
 
 **macOS URL scheme:** `make dev` cannot register `voxal://` (needs a real `.app` bundle). Run `make build-debug` once, open the `.app`, then return to `make dev`. The registration persists.
+
+**Git hooks** live in `.githooks/` (plain `sh`, no hook manager), enabled by `core.hooksPath`, which `npm install`'s `prepare` script sets (`scripts/install-hooks.mjs`, a no-op without `.git` or under `CI`). `pre-commit` lints staged files only (ESLint, JSON, rustfmt, `git diff --check`) and reads a partially staged file from the index, not the working tree. `pre-push` runs only the suites the pushed range touches (API / E2E unit / `cargo test` / `swiftc -parse`), never the mesh suite. `--no-verify` bypasses either. ESLint (`eslint.config.js`) is correctness-only, with no formatting rules. The frontend's cross-file globals are listed there by hand, so a NEW global shared between classic scripts must be added to that list. The `Lint` job in `tests.yml` runs the same checks over the whole tree and is part of `All tests green`.
 
 **E2E tests** use Playwright against `http://127.0.0.1:8080` (config: `playwright.config.js`, tests in `tests/e2e/`). Two projects: `unit` (fast, deterministic — pure-logic + UI flows; excludes `@mesh`) and `mesh` (multi-peer; only `@mesh`). Specs import `test`/`expect` from `tests/e2e/fixtures.js` (not `@playwright/test` directly) so coverage can be layered in transparently.
 

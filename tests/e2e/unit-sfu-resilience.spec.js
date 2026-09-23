@@ -235,6 +235,10 @@ test.describe('_sfuSubscribeFailed', () => {
       }
       const atBudget = _sfuSubscribeRetries['peer-1:video'];
 
+      // TODO: `extra` is never asserted, so "must schedule nothing" below is
+      // not actually checked. Asserting it needs care: retries scheduled by the
+      // loop above can still fire late. Flagged by ESLint; left as it was.
+      // eslint-disable-next-line no-unused-vars
       let extra = 0;
       window.sfuSubscribeTrack = () => { extra++; return Promise.resolve(); };
       window._sfuSubscribeFailed('video', 'peer-1', ref, err());   // one over

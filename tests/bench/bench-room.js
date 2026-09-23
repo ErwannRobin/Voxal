@@ -3,7 +3,7 @@
 // Built on the mesh fixtures rather than beside them: the benchmark has to
 // drive the SAME createRoom/joinRoom/setTalking path the mesh tests do, or it
 // is measuring a second implementation. Only the measurement is new here.
-import { createRoom, joinRoom, getState } from '../e2e/mesh-helpers.js';
+import { createRoom, joinRoom } from '../e2e/mesh-helpers.js';
 import {
   peerSnapshot, audibleCount, reduceUsage, sampleProcessTree, cpuPercentBetween,
   visibleVideoCount, visibleScreenCount, videoQuality, effectsState,

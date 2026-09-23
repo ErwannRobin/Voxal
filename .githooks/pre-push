@@ -1,0 +1,99 @@
+#!/bin/sh
+# pre-push — run the test suites the pushed commits can affect, so a red CI run
+# is caught here first. CI still runs everything; this only saves round-trips.
+#
+#   api/**                            → API tests       (node --test, seconds)
+#   src/**, tests/e2e/**, Playwright  → E2E unit suite  (Playwright, a few minutes)
+#   src-tauri/**                      → Rust tests      (cargo test, native)
+#   ios/**/*.swift                    → Swift parse     (xcrun swiftc -parse, macOS only)
+#   package.json / package-lock.json  → API + E2E
+#   anything else (docs, Markdown…)   → nothing
+#
+# The mesh suite (multi-peer WebRTC) is NOT run: it is slow and timing-sensitive,
+# and CI runs it. Tests run against the WORKING TREE, so commit or stash
+# unrelated edits first if you want the result to describe exactly what you push.
+#
+# Bypass in an emergency: git push --no-verify
+# Installed by `npm install` (scripts/install-hooks.mjs); see README → Git hooks.
+
+set -u
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+zero=0000000000000000000000000000000000000000
+changed=""
+
+# stdin: <local ref> <local sha> <remote ref> <remote sha>, one line per ref.
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  case "$local_sha" in *[!0]*) ;; *) continue ;; esac   # deleting a ref: nothing to test
+  case "$remote_sha" in
+    *[!0]*) base="$remote_sha" ;;
+    # New branch on the remote: compare with where it forked from main.
+    *) base=$(git merge-base "$local_sha" origin/main 2>/dev/null || git merge-base "$local_sha" main 2>/dev/null || echo "") ;;
+  esac
+  if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+    # Remote commit not known locally (someone else pushed): test everything.
+    changed="$changed
+src/ api/ src-tauri/"
+    continue
+  fi
+  changed="$changed
+$(git diff --name-only "$base" "$local_sha")"
+done
+
+touches() { printf '%s\n' "$changed" | grep -Eq "$1"; }
+
+run_api=0; run_e2e=0; run_rust=0; run_swift=0
+touches '^(api/|package(-lock)?\.json$)' && run_api=1
+touches '^(src/|tests/e2e/|playwright\.config\.js$|package(-lock)?\.json$)' && run_e2e=1
+touches '^src-tauri/' && run_rust=1
+touches '^ios/.*\.swift$' && run_swift=1
+
+if [ $((run_api + run_e2e + run_rust + run_swift)) -eq 0 ]; then
+  exit 0
+fi
+
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  printf '\033[33m! Uncommitted changes present — the tests below run against the working tree, not only what you push.\033[0m\n'
+fi
+
+failed=0
+step() { printf '\n\033[1m▶ %s\033[0m\n' "$1"; }
+fail() { printf '\033[31m✖ %s\033[0m\n' "$1"; failed=1; }
+
+if [ $run_swift -eq 1 ]; then
+  if command -v xcrun >/dev/null 2>&1; then
+    step "Swift syntax (xcrun swiftc -parse)"
+    # Parse only — seconds, no Xcode build. Type errors are left to CI's iOS build.
+    files=$(printf '%s\n' "$changed" | grep -E '^ios/.*\.swift$' | sort -u | while read -r f; do [ -f "$f" ] && echo "$f"; done)
+    # shellcheck disable=SC2086
+    [ -z "$files" ] || xcrun swiftc -parse $files || fail "Swift syntax errors"
+  else
+    printf '! xcrun not available — skipping Swift syntax check (CI still analyzes it).\n'
+  fi
+fi
+
+if [ $run_rust -eq 1 ]; then
+  if command -v cargo >/dev/null 2>&1; then
+    step "Rust tests (cargo test)"
+    (cd src-tauri && cargo test --quiet) || fail "Rust tests"
+  else
+    printf '! cargo not found — skipping Rust tests (CI still runs them).\n'
+  fi
+fi
+
+if [ $run_api -eq 1 ]; then
+  step "API tests (npm run test:api)"
+  npm run --silent test:api || fail "API tests"
+fi
+
+if [ $run_e2e -eq 1 ]; then
+  step "E2E unit suite (npm run test:e2e)"
+  npm run --silent test:e2e || fail "E2E unit suite (first time? npx playwright install chromium)"
+fi
+
+if [ "$failed" -ne 0 ]; then
+  echo
+  echo "Push blocked by the pre-push hook. Fix the failures above, or bypass with: git push --no-verify"
+  exit 1
+fi
+exit 0
