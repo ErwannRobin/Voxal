@@ -1,12 +1,12 @@
 use std::sync::Mutex;
+use tauri::menu::{MenuBuilder, MenuItem, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, State};
 #[cfg(target_os = "macos")]
 use tauri::{Manager, WindowEvent};
-use tauri::menu::{MenuItem, MenuBuilder, SubmenuBuilder};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-use tauri_plugin_deep_link::DeepLinkExt;
-use tauri_plugin_updater::UpdaterExt;
 use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_deep_link::DeepLinkExt;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_updater::UpdaterExt;
 
 const DEFAULT_SHORTCUT: &str = "Shift+Space";
 
@@ -78,15 +78,15 @@ async fn presence_fetch(
 // won't give us stays `None` and renders as "—" in the panel.
 #[derive(serde::Serialize, Default)]
 struct DeviceStats {
-    mem_app: Option<u64>,          // process resident memory, bytes
-    mem_total: Option<u64>,        // total system memory, bytes
-    mem_used: Option<u64>,         // used system memory, bytes
-    cpu_app: Option<f32>,          // process CPU, percent
-    cpu_total: Option<f32>,        // system-wide CPU, percent
-    battery_level: Option<u8>,     // 0..=100
+    mem_app: Option<u64>,      // process resident memory, bytes
+    mem_total: Option<u64>,    // total system memory, bytes
+    mem_used: Option<u64>,     // used system memory, bytes
+    cpu_app: Option<f32>,      // process CPU, percent
+    cpu_total: Option<f32>,    // system-wide CPU, percent
+    battery_level: Option<u8>, // 0..=100
     battery_charging: Option<bool>,
-    net_type: Option<String>,      // "Wi-Fi" | "Ethernet" (the active default route)
-    low_power: Option<bool>,       // OS Low Power Mode
+    net_type: Option<String>, // "Wi-Fi" | "Ethernet" (the active default route)
+    low_power: Option<bool>,  // OS Low Power Mode
 }
 
 // The Network Information API and Low Power Mode are not exposed to the WebView,
@@ -95,7 +95,10 @@ struct DeviceStats {
 // spawn) just yields None and the panel shows "—".
 #[cfg(target_os = "macos")]
 fn read_low_power() -> Option<bool> {
-    let out = std::process::Command::new("pmset").arg("-g").output().ok()?;
+    let out = std::process::Command::new("pmset")
+        .arg("-g")
+        .output()
+        .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
     for line in text.lines() {
         let line = line.trim();
@@ -221,10 +224,12 @@ fn update_ptt_shortcut(
     }
     if !shortcut.is_empty() {
         app.global_shortcut()
-            .on_shortcut(shortcut.as_str(), |app, _, event| {
-                match event.state {
-                    ShortcutState::Pressed  => { let _ = app.emit("ptt-press",   ()); }
-                    ShortcutState::Released => { let _ = app.emit("ptt-release", ()); }
+            .on_shortcut(shortcut.as_str(), |app, _, event| match event.state {
+                ShortcutState::Pressed => {
+                    let _ = app.emit("ptt-press", ());
+                }
+                ShortcutState::Released => {
+                    let _ = app.emit("ptt-release", ());
                 }
             })
             .map_err(|e| e.to_string())?;
@@ -238,14 +243,16 @@ async fn check_for_updates(app: AppHandle) -> tauri_plugin_updater::Result<()> {
         eprintln!("[updater] Update available: {}", update.version);
         let _ = app.emit("update-available", &update.version);
 
-        update.download_and_install(
-            |chunk, total| {
-                eprintln!("[updater] Downloaded {} / {:?}", chunk, total);
-            },
-            || {
-                eprintln!("[updater] Download complete, restarting…");
-            },
-        ).await?;
+        update
+            .download_and_install(
+                |chunk, total| {
+                    eprintln!("[updater] Downloaded {} / {:?}", chunk, total);
+                },
+                || {
+                    eprintln!("[updater] Download complete, restarting…");
+                },
+            )
+            .await?;
 
         app.restart();
     } else {
@@ -263,7 +270,10 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(PttShortcut(Mutex::new(DEFAULT_SHORTCUT.to_string())))
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -274,7 +284,6 @@ pub fn run() {
                         api.prevent_close();
                         let _ = window.minimize();
                     }
-
                 });
             }
 
@@ -284,7 +293,13 @@ pub fn run() {
 
             // Build the app menu
             let about = MenuItem::with_id(app, "about", "About Voxal", true, None::<&str>)?;
-            let prefs = MenuItem::with_id(app, "preferences", "Preferences…", true, Some("CmdOrCtrl+,"))?;
+            let prefs = MenuItem::with_id(
+                app,
+                "preferences",
+                "Preferences…",
+                true,
+                Some("CmdOrCtrl+,"),
+            )?;
 
             let app_submenu = SubmenuBuilder::new(app, "Voxal")
                 .item(&about)
@@ -306,7 +321,7 @@ pub fn run() {
                         .paste()
                         .separator()
                         .select_all()
-                        .build()?
+                        .build()?,
                 )
                 .build()?;
 
@@ -323,11 +338,14 @@ pub fn run() {
             });
 
             // Register the default PTT global shortcut
-            app.handle().global_shortcut()
-                .on_shortcut(DEFAULT_SHORTCUT, |app, _, event| {
-                    match event.state {
-                        ShortcutState::Pressed  => { let _ = app.emit("ptt-press",   ()); }
-                        ShortcutState::Released => { let _ = app.emit("ptt-release", ()); }
+            app.handle()
+                .global_shortcut()
+                .on_shortcut(DEFAULT_SHORTCUT, |app, _, event| match event.state {
+                    ShortcutState::Pressed => {
+                        let _ = app.emit("ptt-press", ());
+                    }
+                    ShortcutState::Released => {
+                        let _ = app.emit("ptt-release", ());
                     }
                 })?;
 
@@ -341,7 +359,11 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![update_ptt_shortcut, presence_fetch, get_device_stats])
+        .invoke_handler(tauri::generate_handler![
+            update_ptt_shortcut,
+            presence_fetch,
+            get_device_stats
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
