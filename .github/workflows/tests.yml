@@ -6,23 +6,128 @@ on:
   pull_request:
     branches: ["main"]
 
+# No workflow-level `paths-ignore` here, on purpose: `All tests green` is the
+# check `main`'s ruleset requires, and a workflow that is filtered out never
+# reports it — which blocks the merge rather than allowing it. Docs-only changes
+# are skipped per job instead, by the `changes` job below, and the aggregate
+# accepts `skipped` only where `changes` says nothing relevant was touched.
+
 permissions:
   contents: read
 
+# A new push to the same PR supersedes the run on the old head. The event is in
+# the group so a push to `main` never cancels anything but an older push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  rust-tests:
-    name: Rust tests
-    runs-on: macos-latest
+  # Decides which jobs this change needs. `code` is anything but prose (docs/,
+  # KNOWLEDGE/, Markdown); `rust` is the Tauri crate. Every test job runs when
+  # `code` is true, so a code change can never skip a test.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      rust: ${{ steps.filter.outputs.rust }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+
+      - name: Classify changed files
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!KNOWLEDGE/**'
+              - '!**/*.md'
+            rust:
+              - 'src-tauri/**'
+              - '.github/workflows/tests.yml'
+
+  # The crate's unit tests are pure logic (presence parsing), so they run on
+  # Linux, at a tenth of the macOS price. Needs the same WebKitGTK set
+  # release-linux.yml builds Tauri with — `cargo test` compiles the whole crate.
+  rust-tests:
+    name: Rust tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev \
+            libssl-dev
+
+      - name: Cache Rust build
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-test-
+
+      - name: Run Rust tests
+        run: cd src-tauri && cargo test
+
+  # The same `cargo test`, on macOS: the crate has `#[cfg(target_os = "macos")]`
+  # code that Linux never compiles. Only when the crate (or this file) changed,
+  # and only once the Linux run is green — a change that fails there does not
+  # get to spend macOS minutes finding out again.
+  rust-tests-macos:
+    name: Rust tests (macOS)
+    needs: [changes, rust-tests]
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.rust == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Cache Rust build
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-test-
 
       - name: Run Rust tests
         run: cd src-tauri && cargo test
 
   api-tests:
     name: API tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -43,7 +148,10 @@ jobs:
   # gating check — keep it green.
   unit-e2e:
     name: E2E (unit)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -69,6 +177,8 @@ jobs:
   # block merges, but real regressions still show up here (with retries: 2).
   mesh-e2e:
     name: E2E (mesh, non-blocking)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 15
@@ -105,6 +215,8 @@ jobs:
   # is.
   coverage:
     name: Coverage (non-blocking)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 30
@@ -198,28 +310,47 @@ jobs:
   # add it to `needs:` here instead.
   #
   # `if: always()` makes it run even when a dependency failed or was skipped,
-  # and the step fails closed: anything that is not `success` (failure,
-  # cancelled, skipped) blocks the merge. `mesh-e2e` is deliberately absent —
-  # it is non-blocking by design (see above).
+  # and the step fails closed: every job must be `success`, and `skipped` is
+  # accepted ONLY where `changes` (which must itself succeed) reported that the
+  # job had nothing to test — a docs-only change for the suites, a change
+  # outside `src-tauri/` for the macOS Rust run. `mesh-e2e` is deliberately
+  # absent — it is non-blocking by design (see above).
   all-tests-green:
     name: All tests green
     if: always()
-    needs: [rust-tests, api-tests, unit-e2e]
+    needs: [changes, rust-tests, rust-tests-macos, api-tests, unit-e2e]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Verify every gating job succeeded
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CODE_CHANGED: ${{ needs.changes.outputs.code }}
+          RUST_CHANGED: ${{ needs.changes.outputs.code == 'true' && needs.changes.outputs.rust == 'true' }}
           RUST_RESULT: ${{ needs.rust-tests.result }}
+          RUST_MACOS_RESULT: ${{ needs.rust-tests-macos.result }}
           API_RESULT: ${{ needs.api-tests.result }}
           UNIT_E2E_RESULT: ${{ needs.unit-e2e.result }}
         run: |
-          echo "Rust tests : $RUST_RESULT"
-          echo "API tests  : $API_RESULT"
-          echo "E2E (unit) : $UNIT_E2E_RESULT"
+          echo "Changes          : $CHANGES_RESULT (code=$CODE_CHANGED, rust=$RUST_CHANGED)"
+          echo "Rust tests       : $RUST_RESULT"
+          echo "Rust tests macOS : $RUST_MACOS_RESULT"
+          echo "API tests        : $API_RESULT"
+          echo "E2E (unit)       : $UNIT_E2E_RESULT"
+
+          # $1 = job result, $2 = "true" when the job had to run.
+          ok() {
+            [ "$1" = "success" ] && return 0
+            [ "$1" = "skipped" ] && [ "$2" != "true" ] && return 0
+            return 1
+          }
+
           failed=0
-          for result in "$RUST_RESULT" "$API_RESULT" "$UNIT_E2E_RESULT"; do
-            [ "$result" = "success" ] || failed=1
-          done
+          [ "$CHANGES_RESULT" = "success" ] || failed=1
+          ok "$RUST_RESULT" "$CODE_CHANGED" || failed=1
+          ok "$API_RESULT" "$CODE_CHANGED" || failed=1
+          ok "$UNIT_E2E_RESULT" "$CODE_CHANGED" || failed=1
+          ok "$RUST_MACOS_RESULT" "$RUST_CHANGED" || failed=1
           if [ "$failed" -ne 0 ]; then
             echo "::error::Not every gating test job succeeded — this pull request must not be merged."
             exit 1

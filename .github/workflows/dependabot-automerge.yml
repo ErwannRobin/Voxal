@@ -13,9 +13,16 @@ permissions:
   contents: write
   pull-requests: write
 
+# Every firing re-checks the whole head SHA, so when Tests and CodeQL finish
+# close together only the newest firing needs to run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: true
+
 jobs:
   auto-merge:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # Only act on pull requests opened by Dependabot. The triggering run's own
     # conclusion is checked again (with every other check) in the script below.
     if: >-

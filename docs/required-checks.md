@@ -12,9 +12,17 @@ two places, because either one alone leaves a hole:
 ## 1. The aggregate check
 
 `.github/workflows/tests.yml` ends with a job named **`All tests green`**. It
-`needs:` every gating job (Rust tests, API tests, E2E unit) and runs with
-`if: always()`, so it reports even when a dependency failed, was skipped, or the
-run was cancelled — anything other than `success` on any dependency fails it.
+`needs:` every gating job (Rust tests on Linux, Rust tests on macOS, API tests,
+E2E unit) and runs with `if: always()`, so it reports even when a dependency
+failed, was skipped, or the run was cancelled — anything other than `success` on
+any dependency fails it, with one narrow exception: a job may be `skipped` when
+the `Detect changes` job (which must itself succeed) reported it had nothing to
+test. A docs-only change (`docs/`, `KNOWLEDGE/`, Markdown) skips the suites; a
+change outside `src-tauri/` skips the macOS Rust run.
+
+That is also why `tests.yml` has no workflow-level `paths-ignore`: a filtered-out
+workflow never reports `All tests green`, and a required check that never reports
+blocks the merge.
 
 Requiring that one check, rather than each job by name, means adding or renaming
 a test job is a change to `needs:` in `tests.yml` only; the ruleset never has to

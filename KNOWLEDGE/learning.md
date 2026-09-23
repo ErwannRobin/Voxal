@@ -1739,3 +1739,22 @@ seems too sharp".
   next to the swatch, the way the concatenated markup had it — `.tt-key` is
   `display:inline-flex`, so wrapping it in a `<span>` turns an anonymous flex
   item into a real one and is a change to the box tree for no reason.
+
+## CI cost: macOS runners are ~10x Linux — gate them, never filter the required workflow
+
+- **The two macOS jobs were ~all of the Actions bill.** `Analyze (swift)`
+  (CodeQL, ~20 min — it has to really compile Capacitor and every plugin) ran on
+  every PR and push, and `Rust tests` ran on macOS for tests that are pure logic.
+  Rust tests now run on Linux (gating) and again on macOS only when `src-tauri/`
+  changes, after Linux is green — the crate has `#[cfg(target_os = "macos")]`
+  code Linux never compiles. Swift CodeQL runs only when its inputs change
+  (`ios/`, `package.json`/`package-lock.json` — the plugins it compiles live in
+  `node_modules` — `capacitor.config.json`, the workflow) plus the weekly cron.
+- **Never put `paths`/`paths-ignore` on `tests.yml` itself.** It produces the
+  required `All tests green`; a workflow filtered out never reports it, and a
+  missing required check blocks the merge. Skip per job from a `changes` job
+  (`dorny/paths-filter`) and let the aggregate accept `skipped` *only* where
+  `changes` said so — it stays fail-closed.
+- **Never cache what CodeQL must watch being compiled.** A cached `DerivedData`
+  or Gradle build output lets the build skip compilation and CodeQL extracts
+  nothing. Cache fetched sources only (SPM `SourcePackages`, `~/.gradle/caches`).

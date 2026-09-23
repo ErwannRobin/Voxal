@@ -13,9 +13,16 @@ on:
 permissions:
   contents: write
 
+# One build per tag: a re-run for the same tag supersedes the one in flight
+# (both would `--clobber` the same assets anyway).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: true
+
 jobs:
   build-linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -30,6 +37,16 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-
 
       - name: Install Linux build dependencies
         run: |
