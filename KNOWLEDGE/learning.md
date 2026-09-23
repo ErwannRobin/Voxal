@@ -1749,7 +1749,9 @@ seems too sharp".
   changes, after Linux is green — the crate has `#[cfg(target_os = "macos")]`
   code Linux never compiles. Swift CodeQL runs only when its inputs change
   (`ios/`, `package.json`/`package-lock.json` — the plugins it compiles live in
-  `node_modules` — `capacitor.config.json`, the workflow) plus the weekly cron.
+  `node_modules` — `capacitor.config.json`, the workflow) or a manual dispatch — the weekly
+  cron re-scans JS and Java/Kotlin only, so Swift picks up new CodeQL queries
+  only on its next input change (run it by hand to force one).
 - **Never put `paths`/`paths-ignore` on `tests.yml` itself.** It produces the
   required `All tests green`; a workflow filtered out never reports it, and a
   missing required check blocks the merge. Skip per job from a `changes` job

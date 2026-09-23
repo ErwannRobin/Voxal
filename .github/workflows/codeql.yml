@@ -15,9 +15,9 @@ on:
       - "**/*.md"
       - "KNOWLEDGE/**"
   workflow_dispatch:
-  # The full run, Swift included, whatever changed — keeps the default branch's
-  # iOS analysis fresh against new CodeQL queries even in a week with no iOS
-  # change.
+  # Weekly re-scan of JavaScript and Java/Kotlin against new CodeQL queries.
+  # Swift is deliberately left out (macOS cost): it is analyzed only when its
+  # inputs change, or on a manual dispatch.
   schedule:
     - cron: "27 3 * * 1"
 
@@ -34,7 +34,7 @@ jobs:
   # Whether this push/PR touches anything the Swift analysis compiles: the
   # native project, the Capacitor plugins it builds from node_modules (pinned by
   # package.json / package-lock.json), the Capacitor config, or this workflow.
-  # Scheduled and manual runs skip the filter and always analyze Swift.
+  # A manual dispatch always analyzes Swift; the weekly schedule never does.
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
@@ -43,7 +43,7 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      ios: ${{ steps.filter.outputs.ios || 'true' }}
+      ios: ${{ steps.filter.outputs.ios || (github.event_name == 'schedule' && 'false' || 'true') }}
     steps:
       - name: Checkout repository
         if: github.event_name == 'pull_request' || github.event_name == 'push'
@@ -129,8 +129,8 @@ jobs:
 
   # macOS minutes cost ten times Linux ones, and this is the longest job in the
   # repository (~20 min). So it runs only when the change touches Swift inputs
-  # (see `changes`) or on the weekly schedule, and only after the Linux
-  # JavaScript analysis has succeeded.
+  # (see `changes`) or on a manual dispatch — never on the weekly schedule —
+  # and only after the Linux JavaScript analysis has succeeded.
   analyze-ios:
     name: Analyze (swift)
     needs: [changes, analyze-js]
