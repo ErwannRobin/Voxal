@@ -1,11 +1,23 @@
 name: "CodeQL"
 
+# Prose never changes what CodeQL sees. docs/ is NOT ignored: it holds HTML
+# pages with inline scripts that the JavaScript analysis scans. Unlike Tests,
+# nothing here is a required check, so a filtered-out run blocks nothing.
 on:
   push:
     branches: ["main"]
+    paths-ignore:
+      - "**/*.md"
+      - "KNOWLEDGE/**"
   pull_request:
     branches: ["main"]
+    paths-ignore:
+      - "**/*.md"
+      - "KNOWLEDGE/**"
   workflow_dispatch:
+  # Weekly re-scan of JavaScript and Java/Kotlin against new CodeQL queries.
+  # Swift is deliberately left out (macOS cost): it is analyzed only when its
+  # inputs change, or on a manual dispatch.
   schedule:
     - cron: "27 3 * * 1"
 
@@ -14,10 +26,46 @@ permissions:
   contents: read
   security-events: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Whether this push/PR touches anything the Swift analysis compiles: the
+  # native project, the Capacitor plugins it builds from node_modules (pinned by
+  # package.json / package-lock.json), the Capacitor config, or this workflow.
+  # A manual dispatch always analyzes Swift; the weekly schedule never does.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ios: ${{ steps.filter.outputs.ios || (github.event_name == 'schedule' && 'false' || 'true') }}
+    steps:
+      - name: Checkout repository
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        uses: actions/checkout@v7
+
+      - name: Classify changed files
+        id: filter
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            ios:
+              - 'ios/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'capacitor.config.json'
+              - '.github/workflows/codeql.yml'
+
   analyze-js:
     name: Analyze (javascript-typescript)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
@@ -35,6 +83,7 @@ jobs:
   analyze-android:
     name: Analyze (java-kotlin)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -59,6 +108,17 @@ jobs:
           build-mode: manual
           config-file: ./.github/codeql/codeql-config.yml
 
+      # Dependencies and wrapper only — never build outputs, which would let
+      # Gradle skip the compilation CodeQL has to observe.
+      - name: Cache Gradle
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('android/**/*.gradle*', 'android/gradle/wrapper/gradle-wrapper.properties', 'package-lock.json') }}
+          restore-keys: ${{ runner.os }}-gradle-
+
       - name: Build Android app for CodeQL extraction
         run: |
           echo "sdk.dir=$ANDROID_HOME" > android/local.properties
@@ -67,9 +127,16 @@ jobs:
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4.38.1
 
+  # macOS minutes cost ten times Linux ones, and this is the longest job in the
+  # repository (~20 min). So it runs only when the change touches Swift inputs
+  # (see `changes`) or on a manual dispatch — never on the weekly schedule —
+  # and only after the Linux JavaScript analysis has succeeded.
   analyze-ios:
     name: Analyze (swift)
+    needs: [changes, analyze-js]
+    if: needs.changes.outputs.ios == 'true'
     runs-on: macos-latest
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -92,6 +159,15 @@ jobs:
         with:
           languages: swift
           build-mode: manual
+
+      # Only the fetched package sources — never DerivedData, which would let
+      # xcodebuild skip the compilation CodeQL has to observe.
+      - name: Cache Swift packages
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/SourcePackages
+          key: ${{ runner.os }}-spm-${{ hashFiles('ios/App/**/Package.resolved', 'ios/App/CapApp-SPM/Package.swift') }}
+          restore-keys: ${{ runner.os }}-spm-
 
       - name: Resolve Swift package dependencies
         env:
