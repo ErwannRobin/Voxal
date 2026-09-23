@@ -1772,6 +1772,11 @@ seems too sharp".
 - **A partially staged file is linted from the index** (`git show :path |
   eslint --stdin --stdin-filename path`). Linting the working tree would check
   code that is not being committed, and pass or fail the wrong thing.
+- **`rustfmt --check` exits 0 when reading stdin, even while printing a
+  diff.** Only a file argument makes it fail. The hook needs the staged copy, so
+  it pipes it through `rustfmt --emit stdout` and compares the result with the
+  input instead. The first version of the hook let a misformatted file through
+  silently.
 - **ESLint and classic scripts:** `src/*.js` share one global scope, so
   top-level declarations are globals other files use. That is why the config
   uses `vars: 'local'` for unused-vars, declares each cross-file global by hand
