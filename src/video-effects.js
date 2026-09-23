@@ -47,8 +47,6 @@ var VideoEffects = (function () {
   // --- constants ------------------------------------------------------------
 
   var STORAGE_KEY = 'video-background';
-  var SERVICE_URL_KEY = 'service-url';       // same key presenceBase() reads
-  var DEFAULT_SERVICE_URL = 'https://voxal.app';
 
   var CACHE_NAME  = 'voxal-seg-v1';
   var MODEL_FILE  = 'selfie_segmenter_landscape.tflite';
@@ -601,8 +599,6 @@ var VideoEffects = (function () {
   function isCapacitor() {
     return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   }
-
-  function isNative() { return isTauri() || isCapacitor(); }
 
   function runtimeBase() {
     var override;

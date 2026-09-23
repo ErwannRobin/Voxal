@@ -6,6 +6,15 @@ import { seedRoom } from './_helpers.js';
 // that is not there is not an action.
 
 test.beforeEach(async ({ page }) => {
+  // These cases are written for a Ctrl keyboard (labels read "Ctrl+U", events
+  // carry ctrlKey). Pin the page to one, so the spec means the same on a Mac
+  // developer's machine as on the Linux CI runner — isAppleKeyboard() reads
+  // both navigator.platform and the user agent.
+  await page.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, 'platform', { get: () => 'Linux x86_64' });
+    const ua = navigator.userAgent.replace(/\(Macintosh;[^)]*\)/, '(X11; Linux x86_64)');
+    Object.defineProperty(Navigator.prototype, 'userAgent', { get: () => ua });
+  });
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/');
   await seedRoom(page, {

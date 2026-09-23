@@ -1,4 +1,4 @@
-.PHONY: help run run-web gen-build-info dev debug build build-debug build-signed build-web install clean lint check test \
+.PHONY: help run run-web gen-build-info dev debug build build-debug build-signed build-web install clean lint hooks check test \
         test-rust test-api test-e2e test-mesh coverage coverage-rust coverage-e2e \
         coverage-api coverage-summary coverage-badge bench bench-app bench-audio bench-video \
         bench-report bench-publish bench-history \
@@ -28,6 +28,8 @@ help:
 	@echo "  sync-version Sync package.json/Cargo.toml/version.js/Android/iOS to tauri.conf.json's version (no bump, no commit)"
 	@echo "  docs         Serve architecture flow docs on http://localhost:8090"
 	@echo "  check        Run Rust type-check (no binary)"
+	@echo "  lint         ESLint over all JS + rustfmt check (what the pre-commit hook runs on staged files)"
+	@echo "  hooks        (Re)install the git hooks in .githooks/ (npm install does this automatically)"
 	@echo "  test         Run all test suites (check + Rust tests + Playwright)"
 	@echo "  test-rust    Run Rust unit tests"
 	@echo "  test-e2e     Run fast Playwright E2E tests (unit project)"
@@ -325,6 +327,14 @@ sync-version:
 
 check:
 	cd src-tauri && cargo check
+
+lint:
+	npm run lint
+	cd src-tauri && cargo fmt --check
+
+hooks:
+	git config core.hooksPath .githooks
+	@echo "✓ Git hooks enabled (.githooks/). Bypass once with --no-verify."
 
 test: check test-rust test-api test-e2e
 

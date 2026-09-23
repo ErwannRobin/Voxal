@@ -122,6 +122,34 @@ jobs:
       - name: Run Rust tests
         run: cd src-tauri && cargo test
 
+  # The same checks the pre-commit hook runs on staged files, over the whole
+  # tree. The hook can be bypassed (--no-verify); this cannot, so the next
+  # person to touch a file never inherits someone else's lint errors.
+  lint:
+    name: Lint (ESLint + rustfmt)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: rustfmt
+        run: cd src-tauri && cargo fmt --check
+
   api-tests:
     name: API tests
     needs: changes
@@ -318,7 +346,7 @@ jobs:
   all-tests-green:
     name: All tests green
     if: always()
-    needs: [changes, rust-tests, rust-tests-macos, api-tests, unit-e2e]
+    needs: [changes, lint, rust-tests, rust-tests-macos, api-tests, unit-e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -329,12 +357,14 @@ jobs:
           RUST_CHANGED: ${{ needs.changes.outputs.code == 'true' && needs.changes.outputs.rust == 'true' }}
           RUST_RESULT: ${{ needs.rust-tests.result }}
           RUST_MACOS_RESULT: ${{ needs.rust-tests-macos.result }}
+          LINT_RESULT: ${{ needs.lint.result }}
           API_RESULT: ${{ needs.api-tests.result }}
           UNIT_E2E_RESULT: ${{ needs.unit-e2e.result }}
         run: |
           echo "Changes          : $CHANGES_RESULT (code=$CODE_CHANGED, rust=$RUST_CHANGED)"
           echo "Rust tests       : $RUST_RESULT"
           echo "Rust tests macOS : $RUST_MACOS_RESULT"
+          echo "Lint             : $LINT_RESULT"
           echo "API tests        : $API_RESULT"
           echo "E2E (unit)       : $UNIT_E2E_RESULT"
 
@@ -348,6 +378,7 @@ jobs:
           failed=0
           [ "$CHANGES_RESULT" = "success" ] || failed=1
           ok "$RUST_RESULT" "$CODE_CHANGED" || failed=1
+          ok "$LINT_RESULT" "$CODE_CHANGED" || failed=1
           ok "$API_RESULT" "$CODE_CHANGED" || failed=1
           ok "$UNIT_E2E_RESULT" "$CODE_CHANGED" || failed=1
           ok "$RUST_MACOS_RESULT" "$RUST_CHANGED" || failed=1

@@ -1,0 +1,81 @@
+#!/bin/sh
+# pre-commit — lint only, staged files only, a few seconds at most.
+#
+# Checks exactly what is being committed: a file with unstaged edits is linted
+# from its STAGED copy (the index), not from the working tree.
+#
+# Bypass in an emergency: git commit --no-verify
+# Installed by `npm install` (scripts/install-hooks.mjs); see README → Git hooks.
+
+set -u
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+failed=0
+fail() { printf '\033[31m✖ %s\033[0m\n' "$1"; failed=1; }
+note() { printf '\033[33m! %s\033[0m\n' "$1"; }
+
+# Staged, still-present files (added/copied/modified/renamed), newline-separated.
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+
+# True when the working-tree copy differs from what is staged.
+partially_staged() { ! git diff --quiet -- "$1"; }
+
+# ── Conflict markers and whitespace errors (git's own check) ─────────────────
+# Markdown is exempt: two trailing spaces are a line break there.
+if ! git diff --cached --check -- . ':(exclude)*.md' >/dev/null 2>&1; then
+  git diff --cached --check -- . ':(exclude)*.md'
+  fail "conflict markers or whitespace errors in staged changes (see above)"
+fi
+
+# ── JavaScript: ESLint (also catches syntax errors) ──────────────────────────
+js=$(printf '%s\n' "$staged" | grep -E '\.(js|mjs|cjs)$' || true)
+if [ -n "$js" ]; then
+  eslint=node_modules/.bin/eslint
+  if [ ! -x "$eslint" ]; then
+    note "ESLint not installed — run \`npm install\`. Skipping JS lint."
+  else
+    whole=""
+    for f in $js; do
+      if partially_staged "$f"; then
+        git show ":$f" | "$eslint" --no-warn-ignored --stdin --stdin-filename "$f" || fail "ESLint: $f (staged copy)"
+      else
+        whole="$whole $f"
+      fi
+    done
+    if [ -n "$whole" ]; then
+      # shellcheck disable=SC2086 # word-splitting the file list is intended
+      "$eslint" --no-warn-ignored $whole || fail "ESLint (fix the errors above, or run \`npm run lint\`)"
+    fi
+  fi
+fi
+
+# ── JSON: must parse ─────────────────────────────────────────────────────────
+for f in $(printf '%s\n' "$staged" | grep -E '\.json$' || true); do
+  git show ":$f" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{JSON.parse(s)}catch(e){console.error(e.message);process.exit(1)}})' \
+    || fail "invalid JSON: $f"
+done
+
+# ── Rust: rustfmt ────────────────────────────────────────────────────────────
+rs=$(printf '%s\n' "$staged" | grep -E '\.rs$' || true)
+if [ -n "$rs" ]; then
+  if ! command -v rustfmt >/dev/null 2>&1; then
+    note "rustfmt not found — skipping Rust format check (rustup component add rustfmt)."
+  else
+    # rustfmt --check exits 0 on stdin even when it prints a diff, so compare
+    # the formatted staged copy with the staged copy itself instead.
+    for f in $rs; do
+      staged_rs=$(git show ":$f")
+      formatted=$(printf '%s\n' "$staged_rs" | rustfmt --edition 2021 --emit stdout 2>/dev/null) \
+        && [ "$formatted" = "$staged_rs" ] \
+        || fail "not rustfmt-formatted (or does not parse): $f — run \`cd src-tauri && cargo fmt\`, then re-stage"
+    done
+  fi
+fi
+
+if [ "$failed" -ne 0 ]; then
+  echo
+  echo "Commit blocked by the pre-commit hook. Fix the above, or bypass with: git commit --no-verify"
+  exit 1
+fi
+exit 0

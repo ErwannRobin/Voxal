@@ -156,6 +156,7 @@ If you modify files under `src/`, sync assets for mobile builds with `make cap-s
 | `make test` | Full suite: Rust type-check + Rust tests + API tests + Playwright E2E |
 | `make test-e2e` | Fast Playwright E2E only (pure-logic and UI flows) |
 | `make test-mesh` | Multi-peer WebRTC E2E against a real local PeerServer |
+| `make lint` | ESLint over all JavaScript + `cargo fmt --check` |
 | `make coverage` | Rust + E2E + API coverage reports, summarised in one table |
 | `make coverage-badge` | Re-measure `main.js` and rewrite the coverage badge above |
 | `make bench` | Performance benchmark: voice and camera, real WebRTC, no thresholds |
@@ -165,6 +166,26 @@ If you modify files under `src/`, sync assets for mobile builds with `make cap-s
 ([how that is enforced](docs/required-checks.md)). The multi-peer `make test-mesh`
 suite is kept out of it so the fast path stays deterministic — run it when you
 touch signaling, the audio mesh, or host migration.
+
+### Git hooks
+
+`npm install` (and so `make install`) points git at the repository's own hooks
+in [`.githooks/`](.githooks) by setting `core.hooksPath`. Nothing to do by hand;
+`make hooks` re-enables them if you ever need to. They catch what CI would
+reject before it costs a CI run. CI still runs everything and stays the real
+safety net.
+
+| Hook | Runs | Time |
+|---|---|---|
+| `pre-commit` | On **staged** files only: ESLint for JS, JSON validity, `rustfmt --check` for Rust, conflict markers/whitespace | ~2 s |
+| `pre-push` | Only the suites your pushed commits touch: API tests (`api/`), the E2E unit suite (`src/`, `tests/e2e/`), Rust tests (`src-tauri/`), a Swift syntax check (`ios/**/*.swift`, macOS only). Docs-only pushes run nothing | seconds to a few minutes |
+
+The mesh suite is never run by a hook (slow, timing-sensitive; CI runs it).
+`pre-push` tests the working tree, so stash unrelated edits if you want the
+result to describe exactly what you push.
+
+**Emergency bypass:** `git commit --no-verify` / `git push --no-verify` skips
+the hook for that one command. CI will still check the change.
 
 ## License
 

@@ -436,7 +436,7 @@ test.describe('noise suppression', () => {
     const checked = await page.evaluate(() => {
       localStorage.setItem('noise-suppression', 'off');
       syncNoiseSuppressionControls();
-      const out = Array.from(document.querySelectorAll('input[name=\"noise-suppression-mode\"]'))
+      const out = Array.from(document.querySelectorAll('input[name="noise-suppression-mode"]'))
         .filter((r) => r.checked).map((r) => r.value);
       localStorage.removeItem('noise-suppression');
       return out;

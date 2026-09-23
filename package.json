@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "tauri": "tauri",
+    "prepare": "node scripts/install-hooks.mjs",
+    "lint": "eslint .",
     "test": "npm run test:rust && npm run test:api && npm run test:e2e",
     "test:rust": "cd src-tauri && cargo test",
     "test:e2e": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test --project=unit",
@@ -16,9 +18,12 @@
     "bench:report": "node scripts/bench-report.mjs"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@mediapipe/tasks-vision": "1.0.1",
     "@playwright/test": "^1.63.0",
     "@tauri-apps/cli": "^2",
+    "eslint": "^10.11.0",
+    "globals": "^17.12.0",
     "monocart-coverage-reports": "^2.13.0",
     "peer": "^1.0.2"
   },

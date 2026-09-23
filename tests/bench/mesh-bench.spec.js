@@ -1,5 +1,5 @@
 import { test, expect } from '../e2e/mesh-fixtures.js';
-import { createRoom, joinRoom, getState, killPeer, waitForSharedDeputy } from '../e2e/mesh-helpers.js';
+import { joinRoom, getState, killPeer, waitForSharedDeputy } from '../e2e/mesh-helpers.js';
 import { audibleCount, sampleProcessTree, cpuPercentBetween, median } from './bench-metrics.js';
 import { runScenario, buildRoom, openAudioMesh, startTalking, BASE_STORAGE } from './bench-room.js';
 import { recordRun, RESULTS_FILE } from './bench-results.js';

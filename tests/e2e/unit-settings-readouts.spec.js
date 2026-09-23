@@ -41,6 +41,13 @@ const aboutText = (page) =>
   }));
 
 test.describe('the About readout', () => {
+  // A developer who has ever run a build has a real, gitignored build-info.js
+  // in src/, which would load over the stamp these cases set. Serve the plain
+  // checkout every time: index.html drops the tag when it fails to load.
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/build-info.js', (route) => route.fulfill({ status: 404, body: '' }));
+  });
+
   test('an unstamped checkout falls back to the version.js constants', async ({ page }) => {
     await page.goto('/');
     await openSettings(page);
