@@ -954,6 +954,20 @@ versions (`make bench-history`). Gaps, in rough priority order:
   costs far more than the number is worth — but the limitation has to stay
   printed on the report, not just known.
 
+## 🎬 Promo film — checks the container cannot make
+
+`docs/promo.html` exports were verified here in VP9/Opus (WebM and MP4) and the
+H.264/AAC MP4 layout with ffmpeg-made streams (see `KNOWLEDGE/learning.md`,
+"Promo film"). Still to do on real hardware:
+
+- [ ] Export MP4 from Chrome and Safari on macOS and from Chrome/Edge on Windows
+      (H.264 + AAC there) and open the file in QuickTime, VLC and a social
+      upload (Instagram / LinkedIn / X) — the formats this film is for.
+- [ ] Listen to the soundtrack. It was only checked by level meter and
+      spectrogram in the container (no audio device).
+- [ ] Firefox: confirm which of its WebCodecs encoders answer `supported`, and
+      that the real-time `MediaRecorder` fallback produces a playable file.
+
 ---
 
 _Add new items above this line._

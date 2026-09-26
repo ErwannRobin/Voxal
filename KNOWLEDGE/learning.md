@@ -1761,6 +1761,42 @@ seems too sharp".
   or Gradle build output lets the build skip compilation and CodeQL extracts
   nothing. Cache fetched sources only (SPM `SourcePackages`, `~/.gradle/caches`).
 
+## Promo film (`docs/promo.html`)
+
+- **The container's Chromium cannot encode H.264 or AAC with WebCodecs.** It is
+  an open-source build: `VideoEncoder.isConfigSupported({codec:'avc1.…'})` and
+  `AudioEncoder` with `mp4a.40.2` both answer `supported: false`, while VP9, AV1
+  and Opus work. So the page falls back to VP9 (+ Opus) inside MP4 there, and the
+  real `avc1`/`avcC` + `mp4a`/`esds` path of the MP4 writer was verified another
+  way: ffmpeg-made H.264 (Annex B, `aud=1`) and ADTS AAC, re-packed to AVCC/raw in
+  Node, muxed by `MUX.muxMP4`, then decoded cleanly by ffmpeg. `pip install
+  imageio-ffmpeg` gives a static ffmpeg in this container (Playwright's own
+  ffmpeg build is too stripped to probe files). Chrome/Safari on macOS and
+  Windows do have H.264 + AAC — an export from one of them is still worth a look.
+- **A variable font's width axis can be pinned per family through `FontFace`.**
+  `ctx.fontStretch` is not in every browser, but `new FontFace('Vox Display',
+  buf, { stretch: '118%' })` — a single value, not a range — makes every
+  `ctx.font` using that family render at 118% width, because the requested
+  stretch is clamped into the face's declared range. One woff2 buffer backs both
+  "Vox Display" (118%) and "Vox Text" (100%).
+- **`shadowBlur` / `shadowOffset` are device pixels**, blind to the canvas
+  transform. Everything else in the film is in design units, so those two are
+  multiplied by `ctx.getTransform().a` / `.d` where they are set.
+- **`OfflineAudioContext` left a lone full-scale sample at two kick onsets**
+  (a one-sample spike to 1.0 with its neighbours at -0.03). `renderSoundtrack()`
+  therefore de-clicks isolated single-sample spikes and normalises the peak to
+  -1 dBFS after rendering, rather than trusting the graph's own headroom.
+- **Chrome's VP9 encoder reports no `decoderConfig.colorSpace` and signals BT.601
+  (smpte170m) in the bitstream.** An early MP4 writer stamped a BT.709 `colr` box
+  regardless, contradicting it. Colour metadata is now written only from what the
+  encoder reports; with no report, the bitstream is left to speak.
+- **VP9 overshoots a thin bitrate target ~2× with film grain** (Draft, 720p: asked
+  1.0 Mb/s, got 1.95). The size estimate in the export panel adds a per-pixel
+  floor for that; it is an estimate, and says so.
+- **Background tabs throttle timers, not `MessageChannel`.** The exporter yields
+  between frames through a `MessageChannel` round-trip, so an export keeps going
+  at full speed when the tab is hidden.
+
 ## Git hooks and ESLint
 
 - **Hooks are plain `sh` in `.githooks/`, enabled by `core.hooksPath`**, not

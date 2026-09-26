@@ -33,6 +33,7 @@ make build-debug  # macOS debug bundle — registers voxal:// URL scheme
 make build        # Release build
 make seg-assets   # Stage the background-effects WASM runtime into src/assets/seg/
 make emoji-data   # Regenerate src/emoji-data.js (chat's emoji catalog) from Unicode
+make promo-assets # Re-embed the icon + fonts in docs/promo.html (the 30 s film)
 make cap-sync     # Sync src/ assets to ios/ and android/ after any src/ change
 make cap-ios      # Open Xcode
 make cap-android  # Open Android Studio
@@ -245,6 +246,21 @@ line-up left to keep.
 keeps the header's buttons clear of an overlaid status bar. The immersive stage
 also lifts `.screen`'s 480px cap — the stage is `inset: 0` on the room, so the
 room's width IS the picture's width.
+
+### Promo film (`docs/promo.html`)
+
+A 30-second marketing film that is also its own exporter, in ONE self-contained
+page (served by GitHub Pages; opens from `file://` too). `renderFrame(ctx, W, H, t)`
+draws any frame from `t` alone — no clock, no state between frames, no
+`Math.random()` — in design units where the short side is 1080, so 16:9, 1:1 and
+9:16 share one timeline and only `LAYOUT(V)` differs. The soundtrack is
+synthesised once through an `OfflineAudioContext`. Export encodes with WebCodecs
+(H.264 or VP9, AAC or Opus) and writes the MP4/WebM with the page's own muxers
+(`MUX`); without WebCodecs it falls back to a real-time `MediaRecorder` pass. The
+fonts (Archivo, IBM Plex Mono) and the app icon sit base64 in the last
+`<script>`; `make promo-assets` rewrites that block. Everything else is edited in
+place — there is no build step. `tests/e2e/unit-promo.spec.js` pins determinism
+and the container layout.
 
 ### Presence (optional)
 

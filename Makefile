@@ -3,7 +3,7 @@
         coverage-api coverage-summary coverage-badge bench bench-app bench-audio bench-video \
         bench-report bench-publish bench-history \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
-        seg-assets emoji-data
+        seg-assets emoji-data promo-assets
 
 # Default target
 help:
@@ -18,6 +18,7 @@ help:
 	@echo "  build-debug  Build the Tauri desktop app (debug bundle — registers voxal:// scheme)"
 	@echo "  build-web    Bundle the web version into dist/"
 	@echo "  seg-assets   Stage the background-effects runtime into src/assets/seg"
+	@echo "  promo-assets Re-embed the icon and fonts in docs/promo.html (the 30 s film)"
 	@echo "  cap-sync     Sync web assets to iOS & Android"
 	@echo "  cap-ios      Open Xcode (iOS)"
 	@echo "  cap-android  Open Android Studio"
@@ -122,6 +123,11 @@ gen-build-info:
 # a new Unicode emoji release is worth picking up.
 emoji-data:
 	@node scripts/gen-emoji-data.mjs
+
+# Re-embeds the app icon and the two fonts at the end of docs/promo.html (the
+# 30-second film, a single self-contained page). Run it after the icon changes.
+promo-assets:
+	@node scripts/promo-assets.mjs
 
 # Stages the ~12 MB MediaPipe vision runtime into src/assets/seg/. The copy
 # itself lives in seg-assets.sh so this target and the Vercel deploy
