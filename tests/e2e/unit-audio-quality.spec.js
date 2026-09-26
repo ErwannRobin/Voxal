@@ -23,14 +23,16 @@ function fmtpLine(sdp, pt) {
 }
 
 test.describe('opusSdpTransform', () => {
-  test('forces FEC on, DTX off, mono and a bitrate cap on the opus fmtp line', async ({ page }) => {
+  test('forces FEC on, DTX on, mono and a bitrate cap on the opus fmtp line', async ({ page }) => {
     await page.goto('/');
     const out = await page.evaluate((sdp) => window.opusSdpTransform(sdp), OFFER_SDP);
 
     const fmtp = fmtpLine(out, '111');
     expect(fmtp).toBeTruthy();
     expect(fmtp).toContain('useinbandfec=1');
-    expect(fmtp).toContain('usedtx=0');
+    // DTX is what stops a released talk button uploading 50 packets of
+    // silence a second to every peer.
+    expect(fmtp).toContain('usedtx=1');
     expect(fmtp).toContain('stereo=0');
     expect(fmtp).toContain('sprop-stereo=0');
     expect(fmtp).toContain('maxaveragebitrate=32000');
@@ -47,7 +49,38 @@ test.describe('opusSdpTransform', () => {
     // The opus rtpmap must stay intact — a naive replace corrupts the "/2" suffix.
     expect(out).toContain('a=rtpmap:111 opus/48000/2\r\n');
     expect(out).toContain('a=rtpmap:63 red/48000/2');
-    expect(out.split('\r\n').length).toBe(OFFER_SDP.split('\r\n').length);
+    // Exactly one line more: the a=ptime the transform adds.
+    expect(out.split('\r\n').length).toBe(OFFER_SDP.split('\r\n').length + 1);
+  });
+
+  test('asks for 40 ms packets with a=ptime, right after the opus fmtp line', async ({ page }) => {
+    await page.goto('/');
+    const out = await page.evaluate((sdp) => window.opusSdpTransform(sdp), OFFER_SDP);
+    const lines = out.split('\r\n');
+    const at = lines.indexOf(fmtpLine(out, '111'));
+    expect(lines[at + 1]).toBe('a=ptime:40');
+    expect(lines.filter((l) => l.startsWith('a=ptime:'))).toHaveLength(1);
+  });
+
+  test('replaces a ptime already in the audio section and leaves other sections alone', async ({ page }) => {
+    await page.goto('/');
+    const sdp = [
+      'v=0',
+      'm=audio 9 UDP/TLS/RTP/SAVPF 111',
+      'a=rtpmap:111 opus/48000/2',
+      'a=ptime:20',
+      'a=fmtp:111 minptime=10',
+      'a=maxptime:120',
+      'm=video 9 UDP/TLS/RTP/SAVPF 96',
+      'a=rtpmap:96 VP8/90000',
+      'a=ptime:33',
+      '',
+    ].join('\r\n');
+    const out = await page.evaluate((s) => window.opusSdpTransform(s), sdp);
+    const [audio, video] = out.split('m=video');
+    expect(audio.match(/a=ptime:\d+/g)).toEqual(['a=ptime:40']);
+    expect(audio).toContain('a=maxptime:120\r\n');
+    expect(video).toContain('a=ptime:33\r\n');
   });
 
   test('adds an fmtp line when the offer has none', async ({ page }) => {

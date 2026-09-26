@@ -11,6 +11,7 @@ import {
   waitForSharedDeputy,
   outgoingAudioSenderCounts,
   negotiatedOpusFmtp,
+  negotiatedAudioPtimes,
   sendChat,
   chatIds,
   chatText,
@@ -238,7 +239,7 @@ test.describe('mesh @mesh', () => {
     expect(after).toEqual(before);
   });
 
-  test('audio links negotiate Opus with in-band FEC and DTX off', async ({ makePeer }) => {
+  test('audio links negotiate Opus with in-band FEC, DTX on and 40 ms packets', async ({ makePeer }) => {
     const host = await makePeer({ pseudo: 'Hostie' });
     const code = await createRoom(host);
     const a = await makePeer({ pseudo: 'Alice' });
@@ -249,11 +250,15 @@ test.describe('mesh @mesh', () => {
       await expect.poll(async () => (await negotiatedOpusFmtp(p)).length, POLL).toBeGreaterThanOrEqual(1);
       for (const line of await negotiatedOpusFmtp(p)) {
         // FEC lets the decoder rebuild isolated lost packets instead of
-        // dropping them; DTX off keeps the jitter buffer warm between presses.
+        // dropping them; DTX stops a released talk button sending silence.
         expect(line).toContain('useinbandfec=1');
-        expect(line).toContain('usedtx=0');
+        expect(line).toContain('usedtx=1');
         expect(line).toContain('stereo=0');
       }
+      // Every audio section of every link asks the far side for 40 ms frames.
+      const ptimes = await negotiatedAudioPtimes(p);
+      expect(ptimes.length).toBeGreaterThanOrEqual(1);
+      for (const ptime of ptimes) expect(ptime).toBe(40);
     }
   });
 

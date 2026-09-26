@@ -162,6 +162,29 @@ export function negotiatedOpusFmtp(page) {
   });
 }
 
+/**
+ * The `a=ptime` of each audio section in every audio link's local description,
+ * as a number (null for a section without one) — what we ask the far side to
+ * packetize at.
+ */
+export function negotiatedAudioPtimes(page) {
+  return page.evaluate(() => {
+    const out = [];
+    connections.forEach((conn) => {
+      [conn.media, conn.audioMediaOut].forEach((mc) => {
+        const pc = mc && !mc.closed ? mc.peerConnection : null;
+        const sdp = pc && pc.localDescription ? pc.localDescription.sdp : null;
+        if (!sdp) return;
+        sdp.split('\r\nm=').filter((s) => s.startsWith('audio') || s.startsWith('m=audio')).forEach((section) => {
+          const m = /^a=ptime:(\d+)/m.exec(section);
+          out.push(m ? Number(m[1]) : null);
+        });
+      });
+    });
+    return out;
+  });
+}
+
 /** Number of participant rows rendered in the peer list (self + others). */
 export function rosterCount(page) {
   return page.locator('#peers-list .peer-item').count();
