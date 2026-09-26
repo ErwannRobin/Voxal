@@ -28,6 +28,8 @@ Instant push-to-talk voice rooms.
 
 📡 [Join the Presence Portal](https://voxal.app)
 
+🎬 [Watch Voxal in 30 seconds](https://erwannrobin.github.io/Voxal/promo.html)
+
 ## Why Voxal?
 
 - **Pure P2P voice** (WebRTC full-mesh audio) — never routed through a media server, under any setting
@@ -118,6 +120,7 @@ component by component.
 ## Documentation
 
 - [Architecture & protocol](docs/architecture.md)
+- [The 30-second film — watch it, or export it as MP4/WebM in 16:9, 1:1 or 9:16](https://erwannrobin.github.io/Voxal/promo.html) (source: [`docs/promo.html`](docs/promo.html))
 - [Topology diagrams — voice room, two-peer video, larger rooms](https://erwannrobin.github.io/Voxal/topology.html) (source: [`docs/topology.html`](docs/topology.html))
 - [Architecture flow explorer](https://erwannrobin.github.io/Voxal/architecture.html) (source: [`docs/architecture.html`](docs/architecture.html))
 - [Room Lab — build a room and watch the links form](https://erwannrobin.github.io/Voxal/topology-lab.html) (source: [`docs/topology-lab.html`](docs/topology-lab.html))
