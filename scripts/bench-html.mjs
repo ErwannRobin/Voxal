@@ -397,7 +397,7 @@ export function renderHtml(m, history = { rows: [], incomparable: [] }, historyD
     sections.push(
       card(
         'Upload grows with the room',
-        'Both lines climb because audio is a full mesh. The listener line climbs too: <code>usedtx=0</code> keeps packets flowing while muted, so <strong>everyone</strong> in the room pays for the mesh, not only whoever is talking.',
+        'The speaker line climbs because audio is a full mesh: one Opus stream per other peer. The listener line is the one to check: with Opus DTX on (<code>usedtx=1</code>), a released talk button should send next to nothing, so a listener line that climbs like the speaker\'s means silence is being paid for again.',
         body +
           table(
             ['Peers', 'Speakers', 'Speaker up', 'Listener up', 'Listener down', 'RTT', 'Loss', 'Room CPU', 'Room RSS'],

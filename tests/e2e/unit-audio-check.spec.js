@@ -428,6 +428,55 @@ test.describe('per-peer WebRTC stats', () => {
     expect(iceType).toBe('srflx');
   });
 
+  // Opus DTX leaves a quiet link with a dozen packets per tick; one lost among
+  // them must not read as 8% loss and widen the jitter buffer.
+  test('a loss rate waits for enough packets, then covers the whole window', async ({ page }) => {
+    await seedRoom(page, { selfId: 'self', isHost: true, connections: [{ id: 'p1' }] });
+    const seen = await page.evaluate(async () => {
+      const c = connections.get('p1');
+      const tick = async (received, lost, sent, outLost) => {
+        c.media = { closed: false, peerConnection: window.__mkPc([
+          { type: 'inbound-rtp', kind: 'audio', packetsReceived: received, packetsLost: lost },
+          { type: 'outbound-rtp', kind: 'audio', packetsSent: sent },
+          { type: 'remote-inbound-rtp', kind: 'audio', packetsLost: outLost },
+        ]) };
+        await _collectPeerStats('p1', c);
+        const s = c.webrtcStats;
+        return { in: s.lossPercent, out: s.outLossPercent };
+      };
+      c.webrtcStats = { lossPercent: 0.5, outLossPercent: 0.25 };
+      const quiet = await tick(11, 1, 12, 1);     // a DTX tick: 12 packets, one lost
+      const stillQuiet = await tick(22, 1, 24, 1); // 23 so far — still too few
+      const enough = await tick(99, 1, 100, 2);    // the window closes at 100
+      const next = await tick(199, 1, 200, 2);     // and the next starts from there
+      return { quiet, stillQuiet, enough, next };
+    });
+    expect(seen.quiet).toEqual({ in: 0.5, out: 0.25 });      // carried forward
+    expect(seen.stillQuiet).toEqual({ in: 0.5, out: 0.25 });
+    expect(seen.enough).toEqual({ in: 1, out: 2 });           // 1/100 and 2/100
+    expect(seen.next).toEqual({ in: 0, out: 0 });
+  });
+
+  test('a link closing (counters going backwards) restarts the loss window', async ({ page }) => {
+    await seedRoom(page, { selfId: 'self', isHost: true, connections: [{ id: 'p1' }] });
+    const seen = await page.evaluate(async () => {
+      const c = connections.get('p1');
+      const tick = async (received, lost) => {
+        c.media = { closed: false, peerConnection: window.__mkPc([
+          { type: 'inbound-rtp', kind: 'audio', packetsReceived: received, packetsLost: lost },
+        ]) };
+        await _collectPeerStats('p1', c);
+        return c.webrtcStats.lossPercent;
+      };
+      await tick(1000, 0);
+      const dropped = await tick(40, 0);  // the other link went away
+      const after = await tick(135, 5);   // 95 + 5 since the drop
+      return { dropped, after };
+    });
+    expect(seen.dropped).toBe(0);
+    expect(seen.after).toBe(5);
+  });
+
   test('the stats popover opens onto a peer and closes again', async ({ page }) => {
     await seedRoom(page, { selfId: 'self', isHost: true, connections: [{ id: 'p1', pseudo: 'Ada' }] });
     const seen = await page.evaluate(() => {
