@@ -1770,6 +1770,18 @@ seems too sharp".
 - **Never cache what CodeQL must watch being compiled.** A cached `DerivedData`
   or Gradle build output lets the build skip compilation and CodeQL extracts
   nothing. Cache fetched sources only (SPM `SourcePackages`, `~/.gradle/caches`).
+- **A plugin bump that drops a Swift dependency needs `Package.resolved`
+  regenerated.** Dependabot only touches `package.json`/`package-lock.json`, so
+  the committed `ios/App/App.xcodeproj/.../swiftpm/Package.resolved` keeps the
+  stale pin (`@capgo/capacitor-updater` 8.51.19 dropped `BigInt`). Xcode 26
+  does not report this: `xcodebuild -resolvePackageDependencies` *crashes*
+  (`NSInvalidArgumentException … count of array (9) differs from count of index
+  set (8)`, exit 134), which looks like a Swift/CodeQL failure but isn't. Fix:
+  `npx cap sync ios`, then `xcodebuild -resolvePackageDependencies -project
+  App.xcodeproj -scheme App -clonedSourcePackagesDirPath <fresh dir>` in
+  `ios/App` — it crashes once but writes the right file; a second run is clean.
+  Use a fresh dir: a stale DerivedData checkout fails with "has uncommitted
+  changes".
 
 ## Promo film (`docs/promo.html`)
 
