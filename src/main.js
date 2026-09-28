@@ -6567,7 +6567,8 @@ function removeRecentRoom(code) {
 // stream the fragile part, and untuned WebRTC defaults turn a lossy uplink into
 // chopped ("robotic") audio on the *listener's* side. Three knobs fix that:
 //
-//   1. Opus fmtp: in-band FEC on, DTX off, mono, capped bitrate (below).
+//   1. Opus fmtp: in-band FEC on, DTX on, mono, capped bitrate, 40 ms
+//      packets (below).
 //   2. Sender: an explicit bitrate cap + high network priority (DSCP), so one
 //      speaker's N uploads don't congest each other.
 //   3. Receiver: a jitter-buffer floor via `playoutDelayHint`. Chromium's
@@ -6587,19 +6588,38 @@ const AUDIO_POOR_LOSS_PERCENT  = 3;
 const AUDIO_POOR_JITTER_MS     = 30;
 
 // Opus parameters we force into every audio offer/answer. `useinbandfec=1`
-// lets the decoder reconstruct isolated lost packets instead of dropping them;
-// `usedtx=0` keeps packets flowing while PTT is released (the mic track is
-// disabled, not removed) so the receiver's jitter buffer stays warm and the
-// first word after a press isn't clipped.
+// lets the decoder reconstruct isolated lost packets instead of dropping them.
+//
+// `usedtx=1` is what makes a listener cheap. PTT releases the mic by disabling
+// the track, not removing it, so without DTX every released peer still sent 50
+// packets of silence a second to every other peer — measured at 33-46 kb/s per
+// link, not far off the speaker's 61. With DTX the encoder sends one packet
+// every 400 ms instead (~5 kb/s per link, RTCP included). It used to be off for
+// fear the first word after a press would be clipped; measured, speech onset
+// to the far side is no later with it on (see KNOWLEDGE/learning.md).
 const OPUS_FMTP_PARAMS = {
   stereo: '0',
   'sprop-stereo': '0',
   useinbandfec: '1',
-  usedtx: '0',
+  usedtx: '1',
   maxaveragebitrate: String(OPUS_MAX_BITRATE)
 };
 
-// PeerJS `sdpTransform` hook — rewrites (or adds) the Opus fmtp line.
+// Opus frame length we ask peers to send us, as `a=ptime` on the audio section.
+// WebRTC's default is 20 ms: 50 packets a second per listener, and at speech
+// bitrates the IP/UDP/RTP/SRTP headers on each are about as big as the audio in
+// it. 40 ms halves the packet count for 20 ms more latency (measured: -23%
+// speaker upload per link, speech onset +19-21 ms). 60 ms is NOT better in
+// Chromium: it measured more bytes than 40, not fewer, and a later onset.
+//
+// It is a receiver preference: libwebrtc copies the REMOTE description's
+// `a=ptime` into the codec it sends with and picks the next Opus frame size at
+// or above it. So a peer on an older build still sends us 20 ms until it
+// updates, and we send it 20 ms — mixed rooms simply negotiate per direction.
+const OPUS_PTIME_MS = 40;
+
+// PeerJS `sdpTransform` hook — rewrites (or adds) the Opus fmtp line, and sets
+// the audio section's ptime.
 function opusSdpTransform(sdp) {
   if (typeof sdp !== 'string' || !sdp) return sdp;
   try {
@@ -6623,10 +6643,30 @@ function opusSdpTransform(sdp) {
       return params[k] === null ? k : k + '=' + params[k];
     }).join(';');
 
-    return existing ? sdp.replace(fmtpRe, line) : sdp.replace(rtpmap[0], rtpmap[0] + '\r\n' + line);
+    var tuned = existing ? sdp.replace(fmtpRe, line) : sdp.replace(rtpmap[0], rtpmap[0] + '\r\n' + line);
+    return setOpusPtime(tuned, line);
   } catch (_) {
     return sdp; // never break call setup over a tuning nicety
   }
+}
+
+// `a=ptime` is a media-level attribute, so it belongs to the m= section that
+// carries Opus and nowhere else. Any ptime already in that section is replaced
+// rather than duplicated, and it always lands right after the fmtp line — which
+// keeps the transform idempotent.
+function setOpusPtime(sdp, fmtpLine) {
+  var lines = sdp.split('\r\n');
+  var at = lines.indexOf(fmtpLine);
+  if (at < 0) return sdp;
+  var start = at;
+  while (start > 0 && lines[start].indexOf('m=') !== 0) start--;
+  var end = at + 1;
+  while (end < lines.length && lines[end].indexOf('m=') !== 0) end++;
+
+  var section = lines.slice(start, end).filter(function(l) { return l.indexOf('a=ptime:') !== 0; });
+  var fmtpAt = section.indexOf(fmtpLine);
+  section.splice(fmtpAt + 1, 0, 'a=ptime:' + OPUS_PTIME_MS);
+  return lines.slice(0, start).concat(section, lines.slice(end)).join('\r\n');
 }
 
 // Options passed to every audio `peer.call()` / `call.answer()`.
@@ -6946,6 +6986,32 @@ function _pushLossHistory(prevHistory, value) {
   return history;
 }
 
+// A loss rate over a handful of packets is noise. With Opus DTX a peer whose
+// talk button is up sends one packet every 400 ms, so a 5 s tick can hold a
+// dozen — and ONE lost packet among them reads as 8% loss, which would widen
+// the jitter buffer and flag a healthy link. So a window stays open (its cursor
+// does not move, the previous rate is carried forward) until it holds this many
+// packets: two seconds of continuous 40 ms audio.
+const AUDIO_LOSS_MIN_PACKETS = 50;
+
+// One direction's loss window: `cursor` is the raw counters the window started
+// from, `raw` the current ones, `countKey` the packet counter that direction
+// has (packetsReceived in, packetsSent out). `done` means `count` and `lost`
+// are worth a rate; either way `cursor` is what the next tick measures from.
+function _lossWindow(cursor, raw, countKey) {
+  var from = cursor || {};
+  var count = raw[countKey] - (from[countKey] || 0);
+  // RTP's cumulative loss can dip when duplicates arrive — that is no loss.
+  var lost = Math.max(0, raw.packetsLost - (from.packetsLost || 0));
+  // The counters are summed over every audio link to the peer, so one closing
+  // makes them go backwards. Start again from here rather than wait for them to
+  // climb back past a cursor that no longer means anything.
+  if (count < 0) return { done: false, cursor: raw };
+  var total = countKey === 'packetsReceived' ? count + lost : count;
+  if (total < AUDIO_LOSS_MIN_PACKETS) return { done: false, cursor: cursor || {} };
+  return { done: true, count: count, lost: lost, cursor: raw };
+}
+
 async function _collectPeerStats(peerId, conn) {
   var pcs = audioPeerConnections(conn);
   if (!pcs.length) return;
@@ -7006,25 +7072,21 @@ async function _collectPeerStats(peerId, conn) {
 
     var prev = conn.webrtcStats || {};
 
-    var prevIn   = prev._inboundRaw || {};
-    var lostDelta = Math.max(0, inRaw.packetsLost - (prevIn.packetsLost || 0));
-    var recvDelta = Math.max(0, inRaw.packetsReceived - (prevIn.packetsReceived || 0));
-    if (recvDelta + lostDelta > 0) {
-      stats.lossPercent = _round1((lostDelta / (recvDelta + lostDelta)) * 100);
+    var inWindow = _lossWindow(prev._inboundRaw, inRaw, 'packetsReceived');
+    if (inWindow.done) {
+      stats.lossPercent = _round1((inWindow.lost / (inWindow.count + inWindow.lost)) * 100);
     } else if (typeof prev.lossPercent === 'number') {
       stats.lossPercent = prev.lossPercent; // carry forward
     }
-    stats._inboundRaw = inRaw;
+    stats._inboundRaw = inWindow.cursor;
 
-    var prevOut   = prev._outboundRaw || {};
-    var outLostDelta = Math.max(0, outRaw.packetsLost - (prevOut.packetsLost || 0));
-    var outSentDelta = Math.max(0, outRaw.packetsSent - (prevOut.packetsSent || 0));
-    if (outSentDelta > 0) {
-      stats.outLossPercent = _round1(Math.min(100, (outLostDelta / outSentDelta) * 100));
+    var outWindow = _lossWindow(prev._outboundRaw, outRaw, 'packetsSent');
+    if (outWindow.done) {
+      stats.outLossPercent = _round1(Math.min(100, (outWindow.lost / outWindow.count) * 100));
     } else if (typeof prev.outLossPercent === 'number') {
       stats.outLossPercent = prev.outLossPercent; // carry forward
     }
-    stats._outboundRaw = outRaw;
+    stats._outboundRaw = outWindow.cursor;
 
     // Cumulative totals + peaks + a rolling window, so a brief dropout is still
     // visible minutes later instead of being averaged away by the next sample.

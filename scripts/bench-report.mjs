@@ -343,8 +343,8 @@ if (m.scale.length) {
   if (m.marginalUploadBps !== null) {
     out.push(
       `Every peer added costs a speaker another **${bits(m.marginalUploadBps)}** of upload ` +
-        `(least-squares slope across ${m.curve.length} room sizes). A listener pays it too — ` +
-        `\`usedtx=0\` keeps packets flowing while muted.`
+        `(least-squares slope across ${m.curve.length} room sizes). A listener's upload is the ` +
+        `other column to read: with Opus DTX on, a released talk button should cost next to nothing.`
     );
     out.push('');
   }

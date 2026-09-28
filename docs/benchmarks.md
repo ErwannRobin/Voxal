@@ -159,10 +159,14 @@ Walking into a meeting that is already on camera. Hearing the room and *seeing* 
 ## Reading the mesh honestly
 
 Audio is a full mesh, always. A speaker uploads one Opus stream **per other
-peer**, so upload grows as `O(N-1)` while an SFU-based product's stays flat —
-and because `usedtx=0` keeps the receiver's jitter buffer warm, a *listener*
-pays nearly the same. Everyone in a Voxal room pays for the mesh, not only
-whoever is talking.
+peer**, so upload grows as `O(N-1)` while an SFU-based product's stays flat.
+
+A *listener* used to pay nearly the same: under `usedtx=0` a released talk
+button still sent silence to every peer, which is what the listener column
+above shows. The app now turns on Opus DTX (`usedtx=1`, one packet per 400 ms
+while silent) and 40 ms packets, which a scratch run put at ~5 kb/s per link
+for a listener and about a third less per link for a speaker. The tables
+above predate both; the next `make bench-publish` replaces them.
 
 Camera and screen-share are the same shape under `p2p-only`, at roughly twenty
 times the bitrate — which is exactly why the shipped default lets them take an

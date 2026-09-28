@@ -55,8 +55,9 @@ test.describe('bench @bench', () => {
   }
 
   // Worst case for the mesh: everybody talking at once. The gap between this
-  // and the single-speaker run above is what silence suppression buys — and
-  // since the app forces `usedtx=0`, it should be smaller than intuition says.
+  // and the single-speaker run above is what silence suppression buys — with
+  // Opus DTX on (`usedtx=1`), a released talk button should cost almost
+  // nothing, so the gap should be close to the whole of the listeners' share.
   test(`mesh scale — ${Math.max(...SIZES)} peers, all speaking`, async ({ makePeer }) => {
     const size = Math.max(...SIZES);
     test.setTimeout(HOLD_MS + 180_000);

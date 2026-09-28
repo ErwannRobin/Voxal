@@ -376,15 +376,20 @@ no rate limit in the way.
 Audio is full mesh, always — see `docs/video-routing.md`. A speaker uploads one
 Opus stream **per other peer**, so upload grows as `O(N-1)` while an SFU-based
 product's stays flat. At 8 peers that is roughly 8× the upload of Discord or
-Zoom for the same call. The harness measures exactly that: 48 → 97 → 145 kb/s
+Zoom for the same call. The harness measured exactly that: 48 → 97 → 145 kb/s
 across 2, 3 and 4 peers — ×3 for ×3 the links, with no inflection to hope for.
+(Those figures predate 40 ms Opus packets, `OPUS_PTIME_MS`, and DTX, which
+together cut a speaker's upload per link by about a third in a scratch run. The
+slope is still linear.)
 
-And the cost is not only the speaker's. Because `OPUS_FMTP_PARAMS` forces
-`usedtx=0` — keeping the receiver's jitter buffer warm so the first word after
-a PTT press is not clipped — a *listener* in that 4-peer room still uploads
-135 kb/s against the speaker's 145. Everyone in a Voxal room pays the mesh, not
-just whoever is talking. Quote both columns; a comparison that cites only the
-speaker's upload understates the design by a factor of N.
+The listener column used to be nearly as bad. Under `usedtx=0` a released talk
+button still sent 50 packets of silence a second per link, so a *listener* in
+that 4-peer room uploaded 135 kb/s against the speaker's 145. With Opus DTX on
+(`usedtx=1`) it sends one packet every 400 ms: ~5 kb/s per link. Quote both
+columns anyway — a run that cites only the speaker's upload hides the one
+number that says whether that still holds — and note that simultaneous presses
+can leave duplicate audio links (see *glare* in `KNOWLEDGE/learning.md`), which
+the listener column also pays for.
 
 That is a real cost and the report prints it plainly. The trade it buys is also
 real: no server hop in the audio path, and audio that never touches a server at
