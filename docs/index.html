@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voxal — Push-to-talk voice rooms</title>
+<meta name="description" content="Instant push-to-talk voice rooms. Peer-to-peer, no accounts, no installation. Web, desktop, iOS and Android.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg:        #F1F2F5;
+    --surface:   #FFFFFF;
+    --surface-2: #E7EAEF;
+    --ink:       #14181F;
+    --ink-dim:   #59636F;
+    --rule:      #D2D7DE;
+    --signal:    #6B4FD0;
+    --audio:     #0F7D62;
+    --video:     #2463C4;
+    --relay:     #B06511;
+    --shadow:    0 1px 2px rgba(20,24,31,.06), 0 8px 24px rgba(20,24,31,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:        #0C0F13;
+      --surface:   #151A21;
+      --surface-2: #1D232B;
+      --ink:       #E5E9EF;
+      --ink-dim:   #939DAB;
+      --rule:      #2A313B;
+      --signal:    #A897F7;
+      --audio:     #35C49B;
+      --video:     #71A8F7;
+      --relay:     #EBA84E;
+      --shadow:    0 1px 2px rgba(0,0,0,.4), 0 10px 28px rgba(0,0,0,.35);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 15px; line-height: 1.55;
+  }
+  a { color: var(--signal); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  h1, h2, h3 { font-family: 'Archivo', sans-serif; margin: 0; text-wrap: balance; }
+  code { font-family: 'IBM Plex Mono', monospace; font-size: .88em; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
+
+  /* Hero */
+  .hero { display: grid; grid-template-columns: 1fr auto; gap: 40px; align-items: center; padding: 56px 0 40px; }
+  .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+  .brand svg { width: 36px; height: 36px; }
+  .brand span { font-family: 'Archivo', sans-serif; font-weight: 700; font-size: 22px; letter-spacing: -.01em; }
+  .hero h1 { font-size: clamp(30px, 5vw, 46px); line-height: 1.08; letter-spacing: -.02em; }
+  .hero p.lead { color: var(--ink-dim); font-size: 17px; margin: 14px 0 24px; max-width: 34em; }
+  .cta { display: flex; flex-wrap: wrap; gap: 10px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 10px;
+    font-weight: 600; font-size: 14px; border: 1px solid var(--rule); background: var(--surface); color: var(--ink);
+  }
+  .btn:hover { text-decoration: none; border-color: var(--signal); }
+  .btn.primary { background: var(--signal); border-color: var(--signal); color: #fff; }
+  @media (prefers-color-scheme: dark) { .btn.primary { color: #0C0F13; } }
+  .platforms { margin-top: 18px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-dim); }
+  .shot { width: 250px; border-radius: 18px; box-shadow: var(--shadow); border: 1px solid var(--rule); display: block; }
+  .shot.dark { display: none; }
+  @media (prefers-color-scheme: dark) { .shot.light { display: none; } .shot.dark { display: block; } }
+
+  /* Sections */
+  section { padding: 28px 0; border-top: 1px solid var(--rule); }
+  .kicker { font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-dim); margin-bottom: 14px; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+  .card { background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; padding: 16px; box-shadow: var(--shadow); }
+  .card h3 { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .card p { margin: 0; color: var(--ink-dim); font-size: 13.5px; }
+  .card .tag { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; vertical-align: 1px; }
+  a.card { color: inherit; display: block; }
+  a.card:hover { text-decoration: none; border-color: var(--signal); }
+  a.card h3::after { content: " →"; color: var(--signal); }
+
+  /* Topology strip */
+  .topo { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .topo .card b { font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 500; }
+  .note { margin: 14px 0 0; color: var(--ink-dim); font-size: 13.5px; }
+
+  /* Docs list */
+  .docs { display: grid; gap: 24px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .docs h3 { font-size: 14px; margin-bottom: 8px; }
+  .docs ul { list-style: none; margin: 0; padding: 0; }
+  .docs li { padding: 7px 0; border-bottom: 1px solid var(--rule); font-size: 14px; }
+  .docs li small { display: block; color: var(--ink-dim); font-size: 12.5px; }
+
+  pre {
+    margin: 0; background: var(--surface); border: 1px solid var(--rule); border-radius: 12px;
+    padding: 14px 16px; overflow-x: auto; font-family: 'IBM Plex Mono', monospace; font-size: 13px; line-height: 1.7;
+  }
+  pre .c { color: var(--ink-dim); }
+  footer { padding: 28px 0 48px; border-top: 1px solid var(--rule); color: var(--ink-dim); font-size: 13px; }
+
+  @media (max-width: 760px) {
+    .hero { grid-template-columns: 1fr; padding-top: 32px; }
+    .shot { width: 200px; margin: 0 auto; }
+    .topo { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="hero">
+    <div>
+      <div class="brand">
+        <svg viewBox="0 0 36 36" aria-hidden="true">
+          <rect width="36" height="36" rx="9" fill="var(--signal)"/>
+          <g stroke="#fff" stroke-width="3" stroke-linecap="round">
+            <line x1="10" y1="14" x2="10" y2="22"/><line x1="15" y1="10" x2="15" y2="26"/>
+            <line x1="20" y1="13" x2="20" y2="23"/><line x1="25" y1="16" x2="25" y2="20"/>
+          </g>
+        </svg>
+        <span>Voxal</span>
+      </div>
+      <h1>Instant push-to-talk voice rooms.</h1>
+      <p class="lead">Peer-to-peer voice that never goes through a media server. No accounts, no installation, no server required — and the room survives when the host leaves.</p>
+      <div class="cta">
+        <a class="btn primary" href="https://web.voxal.app">Try in a browser</a>
+        <a class="btn" href="https://github.com/ErwannRobin/Voxal/releases/latest">Download desktop app</a>
+        <a class="btn" href="promo.html">Watch in 30 s</a>
+        <a class="btn" href="https://github.com/ErwannRobin/Voxal">GitHub</a>
+      </div>
+      <div class="platforms">macOS · Linux · Windows · iOS · Android · Web — MIT licensed</div>
+    </div>
+    <div>
+      <img class="shot light" src="voxal-screenshot-light.png" alt="Voxal room (light theme)">
+      <img class="shot dark" src="voxal-screenshot-dark.png" alt="Voxal room (dark theme)">
+    </div>
+  </header>
+
+  <section>
+    <div class="kicker">Why Voxal</div>
+    <div class="grid">
+      <div class="card"><h3><span class="tag" style="background:var(--audio)"></span>Pure P2P voice</h3><p>WebRTC full-mesh audio (Opus, 16 kHz mono). Never routed through a media server, under any setting.</p></div>
+      <div class="card"><h3><span class="tag" style="background:var(--signal)"></span>Push-to-talk first</h3><p>Global shortcut on desktop, touch button on mobile and web, hands-free when you want it.</p></div>
+      <div class="card"><h3><span class="tag" style="background:var(--signal)"></span>Host migration</h3><p>A deputy takes over when the host leaves. Nobody reconnects, no audio link drops.</p></div>
+      <div class="card"><h3><span class="tag" style="background:var(--video)"></span>Video &amp; screen</h3><p>Adaptive video stage, screen sharing, local background blur. Optional SFU for video only.</p></div>
+      <div class="card"><h3><span class="tag" style="background:var(--relay)"></span>Works behind NAT</h3><p>TURN / STUN with short-lived credentials, even for anonymous users.</p></div>
+      <div class="card"><h3><span class="tag" style="background:var(--ink-dim)"></span>One frontend, everywhere</h3><p>Plain HTML/JS, wrapped by Tauri on desktop and Capacitor on mobile. Embeddable as an iframe.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="kicker">How a room is wired</div>
+    <div class="topo">
+      <div class="card"><h3>Signaling</h3><p><b>star</b> — host ↔ each peer over a PeerJS data channel. The room code is the host's peer ID.</p></div>
+      <div class="card"><h3>Audio</h3><p><b>full mesh</b> — every peer ↔ every peer, always direct. A TURN relay only forwards encrypted packets.</p></div>
+      <div class="card"><h3>Camera / screen</h3><p><b>mesh or SFU</b> — own link set; may use Cloudflare's Realtime SFU in larger rooms.</p></div>
+    </div>
+    <p class="note">See it drawn: <a href="topology.html">topology diagrams</a> · build a room yourself in the <a href="topology-lab.html">Room Lab</a> · walk it component by component in the <a href="architecture.html">flow explorer</a>.</p>
+  </section>
+
+  <section>
+    <div class="kicker">Interactive pages</div>
+    <div class="grid">
+      <a class="card" href="topology.html"><h3>Topology diagrams</h3><p>Join sequence, star vs. mesh, what each server sees, migration, video above two people.</p></a>
+      <a class="card" href="topology-lab.html"><h3>Room Lab</h3><p>Add and remove peers and watch the links form.</p></a>
+      <a class="card" href="architecture.html"><h3>Flow explorer</h3><p>The architecture, one component and one flow at a time.</p></a>
+      <a class="card" href="benchmark.html"><h3>Benchmark dashboard</h3><p>What a room costs: bandwidth, CPU, memory, join time.</p></a>
+      <a class="card" href="promo.html"><h3>The 30-second film</h3><p>Watch it, or export it as MP4/WebM in 16:9, 1:1 or 9:16.</p></a>
+    </div>
+  </section>
+
+  <section>
+    <div class="kicker">Documentation</div>
+    <div class="docs">
+      <div>
+        <h3>How it works</h3>
+        <ul>
+          <li><a href="https://github.com/ErwannRobin/Voxal/blob/main/docs/architecture.md">Architecture &amp; protocol</a><small>Topology, messages, state</small></li>
+          <li><a href="https://github.com/ErwannRobin/Voxal/blob/main/docs/host-migration.md">Host migration</a><small>Deputy and successor handoff</small></li>
+          <li><a href="https://github.com/ErwannRobin/Voxal/blob/main/docs/video-routing.md">Video routing</a><small>Mesh vs. SFU, and why audio never relays</small></li>
+          <li><a href="https://github.com/ErwannRobin/Voxal/blob/main/docs/video-effects.md">Camera background effects</a><small>Blur and virtual backgrounds, on-device</small></li>
+          <li><a href="https://github.com/ErwannRobin/Voxal/blob/main/docs/turn-and-ice.md">TURN &amp; ICE</a><small>NAT traversal and relay credentials</small></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Build &amp; deploy</h3>
+        <ul>
+          <li><a href="https://github.com/ErwannRobin/Voxal/blob/main/docs/deployment.md">Deployment &amp; self-hosting</a><small>Web, signaling, presence</small></li>
+          <li><a href="https://github.com/ErwannRobin/Voxal/blob/main/docs/mobile.md">Mobile guide</a><small>iOS and Android builds, forking</small></li>
+          <li><a href="https://github.com/ErwannRobin/Voxal/blob/main/docs/iframe-embed.md">iframe embed</a><small>URL parameters and the postMessage bridge</small></li>
+          <li><a href="https://github.com/ErwannRobin/Voxal/blob/main/docs/prompts.md">LLM integration prompts</a><small>Ready-made prompts for coding agents</small></li>
+          <li><a href="https://github.com/ErwannRobin/Voxal/blob/main/docs/release.md">Release workflow</a><small>Versioning and signing</small></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Quality &amp; project</h3>
+        <ul>
+          <li><a href="https://github.com/ErwannRobin/Voxal/blob/main/docs/benchmarks.md">Benchmark results</a><small>Method: <a href="https://github.com/ErwannRobin/Voxal/blob/main/docs/benchmarking.md">benchmarking.md</a></small></li>
+          <li><a href="https://github.com/ErwannRobin/Voxal/blob/main/docs/required-checks.md">Required checks</a><small>No merge on red tests</small></li>
+          <li><a href="https://github.com/ErwannRobin/Voxal/blob/main/docs/ring-a-friend.md">Ring a friend</a><small>Design proposal — not implemented</small></li>
+          <li><a href="https://github.com/ErwannRobin/Voxal/blob/main/docs/updates/2026-06-15.md">Recent updates</a><small>Daily changelog</small></li>
+          <li><a href="https://github.com/ErwannRobin/Voxal/blob/main/CONTRIBUTING.md">Contributing</a><small>How to send a change</small></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="kicker">Run it locally</div>
+<pre><span class="c"># clone, install, start the desktop app with hot reload</span>
+git clone https://github.com/ErwannRobin/Voxal.git
+make install
+make dev        <span class="c"># or: make run-web → http://localhost:8080</span>
+make test       <span class="c"># Rust + API + Playwright E2E</span></pre>
+  </section>
+
+  <footer>
+    Voxal · MIT license · <a href="https://github.com/ErwannRobin/Voxal">github.com/ErwannRobin/Voxal</a> · <a href="https://voxal.app">Presence portal</a>
+  </footer>
+
+</div>
+</body>
+</html>
