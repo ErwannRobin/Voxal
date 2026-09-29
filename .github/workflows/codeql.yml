@@ -72,13 +72,13 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4.38.1
+        uses: github/codeql-action/init@v4.38.2
         with:
           languages: javascript-typescript
           build-mode: none
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4.38.1
+        uses: github/codeql-action/analyze@v4.38.2
 
   analyze-android:
     name: Analyze (java-kotlin)
@@ -102,7 +102,7 @@ jobs:
         run: npx cap sync android
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4.38.1
+        uses: github/codeql-action/init@v4.38.2
         with:
           languages: java-kotlin
           build-mode: manual
@@ -125,7 +125,7 @@ jobs:
           cd android && ./gradlew assembleDebug --no-daemon
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4.38.1
+        uses: github/codeql-action/analyze@v4.38.2
 
   # macOS minutes cost ten times Linux ones, and this is the longest job in the
   # repository (~20 min). So it runs only when the change touches Swift inputs
@@ -155,7 +155,7 @@ jobs:
         run: npx cap sync ios
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4.38.1
+        uses: github/codeql-action/init@v4.38.2
         with:
           languages: swift
           build-mode: manual
@@ -193,4 +193,4 @@ jobs:
             CODE_SIGNING_REQUIRED=NO
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4.38.1
+        uses: github/codeql-action/analyze@v4.38.2
