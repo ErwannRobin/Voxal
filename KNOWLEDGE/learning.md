@@ -1079,6 +1079,41 @@ before building them:
   seg canvas the gain was just applied to — same class of bug as the mask
   compounding into its own input, below.
 
+## Fixed camera — the empty-room reference (experimental)
+
+From "could a picture of the room without me improve the detection, for a
+camera that does not move". What was not obvious:
+
+- **A thresholded confidence mask is not "where the model is unsure".** The
+  first fusion trusted the model wherever its blended mask was above 0.8 and
+  let the reference decide the rest. Against a hard-edged mask that is the
+  whole mask: the reference was left only the dilate's 3-texel halo and changed
+  almost nothing. The model is confidently wrong near its edge as often as it is
+  unsure there, so the protected "core" has to be an EROSION of the mask (4
+  texels), not a threshold of it.
+
+- **Compare like with like, filter included.** The camera was box-sampled
+  through four taps and the reference sampled once. On a striped test room every
+  stripe boundary came out as "different" and stayed sharp: a one-pixel line
+  along every edge in the room. Run both through the same taps.
+
+- **Webcams re-meter when you walk back in.** Auto-exposure and white balance
+  change the whole room the moment the subject returns, so a raw comparison
+  calls everything foreground. Measure a per-channel gain over what the model
+  calls room (a 64-wide probe, twice a second) and apply it to the reference.
+
+- **A reference must be able to give up on its own.** A knocked camera or a
+  lamp turned on makes it actively harmful. The same probe gives the share of
+  the room that still matches; below 55% it is set aside, above 70% trusted
+  again — two thresholds, or it flickers on a borderline room.
+
+- **Let the reference only take away, never add.** `m * max(diff, core)` cannot
+  cut in anything the model did not already include, so a shadow or a moving
+  curtain elsewhere in the room can never appear sharp.
+
+- **An opt-out must forget, not just stop using.** Switching the setting off
+  drops the picture. It never touches storage in the first place.
+
 ## Background blur quality — grey background, cardboard-cutout edge
 
 Two independent bugs, both invisible in isolation, both plainly visible in the

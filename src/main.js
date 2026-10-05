@@ -9701,6 +9701,8 @@ var VIDEO_DETECTION_QUALITY_KEY =
   (typeof VideoEffects === 'undefined') ? null : VideoEffects.QUALITY_KEY;
 var VIDEO_LIGHT_ADAPT_KEY =
   (typeof VideoEffects === 'undefined') ? null : VideoEffects.LIGHT_ADAPT_KEY;
+var VIDEO_REFERENCE_KEY =
+  (typeof VideoEffects === 'undefined') ? null : VideoEffects.REFERENCE_KEY;
 
 function videoBackgroundMode() {
   return (typeof VideoEffects === 'undefined') ? 'off' : VideoEffects.readMode();
@@ -13797,13 +13799,16 @@ var _videoBgStrength = null;
 var _videoBgSharpness = null;
 var _videoBgQuality = null;
 var _videoBgLight = null;
+var _videoBgReference = null;
 
 function syncVideoBackgroundControls() {
   var mode = videoBackgroundMode();
   _videoBgPickers.forEach(function(p) { try { p.sync(mode); } catch (e) { /* ignore */ } });
-  [_videoBgStrength, _videoBgSharpness, _videoBgQuality, _videoBgLight].forEach(function(c) {
+  [_videoBgStrength, _videoBgSharpness, _videoBgQuality, _videoBgLight,
+   _videoBgReference].forEach(function(c) {
     if (c) { try { c.sync(); } catch (e) { /* ignore */ } }
   });
+  renderVideoBackgroundReference();
   // The room control lives on the self-view tile; refreshing the stage is what
   // re-reads its state.
   if (inRoom) updatePeerList();
@@ -13896,6 +13901,90 @@ function renderVideoBackgroundProgress() {
   positionVideoBackgroundPopover();
 }
 
+// --- Fixed camera: the empty-room reference -----------------------------------
+//
+// Experimental, behind Settings → Video → Fixed camera. The popover offers to
+// photograph the room without you in it; video-effects.js then checks the
+// cut-out's edge against that picture. The countdown lives here, not there: it
+// is the time to walk out of the picture, which is a UI concern — the pipeline
+// only needs to be told when the room is empty.
+
+var VIDEO_REF_COUNTDOWN_S = 3;   // a var, not a const: the E2E suite shortens it
+var _videoRefCountdown = 0;      // seconds left, 0 when no countdown is running
+var _videoRefTimer = null;
+var _videoRefLastState = null;
+
+var VIDEO_REF_TEXT = {
+  none: 'Fixed camera: capture the room without you in it to sharpen the cut-out.',
+  capturing: 'Capturing the empty room…',
+  ready: 'Using your empty-room picture.',
+  stale: 'The room no longer matches — the camera moved or the light changed. Capture it again.'
+};
+
+function renderVideoBackgroundReference() {
+  var row = document.getElementById('video-bg-reference');
+  if (!row || typeof VideoEffects === 'undefined') return;
+  var st = VideoEffects.referenceState();
+  var show = st !== 'off' && st !== 'inactive';
+  row.classList.toggle('hidden', !show);
+  if (show) {
+    var text = row.querySelector('.video-bg-reference-text');
+    var capture = document.getElementById('btn-video-bg-capture');
+    var forget = document.getElementById('btn-video-bg-forget');
+    var busy = _videoRefCountdown > 0 || st === 'capturing';
+    if (text) {
+      text.textContent = _videoRefCountdown > 0
+        ? 'Step out of the picture — capturing in ' + _videoRefCountdown + '…'
+        : (VIDEO_REF_TEXT[st] || '');
+    }
+    if (capture) {
+      capture.disabled = busy;
+      capture.textContent = (st === 'none' || busy) ? 'Capture empty room' : 'Capture again';
+    }
+    if (forget) forget.classList.toggle('hidden', st === 'none' || busy);
+  }
+  positionVideoBackgroundPopover();
+}
+
+function stopVideoReferenceCountdown() {
+  if (_videoRefTimer) clearInterval(_videoRefTimer);
+  _videoRefTimer = null;
+  _videoRefCountdown = 0;
+}
+
+function startVideoReferenceCapture() {
+  if (typeof VideoEffects === 'undefined' || _videoRefTimer) return;
+  _videoRefCountdown = VIDEO_REF_COUNTDOWN_S;
+  renderVideoBackgroundReference();
+  var tick = function() {
+    _videoRefCountdown--;
+    if (_videoRefCountdown > 0) { renderVideoBackgroundReference(); return; }
+    stopVideoReferenceCountdown();
+    VideoEffects.captureReference().then(function(res) {
+      renderVideoBackgroundReference();
+      if (res.ok) showCopyToast('Empty room captured');
+      else if (res.reason === 'present') showCopyToast('You are still in the picture — step out and try again');
+      else if (res.reason !== 'off') showCopyToast('Could not capture the room');
+    });
+  };
+  if (_videoRefCountdown <= 0) { _videoRefCountdown = 1; tick(); return; }
+  _videoRefTimer = setInterval(tick, 1000);
+}
+
+function onVideoReferenceState(st) {
+  // Losing the camera, or the setting, ends a countdown that has nothing left
+  // to capture.
+  if (st === 'off' || st === 'inactive') stopVideoReferenceCountdown();
+  // Said once, on the way from working to set aside — the popover is usually
+  // closed by then, and the picture just got slightly worse for no visible
+  // reason.
+  if (st === 'stale' && _videoRefLastState === 'ready') {
+    showCopyToast('Fixed camera: the room changed — capture it again from the background menu');
+  }
+  _videoRefLastState = st;
+  renderVideoBackgroundReference();
+}
+
 function cancelVideoBackgroundLoad() {
   if (typeof VideoEffects === 'undefined') return;
   VideoEffects.cancelLoad();
@@ -13940,6 +14029,26 @@ function initVideoBackgroundUI() {
     document.getElementById('settings-light-adapt'),
     { id: 'btn-light-adapt', label: 'Adapt to low light',
       title: 'Brighten the detector\'s copy of the picture in a dim room' });
+  _videoBgReference = VideoEffects.renderReference(
+    document.getElementById('settings-bg-reference'),
+    { id: 'btn-bg-reference', label: 'Fixed camera',
+      title: 'Compare the cut-out with a picture of the empty room' });
+
+  var captureBtn = document.getElementById('btn-video-bg-capture');
+  if (captureBtn) {
+    captureBtn.addEventListener('click', function(ev) {
+      ev.stopPropagation();
+      startVideoReferenceCapture();
+    });
+  }
+  var forgetBtn = document.getElementById('btn-video-bg-forget');
+  if (forgetBtn) {
+    forgetBtn.addEventListener('click', function(ev) {
+      ev.stopPropagation();
+      VideoEffects.clearReference();
+    });
+  }
+  VideoEffects.onReferenceState(onVideoReferenceState);
 
   var pop = document.getElementById('video-bg-popover');
   if (pop) pop.addEventListener('click', function(ev) { ev.stopPropagation(); });
@@ -18349,7 +18458,8 @@ window.addEventListener('DOMContentLoaded', function() {
                           NOISE_SUPPRESSION_KEY, MIC_DEVICE_KEY, VIDEO_ROUTING_KEY,
                           NETWORK_USAGE_REQUEST_KEY, VIDEO_BACKGROUND_STORAGE_KEY,
                           VIDEO_BLUR_STRENGTH_KEY, VIDEO_EDGE_SHARPNESS_KEY,
-                          VIDEO_DETECTION_QUALITY_KEY, VIDEO_LIGHT_ADAPT_KEY];
+                          VIDEO_DETECTION_QUALITY_KEY, VIDEO_LIGHT_ADAPT_KEY,
+                          VIDEO_REFERENCE_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
     if (e.key === VIDEO_BLUR_STRENGTH_KEY) {
       // Changed from the desktop preferences window, which stores but cannot
@@ -18376,6 +18486,13 @@ window.addEventListener('DOMContentLoaded', function() {
       if (e.key === VIDEO_EDGE_SHARPNESS_KEY && _videoBgSharpness) _videoBgSharpness.sync();
       else if (e.key === VIDEO_DETECTION_QUALITY_KEY && _videoBgQuality) _videoBgQuality.sync();
       else if (e.key === VIDEO_LIGHT_ADAPT_KEY && _videoBgLight) _videoBgLight.sync();
+      return;
+    }
+    if (e.key === VIDEO_REFERENCE_KEY) {
+      // The fixed-camera switch, flipped in the preferences window. The
+      // picture lives here, so this is also where switching it off forgets it.
+      try { VideoEffects.refreshReference(); } catch (err) { /* ignore */ }
+      if (_videoBgReference) _videoBgReference.sync();
       return;
     }
     if (e.key === VIDEO_BACKGROUND_STORAGE_KEY) {

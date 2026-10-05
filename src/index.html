@@ -352,6 +352,18 @@
                 looks at — never the picture anyone else sees — so it can still find
                 your outline. Does nothing at all in ordinary light.
               </p>
+              <div class="settings-field settings-inline-toggle" style="margin-top:12px">
+                <label for="btn-bg-reference" style="flex:1">Fixed camera (experimental)</label>
+                <div id="settings-bg-reference"></div>
+              </div>
+              <p class="settings-hint">
+                For a camera that does not move. During a call, open the background
+                menu on your own video and capture the room without you in it — the
+                cut-out is then checked against that picture, which sharpens the edge
+                around hair and shoulders. The picture stays in memory on this device,
+                is never sent or saved, and is forgotten when you switch this off.
+                It is set aside on its own if the camera moves or the light changes.
+              </p>
             </div>
           </div>
 
@@ -692,6 +704,16 @@
           <button type="button" id="btn-video-bg-cancel" class="btn btn-secondary btn-sm">Cancel</button>
         </div>
         <div id="video-bg-picker"></div>
+        <!-- Fixed camera: the empty-room reference. Shown only while the
+             setting is on and an effect is running — see
+             renderVideoBackgroundReference(). -->
+        <div id="video-bg-reference" class="video-bg-reference hidden">
+          <p class="video-bg-reference-text" aria-live="polite"></p>
+          <div class="video-bg-reference-actions">
+            <button type="button" id="btn-video-bg-capture" class="btn btn-secondary btn-sm">Capture empty room</button>
+            <button type="button" id="btn-video-bg-forget" class="btn btn-ghost btn-sm">Forget</button>
+          </div>
+        </div>
       </div>
 
       <div id="room-peers-panel" class="room-peers-panel">

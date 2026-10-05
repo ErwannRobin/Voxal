@@ -4645,6 +4645,25 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
 }
 .video-bg-progress .btn { align-self: flex-start; }
 
+/* Fixed camera: the empty-room reference, under the chips. Only present while
+   the (experimental) setting is on and an effect is running. */
+.video-bg-reference {
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.video-bg-reference.hidden { display: none; }
+.video-bg-reference-text {
+  margin: 0;
+  max-width: 320px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.video-bg-reference-actions { display: flex; gap: 8px; align-items: center; }
+
 .bg-chip {
   flex: 0 0 auto;
   width: 44px;

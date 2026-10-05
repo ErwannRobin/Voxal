@@ -329,6 +329,18 @@
             looks at — never the picture anyone else sees — so it can still find
             your outline. Does nothing at all in ordinary light.
           </p>
+          <div class="settings-field settings-inline-toggle" style="margin-top:12px">
+            <label for="btn-bg-reference" style="flex:1">Fixed camera (experimental)</label>
+            <div id="settings-bg-reference"></div>
+          </div>
+          <p class="settings-hint">
+            For a camera that does not move. During a call, open the background
+            menu on your own video and capture the room without you in it — the
+            cut-out is then checked against that picture, which sharpens the edge
+            around hair and shoulders. The picture stays in memory on this device,
+            is never sent or saved, and is forgotten when you switch this off.
+            It is set aside on its own if the camera moves or the light changes.
+          </p>
         </div>
       </div>
 
@@ -1467,12 +1479,21 @@
           title: 'Brighten the detector\'s copy of the picture in a dim room',
           onChange: function(on) { VideoEffects.writeLightAdapt(on); }
         });
+        // The fixed-camera reference: stored here, applied (and, when switched
+        // off, forgotten) by the main window, which holds the picture.
+        var bgReference = VideoEffects.renderReference($id('settings-bg-reference'), {
+          id: 'btn-bg-reference',
+          label: 'Fixed camera',
+          title: 'Compare the cut-out with a picture of the empty room',
+          onChange: function(on) { VideoEffects.writeReference(on); }
+        });
         window.addEventListener('storage', function(e) {
           if (bgPicker && e.key === VideoEffects.STORAGE_KEY) bgPicker.sync();
           if (bgStrength && e.key === VideoEffects.STRENGTH_KEY) bgStrength.sync();
           if (bgSharpness && e.key === VideoEffects.SHARPNESS_KEY) bgSharpness.sync();
           if (bgQuality && e.key === VideoEffects.QUALITY_KEY) bgQuality.sync();
           if (bgLight && e.key === VideoEffects.LIGHT_ADAPT_KEY) bgLight.sync();
+          if (bgReference && e.key === VideoEffects.REFERENCE_KEY) bgReference.sync();
         });
       }
       $id('select-speaker-device').addEventListener('change', function(e) {
