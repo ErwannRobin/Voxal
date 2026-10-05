@@ -1330,3 +1330,239 @@ test.describe('adapting the detector to low light', () => {
     expect(seen.stored).toBe(false);
   });
 });
+
+// The fixed-camera reference (experimental): a picture of the empty room that
+// the cut-out's edge is checked against. The stub's mask is a centred oval,
+// deliberately much bigger than the "person" painted below, so the band
+// between the two is exactly the region the reference exists for: the model
+// calls it you, the room says it is not.
+test.describe('the empty-room reference', () => {
+  // A striped room (stripes far narrower than the blur, so blurred and sharp
+  // are easy to tell apart) and, when `__scene` says so, a flat "person"
+  // standing inside the stub's oval. `moved` is the same room in other colours
+  // — what a camera that has been knocked sees.
+  async function installScene(page) {
+    await page.evaluate(() => {
+      window.__scene = 'empty';
+      window.__mkVideoStream = function () {
+        const c = document.createElement('canvas');
+        c.width = 320; c.height = 240;
+        const ctx = c.getContext('2d');
+        let n = 0;
+        const paint = () => {
+          const moved = window.__scene === 'moved';
+          for (let x = 0; x < 320; x += 8) {
+            ctx.fillStyle = ((x / 8) % 2) ? (moved ? '#c03030' : '#f0d020') : (moved ? '#30c060' : '#2040d0');
+            ctx.fillRect(x, 0, 8, 240);
+          }
+          if (window.__scene === 'person') {
+            ctx.fillStyle = '#c89678';
+            ctx.fillRect(128, 84, 64, 156);
+          }
+          // The moving marker, on the top row where nothing is measured.
+          ctx.fillStyle = '#fff';
+          ctx.fillRect((n++ * 7) % 320, 0, 2, 1);
+        };
+        paint();
+        const stream = c.captureStream(15);
+        const timer = setInterval(paint, 40);
+        stream.getVideoTracks()[0].addEventListener('ended', () => clearInterval(timer));
+        return stream;
+      };
+      window.__probe = function (x, y) {
+        const src = VideoEffects.active().canvas;
+        const probe = document.createElement('canvas');
+        probe.width = src.width; probe.height = src.height;
+        const ctx = probe.getContext('2d');
+        ctx.drawImage(src, 0, 0);
+        return Array.from(ctx.getImageData(x, y, 1, 1).data).slice(0, 3);
+      };
+      window.__sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      window.__waitFor = async (fn, ms) => {
+        const end = Date.now() + ms;
+        while (!fn() && Date.now() < end) await window.__sleep(50);
+        return fn();
+      };
+    });
+  }
+
+  test('is off by default, and the toggle in Video stores the opt-in', async ({ page }) => {
+    expect(await page.evaluate(() => [VideoEffects.readReference(), VideoEffects.referenceState()]))
+      .toEqual([false, 'off']);
+    await page.click('#btn-open-settings');
+    await page.click('#modal-settings [data-target="settings-video"]');
+    const btn = page.locator('#settings-bg-reference .toggle-btn');
+    await expect(btn).toHaveAttribute('aria-checked', 'false');
+    await btn.click();
+    expect(await page.evaluate(() => [
+      VideoEffects.readReference(), localStorage.getItem(VideoEffects.REFERENCE_KEY),
+      VideoEffects.referenceState(),
+    ])).toEqual([true, 'on', 'inactive']);
+    await btn.click();
+    expect(await page.evaluate(() => localStorage.getItem(VideoEffects.REFERENCE_KEY))).toBe(null);
+  });
+
+  test('the score calls the same room the same, and a person different', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const s = VideoEffects._refScore;
+      const cfg = VideoEffects._refConfig;
+      return {
+        cfg,
+        same: s(0.5, 0.4, 0.3, 0.5, 0.4, 0.3),
+        noise: s(0.51, 0.39, 0.31, 0.5, 0.4, 0.3),
+        // A soft shadow: the same colour, a quarter darker.
+        shadow: s(0.375, 0.3, 0.225, 0.5, 0.4, 0.3),
+        // Skin in front of a blue wall, and a grey jumper in front of a grey wall.
+        person: s(0.78, 0.59, 0.47, 0.13, 0.25, 0.82),
+        grey: s(0.25, 0.25, 0.25, 0.6, 0.6, 0.6),
+        // Black on black: chroma is noise there and must not count.
+        dark: s(0.02, 0.0, 0.0, 0.0, 0.0, 0.02),
+      };
+    });
+    expect(seen.same).toBe(0);
+    expect(seen.noise).toBeLessThan(seen.cfg.scoreLo);
+    expect(seen.shadow).toBeLessThan(seen.cfg.scoreHi);
+    expect(seen.person).toBeGreaterThan(seen.cfg.scoreHi);
+    expect(seen.grey).toBeGreaterThan(seen.cfg.scoreHi);
+    expect(seen.dark).toBeLessThan(seen.cfg.scoreHi);
+  });
+
+  test('refuses to learn a room with somebody still in it', async ({ page }) => {
+    await seedEffectsRoom(page);
+    await installScene(page);
+    const res = await page.evaluate(async () => {
+      VideoEffects.setReference(true);
+      VideoEffects.writeMode('blur');
+      await startVideoShare();
+      const r = await VideoEffects.captureReference();
+      return { r, state: VideoEffects.referenceState(), has: VideoEffects.hasReference() };
+    });
+    // The stub's oval is a person as far as the model can tell.
+    expect(res.r).toEqual({ ok: false, reason: 'present' });
+    expect(res.state).toBe('none');
+    expect(res.has).toBe(false);
+  });
+
+  test('blurs the room the model wrongly kept, keeps the person, and swaps nothing', async ({ page }) => {
+    await seedEffectsRoom(page);
+    await installScene(page);
+    const seen = await page.evaluate(async () => {
+      VideoEffects.setReference(true);
+      VideoEffects.writeMode('blur');
+      await startVideoShare();
+      const swaps = window.__swaps.length;
+      // Step out: an empty room, and a model that sees nobody.
+      window.__voxalSegStub = { empty: true };
+      await __sleep(300);
+      const r = await VideoEffects.captureReference();
+      // Step back in.
+      window.__voxalSegStub = true;
+      window.__scene = 'person';
+      await __sleep(400);
+      // Inside the stub's oval (its edge is at x~90 on this row) but outside
+      // the person, and closer to that edge than the core's erosion: the band.
+      const band = { x: 93, y: 150 };
+      const ready = await __waitFor(() => VideoEffects.active().refWeight > 0.99, 4000);
+      await __sleep(300);
+      const withRef = { band: __probe(band.x, band.y), person: __probe(160, 170) };
+      // The same frame without the reference: the band is kept sharp.
+      VideoEffects.setReference(false);
+      await __waitFor(() => VideoEffects.active().refWeight === 0, 3000);
+      await __sleep(200);
+      const without = { band: __probe(band.x, band.y), person: __probe(160, 170) };
+      return { r, ready, withRef, without, swaps: window.__swaps.length - swaps,
+               forgotten: !VideoEffects.hasReference() };
+    });
+    expect(seen.r).toEqual({ ok: true });
+    expect(seen.ready).toBe(true);
+    // x=93 is in a #f0d020 stripe. Kept sharp, that is what the far side gets…
+    expect(seen.without.band[0]).toBeGreaterThan(200);
+    expect(seen.without.band[2]).toBeLessThan(80);
+    // …and with the reference it is the blurred room: yellow and blue mixed,
+    // so neither the stripe's blue floor nor its red ceiling survives.
+    expect(seen.withRef.band[2]).toBeGreaterThan(90);
+    expect(seen.withRef.band[0]).toBeLessThan(200);
+    // The person stays sharp either way.
+    for (const px of [seen.withRef.person, seen.without.person]) {
+      expect(Math.abs(px[0] - 0xc8)).toBeLessThan(16);
+      expect(Math.abs(px[1] - 0x96)).toBeLessThan(16);
+      expect(Math.abs(px[2] - 0x78)).toBeLessThan(16);
+    }
+    // All of it is uniforms and a texture inside the running pipeline.
+    expect(seen.swaps).toBe(0);
+    // Switching the setting off forgets the picture, not just stops using it.
+    expect(seen.forgotten).toBe(true);
+  });
+
+  test('sets itself aside when the room stops matching', async ({ page }) => {
+    await seedEffectsRoom(page);
+    await installScene(page);
+    const seen = await page.evaluate(async () => {
+      VideoEffects.setReference(true);
+      VideoEffects.writeMode('blur');
+      await startVideoShare();
+      window.__voxalSegStub = { empty: true };
+      await __sleep(300);
+      const r = await VideoEffects.captureReference();
+      window.__voxalSegStub = true;
+      window.__scene = 'person';
+      const ready = await __waitFor(() => VideoEffects.referenceState() === 'ready' &&
+                                          VideoEffects.active().refWeight > 0.99, 4000);
+      // Knock the camera: a different room.
+      window.__scene = 'moved';
+      const stale = await __waitFor(() => VideoEffects.referenceState() === 'stale', 4000);
+      const faded = await __waitFor(() => VideoEffects.active().refWeight === 0, 3000);
+      // And back: the reference is trusted again.
+      window.__scene = 'person';
+      const back = await __waitFor(() => VideoEffects.referenceState() === 'ready', 4000);
+      return { r, ready, stale, faded, back };
+    });
+    expect(seen).toEqual({ r: { ok: true }, ready: true, stale: true, faded: true, back: true });
+  });
+
+  // The desktop preferences window stores the switch but holds no picture —
+  // the main window does, so switching it off THERE has to forget it HERE.
+  test('switching it off in the preferences window forgets the picture', async ({ page }) => {
+    await seedEffectsRoom(page);
+    await installScene(page);
+    const seen = await page.evaluate(async () => {
+      VideoEffects.setReference(true);
+      VideoEffects.writeMode('blur');
+      await startVideoShare();
+      window.__voxalSegStub = { empty: true };
+      await __sleep(300);
+      const r = await VideoEffects.captureReference();
+      const had = VideoEffects.hasReference();
+      localStorage.removeItem(VideoEffects.REFERENCE_KEY);
+      window.dispatchEvent(new StorageEvent('storage', { key: VideoEffects.REFERENCE_KEY, newValue: null }));
+      return { r, had, has: VideoEffects.hasReference(), state: VideoEffects.referenceState(),
+               loaded: VideoEffects.active().refLoaded };
+    });
+    expect(seen).toEqual({ r: { ok: true }, had: true, has: false, state: 'off', loaded: false });
+  });
+
+  test('the room popover offers the capture only while the setting is on', async ({ page }) => {
+    await page.evaluate(() => showScreen('room'));
+    await seedEffectsRoom(page);
+    await installScene(page);
+    await page.evaluate(async () => {
+      VIDEO_REF_COUNTDOWN_S = 0;
+      VideoEffects.writeMode('blur');
+      await startVideoShare();
+    });
+    await page.click('.video-tile-self.video-tile-camera .video-tile-bg');
+    await expect(page.locator('#video-bg-popover')).toBeVisible();
+    await expect(page.locator('#video-bg-reference')).toBeHidden();
+
+    await page.evaluate(() => { VideoEffects.setReference(true); window.__voxalSegStub = { empty: true }; });
+    await expect(page.locator('#video-bg-reference')).toBeVisible();
+    await expect(page.locator('#btn-video-bg-forget')).toBeHidden();
+    await page.click('#btn-video-bg-capture');
+    await expect(page.locator('.video-bg-reference-text')).toHaveText(/Using your empty-room picture/);
+    await expect(page.locator('#btn-video-bg-capture')).toHaveText('Capture again');
+
+    await page.click('#btn-video-bg-forget');
+    await expect(page.locator('.video-bg-reference-text')).toHaveText(/capture the room without you/);
+    expect(await page.evaluate(() => VideoEffects.hasReference())).toBe(false);
+  });
+});

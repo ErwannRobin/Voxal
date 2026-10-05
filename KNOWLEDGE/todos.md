@@ -44,10 +44,17 @@ prove — that Tauri really does deliver these events and open these windows.
 ## 🎥 Camera background effects — follow-ups
 
 Shipped: blur, four generated presets, custom image, blur strength, edge
-sharpness, detection accuracy and the low-light adaptation. See
-`docs/video-effects.md`.
+sharpness, detection accuracy, the low-light adaptation, and the experimental
+fixed-camera empty-room reference. See `docs/video-effects.md`.
 
 Deliberately left for later:
+
+- **Tune the fixed-camera reference on a real webcam, then decide its fate.**
+  Every threshold (`REF_SCORE_LO/HI`, `REF_MATCH_MAX`, the core window and
+  `REF_CORE_ERODE`, the stale/fresh hysteresis) is reasoned, and only checked
+  against a synthetic striped room. Try: hair against a plain wall, a white
+  shirt against a white wall, a desk lamp switched on mid-call, and a laptop
+  lid nudged. If it helps, drop "(experimental)"; if not, remove it.
 
 - **Share the WebGL context with MediaPipe.** The mask currently crosses the CPU
   as a 37 KB `Uint8Array` per inference. Keeping it a GPU texture would remove

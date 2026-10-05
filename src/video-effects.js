@@ -224,6 +224,59 @@ var VideoEffects = (function () {
   var LIGHT_GRID_W    = 12;     // the luma probe is 12x8 = 96 pixels
   var LIGHT_GRID_H    = 8;
 
+  // --- a fixed camera: the empty-room reference -----------------------------
+  //
+  // EXPERIMENTAL, and off unless switched on. When the camera does not move, a
+  // picture of the room without you in it says, pixel by pixel and at far more
+  // than the model's 256-wide resolution, what is NOT you: anything that still
+  // looks like the empty room. That is a second opinion, and it is strongest
+  // exactly where the model is weakest — the edge, the hair, the shoulder.
+  //
+  // It is never trusted on its own. The model still decides the two easy
+  // regions: far from you (so a shadow or a moving curtain across the room is
+  // never cut in), and deep inside you (so a white shirt in front of a white
+  // wall is never cut out). The reference only decides the band in between,
+  // which is where the model's staircase and the dilate's halo of sharp
+  // background live. See FRAG_COMPOSITE.
+  //
+  // The picture is kept in memory and nowhere else — never stored, never sent
+  // — and forgotten when the page goes away or the setting is switched off.
+  var REFERENCE_KEY      = 'bg-reference';
+  var REF_LONG           = 640;   // the comparison buffer's long side
+  var REF_CAPTURE_FRAMES = 12;    // averaged into the reference, to beat sensor noise
+  var REF_CAPTURE_MS     = 6000;  // give up on a capture that cannot finish
+  var REF_PRESENT_MAX    = 0.02;  // share of the frame the model may call "person" during a capture
+  var REF_STATS_LONG     = 64;    // the CPU probe that watches for a moved camera
+  var REF_STATS_MS       = 500;
+  var REF_STALE_BELOW    = 0.55;  // share of the visible room that must still match…
+  var REF_FRESH_ABOVE    = 0.70;  // …and the higher bar to trust it again (hysteresis)
+  var REF_MIN_ROOM       = 0.10;  // too little room visible to judge = keep the last verdict
+  var REF_GAIN_MIN       = 0.5;   // exposure / white-balance drift the reference absorbs
+  var REF_GAIN_MAX       = 2.0;
+  var REF_GAIN_SMOOTH    = 0.3;
+  // The difference score, 0 = identical to the room, mapped through
+  // smoothstep(LO, HI) to "how much this is not the room". Reasoned, not
+  // measured on a real room — see docs/video-effects.md.
+  var REF_SCORE_LO       = 0.10;
+  var REF_SCORE_HI       = 0.28;
+  var REF_MATCH_MAX      = 0.15;  // the CPU probe's "still the same room" score
+  // Where the model is sure enough that the reference is not asked: the
+  // blended mask ERODED by REF_CORE_ERODE mask texels, through
+  // smoothstep(CORE_LO, CORE_HI). Eroded rather than merely thresholded,
+  // because the model is confidently wrong as often as it is unsure — a mask
+  // of 1.0 right up to its staircase edge would leave the reference nothing
+  // to decide. Four texels is ~20 px on a 1280-wide camera: the region where
+  // hair and shoulders go wrong, and no deeper.
+  var REF_CORE_ERODE     = 4;
+  var REF_CORE_LO        = 0.60;
+  var REF_CORE_HI        = 0.95;
+  // The band the reference may decide is widened by this much, in mask
+  // texels, while it is in use — hair the model missed can only be given back
+  // if it is inside the band.
+  var REF_DILATE_EXTRA   = 2;
+  var REF_TEMPORAL       = 0.6;   // per-frame blend of the difference, toward the new frame
+  var REF_FADE           = 0.15;  // per-frame ease of the reference's weight in and out
+
   var PRESETS = [
     { id: 'aurora', label: 'Aurora', src: 'assets/backgrounds/aurora.webp' },
     { id: 'dusk',   label: 'Dusk',   src: 'assets/backgrounds/dusk.webp' },
@@ -449,6 +502,47 @@ var VideoEffects = (function () {
     return { gain: gain, contrast: 1 + 0.25 * (gain - 1) / (LIGHT_GAIN_MAX - 1) };
   }
 
+  // --- the empty-room reference: the preference ----------------------------
+
+  function readReference() {
+    // Off unless switched on: it asks something of the user (step out of the
+    // picture) and only helps a camera that does not move.
+    try { return localStorage.getItem(REFERENCE_KEY) === 'on'; }
+    catch (e) { return false; }
+  }
+
+  function writeReference(on) {
+    on = !!on;
+    try {
+      if (on) localStorage.setItem(REFERENCE_KEY, 'on');
+      else localStorage.removeItem(REFERENCE_KEY);
+    } catch (e) { /* private mode — it still applies for this session */ }
+    return on;
+  }
+
+  // How different two colours are, for the reference: 0 is "the same room".
+  //
+  // Two parts, and the larger wins. Chromaticity (colour with the brightness
+  // divided out) catches a person in front of a wall of another colour, and is
+  // left alone by a shadow, which darkens without changing colour. It is
+  // ignored in the dark, where it is mostly sensor noise. Relative luma catches
+  // the rest — a grey jumper in front of a grey wall — weighted down so a soft
+  // shadow alone does not cross the threshold.
+  //
+  // The GLSL in FRAG_REF_DIFF is this function, line for line; the CPU probe
+  // uses this copy, so the two cannot disagree about what "the same" means.
+  function refScore(cr, cg, cb, pr, pg, pb) {
+    var yc = 0.2126 * cr + 0.7152 * cg + 0.0722 * cb;
+    var yp = 0.2126 * pr + 0.7152 * pg + 0.0722 * pb;
+    var lum = Math.abs(yc - yp) / Math.max(yc, yp, 0.08);
+    var sc = Math.max(cr + cg + cb, 0.03), sp = Math.max(pr + pg + pb, 0.03);
+    var dr = cr / sc - pr / sp, dg = cg / sc - pg / sp, db = cb / sc - pb / sp;
+    var y = Math.max(yc, yp);
+    var lit = y <= 0.04 ? 0 : y >= 0.15 ? 1 : (function (t) { return t * t * (3 - 2 * t); })((y - 0.04) / 0.11);
+    var chroma = Math.sqrt(dr * dr + dg * dg + db * db) * 4 * lit;
+    return Math.max(chroma, lum * 0.7);
+  }
+
   // Long side SEG_LONG, short side to match the frame, both even. A 16:9 camera
   // gives 256x144; the 4:3 one on most laptops gives 256x192; a phone held
   // upright gives 144x256.
@@ -458,6 +552,16 @@ var VideoEffects = (function () {
     return {
       width:  Math.max(2, Math.round(w * scale / 2) * 2),
       height: Math.max(2, Math.round(h * scale / 2) * 2)
+    };
+  }
+
+  // The reference's comparison buffer: long side REF_LONG, never larger than
+  // the camera itself, short side to match.
+  function refSizeFor(w, h) {
+    var scale = Math.min(1, REF_LONG / Math.max(w || 1, h || 1));
+    return {
+      width:  Math.max(2, Math.round((w || REF_LONG) * scale)),
+      height: Math.max(2, Math.round((h || Math.round(REF_LONG * 9 / 16)) * scale))
     };
   }
 
@@ -789,6 +893,15 @@ var VideoEffects = (function () {
         window.__voxalSegCalls = (window.__voxalSegCalls || 0) + 1;
         var w = frame.width || frame.videoWidth || SEG_LONG;
         var h = frame.height || frame.videoHeight || Math.round(SEG_LONG * 9 / 16);
+        // `{ empty: true }` is an empty room: nobody in the picture, which is
+        // what capturing the reference needs to see. Read per call, so a test
+        // can step out of the frame and back in.
+        var s = window.__voxalSegStub;
+        if (s && s.empty) {
+          cb({ confidenceMasks: [{ width: w, height: h,
+            getAsUint8Array: function () { return new Uint8Array(w * h); } }] });
+          return;
+        }
         cb({ confidenceMasks: [maskFor(w, h)] });
       }
     });
@@ -956,20 +1069,28 @@ var VideoEffects = (function () {
   // Separable max filter. Expands the subject by uDir per pass; the mask is a
   // single channel, so three taps is enough to matter and cheap enough to be
   // free at this size.
-  var FRAG_DILATE = [
-    '#version 300 es',
-    'precision mediump float;',
-    'in vec2 vUv;',
-    'uniform sampler2D uTex;',
-    'uniform vec2 uDir;',
-    'out vec4 outColor;',
-    'void main() {',
-    '  float m = texture(uTex, vUv).r;',
-    '  m = max(m, texture(uTex, vUv + uDir).r);',
-    '  m = max(m, texture(uTex, vUv - uDir).r);',
-    '  outColor = vec4(m, 0.0, 0.0, 1.0);',
-    '}'
-  ].join('\n');
+  //
+  // The same filter with min() in place of max() erodes instead: that is the
+  // reference's "core", where the model is trusted without asking.
+  function fragMorph(op) {
+    return [
+      '#version 300 es',
+      'precision mediump float;',
+      'in vec2 vUv;',
+      'uniform sampler2D uTex;',
+      'uniform vec2 uDir;',
+      'out vec4 outColor;',
+      'void main() {',
+      '  float m = texture(uTex, vUv).r;',
+      '  m = ' + op + '(m, texture(uTex, vUv + uDir).r);',
+      '  m = ' + op + '(m, texture(uTex, vUv - uDir).r);',
+      '  outColor = vec4(m, 0.0, 0.0, 1.0);',
+      '}'
+    ].join('\n');
+  }
+
+  var FRAG_DILATE = fragMorph('max');
+  var FRAG_ERODE  = fragMorph('min');
 
   // Temporal smoothing, and the reason it is asymmetric.
   //
@@ -999,6 +1120,68 @@ var VideoEffects = (function () {
     '}'
   ].join('\n');
 
+  // The empty-room reference: how much each pixel is NOT the room, per frame.
+  //
+  // refScore() in GLSL — same constants, same order — so the per-pixel answer
+  // here and the CPU probe's "has the camera moved" answer cannot drift apart.
+  // The camera is box-sampled (four bilinear taps, as FRAG_DOWNSAMPLE does)
+  // into a buffer the reference's size, which averages away most of the sensor
+  // noise that would otherwise make the edge shimmer — and the reference is
+  // sampled through the same four taps, so both are equally soft. (It is also
+  // already an average of REF_CAPTURE_FRAMES frames.)
+  //
+  // uGain is the exposure and white balance the camera has drifted by since the
+  // capture, measured on the CPU over what the model calls room. The reference
+  // is brought to the camera, not the other way round.
+  //
+  // Lightly blended with the previous frame's answer: a pixel-scale threshold
+  // on a live camera flickers, and this costs one frame of lag at most.
+  // Everything here stays in the mask's own convention (image rows top first,
+  // sampled at vUv), so the composite samples it with `flip` like the mask.
+  function fragRefDiff() {
+    function f(v) { return v.toFixed(4); }
+    return [
+      '#version 300 es',
+      'precision mediump float;',
+      'in vec2 vUv;',
+      'uniform sampler2D uCam;',
+      'uniform sampler2D uPlate;',
+      'uniform sampler2D uPrev;',
+      'uniform vec3 uGain;',
+      'uniform vec2 uOff;',
+      'uniform float uAlpha;',
+      'out vec4 outColor;',
+      'void main() {',
+      '  vec3 c = texture(uCam, vUv + vec2(-uOff.x, -uOff.y)).rgb;',
+      '  c += texture(uCam, vUv + vec2( uOff.x, -uOff.y)).rgb;',
+      '  c += texture(uCam, vUv + vec2(-uOff.x,  uOff.y)).rgb;',
+      '  c += texture(uCam, vUv + vec2( uOff.x,  uOff.y)).rgb;',
+      '  c *= 0.25;',
+      // The reference through the SAME four taps. Sampled once, it is sharper
+      // than the box-filtered camera, and every edge in the room — a door
+      // frame, a shelf — would read as "different" along its length.
+      '  vec3 p = texture(uPlate, vUv + vec2(-uOff.x, -uOff.y)).rgb;',
+      '  p += texture(uPlate, vUv + vec2( uOff.x, -uOff.y)).rgb;',
+      '  p += texture(uPlate, vUv + vec2(-uOff.x,  uOff.y)).rgb;',
+      '  p += texture(uPlate, vUv + vec2( uOff.x,  uOff.y)).rgb;',
+      '  p = clamp(p * 0.25 * uGain, 0.0, 1.0);',
+      '  vec3 Y = vec3(0.2126, 0.7152, 0.0722);',
+      '  float yc = dot(c, Y);',
+      '  float yp = dot(p, Y);',
+      '  float lum = abs(yc - yp) / max(max(yc, yp), 0.08);',
+      '  vec3 cc = c / max(c.r + c.g + c.b, 0.03);',
+      '  vec3 pc = p / max(p.r + p.g + p.b, 0.03);',
+      '  float chroma = length(cc - pc) * 4.0 * smoothstep(0.04, 0.15, max(yc, yp));',
+      '  float score = max(chroma, lum * 0.7);',
+      '  float d = smoothstep(' + f(REF_SCORE_LO) + ', ' + f(REF_SCORE_HI) + ', score);',
+      '  float prev = texture(uPrev, vUv).r;',
+      '  outColor = vec4(mix(prev, d, uAlpha), 0.0, 0.0, 1.0);',
+      '}'
+    ].join('\n');
+  }
+
+  var FRAG_REF_DIFF = fragRefDiff();
+
   // uBgXform packs a cover-fit for the background image: xy scale, zw offset.
   // uEdge packs the smoothstep window the feathered mask is mapped through.
   var FRAG_COMPOSITE = [
@@ -1012,6 +1195,9 @@ var VideoEffects = (function () {
     'uniform float uUseImage;',
     'uniform vec4 uBgXform;',
     'uniform vec2 uEdge;',
+    'uniform sampler2D uRef;',
+    'uniform sampler2D uCore;',
+    'uniform float uRefOn;',
     'out vec4 outColor;',
     'void main() {',
     '  vec2 flip = vec2(vUv.x, 1.0 - vUv.y);',
@@ -1031,6 +1217,20 @@ var VideoEffects = (function () {
     // face rather than outside it. Better to keep a sliver of background sharp
     // than to blur somebody's ear off. See MASK_EDGE_LO / MASK_EDGE_HI.
     '  float m = smoothstep(uEdge.x, uEdge.y, texture(uMask, flip).r);',
+    // The empty-room reference, when there is one. `m` is the model's band —
+    // dilated, so it reaches past you — and the reference only ever takes
+    // away from it: outside the band it is never asked, so a shadow across
+    // the room cannot be cut in. `core` is where the model is sure on its own
+    // (the blended mask, eroded — see REF_CORE_ERODE), and there the reference
+    // is not asked either, so a shirt the colour of the wall cannot be cut out.
+    // uRefOn eases between the two answers, so a reference that goes stale
+    // fades out rather than snapping.
+    '  if (uRefOn > 0.001) {',
+    '    float core = smoothstep(' + REF_CORE_LO.toFixed(4) + ', ' + REF_CORE_HI.toFixed(4) +
+      ', texture(uCore, flip).r);',
+    '    float d = texture(uRef, flip).r;',
+    '    m = mix(m, m * max(d, core), uRefOn);',
+    '  }',
     '  outColor = vec4(mix(bg, sharp, m), 1.0);',
     '}'
   ].join('\n');
@@ -1096,6 +1296,13 @@ var VideoEffects = (function () {
   var _active = null;      // at most one camera pipeline at a time
   var _onOverload = null;  // set by main.js; called when we give up on a device
 
+  // The empty-room reference, held at module level rather than on a processor
+  // so turning the camera off and on again does not throw it away. In memory
+  // only: { w, h, rgba, sw, sh, small, aspect, deviceId }. `rgba` is the
+  // comparison buffer's size; `small` is the CPU probe's (0-1 floats, RGB).
+  var _plate = null;
+  var _onReference = null; // set by main.js; called with the new state
+
   function Processor(rawStream, mode) {
     this.raw = rawStream;
     this.mode = normalizeMode(mode);
@@ -1120,6 +1327,17 @@ var VideoEffects = (function () {
     this.lightGain = 1;
     this.lightContrast = 1;
     this.lastLight = 0;
+
+    // The empty-room reference. refWeight eases toward 1 while a reference is
+    // loaded and still matches the room, toward 0 otherwise.
+    this.refOn = readReference();
+    this.refLoaded = false;
+    this.refStale = false;
+    this.refWeight = 0;
+    this.refGain = [1, 1, 1];
+    this.lastRefStats = 0;
+    this.refCapture = null;
+    this.refStateSent = null;
 
     this.frames = 0;
     this.windowStart = 0;
@@ -1232,6 +1450,8 @@ var VideoEffects = (function () {
     this.pMix  = program(gl, FRAG_MASK_MIX);
     this.pDilate = program(gl, FRAG_DILATE);
     this.pComp = program(gl, FRAG_COMPOSITE);
+    this.pRef  = program(gl, FRAG_REF_DIFF);
+    this.pErode = program(gl, FRAG_ERODE);
 
     this.texCam = texture(gl, 1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
     this.texImg = texture(gl, 1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
@@ -1287,6 +1507,31 @@ var VideoEffects = (function () {
     this.fbMaskA = framebuffer(gl, this.texMaskA);
     this.fbMaskB = framebuffer(gl, this.texMaskB);
     this.maskPrimed = false;
+
+    // The empty-room reference: the picture itself, a ping-pong pair for the
+    // per-frame difference (the pair is the temporal blend's memory), and a
+    // 64-wide 2D canvas the CPU reads to notice a camera that has moved. All
+    // of it is allocated whether or not the feature is on — a few hundred KB
+    // of GPU memory — so switching it on mid-call never rebuilds anything.
+    var ref = refSizeFor(size.w, size.h);
+    this.refW = ref.width; this.refH = ref.height;
+    this.texPlate = texture(gl, this.refW, this.refH, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+    this.texRefA = texture(gl, this.refW, this.refH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
+    this.texRefB = texture(gl, this.refW, this.refH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
+    this.fbRefA = framebuffer(gl, this.texRefA);
+    this.fbRefB = framebuffer(gl, this.texRefB);
+    // The core: the blended mask, eroded. Mask-sized, rebuilt per inference
+    // while a reference is loaded.
+    this.texCore = texture(gl, this.segW, this.segH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
+    this.fbCore = framebuffer(gl, this.texCore);
+    var sscale = REF_STATS_LONG / Math.max(this.refW, this.refH);
+    this.refSW = Math.max(2, Math.round(this.refW * sscale));
+    this.refSH = Math.max(2, Math.round(this.refH * sscale));
+    this.refStatsCanvas = document.createElement('canvas');
+    this.refStatsCanvas.width = this.refSW; this.refStatsCanvas.height = this.refSH;
+    this.refStatsCtx = this.refStatsCanvas.getContext('2d', { willReadFrequently: true });
+    this.refLoaded = false;
+    this.syncReference();
 
     gl.disable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
@@ -1354,6 +1599,245 @@ var VideoEffects = (function () {
     this.lightAdapt = readLightAdapt();
     if (!this.lightAdapt) { this.lightGain = 1; this.lightContrast = 1; }
     this.lastLight = 0;
+  };
+
+  // --- the empty-room reference ---------------------------------------------
+
+  // Re-read the preference. Switching it off drops the reference from this
+  // processor; refreshReference() is what forgets the picture itself.
+  Processor.prototype.applyReference = function () {
+    this.refOn = readReference();
+    if (!this.refOn && this.refCapture) this.finishCapture({ ok: false, reason: 'off' });
+    this.syncReference();
+  };
+
+  // The camera this processor is reading, as far as the browser will say.
+  Processor.prototype.deviceId = function () {
+    var t = this.raw && this.raw.getVideoTracks()[0];
+    var st = t && t.getSettings ? t.getSettings() : null;
+    return (st && st.deviceId) || '';
+  };
+
+  // Load the module's reference into this processor's GL state if it belongs
+  // to this camera — same device, same shape — and drop it otherwise. A
+  // reference of another camera, or of the same one at another aspect, is not
+  // "slightly off", it is a different room.
+  Processor.prototype.syncReference = function () {
+    var gl = this.gl;
+    var p = _plate;
+    var fits = !!(gl && this.refOn && p && p.w === this.refW && p.h === this.refH &&
+                  (!p.deviceId || !this.deviceId() || p.deviceId === this.deviceId()));
+    if (fits && !this.refLoaded) {
+      gl.bindTexture(gl.TEXTURE_2D, this.texPlate);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, p.w, p.h, gl.RGBA, gl.UNSIGNED_BYTE, p.rgba);
+      // The difference starts from "all room" and is pulled toward the truth
+      // within a few frames; the weight eases in over the same span.
+      [this.fbRefA, this.fbRefB].forEach(function (fb) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+      });
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      this.refGain = [1, 1, 1];
+      this.refStale = false;
+      this.lastRefStats = 0;
+    }
+    this.refLoaded = fits;
+    if (!fits) this.refStale = false;
+    this.emitReference();
+  };
+
+  Processor.prototype.referenceState = function () {
+    if (!this.refOn) return 'off';
+    if (this.refCapture) return 'capturing';
+    if (!this.refLoaded) return 'none';
+    return this.refStale ? 'stale' : 'ready';
+  };
+
+  Processor.prototype.emitReference = function () {
+    var st = this.referenceState();
+    if (st === this.refStateSent) return;
+    this.refStateSent = st;
+    if (_onReference && _active === this) { try { _onReference(st); } catch (e) { /* ignore */ } }
+  };
+
+  // Photograph the empty room. Resolves { ok: true } or { ok: false, reason }
+  // with reason 'present' (the model still sees somebody), 'off', 'timeout' or
+  // 'unavailable'. Never rejects: a failed capture is something to tell the
+  // user, not an error.
+  //
+  // REF_CAPTURE_FRAMES consecutive frames are averaged, which takes the sensor
+  // noise down by ~3.5x — and the model is watched throughout, so a capture
+  // with somebody still in it is refused rather than learnt. The countdown
+  // that gives the user time to step out belongs to the caller.
+  Processor.prototype.captureReference = function () {
+    var self = this;
+    if (!this.gl || this.stopped) return Promise.resolve({ ok: false, reason: 'unavailable' });
+    if (!this.refOn) return Promise.resolve({ ok: false, reason: 'off' });
+    if (this.refCapture) return this.refCapture.promise;
+    var cap = {
+      frames: 0,
+      inferences: 0,
+      present: 0,
+      acc: new Float32Array(this.refW * this.refH * 3),
+      canvas: document.createElement('canvas'),
+      started: performance.now()
+    };
+    cap.canvas.width = this.refW; cap.canvas.height = this.refH;
+    cap.ctx = cap.canvas.getContext('2d', { willReadFrequently: true });
+    cap.promise = new Promise(function (resolve) { cap.resolve = resolve; });
+    this.refCapture = cap;
+    this.emitReference();
+    // A deadline of its own: a paused or hidden pipeline delivers no frames,
+    // and a capture must not hang the button.
+    cap.timer = setTimeout(function () {
+      if (self.refCapture === cap) self.finishCapture({ ok: false, reason: 'timeout' });
+    }, REF_CAPTURE_MS);
+    return cap.promise;
+  };
+
+  // One frame of the capture, from onFrame().
+  Processor.prototype.captureStep = function () {
+    var cap = this.refCapture;
+    if (cap.frames < REF_CAPTURE_FRAMES) {
+      var px;
+      try {
+        cap.ctx.drawImage(this.video, 0, 0, this.refW, this.refH);
+        px = cap.ctx.getImageData(0, 0, this.refW, this.refH).data;
+      } catch (e) {
+        this.finishCapture({ ok: false, reason: 'unavailable' });
+        return;
+      }
+      var acc = cap.acc;
+      for (var i = 0, j = 0; j < acc.length; i += 4, j += 3) {
+        acc[j] += px[i]; acc[j + 1] += px[i + 1]; acc[j + 2] += px[i + 2];
+      }
+      cap.frames++;
+    }
+    // Two inferences at least, so the "is anybody there" check has actually
+    // looked at the room the frames were taken of.
+    if (cap.frames >= REF_CAPTURE_FRAMES && cap.inferences >= 2) this.completeCapture();
+  };
+
+  // Called from the segmentation callback while a capture runs: the share of
+  // the frame the model calls a person, worst case over the capture.
+  Processor.prototype.captureSawMask = function (data) {
+    var cap = this.refCapture;
+    var n = 0;
+    for (var i = 0; i < data.length; i++) if (data[i] >= 128) n++;
+    cap.present = Math.max(cap.present, data.length ? n / data.length : 0);
+    cap.inferences++;
+  };
+
+  Processor.prototype.completeCapture = function () {
+    var cap = this.refCapture;
+    if (cap.present > REF_PRESENT_MAX) {
+      this.finishCapture({ ok: false, reason: 'present' });
+      return;
+    }
+    var W = this.refW, H = this.refH, k = 1 / cap.frames;
+    var rgba = new Uint8Array(W * H * 4);
+    for (var i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
+      rgba[i]     = Math.round(cap.acc[j] * k);
+      rgba[i + 1] = Math.round(cap.acc[j + 1] * k);
+      rgba[i + 2] = Math.round(cap.acc[j + 2] * k);
+      rgba[i + 3] = 255;
+    }
+    // The probe's copy, box-averaged down from the same average, so the CPU
+    // check compares like with like.
+    var SW = this.refSW, SH = this.refSH;
+    var small = new Float32Array(SW * SH * 3);
+    for (var sy = 0; sy < SH; sy++) {
+      var y0 = Math.floor(sy * H / SH), y1 = Math.max(y0 + 1, Math.floor((sy + 1) * H / SH));
+      for (var sx = 0; sx < SW; sx++) {
+        var x0 = Math.floor(sx * W / SW), x1 = Math.max(x0 + 1, Math.floor((sx + 1) * W / SW));
+        var r = 0, g = 0, b = 0, n = 0;
+        for (var y = y0; y < y1; y++) {
+          for (var x = x0; x < x1; x++) {
+            var o = (y * W + x) * 4;
+            r += rgba[o]; g += rgba[o + 1]; b += rgba[o + 2]; n++;
+          }
+        }
+        var so = (sy * SW + sx) * 3;
+        small[so] = r / n / 255; small[so + 1] = g / n / 255; small[so + 2] = b / n / 255;
+      }
+    }
+    _plate = { w: W, h: H, rgba: rgba, sw: SW, sh: SH, small: small,
+               aspect: W / H, deviceId: this.deviceId() };
+    this.refLoaded = false;   // force the upload
+    this.finishCapture({ ok: true });
+  };
+
+  Processor.prototype.finishCapture = function (result) {
+    var cap = this.refCapture;
+    if (!cap) return;
+    clearTimeout(cap.timer);
+    this.refCapture = null;
+    cap.acc = null;
+    if (result.ok) this.syncReference();
+    else this.emitReference();
+    cap.resolve(result);
+  };
+
+  // Every REF_STATS_MS, from the segmentation callback, which is the one place
+  // a fresh model mask is in hand: compare a 64-wide copy of the camera to the
+  // reference over the part of the frame the model calls room.
+  //
+  // Two answers come out. The per-channel gain is how far exposure and white
+  // balance have drifted since the capture — webcams re-meter the moment you
+  // walk back into the picture, and without this the whole room would read as
+  // "different". And the share of that room that still matches says whether
+  // the camera has moved or the lighting has changed: below REF_STALE_BELOW
+  // the reference is set aside (eased out, not snapped), and it comes back
+  // only above REF_FRESH_ABOVE, so a borderline room does not flicker between
+  // the two.
+  Processor.prototype.referenceStats = function (mask, mw, mh, now) {
+    if (now - this.lastRefStats < REF_STATS_MS) return;
+    this.lastRefStats = now;
+    var p = _plate;
+    if (!p || p.sw !== this.refSW || p.sh !== this.refSH) return;
+    var SW = this.refSW, SH = this.refSH, px;
+    try {
+      this.refStatsCtx.drawImage(this.video, 0, 0, SW, SH);
+      px = this.refStatsCtx.getImageData(0, 0, SW, SH).data;
+    } catch (e) { return; }
+
+    var room = [], cr = 0, cg = 0, cb = 0, pr = 0, pg = 0, pb = 0;
+    for (var y = 0; y < SH; y++) {
+      var my = Math.min(mh - 1, Math.floor((y + 0.5) * mh / SH));
+      for (var x = 0; x < SW; x++) {
+        var mx = Math.min(mw - 1, Math.floor((x + 0.5) * mw / SW));
+        if (mask[my * mw + mx] >= 64) continue;   // the model sees you here
+        var i = y * SW + x;
+        room.push(i);
+        cr += px[i * 4]; cg += px[i * 4 + 1]; cb += px[i * 4 + 2];
+        pr += p.small[i * 3]; pg += p.small[i * 3 + 1]; pb += p.small[i * 3 + 2];
+      }
+    }
+    // Too little of the room in view to judge — somebody leaning into the
+    // camera. Keep the last verdict rather than guessing.
+    if (room.length < REF_MIN_ROOM * SW * SH) return;
+
+    var clampGain = function (c, q) {
+      if (q < 1e-3) return 1;
+      return Math.min(REF_GAIN_MAX, Math.max(REF_GAIN_MIN, (c / 255) / q));
+    };
+    var want = [clampGain(cr, pr), clampGain(cg, pg), clampGain(cb, pb)];
+    for (var c = 0; c < 3; c++) this.refGain[c] += (want[c] - this.refGain[c]) * REF_GAIN_SMOOTH;
+
+    var same = 0, g = this.refGain;
+    for (var k = 0; k < room.length; k++) {
+      var j = room[k];
+      var score = refScore(px[j * 4] / 255, px[j * 4 + 1] / 255, px[j * 4 + 2] / 255,
+                           Math.min(1, p.small[j * 3] * g[0]),
+                           Math.min(1, p.small[j * 3 + 1] * g[1]),
+                           Math.min(1, p.small[j * 3 + 2] * g[2]));
+      if (score < REF_MATCH_MAX) same++;
+    }
+    this.refMatch = same / room.length;
+    if (!this.refStale && this.refMatch < REF_STALE_BELOW) this.refStale = true;
+    else if (this.refStale && this.refMatch > REF_FRESH_ABOVE) this.refStale = false;
+    this.emitReference();
   };
 
   // --- background source ----------------------------------------------------
@@ -1429,6 +1913,7 @@ var VideoEffects = (function () {
     }
 
     var now = performance.now();
+    if (this.refCapture) this.captureStep();
     if (this.segmenter && (now - this.lastSeg) >= this.segInterval) {
       this.lastSeg = now;
       this.runSegment(now);
@@ -1466,8 +1951,14 @@ var VideoEffects = (function () {
         // segmenters put the person at index 1 behind the background.
         var mask = masks && (masks.length > 1 ? masks[1] : masks[0]);
         if (!mask) return;
-        try { self.uploadMask(mask.getAsUint8Array(), mask.width, mask.height); }
-        catch (e) { /* the mask's lifetime ends with this callback */ }
+        try {
+          var data = mask.getAsUint8Array();
+          if (self.refCapture) self.captureSawMask(data);
+          self.uploadMask(data, mask.width, mask.height);
+          // Read here and nowhere else: the mask's lifetime ends with this
+          // callback.
+          if (self.refLoaded) self.referenceStats(data, mask.width, mask.height, now);
+        } catch (e) { /* the mask's lifetime ends with this callback */ }
       });
     } catch (e) {
       // A single failed inference must not take the call's video with it.
@@ -1575,13 +2066,36 @@ var VideoEffects = (function () {
     // little — the feather blur, the smoothstep, and the mask's own lag behind
     // a moving frame — so expand it first and let those take the slack back.
     // Separable, like the blur: two passes of a 3-tap max.
+    //
+    // First, while a reference is loaded, the core it is never asked about:
+    // the blended mask eroded by REF_CORE_ERODE, as two 3-tap min passes per
+    // axis at half that stride (taps at 0, ±s, ±2s — no gaps for a sliver to
+    // slip through). The work pair is scratch, exactly as for the dilate.
+    if (this.refLoaded) {
+      var es = REF_CORE_ERODE / 2;
+      gl.useProgram(this.pErode);
+      this.bindTex(this.pErode, 'uTex', 0, this.texMaskS);
+      gl.uniform2f(uloc(gl, this.pErode, 'uDir'), es / W, 0);
+      this.drawQuad(this.fbMaskB, W, H);
+      this.bindTex(this.pErode, 'uTex', 0, this.texMaskB);
+      this.drawQuad(this.fbMaskA, W, H);
+      this.bindTex(this.pErode, 'uTex', 0, this.texMaskA);
+      gl.uniform2f(uloc(gl, this.pErode, 'uDir'), 0, es / H);
+      this.drawQuad(this.fbMaskB, W, H);
+      this.bindTex(this.pErode, 'uTex', 0, this.texMaskB);
+      this.drawQuad(this.fbCore, W, H);
+    }
+
+    // With the empty-room reference in use the band reaches a little further:
+    // the reference can only give back what is inside it.
+    var dilate = this.edge.dilate + (this.refWeight > 0.5 ? REF_DILATE_EXTRA : 0);
     gl.useProgram(this.pDilate);
     this.bindTex(this.pDilate, 'uTex', 0, this.texMaskS);
-    gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), this.edge.dilate / W, 0);
+    gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), dilate / W, 0);
     this.drawQuad(this.fbMaskB, W, H);
 
     this.bindTex(this.pDilate, 'uTex', 0, this.texMaskB);
-    gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), 0, this.edge.dilate / H);
+    gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), 0, dilate / H);
     this.drawQuad(this.fbMaskA, W, H);
 
     // Feather: blur the dilated mask so the composite's smoothstep has a real
@@ -1608,7 +2122,7 @@ var VideoEffects = (function () {
   // camera and blur buffers alone.
   Processor.prototype.resizeMaskBuffers = function (w, h) {
     var gl = this.gl;
-    [this.texMaskS, this.texMaskSB, this.texMaskA, this.texMaskB].forEach(function (t) {
+    [this.texMaskS, this.texMaskSB, this.texMaskA, this.texMaskB, this.texCore].forEach(function (t) {
       gl.bindTexture(gl.TEXTURE_2D, t);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, w, h, 0, gl.RED, gl.UNSIGNED_BYTE, null);
     });
@@ -1625,6 +2139,26 @@ var VideoEffects = (function () {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.video);
     } catch (e) {
       return;   // the source can vanish mid-teardown
+    }
+
+    // The empty-room reference: ease its weight toward whether it should be
+    // used, and while it carries any weight, compare this frame to it.
+    var refWant = (this.refLoaded && !this.refStale && !this.refCapture) ? 1 : 0;
+    this.refWeight += (refWant - this.refWeight) * REF_FADE;
+    if (refWant === 0 && this.refWeight < 0.001) this.refWeight = 0;
+    if (this.refWeight > 0) {
+      gl.useProgram(this.pRef);
+      this.bindTex(this.pRef, 'uCam', 0, this.texCam);
+      this.bindTex(this.pRef, 'uPlate', 1, this.texPlate);
+      this.bindTex(this.pRef, 'uPrev', 2, this.texRefA);
+      gl.uniform3f(uloc(gl, this.pRef, 'uGain'), this.refGain[0], this.refGain[1], this.refGain[2]);
+      gl.uniform2f(uloc(gl, this.pRef, 'uOff'), 0.25 / this.refW, 0.25 / this.refH);
+      gl.uniform1f(uloc(gl, this.pRef, 'uAlpha'), REF_TEMPORAL);
+      this.drawQuad(this.fbRefB, this.refW, this.refH);
+      // A is always the newest answer, and the next frame's memory.
+      var rt = this.texRefA, rf = this.fbRefA;
+      this.texRefA = this.texRefB; this.fbRefA = this.fbRefB;
+      this.texRefB = rt; this.fbRefB = rf;
     }
 
     var useImage = this.bgReady && this.mode !== 'blur';
@@ -1655,6 +2189,9 @@ var VideoEffects = (function () {
     this.bindTex(this.pComp, 'uBlur', 1, this.texBlurA);
     this.bindTex(this.pComp, 'uImage', 2, this.texImg);
     this.bindTex(this.pComp, 'uMask', 3, this.texMaskA);
+    this.bindTex(this.pComp, 'uRef', 4, this.texRefA);
+    this.bindTex(this.pComp, 'uCore', 5, this.texCore);
+    gl.uniform1f(uloc(gl, this.pComp, 'uRefOn'), this.refWeight);
     gl.uniform1f(uloc(gl, this.pComp, 'uUseImage'), useImage ? 1 : 0);
     gl.uniform2f(uloc(gl, this.pComp, 'uEdge'), this.edge.lo, this.edge.hi);
     var x = this.bgXform();
@@ -1713,7 +2250,13 @@ var VideoEffects = (function () {
     var self = this;
     return this.video.play().catch(function () { /* ignore */ }).then(function () {
       var size = self.sizeFromTrack();
-      if (!self.gl || (size.w === self.canvas.width && size.h === self.canvas.height)) return;
+      // Another camera is another room: a reference taken by the front camera
+      // must not be compared with the back one. initGL() re-checks on its own.
+      self.refLoaded = false;
+      if (!self.gl || (size.w === self.canvas.width && size.h === self.canvas.height)) {
+        self.syncReference();
+        return;
+      }
       // A different capture size needs new buffers; rebuilding the whole GL
       // state is simpler and rarer than resizing every attachment in place.
       self.releaseGL();
@@ -1730,24 +2273,28 @@ var VideoEffects = (function () {
     var gl = this.gl;
     if (!gl) return;
     [this.texCam, this.texImg, this.texBlurA, this.texBlurB, this.texMaskRaw,
-     this.texMaskS, this.texMaskSB, this.texMaskA, this.texMaskB].forEach(function (t) {
+     this.texMaskS, this.texMaskSB, this.texMaskA, this.texMaskB,
+     this.texPlate, this.texRefA, this.texRefB, this.texCore].forEach(function (t) {
       if (t) try { gl.deleteTexture(t); } catch (e) { /* ignore */ }
     });
     [this.fbBlurA, this.fbBlurB, this.fbMaskS, this.fbMaskSB,
-     this.fbMaskA, this.fbMaskB].forEach(function (f) {
+     this.fbMaskA, this.fbMaskB, this.fbRefA, this.fbRefB, this.fbCore].forEach(function (f) {
       if (f) try { gl.deleteFramebuffer(f); } catch (e) { /* ignore */ }
     });
-    [this.pDown, this.pBlur, this.pFeather, this.pMix, this.pDilate, this.pComp].forEach(function (p) {
+    [this.pDown, this.pBlur, this.pFeather, this.pMix, this.pDilate, this.pComp,
+     this.pRef, this.pErode].forEach(function (p) {
       if (p) try { gl.deleteProgram(p); } catch (e) { /* ignore */ }
     });
     if (this.quad) try { gl.deleteBuffer(this.quad); } catch (e) { /* ignore */ }
     if (this.vao) try { gl.deleteVertexArray(this.vao); } catch (e) { /* ignore */ }
     this.gl = null;
+    this.refLoaded = false;
   };
 
   Processor.prototype.destroy = function () {
     if (this.stopped) return;
     this.stopped = true;
+    if (this.refCapture) this.finishCapture({ ok: false, reason: 'unavailable' });
     if (this._rvfc && this.video.cancelVideoFrameCallback) {
       try { this.video.cancelVideoFrameCallback(this._rvfc); } catch (e) { /* ignore */ }
     }
@@ -1760,7 +2307,10 @@ var VideoEffects = (function () {
       this.stream._effectsOriginal = null;
       this.stream._effectsProcessor = null;
     }
-    if (_active === this) _active = null;
+    if (_active === this) {
+      _active = null;
+      if (_onReference) { try { _onReference(referenceState()); } catch (e) { /* ignore */ } }
+    }
   };
 
   // --- public surface -------------------------------------------------------
@@ -1836,6 +2386,49 @@ var VideoEffects = (function () {
     if (_active) { try { _active.applyLightAdapt(); } catch (e) { /* ignore */ } }
     return on;
   }
+
+  // --- the empty-room reference: the public half ----------------------------
+
+  // 'off' (the setting is off), 'inactive' (on, but no camera effect is
+  // running), or the running processor's 'none' / 'capturing' / 'ready' /
+  // 'stale'.
+  function referenceState() {
+    if (!readReference()) return 'off';
+    if (!_active) return 'inactive';
+    return _active.referenceState();
+  }
+
+  // Re-read the preference and push it at whatever is running. Switching it
+  // off FORGETS the picture, not just stops using it: an opt-in that keeps a
+  // photo of your room after you opted out is not an opt-out. Called by the
+  // main window's `storage` listener when the preferences window flips it.
+  function refreshReference() {
+    if (!readReference()) _plate = null;
+    if (_active) { try { _active.applyReference(); } catch (e) { /* ignore */ } }
+    else if (_onReference) { try { _onReference(referenceState()); } catch (e) { /* ignore */ } }
+  }
+
+  function setReference(on) {
+    on = writeReference(on);
+    refreshReference();
+    return on;
+  }
+
+  function captureReference() {
+    if (!_active) return Promise.resolve({ ok: false, reason: 'unavailable' });
+    return _active.captureReference();
+  }
+
+  // Forget the picture, keeping the setting on.
+  function clearReference() {
+    _plate = null;
+    if (_active) { _active.refLoaded = false; _active.syncReference(); }
+    else if (_onReference) { try { _onReference(referenceState()); } catch (e) { /* ignore */ } }
+  }
+
+  function hasReference() { return !!_plate; }
+
+  function onReferenceState(fn) { _onReference = fn; }
 
   function active() { return _active; }
 
@@ -2150,8 +2743,36 @@ var VideoEffects = (function () {
   // --- the low-light toggle -------------------------------------------------
 
   function renderLightAdapt(el, opts) {
-    if (!el) return null;
     opts = opts || {};
+    return renderToggle(el, {
+      id: opts.id,
+      label: opts.label || 'Adapt the detector to low light',
+      title: opts.title,
+      read: readLightAdapt,
+      onChange: opts.onChange,
+      apply: setLightAdapt
+    });
+  }
+
+  // --- the fixed-camera toggle ----------------------------------------------
+
+  function renderReference(el, opts) {
+    opts = opts || {};
+    return renderToggle(el, {
+      id: opts.id,
+      label: opts.label || 'Fixed camera: compare with the empty room',
+      title: opts.title,
+      read: readReference,
+      onChange: opts.onChange,
+      apply: setReference
+    });
+  }
+
+  // An ON/OFF switch over one boolean preference. cfg: { id, label, title,
+  // read(), apply(on), onChange(on) } — onChange, when given, replaces apply
+  // (settings.html stores and lets the main window apply).
+  function renderToggle(el, opts) {
+    if (!el) return null;
     el.innerHTML = '';
 
     var btn = document.createElement('button');
@@ -2161,11 +2782,11 @@ var VideoEffects = (function () {
     // The id is what the row's <label for=...> points at, and the aria-label is
     // the fallback for a caller that renders no label of its own.
     if (opts.id) btn.id = opts.id;
-    btn.setAttribute('aria-label', opts.label || 'Adapt the detector to low light');
+    btn.setAttribute('aria-label', opts.label);
     if (opts.title) btn.title = opts.title;
 
     function sync(on) {
-      on = (on === undefined) ? readLightAdapt() : !!on;
+      on = (on === undefined) ? opts.read() : !!on;
       btn.textContent = on ? 'ON' : 'OFF';
       btn.classList.toggle('active', on);
       btn.setAttribute('aria-checked', on ? 'true' : 'false');
@@ -2176,7 +2797,7 @@ var VideoEffects = (function () {
       var on = !(btn.getAttribute('aria-checked') === 'true');
       sync(on);
       if (opts.onChange) opts.onChange(on);
-      else setLightAdapt(on);
+      else opts.apply(on);
     });
 
     el.appendChild(btn);
@@ -2194,6 +2815,7 @@ var VideoEffects = (function () {
     QUALITY_DEFAULT: QUALITY_DEFAULT,
     QUALITIES: QUALITIES,
     LIGHT_ADAPT_KEY: LIGHT_ADAPT_KEY,
+    REFERENCE_KEY: REFERENCE_KEY,
     PRESETS: PRESETS,
     SEG_LONG: SEG_LONG,
     segSizeFor: segSizeFor,
@@ -2252,6 +2874,24 @@ var VideoEffects = (function () {
     writeLightAdapt: writeLightAdapt,
     setLightAdapt: setLightAdapt,
     renderLightAdapt: renderLightAdapt,
+    readReference: readReference,
+    writeReference: writeReference,
+    setReference: setReference,
+    refreshReference: refreshReference,
+    referenceState: referenceState,
+    captureReference: captureReference,
+    clearReference: clearReference,
+    hasReference: hasReference,
+    onReferenceState: onReferenceState,
+    renderReference: renderReference,
+    // Test hooks: the difference score both the shader and the probe use, and
+    // the numbers the reference is judged by.
+    _refScore: refScore,
+    _refConfig: {
+      long: REF_LONG, frames: REF_CAPTURE_FRAMES, presentMax: REF_PRESENT_MAX,
+      staleBelow: REF_STALE_BELOW, freshAbove: REF_FRESH_ABOVE,
+      matchMax: REF_MATCH_MAX, scoreLo: REF_SCORE_LO, scoreHi: REF_SCORE_HI
+    },
     cancelLoad: cancelLoad,
     isLoading: isLoading,
     isLoaded: isLoaded,

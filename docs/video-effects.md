@@ -340,6 +340,78 @@ So the segmenter gets **its own canvas**, and the mask comes back as a
 and sub-millisecond. Sharing the context is a documented future optimisation,
 not something this version needs.
 
+### A fixed camera: the empty-room reference (experimental)
+
+Off unless Settings → Video → **Fixed camera** is on (`bg-reference`). With it
+on, the background popover on your own tile offers **Capture empty room**: a
+three-second countdown to step out of the picture, then `REF_CAPTURE_FRAMES`
+(12) frames averaged into a picture of the room without you. From then on every
+frame is compared with that picture at `REF_LONG` (640) wide — two and a half
+times the model's resolution — and the comparison is allowed to correct the
+cut-out's edge.
+
+**It is a second opinion, never the only one.** The composite keeps the model
+in charge of the two regions it gets right, and hands the reference only the
+band between them:
+
+```
+m     = smoothstep(edge, feathered dilated mask)   // the model, as before
+core  = smoothstep(0.60, 0.95, eroded blended mask) // where the model is sure
+m'    = m * max(diff, core)                          // the reference can only take away
+```
+
+- Outside the model's (dilated) band the reference is never asked, so a shadow
+  or a moving curtain across the room is never cut *in*.
+- Inside `core` — the blended mask eroded by `REF_CORE_ERODE` (4) mask texels,
+  ~20 px on a 1280-wide camera — it is not asked either, so a shirt the colour
+  of the wall is never cut *out*. Eroded, not merely thresholded: the model is
+  confidently wrong as often as it is unsure, and a mask that is 1.0 right up to
+  its staircase edge would leave the reference nothing to decide.
+- In between, which is where the model's staircase and the dilate's halo of
+  sharp room live, the per-pixel difference decides. While the reference is in
+  use the band is dilated `REF_DILATE_EXTRA` (2) texels further, since the
+  reference can only give back hair that is inside it.
+
+The difference (`refScore()` in JS, the same arithmetic in `FRAG_REF_DIFF`) is
+the larger of a chromaticity distance — colour with brightness divided out,
+which a shadow leaves alone, and which is ignored in the dark where it is noise
+— and a relative luma distance weighted down so a soft shadow alone does not
+cross the threshold. Camera and reference are both box-sampled through the same
+four taps: sampling the reference once made it sharper than the camera, and
+every edge in the room read as "different" along its length.
+
+**Webcams re-meter the moment you walk back in.** Every `REF_STATS_MS` (500 ms),
+in the segmentation callback where a fresh mask is in hand, a 64-wide copy of
+the frame is compared with the reference over the part the model calls room.
+That gives a per-channel gain (exposure and white balance since the capture,
+clamped to 0.5–2×) that is applied to the reference before the comparison, and
+the share of the room that still matches. Below `REF_STALE_BELOW` (55%) the
+reference is set aside — the camera moved, or the light changed — and eased out
+over a few frames rather than snapped; it is trusted again only above
+`REF_FRESH_ABOVE` (70%). The popover then says so, and a toast says it once.
+
+A capture is refused (`reason: 'present'`) if the model calls more than
+`REF_PRESENT_MAX` (2%) of any frame during it a person: a reference with you in
+it would teach the pipeline that you are the room.
+
+**Privacy.** The picture lives in a module-level variable, in memory only — it
+survives turning the camera off and on, and nothing else. It is never written
+to storage and never sent. Switching the setting off **forgets** it, not just
+stops using it (`refreshReference()`, which the main window's `storage`
+listener also calls when the desktop preferences window flips the switch). A
+reference belongs to one camera at one shape: flipping to another camera, or a
+different aspect, simply does not load it.
+
+**Costs nothing when off, and little when on**: one 640-wide pass per frame, a
+four-pass erosion of the 256-wide mask per inference, and a 64×36 readback
+twice a second. Nothing about it swaps a track.
+
+**Not measured on a real room.** Every threshold above (`REF_SCORE_LO/HI`,
+`REF_MATCH_MAX`, the core window, the erosion) is reasoned from how webcams and
+the model behave, and checked only against a synthetic striped room in
+`unit-video-effects.spec.js`. Expect them to need tuning against a real webcam
+before this loses the "experimental".
+
 ## Switching backgrounds does not touch the wire
 
 This is the property the design exists to protect.
@@ -525,8 +597,9 @@ The same row appears in Settings → Video, rendered by the same
 `VideoEffects.renderPicker()` so there is one definition rather than three
 drifting copies. Four controls sit beneath it in the same card and follow the
 same rule — `renderStrength()` and `renderSharpness()` (one slider builder,
-two sets of arithmetic), `renderQuality()` and `renderLightAdapt()`. In the
-desktop preferences window (`settings.html`) all five are write-only: that
+two sets of arithmetic), `renderQuality()`, `renderLightAdapt()` and `renderReference()` (the last two
+are one switch builder, `renderToggle()`). In the
+desktop preferences window (`settings.html`) all six are write-only: that
 window has no module system and therefore no capture pipeline, so it writes the
 preference and the main window's `storage` listener applies it to the running
 processor — the same bridge the noise-suppression and microphone-device
