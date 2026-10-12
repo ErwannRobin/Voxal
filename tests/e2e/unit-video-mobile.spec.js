@@ -390,8 +390,10 @@ test.describe('the room keeps its colours in video mode', () => {
     const audioOnly = await mic();
     await turnCameraOn(page);
     expect(await mic()).toEqual(audioOnly);
-    // …and still there once the chrome has been put away.
+    // …and back on it when the chrome returns (it drops while the chrome is away).
     await page.evaluate(() => setStageChrome(true));
+    await page.waitForTimeout(350);
+    await page.evaluate(() => setStageChrome(false));
     await page.waitForTimeout(350);
     expect(await mic()).toEqual(audioOnly);
   });
@@ -458,12 +460,9 @@ test.describe('clean mode leaves the mic on the picture', () => {
   // The button already says whether the room can hear you — a green ring, an
   // accent fill, or neither. A line of red text under it on somebody's face is
   // the thing clean mode was asked to get rid of.
-  test('the red status line goes too, without moving the mic', async ({ page }) => {
+  test('the red status line goes too', async ({ page }) => {
     await twoCameras(page);
     await page.evaluate(() => { document.getElementById('ptt-status').textContent = '\u25cf Live'; });
-    const micY = () => page.evaluate(() =>
-      Math.round(document.getElementById('ptt-btn').getBoundingClientRect().top));
-    const before = await micY();
     expect(await page.evaluate(() =>
       getComputedStyle(document.getElementById('ptt-status')).visibility)).toBe('visible');
 
@@ -471,7 +470,31 @@ test.describe('clean mode leaves the mic on the picture', () => {
     await page.waitForTimeout(250);
     expect(await page.evaluate(() =>
       getComputedStyle(document.getElementById('ptt-status')).visibility)).toBe('hidden');
-    expect(await micY()).toBe(before);   // ink, never space
+  });
+
+  // Alone on the picture, the mic has no reason to stand above a row that is
+  // not there: it drops onto the bar's bottom edge, straight down, and comes
+  // back up with the chrome.
+  test('the mic drops to the bottom with the chrome away, and comes back', async ({ page }) => {
+    await twoCameras(page);
+    const geo = () => page.evaluate(() => {
+      const m = document.getElementById('ptt-btn').getBoundingClientRect();
+      const b = document.querySelector('.room-bottom-bar').getBoundingClientRect();
+      return { x: Math.round(m.left), top: Math.round(m.top),
+               bottom: Math.round(m.bottom), barBottom: Math.round(b.bottom) };
+    });
+    const up = await geo();
+    expect(up.bottom).toBeLessThan(up.barBottom - 20);   // the row is under it
+
+    await page.evaluate(() => setStageChrome(true));
+    await expect.poll(async () => { const g = await geo(); return g.barBottom - g.bottom; })
+      .toBeLessThanOrEqual(1);
+    const down = await geo();
+    expect(down.x).toBe(up.x);
+    expect(down.barBottom).toBe(up.barBottom);           // the bar itself never moves
+
+    await page.evaluate(() => setStageChrome(false));
+    await expect.poll(async () => (await geo()).top).toBe(up.top);
   });
 });
 
@@ -948,14 +971,16 @@ test.describe('the immersive stage held sideways', () => {
   });
 
   // A tap on the picture still clears the chrome — and the mic, which is not
-  // chrome, does not move a pixel while it happens.
-  test('a tap clears the chrome without moving the talk button', async ({ page }) => {
+  // chrome, stays, dropping straight down onto the bar's bottom edge.
+  test('a tap clears the chrome and drops the talk button to the bottom', async ({ page }) => {
     await withVideo(page);
     const mic = () => page.evaluate(() => {
       const b = document.getElementById('ptt-btn').getBoundingClientRect();
-      return [Math.round(b.x), Math.round(b.y)];
+      const bar = document.querySelector('.room-bottom-bar').getBoundingClientRect();
+      return { x: Math.round(b.x), gap: Math.round(bar.bottom - b.bottom) };
     });
     const before = await mic();
+    expect(before.gap).toBeGreaterThan(20);
     await page.evaluate(() => setStageChrome(true));
     await page.waitForTimeout(350);
     const seen = await page.evaluate(() => ({
@@ -967,7 +992,9 @@ test.describe('the immersive stage held sideways', () => {
       insetTop: getComputedStyle(document.documentElement).getPropertyValue('--stage-inset-top').trim(),
     }));
     expect(seen).toEqual({ header: 'hidden', controls: 'hidden', handles: 'none', insetTop: '0px' });
-    expect(await mic()).toEqual(before);
+    const after = await mic();
+    expect(after.x).toBe(before.x);
+    expect(Math.abs(after.gap)).toBeLessThanOrEqual(1);
   });
 
   // Sideways carries the same glass as upright — it used to be the only place
