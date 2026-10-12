@@ -43,11 +43,29 @@ prove — that Tauri really does deliver these events and open these windows.
 
 ## 🎥 Camera background effects — follow-ups
 
-Shipped: blur, four generated presets, custom image, blur strength, edge
-sharpness, detection accuracy, the low-light adaptation, and the experimental
-fixed-camera empty-room reference. See `docs/video-effects.md`.
+Shipped: blur, five animated generated scenes (office, island, cyber café,
+mountain, countryside — relit to the subject, with shadow, light wrap and
+motion response), custom image, blur strength, edge sharpness, detection
+accuracy, the low-light adaptation, and the experimental fixed-camera empty-room
+reference. See `docs/video-effects.md`.
 
 Deliberately left for later:
+
+- **Tune the scenes' lighting match on a real webcam.** `LOOK_DIR_GAIN`,
+  `LOOK_SIDE_FLIP`, the exposure curve, the tint clamp, `SHADOW_REACH` and the
+  per-scene shadow/wrap strengths are reasoned and checked only on synthetic
+  subjects. Try: a window to one side, an overhead office light, a desk lamp at
+  night, a face lit only by the screen.
+- **Benchmark a scene.** `video-bench.spec.js` measures `off` and `blur`; an
+  animated scene adds GPU work and, more importantly, encoder bits. Add
+  `preset:office` (and the busiest scene) to the background sweep and compare
+  outgoing bitrate against `blur` at the same resolution.
+- **Relight the subject, not just the scene.** The light wrap only adds the
+  scene's light at your edge. A full relight (shading the face toward the
+  scene's key light) needs normals the selfie model does not give.
+- **Optional switch for the interactions.** Shadow, light wrap and the motion
+  response are always on with a scene. If anyone finds them distracting, a
+  Settings → Video toggle is a uniform each — no track swap.
 
 - **Tune the fixed-camera reference on a real webcam, then decide its fate.**
   Every threshold (`REF_SCORE_LO/HI`, `REF_MATCH_MAX`, the core window and

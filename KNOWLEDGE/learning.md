@@ -1002,10 +1002,65 @@ Full design in `docs/video-effects.md`. What is not derivable from the code:
   one-liner belongs in a script (`vercel-build.sh`) with the JSON side kept to
   `sh vercel-build.sh`.
 
-- Heavily blurred gradient artwork compresses absurdly well: the four bundled
-  1280×720 WebP backgrounds total ~20 KB. Generated artwork (see
-  `resources/make-backgrounds.py`) is cheaper *and* smaller than anything you
-  would license.
+- Generated beats licensed for backgrounds. The four 1280×720 WebP presets
+  (~20 KB, from a Python generator) were later replaced by shaders that ship no
+  bytes of artwork at all — see the next section.
+
+## Animated scenes — shaders instead of pictures
+
+From "replace the virtual backgrounds with realistic, subtle animations, purely
+generated, matching the subject's light, with their shadow". Full design in
+`docs/video-effects.md` → *Animated scenes*. What bit:
+
+- **A canvas's alpha is not "data" to the page.** The scene shader writes how
+  near each surface is into alpha, for the composite's shadow. Rendered into an
+  FBO that is fine; rendered into a default `alpha: true` canvas and exported
+  with `toDataURL`, every far surface came out *transparent* — the island, the
+  mountain and the countryside previews were pure white. Any canvas that only
+  displays such a shader needs `alpha: false`.
+
+- **GLSL ES 3.00 reserves words a scene wants to use.** `patch` (a sunlit
+  patch) and `cast` (a cast shadow) are both reserved and fail with "Illegal use
+  of reserved word". Neither is reserved in GLSL ES 1.00, so code ported from a
+  WebGL1 shader trips on it.
+
+- **A backtick in a GLSL comment ends a JS template literal.** The shaders live
+  in template strings; one `` `s` `` in a comment turned the rest of the file
+  into a syntax error. `node --check` finds it in a second.
+
+- **`pow(x, 2.0)` with negative `x` is undefined, and so is `smoothstep` with
+  edge0 ≥ edge1.** SwiftShader computes both "as expected", which is exactly why
+  it is a trap: some real drivers return NaN for the first, and a falling edge
+  written as `smoothstep(0.9, 0.1, x)` is not guaranteed by the spec. The scenes
+  use `sq(x)` for gaussians and their own `sstep()` everywhere.
+
+- **The test GPU has no `KHR_parallel_shader_compile`, and its cost is the JIT,
+  not the pixels.** Rendering five 160×90 thumbnails took ~1.7 s on headless
+  SwiftShader; halving the size changed nothing. Each new program is JIT-compiled
+  on first draw and the next synchronous GL call waits for it. On a real GPU the
+  same work is milliseconds, and with the extension it is off the main thread —
+  but the suite pays ~2 s every time a picker scrolls into view. Thumbnails are
+  therefore rendered only when the chip row is actually visible
+  (`IntersectionObserver`), never at page load, and read back with
+  `OffscreenCanvas.convertToBlob()` rather than a blocking `toDataURL()`.
+
+- **Measure the illuminant on the room, not on the face.** The first idea —
+  tint the scene by the subject's average colour — would have turned every scene
+  orange: skin is not grey. The webcam has already white-balanced, so gray-world
+  over the whole frame gives the *residual* cast, which is what the scene must
+  match; follow it only halfway and clamp it, or a green wall turns the sky
+  green. Exposure is the opposite: measure it on the subject's confident core,
+  because the frame's average is mostly the room being replaced.
+
+- **Direction needs hysteresis, and a mirror needs a crossfade.** Half-face
+  asymmetry flips sign whenever the head turns. The window changes sides only
+  past ±0.35 (eased), and a change draws both mirrored layouts and fades between
+  them for ~1 s. A scene authored with its light on the right and mirrored is
+  also why scenes carry no text, no clock: they would read backwards.
+
+- **A moving background is a bitrate cost for every receiver.** Keep the motion
+  slow and sparse, redraw the scene below the camera's rate (20 Hz), and pin it
+  in a test (mean change between frames a second apart < 3/255).
 
 ## Detection controls — edge sharpness, inference rate, low light
 

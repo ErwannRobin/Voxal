@@ -58,6 +58,7 @@ export default [
         VOXAL_VERSION: 'readonly', // src/version.js
         VOXAL_BUILD_DATE: 'readonly', // src/version.js / build-info.js
         VideoEffects: 'readonly', // src/video-effects.js
+        VideoScenes: 'readonly', // src/video-scenes.js
         EMOJI_GROUPS: 'readonly', // src/emoji-data.js
         NET_USAGE_KINDS: 'readonly', // src/net-usage.js
         NET_USAGE_HISTORY_MAX: 'readonly',

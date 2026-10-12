@@ -1,8 +1,9 @@
 # Camera background effects (blur & virtual backgrounds)
 
-Voxal can blur what is behind you, or replace it with an image. This document
-covers how the pipeline is built, why it is built that way, where the assets
-come from, and what happens on a device that cannot keep up.
+Voxal can blur what is behind you, or replace it with one of five animated
+scenes or an image of your own. This document covers how the pipeline is built,
+why it is built that way, where the assets come from, and what happens on a
+device that cannot keep up. The scenes have [their own section](#animated-scenes).
 
 The whole feature is `src/video-effects.js` plus a handful of integration points
 in `src/main.js`. It applies to **your camera only** — never to screen-share,
@@ -47,6 +48,9 @@ raw camera MediaStream  (getUserMedia)
             │      → confidence mask → R8 texture
             │      → temporal blend with the previous mask
             │      → dilate, then separable blur (the feather)
+            │      → [a scene] shrink to 64 wide and blur wide (the soft mask)
+            │      → [a scene, 4×/s] measure how you are lit
+            ├─ [a scene, 20 Hz] draw the scene into a 512-long buffer, mipmap it
             └─ WebGL2 composite → canvas → captureStream() → the published track
 ```
 
@@ -412,6 +416,144 @@ the model behave, and checked only against a synthetic striped room in
 `unit-video-effects.spec.js`. Expect them to need tuning against a real webcam
 before this loses the "experimental".
 
+## Animated scenes
+
+The presets are not pictures. **Office**, **Island**, **Cyber café**,
+**Mountain** and **Countryside** are each one fragment shader in
+`src/video-scenes.js` — every wall, cloud and leaf is computed from the
+pixel's position and the clock. Nothing is downloaded, nothing is licensed, and
+nothing is stored: there is no artwork anywhere in the repository. That is a
+requirement rather than a style, because it is what lets the scene be **relit
+to match you**, which a photograph never can be.
+
+| Scene | What moves | Takes your shadow |
+|---|---|---|
+| Office | the sunlit patch on the wall, dappled by a tree outside; dust in the beam; the plants | yes — the wall behind you |
+| Island | cumulus, swell, glitter under the sun, the shore lapping, a sail crossing the horizon, the palm | lightly — the sand |
+| Cyber café | the neon breathing, code scrolling on the screens, rain on the window, steam from a cup | yes — the brick wall |
+| Mountain | cirrus, mist in the valley, a bird circling far off, the pines | no — everything is far away |
+| Countryside | cumulus, wind over the wheat, the long grass and its flowers, pollen | no |
+
+### The light is yours
+
+A few times a second (`LOOK_SAMPLE_MS`, 250 ms), in the segmentation callback
+where a fresh mask is in hand, a 32-wide copy of the frame is read alongside the
+mask and three things are measured (`VideoScenes.measureSubject()`):
+
+* **Exposure** — your own brightness, on the confident core of the mask only.
+  The scene is scaled to it in linear light, so a dim room gets a dim scene.
+  Measured on you rather than the frame, because the frame's average is mostly
+  the room the scene is about to replace. As your face drops below about three
+  quarters of a well-lit one (exposure 0.62, fully at 0.28) the scene turns to
+  **evening**: the city lights come on outside the office window,
+  the shelf lamp is lit, the mountain sky goes to dusk. Light sources (a lamp, a
+  screen, the sky through a window) are dimmed less than lit surfaces, as they
+  are in a real dark room.
+* **Direction** — the right half of your silhouette against the left. The side
+  of your face that is brighter is the side your light is on, and the scene puts
+  its window, its sun or its brightest lamp there. Each scene is authored with
+  its light on the right and **mirrored** for a light on the left; when the side
+  changes, both are drawn and crossfaded over about a second, so the room turns
+  rather than jumps. The side only changes past `LOOK_SIDE_FLIP` (0.35) — a head
+  turned toward a second screen must not walk the window across the room.
+* **Tint** — gray-world over the whole frame. The webcam has already
+  white-balanced, so what is left is the cast it could not remove (a warm lamp at
+  night, blue screen glow). Only half of it is followed, each channel is clamped
+  to 0.84–1.18, and it is renormalised to luminance 1 so it is a colour, never a
+  brightness. Measuring the subject instead would have been wrong: skin is not
+  grey, and the "illuminant" read off a face is mostly the face.
+
+What is measured is a *target*; what is drawn eases toward it with a 1.4 s time
+constant (`easeLook()`), so leaning toward the screen never makes the room
+flicker. The first measurement is taken whole, or every call would open with the
+room relighting itself.
+
+### Your shadow, and the scene's light on you
+
+The scene's **alpha channel** says how near each surface is — 1 for the wall a
+metre behind you, 0 for the sky and the distant hills — and the composite reads
+one more buffer, the **soft mask**: the finished mask shrunk to 64 wide and
+blurred wide, rebuilt per inference in four draws on ~2,000 pixels.
+
+* **Cast shadow** — the soft mask sampled *toward* the light (`shadowPlan()`):
+  a shadow falls away from its light, so the point it darkens is lit by way of
+  you. A light from your right throws your shadow left, onto the wall; from
+  above, a little down. A strongly one-sided light is a hard light and gets the
+  darker shadow; a frontal one barely casts any. Multiplied by the alpha, so the
+  mountains never take one.
+* **Contact shadow** — the soft mask where you are, very faint
+  (`SHADOW_AO`, 12%): the darkening of a wall right behind a person that keeps
+  them from looking pasted on, whatever the light.
+* **Light wrap** — the scene's light, from a coarse mip level of the scene
+  buffer, spilling onto the edge of your silhouette. Screen-blended in linear
+  light, so it only ever *adds* light: the café's neon tints your shoulder, a
+  bright sky rims your hair, a dark wall never dirties you. Fades in from the
+  edge over the soft mask's width; the middle of you is untouched.
+
+### Interactions
+
+How much the mask moved between two samples is the scene's **motion** input. It
+rises at once and settles over a couple of seconds, like air. The things near
+you answer it: dust in the office's sunbeam is pushed away from you and swirls,
+the shelf vines and the fig stir, steam over the café cup bends, the palm's
+fronds and the countryside's grass and flowers move more. All of it is a few
+millimetres of screen — an acknowledgement, not an animation.
+
+### Quiet on purpose
+
+Every scene is a backdrop to a working call. Its motion is slow and small, and
+there is a second reason for that beyond taste: **every pixel that changes is a
+pixel the video encoder spends bits on**, for everyone receiving you. So:
+
+* the scene is redrawn at 20 Hz (`SCENE_HZ`), not at the camera's rate;
+* nothing flashes — the neon breathes ±7%, the glitter on the sea is sparse and
+  slow, the rain is a few drops sliding down;
+* `unit-video-scenes.spec.js` pins it: between two frames a second apart, the
+  mean change is under 3 levels of 255 and under 5% of pixels change by more
+  than 12.
+
+### Cost, and the step-down
+
+The scene is drawn into a buffer of 512 on its long side (384 on mobile) and
+upscaled. That is cheaper, and it is also the look: a real camera focused on a
+face shows the room behind it soft. Its buffers — the scene, its mips, the soft
+mask — are allocated the first time a scene is picked and never for blur or an
+image, the same rule that makes **off** free.
+
+Under load, the existing ladder runs first (segmentation steps down), then the
+scene halves to 10 Hz, and only then does the effect give up.
+
+Picking a scene compiles its shader, once per scene per camera. The compile goes
+through `KHR_parallel_shader_compile` where the driver has it, and whatever was
+showing keeps showing until the new program is ready — a shader with loops can
+take a visible moment to compile on ANGLE over Direct3D, and a pick must never
+freeze the call's video.
+
+### The chips
+
+Each chip shows a gradient swatch (`swatch` in the catalogue) at once, then a
+**thumbnail rendered from the scene's own shader** at the moment the live scene
+starts from (`THUMB_TIME`), so the chip is the picture you get. All five render
+in one small offscreen WebGL2 context that is released as soon as they are done,
+and only once the chip row is actually on screen (an `IntersectionObserver`):
+every page renders its pickers at load, inside a popover or a settings card that
+may never be opened.
+
+### From the image presets
+
+The four bundled images (Aurora, Dusk, Studio, Linen) are gone. A stored
+`preset:aurora` / `dusk` / `studio` / `linen` reads as the nearest scene —
+mountain, island, office, countryside — rather than silently turning the effect
+off (`VideoScenes.LEGACY`).
+
+### Not measured on a real room
+
+Like the fixed-camera reference, the lighting thresholds (`LOOK_DIR_GAIN`,
+`LOOK_SIDE_FLIP`, the exposure curve, the tint clamp) and the shadow's reach and
+strength are reasoned from how webcams light a face, and checked against
+synthetic subjects in `unit-video-scenes.spec.js`. Expect them to want tuning
+against a real webcam in a real room.
+
 ## Switching backgrounds does not touch the wire
 
 This is the property the design exists to protect.
@@ -423,6 +565,9 @@ tile teardown on anyone else's screen. Only crossing the **off ↔ on** boundary
 swaps a track, and even then it is a `replaceTrack` on the existing senders
 (`localVideoSenders()` in `main.js`, which already covers both the mesh and the
 SFU publish connection) rather than a republish.
+
+Switching between scenes is the same non-event: a compile the first time, a
+different program after that, and the same canvas track throughout.
 
 The same property makes the front/back camera flip free: `flipCamera()` points
 the effect at the new camera via `VideoEffects.setSource()` and the far side
@@ -466,7 +611,8 @@ rate:
 1. steps segmentation down the ladder the `detection-quality` preference chose
    (by default 15 → 10 → 6 Hz on desktop, 10 → 6 Hz on mobile), since that is
    where nearly all the cost is; then
-2. having run out of things to trade, gives up: the raw camera goes back on the
+2. with an animated scene, redraws the scene at 10 Hz instead of 20; then
+3. having run out of things to trade, gives up: the raw camera goes back on the
    wire, the preference is set to `off`, and the user is told once.
 
 Degradation happens quietly. Only giving up is announced, and it is announced
@@ -478,13 +624,12 @@ rather than left to look like a broken camera.
 |---|---|---|
 | `vision_bundle.mjs`, `vision_wasm_internal.{js,wasm}` | ~12 MB | **Not committed.** Staged out of `node_modules` by `seg-assets.sh`, which `make seg-assets`, the desktop build targets and the Vercel deploy (`vercel-build.sh`) all call. Bundled into the desktop app; fetched lazily on mobile. |
 | `selfie_segmenter_landscape.tflite` | 250 KB | Committed to `src/assets/seg/`, bundled into the apps. |
-| `assets/backgrounds/*.webp` | ~20 KB total | Committed. Generated by `resources/make-backgrounds.py`, so there is no third-party artwork and nothing to license. |
+| The scenes | 0 bytes of assets | Shaders in `src/video-scenes.js`. There is no background artwork at all. |
 
 Twelve megabytes of WASM in every App Store and Play download, for a feature
 most people never switch on, is not a trade worth making — so `make cap-sync`
 deletes `assets/seg/vision_*` from the iOS and Android bundles after syncing.
-The model and the artwork stay bundled: they are small, and keeping them local
-saves a round-trip.
+The model stays bundled: it is small, and keeping it local saves a round-trip.
 
 **Desktop makes the opposite trade.** `tauri.conf.json` bundles the whole of
 `src/`, and the build targets stage the runtime first, so the Tauri app ships
@@ -580,7 +725,7 @@ Because that tile moves, the popover cannot live inside it: it is a child of
 single row of chips:
 
 ```
-None · Blur · Aurora · Dusk · Studio · Linen · +
+None · Blur · Office · Island · Cyber café · Mountain · Countryside · +
 ```
 
 The button appears only while a camera is actually running, and only where the
@@ -610,6 +755,7 @@ selectors use.
 | File | What it holds |
 |---|---|
 | `src/video-effects.js` | The whole pipeline, the shaders (generated from `gaussianHalfKernel`), the mode/strength/sharpness/accuracy/low-light storage, the picker and the four controls under it |
+| `src/video-scenes.js` | The five animated scenes (one shader each), measuring how you are lit (`measureSubject()` / `lookFromStats()` / `easeLook()`), the async compile and the chip thumbnails |
 | `src/main.js` | `maybeApplyVideoEffects()`, `applyVideoBackground()`, `swapLocalVideoTrack()`, the unwrap in `stopStreamTracks()`, the effects branches in `flipCamera()` and `setLocalCameraSuspended()`, the tile button in `_buildVideoTile()`, and `positionVideoBackgroundPopover()` / `renderVideoBackgroundProgress()` |
-| `resources/make-backgrounds.py` | Generates the four preset images |
 | `tests/e2e/unit-video-effects.spec.js` | Coverage, with inference stubbed via `window.__voxalSegStub` |
+| `tests/e2e/unit-video-scenes.spec.js` | The scenes: every one renders, moves only a little, mirrors to the light; the measurement; shadow, light wrap and motion through the real pipeline |

@@ -967,8 +967,11 @@
     <script src="assets/peerjs.min.js"></script>
     <!-- Shared with settings.html — both must load before main.js, which uses
          net-usage.js's constants (NET_USAGE_KINDS, NET_USAGE_HISTORY_MAX) and
-         video-effects.js's VideoEffects.STORAGE_KEY. -->
+         video-effects.js's VideoEffects.STORAGE_KEY. video-scenes.js (the
+         animated backgrounds) must come before video-effects.js, which builds
+         its presets from it. -->
     <script src="net-usage.js"></script>
+    <script src="video-scenes.js"></script>
     <script src="video-effects.js"></script>
     <!-- The emoji picker's dataset (generated; see scripts/gen-emoji-data.mjs).
          Only index.html needs it — settings.html has no chat. -->

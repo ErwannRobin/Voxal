@@ -87,10 +87,10 @@ test('a selected background is applied, and the wrapped stream is what goes out'
 
 test('a preset background is passed through by name', async ({ page }) => {
   await stubEffects(page);
-  await page.evaluate(() => localStorage.setItem('video-background', 'preset:studio'));
+  await page.evaluate(() => localStorage.setItem('video-background', 'preset:office'));
 
   const out = await applyTo(page);
-  expect(out.wrapCalls[0].mode).toBe('preset:studio');
+  expect(out.wrapCalls[0].mode).toBe('preset:office');
 });
 
 test('a browser that cannot do effects shares the raw camera without trying', async ({ page }) => {

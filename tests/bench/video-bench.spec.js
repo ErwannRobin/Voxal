@@ -96,9 +96,9 @@ test.describe('bench video @bench', () => {
   // Held at one room size with everything else pinned, because the number that
   // matters is the delta between off and on, not either absolute.
   //
-  // `blur` rather than an image: an image preset would also measure a download
-  // and a texture upload that a blur does not do, and the blur is what most
-  // people leave on.
+  // `blur` rather than a scene or an image: the blur is what most people leave
+  // on. An animated scene adds its own shader and, more to the point, moving
+  // pixels for the encoder — worth its own row one day (KNOWLEDGE/todos.md).
   for (const background of ['off', 'blur']) {
     test(`video background — ${background}`, async ({ makePeer }) => {
       test.setTimeout(HOLD_MS + 300_000);
