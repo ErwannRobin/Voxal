@@ -1623,13 +1623,25 @@ body.video-stage-immersive #screen-room .video-tile {
    publishes this: the room header and the control row go, leaving the talk
    button alone on the picture.
 
-   Nothing MOVES — not the button, not the row when it comes back. The row loses
-   its INK, not its space (`visibility`, never `display`), because the bar is
-   anchored to the bottom of the screen and collapsing the row would drag the
-   talk button down with it. It costs no picture: the bar paints nothing at all
-   in video mode, so the video shows straight through where the row was. */
+   The row loses its INK, not its space (`visibility`, never `display`), so the
+   bar keeps its box and the row comes back exactly where it was. The mic then
+   SLIDES down onto the bar's bottom edge (`--ptt-drop`, measured by
+   applyImmersiveStageInsets()) — alone on the picture it has no reason to stand
+   above a row that is not there, and the band it leaves is picture again.
+   `translate`, not `transform`: the press scale lives on `transform`, and the
+   two must compose. Moving it does not reflow anything, and it slides back up
+   with the chrome. */
 body.video-stage-immersive.stage-chrome-hidden #screen-room .room-bottom-bar .room-controls {
   visibility: hidden;
+}
+body.video-stage-immersive #screen-room .ptt-btn {
+  transition: background 0.1s, border-color 0.1s, transform 0.08s, translate 0.25s ease;
+}
+body.video-stage-immersive.stage-chrome-hidden #screen-room .ptt-btn {
+  translate: 0 var(--ptt-drop, 0px);
+}
+@media (prefers-reduced-motion: reduce) {
+  body.video-stage-immersive #screen-room .ptt-btn { transition: background 0.1s, border-color 0.1s; }
 }
 /* The talk button needs nothing here: it has worn the glass since the slab was
    dropped, so clean mode is simply the same button with the chips beside it
@@ -1642,7 +1654,7 @@ body.video-stage-immersive.stage-chrome-hidden #screen-room .room-bottom-bar .ro
    is silence. A line of red text under a bare mic on top of somebody's face is
    the one thing clean mode was asked to get rid of.
 
-   Ink again, never space: it is between the mic and the bottom of the screen. */
+   Ink again, never space: the mic's drop is measured past it. */
 body.video-stage-immersive.stage-chrome-hidden #screen-room .ptt-status {
   visibility: hidden;
 }

@@ -238,7 +238,10 @@ the chrome both ways (`initStagePanelHandles()` hands it to `toggleStageChrome()
 Anything that hides in there takes its **ink, not its space** (`visibility`,
 never `display`; a border goes `transparent`, never `none`). The bar is
 bottom-anchored, so anything that collapses drags the talk button down — and the
-mic has to be on the same pixel in a voice room and a video one. Upright the hint
+mic has to be on the same pixel in a voice room and a video one. The one
+exception is the chrome put away: then the mic is alone on the picture and
+slides straight down onto the bar's bottom edge (`translate` by `--ptt-drop`,
+measured in `applyImmersiveStageInsets()`), and back up when the chrome returns. Upright the hint
 and the status line are therefore reserved; **sideways** they are `display: none`,
 because the talk button has left the landscape room's talk column and there is no
 line-up left to keep.

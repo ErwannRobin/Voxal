@@ -12353,6 +12353,7 @@ function applyImmersiveStageInsets(gridEl) {
     if (ribbonWrap) ribbonWrap.style.removeProperty('padding-bottom');
     document.documentElement.style.removeProperty('--stage-inset-top');
     document.documentElement.style.removeProperty('--stage-inset-bottom');
+    document.documentElement.style.removeProperty('--ptt-drop');
     applySelfBadgePlacement();
     return;
   }
@@ -12400,10 +12401,37 @@ function applyImmersiveStageInsets(gridEl) {
   var root = document.documentElement.style;
   root.setProperty('--stage-inset-top', insetTop + 'px');
   root.setProperty('--stage-inset-bottom', insetBottom + 'px');
+  // With the chrome away the mic is the only thing left in the bar, so it
+  // drops onto the bar's bottom edge and gives the picture back the band the
+  // status line and the control row were holding.
+  root.setProperty('--ptt-drop', (chromeUp ? 0 : pttDropDistance(bar)) + 'px');
   // The slots beside the mic are measured from that same control stack, and a
   // badge parked in one has to be handed back to an edge the moment the stack
   // stops having room for it (a phone turned on its side).
   applySelfBadgePlacement();
+}
+
+// The talk button's vertical `translate` right now — mid-transition too, so it
+// always matches what getBoundingClientRect() reports.
+function pttTranslateY(ptt) {
+  var t = (window.getComputedStyle(ptt).translate || '').split(' ');
+  return t.length > 1 ? (parseFloat(t[1]) || 0) : 0;
+}
+
+// The mic's bottom where the layout put it (no translate, no press scale —
+// the scale is about the centre, so the centre plus half the box is exact).
+function pttLayoutBottom(ptt) {
+  var p = ptt.getBoundingClientRect();
+  return p.top + p.height / 2 - pttTranslateY(ptt) + ptt.offsetHeight / 2;
+}
+
+// How far the mic travels to sit on the bar's bottom edge. The bar is already
+// inset from the screen's edge (safe area included), so this never reaches
+// under a home indicator.
+function pttDropDistance(bar) {
+  var ptt = document.getElementById('ptt-btn');
+  if (!bar || !ptt || !ptt.offsetHeight) return 0;
+  return Math.max(0, Math.round(bar.getBoundingClientRect().bottom - pttLayoutBottom(ptt)));
 }
 
 function layoutVideoStageGrid(gridEl, count) {
@@ -13155,9 +13183,13 @@ function selfBadgeBarSlots() {
   // have to hold it.
   var side = Math.min(p.left - s.left, s.right - p.right) - SELF_BADGE_BAR_GAP;
   if (side < SELF_BADGE_BAR_MIN_SIDE) return null;
+  // Where the mic is GOING, not where a running slide has it: it drops with
+  // the chrome away (`--ptt-drop`), and the badge beside it has to follow.
+  var drop = parseFloat(document.documentElement.style.getPropertyValue('--ptt-drop')) || 0;
+  var micMiddle = pttLayoutBottom(ptt) - ptt.offsetHeight / 2 + drop;
   return {
     top: b.top - s.top,
-    centre: s.bottom - (p.top + p.height / 2),   // stage bottom → the mic's middle
+    centre: s.bottom - micMiddle,   // stage bottom → the mic's middle
     width: Math.min(SELF_BADGE_BAR_MAX_WIDTH, side)
   };
 }
