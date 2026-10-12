@@ -1937,3 +1937,7 @@ seems too sharp".
   over-budget calls in `extra` but never checks it. Asserting it needs care
   (retries scheduled earlier can fire late), so it carries a TODO rather than a
   rushed fix.
+
+### Rotating a phone: `resize` fires before the layout has settled
+
+On iOS especially, `resize` can fire while `innerWidth/innerHeight`, media queries and safe-area insets still describe the OLD orientation. The stage's one rAF-debounced measurement then reads stale geometry (insets, grid columns, `object-fit`). `scheduleStageRelayout()` in `main.js` is also driven by `orientationchange`, `screen.orientation` `change` and `visualViewport` `resize`, with settle passes at 150 ms and 400 ms. Not verified on a real device from this container.
