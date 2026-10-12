@@ -11,8 +11,10 @@
     <!-- Shared verbatim with main.js/index.html — this window renders the same
          usage charts from data relayed over the net-usage-state bridge, and the
          same background picker, which writes its preference for the main window
-         to act on. -->
+         to act on. video-scenes.js first: the picker's scene chips render
+         their thumbnails from its shaders. -->
     <script src="net-usage.js"></script>
+    <script src="video-scenes.js"></script>
     <script src="video-effects.js"></script>
     <script>
       // Apply theme before paint to avoid flash

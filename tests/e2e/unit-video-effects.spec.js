@@ -104,14 +104,14 @@ test.describe('the background preference', () => {
       const initial = VideoEffects.readMode();
       VideoEffects.writeMode('blur');
       const blur = [VideoEffects.readMode(), localStorage.getItem('video-background')];
-      VideoEffects.writeMode('preset:aurora');
+      VideoEffects.writeMode('preset:office');
       const preset = VideoEffects.readMode();
       VideoEffects.writeMode('off');
       return { initial, blur, preset, cleared: localStorage.getItem('video-background') };
     });
     expect(seen.initial).toBe('off');
     expect(seen.blur).toEqual(['blur', 'blur']);
-    expect(seen.preset).toBe('preset:aurora');
+    expect(seen.preset).toBe('preset:office');
     // 'off' is the absence of a preference, not a stored value.
     expect(seen.cleared).toBe(null);
   });
@@ -121,9 +121,26 @@ test.describe('the background preference', () => {
       VideoEffects.normalizeMode('preset:no-such-image'),
       VideoEffects.normalizeMode('nonsense'),
       VideoEffects.normalizeMode(''),
-      VideoEffects.normalizeMode('preset:aurora'),
+      VideoEffects.normalizeMode('preset:office'),
     ]);
-    expect(seen).toEqual(['off', 'off', 'off', 'preset:aurora']);
+    expect(seen).toEqual(['off', 'off', 'off', 'preset:office']);
+  });
+
+  // The four image presets were replaced by the animated scenes. Somebody who
+  // had one stored must keep a background across the upgrade, not lose it.
+  test('a stored image preset from before the scenes maps to the nearest scene', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const out = {};
+      for (const old of ['aurora', 'dusk', 'studio', 'linen']) {
+        localStorage.setItem('video-background', 'preset:' + old);
+        out[old] = VideoEffects.readMode();
+      }
+      return out;
+    });
+    expect(seen).toEqual({
+      aurora: 'preset:mountain', dusk: 'preset:island',
+      studio: 'preset:office', linen: 'preset:countryside',
+    });
   });
 });
 
@@ -140,7 +157,8 @@ test.describe('the picker', () => {
       Array.from(document.querySelectorAll('#settings-bg-picker .bg-chip'))
         .map((c) => c.dataset.mode));
     expect(modes).toEqual([
-      'off', 'blur', 'preset:aurora', 'preset:dusk', 'preset:studio', 'preset:linen', 'custom',
+      'off', 'blur', 'preset:office', 'preset:island', 'preset:cybercafe', 'preset:mountain',
+      'preset:countryside', 'custom',
     ]);
   });
 
@@ -151,12 +169,12 @@ test.describe('the picker', () => {
     expect(await page.evaluate(() => localStorage.getItem('video-background'))).toBe('blur');
 
     // Exactly one chip is ever checked — it is a radiogroup, not a set of toggles.
-    await page.click('#settings-bg-picker .bg-chip[data-mode="preset:dusk"]');
+    await page.click('#settings-bg-picker .bg-chip[data-mode="preset:island"]');
     const checked = await page.evaluate(() =>
       Array.from(document.querySelectorAll('#settings-bg-picker .bg-chip'))
         .filter((c) => c.getAttribute('aria-checked') === 'true')
         .map((c) => c.dataset.mode));
-    expect(checked).toEqual(['preset:dusk']);
+    expect(checked).toEqual(['preset:island']);
   });
 
   test('both pickers stay in step, since they share one source of truth', async ({ page }) => {
@@ -274,8 +292,9 @@ test.describe('turning the effect on and off mid-call', () => {
       await applyVideoBackground('blur');
       const track = localVideoStream.getVideoTracks()[0];
       window.__swaps = [];
-      await applyVideoBackground('preset:aurora');
-      await applyVideoBackground('preset:studio');
+      for (const id of ['office', 'island', 'cybercafe', 'mountain', 'countryside']) {
+        await applyVideoBackground('preset:' + id);
+      }
       await applyVideoBackground('blur');
       return {
         swaps: window.__swaps.length,
@@ -317,7 +336,7 @@ test.describe('turning the effect on and off mid-call', () => {
   test('a preference set before sharing is applied when the camera starts', async ({ page }) => {
     await seedEffectsRoom(page);
     const seen = await page.evaluate(async () => {
-      VideoEffects.writeMode('preset:linen');
+      VideoEffects.writeMode('preset:countryside');
       await startVideoShare();
       return {
         wrapped: !!localVideoStream._effectsProcessor,
@@ -326,7 +345,7 @@ test.describe('turning the effect on and off mid-call', () => {
       };
     });
     expect(seen.wrapped).toBe(true);
-    expect(seen.mode).toBe('preset:linen');
+    expect(seen.mode).toBe('preset:countryside');
     expect(seen.published).toEqual(['video']);
   });
 
@@ -439,17 +458,17 @@ test.describe('choosing a background', () => {
   });
 
   test('closes the popover, since the choice is about the picture behind it', async ({ page }) => {
-    await page.click('#video-bg-popover .bg-chip[data-mode="preset:studio"]');
+    await page.click('#video-bg-popover .bg-chip[data-mode="preset:office"]');
     await expect(page.locator('#video-bg-popover')).toBeHidden();
     expect(await page.evaluate(() => localStorage.getItem('video-background')))
-      .toBe('preset:studio');
+      .toBe('preset:office');
   });
 
   // The selected chip's ring is a box-shadow drawn outside its box, and on a
   // narrow screen the strip is a scroll container — which clips both axes.
   test('the selected chip\'s ring is not clipped by the scrolling strip', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 780 });
-    await page.click('#video-bg-popover .bg-chip[data-mode="preset:dusk"]');
+    await page.click('#video-bg-popover .bg-chip[data-mode="preset:island"]');
     await page.click('.video-tile-self.video-tile-camera .video-tile-bg');
     const clearance = await page.evaluate(() => {
       const strip = document.querySelector('#video-bg-popover .bg-picker');
@@ -498,7 +517,7 @@ test.describe('a custom image', () => {
 
     const chooser = page.waitForEvent('filechooser');
     await page.click('#video-bg-popover .bg-chip[data-mode="custom"]');
-    await (await chooser).setFiles('src/assets/backgrounds/aurora.webp');
+    await (await chooser).setFiles('src/assets/icon-192.png');
     await expect(page.locator('#video-bg-popover')).toBeHidden();
     expect(await page.evaluate(() => localStorage.getItem('video-background'))).toBe('custom');
 
@@ -582,7 +601,7 @@ test.describe('the composited output', () => {
   test('draws the background outside the person and the camera inside it', async ({ page }) => {
     await seedEffectsRoom(page);
     const seen = await page.evaluate(async () => {
-      VideoEffects.writeMode('preset:aurora');
+      VideoEffects.writeMode('preset:mountain');
       await startVideoShare();
       await new Promise((r) => setTimeout(r, 600));
       const src = VideoEffects.active().canvas;
@@ -600,8 +619,8 @@ test.describe('the composited output', () => {
     });
     expect(seen.size).toEqual([320, 240]);
     expect(seen.segmented).toBe(true);
-    // The stub's mask is a centred oval: outside it we should see the aurora
-    // artwork (blue-dominant), inside it the fake camera's green fill.
+    // The stub's mask is a centred oval: outside it we should see the mountain
+    // scene's sky (blue-dominant), inside it the fake camera's green fill.
     expect(seen.corner[2]).toBeGreaterThan(seen.corner[0]);
     expect(seen.centre[1]).toBeGreaterThan(seen.centre[0] + 40);
     expect(seen.centre[1]).toBeGreaterThan(seen.centre[2] + 40);

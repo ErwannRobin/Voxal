@@ -3,7 +3,8 @@
 // Loaded as a plain classic script by BOTH index.html and settings.html, the
 // way net-usage.js is, so the two documents share one definition of the modes,
 // the presets and the chip picker instead of hand-duplicating them. It must
-// load *before* main.js.
+// load *before* main.js, and *after* video-scenes.js — the presets are the
+// animated scenes defined there.
 //
 // Everything lives inside one IIFE. In particular VIDEO_BACKGROUND_KEY is
 // declared here and here only, and exposed as VideoEffects.STORAGE_KEY —
@@ -277,14 +278,33 @@ var VideoEffects = (function () {
   var REF_TEMPORAL       = 0.6;   // per-frame blend of the difference, toward the new frame
   var REF_FADE           = 0.15;  // per-frame ease of the reference's weight in and out
 
-  var PRESETS = [
-    { id: 'aurora', label: 'Aurora', src: 'assets/backgrounds/aurora.webp' },
-    { id: 'dusk',   label: 'Dusk',   src: 'assets/backgrounds/dusk.webp' },
-    { id: 'studio', label: 'Studio', src: 'assets/backgrounds/studio.webp' },
-    { id: 'linen',  label: 'Linen',  src: 'assets/backgrounds/linen.webp' }
-  ];
-
   var IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+
+  // The presets are the animated scenes in video-scenes.js: generated in a
+  // shader, relit to match you, and drawn into a small buffer of their own.
+  // See the "scenes" section of the processor below.
+  var PRESETS = VideoScenes.SCENES;
+
+  // The scene buffer's long side. Small on purpose: it is cheap, and a real
+  // camera focused on a face shows the room behind it soft anyway.
+  var SCENE_LONG = IS_MOBILE ? 384 : 512;
+  // How often the scene itself is redrawn. Its motion is slow by design, and a
+  // background that changes on every frame is one the encoder pays for on every
+  // frame — so it runs well under the camera's rate, and halves under load
+  // before anything else is given up.
+  var SCENE_HZ = [20, 10];
+  // The subject's light is re-measured this often (a 32-wide probe).
+  var LOOK_SAMPLE_MS = 250;
+  var LOOK_PROBE_W = 32;
+  // The soft mask the shadow and the light wrap read: the finished mask,
+  // brought down to this width and blurred wide.
+  var SOFT_LONG = 64;
+  // How far your shadow falls from you, as a fraction of the frame, at a light
+  // fully to one side.
+  var SHADOW_REACH = 0.075;
+  // The faint darkening of a near surface right behind you, whatever the light:
+  // the contact shadow that keeps a person from looking pasted on.
+  var SHADOW_AO = 0.12;
 
   // --- mode: read, write, normalise ----------------------------------------
 
@@ -292,8 +312,10 @@ var VideoEffects = (function () {
     if (!mode || mode === 'off') return 'off';
     if (mode === 'blur' || mode === 'custom') return mode;
     if (String(mode).indexOf('preset:') === 0) {
-      var id = String(mode).slice(7);
-      for (var i = 0; i < PRESETS.length; i++) if (PRESETS[i].id === id) return mode;
+      // A scene id, or one of the image presets they replaced (mapped to the
+      // nearest scene, so an upgrade never silently drops someone's choice).
+      var id = VideoScenes.resolveId(String(mode).slice(7));
+      if (id) return 'preset:' + id;
     }
     return 'off';
   }
@@ -563,11 +585,6 @@ var VideoEffects = (function () {
       width:  Math.max(2, Math.round((w || REF_LONG) * scale)),
       height: Math.max(2, Math.round((h || Math.round(REF_LONG * 9 / 16)) * scale))
     };
-  }
-
-  function presetById(id) {
-    for (var i = 0; i < PRESETS.length; i++) if (PRESETS[i].id === id) return PRESETS[i];
-    return null;
   }
 
   // --- support probe --------------------------------------------------------
@@ -1182,8 +1199,23 @@ var VideoEffects = (function () {
 
   var FRAG_REF_DIFF = fragRefDiff();
 
+  // uBgMode picks the background: 0 the blurred camera, 1 an image, 2 a scene.
   // uBgXform packs a cover-fit for the background image: xy scale, zw offset.
   // uEdge packs the smoothstep window the feathered mask is mapped through.
+  //
+  // A scene brings three more things, all read from uSoft — the finished mask,
+  // shrunk to 64 wide and blurred wide (see buildSoft()):
+  //   * your shadow: uSoft sampled toward the light (uShadowOff), darkening the
+  //     scene by uShadow.x where the scene's alpha says the surface is near
+  //     enough to take one — the wall behind you, never the distant hills;
+  //   * a contact shadow (uShadow.y), uSoft sampled where you are: the faint
+  //     darkening of a wall right behind a person, whatever the light;
+  //   * the light wrap: the scene's light, from a coarse mip level, spilling
+  //     onto the edge of your silhouette (uWrap). Screen-blended in linear
+  //     light, so it only ever adds light — a neon sign tints your shoulder,
+  //     a dark wall never dirties it.
+  // The scene buffer is rendered in GL orientation, so it is sampled at vUv,
+  // not at the flipped coordinate the camera needs.
   var FRAG_COMPOSITE = [
     '#version 300 es',
     'precision mediump float;',
@@ -1192,22 +1224,40 @@ var VideoEffects = (function () {
     'uniform sampler2D uBlur;',
     'uniform sampler2D uImage;',
     'uniform sampler2D uMask;',
-    'uniform float uUseImage;',
+    'uniform float uBgMode;',
     'uniform vec4 uBgXform;',
     'uniform vec2 uEdge;',
     'uniform sampler2D uRef;',
     'uniform sampler2D uCore;',
     'uniform float uRefOn;',
+    'uniform sampler2D uScene;',
+    'uniform sampler2D uSoft;',
+    'uniform vec2 uShadowOff;',
+    'uniform vec2 uShadow;',
+    'uniform float uWrap;',
     'out vec4 outColor;',
     'void main() {',
     '  vec2 flip = vec2(vUv.x, 1.0 - vUv.y);',
     '  vec3 sharp = texture(uSharp, flip).rgb;',
     '  vec3 bg;',
-    '  if (uUseImage > 0.5) {',
+    '  float soft = 0.0;',
+    '  if (uBgMode > 1.5) {',
+    '    vec4 sc = texture(uScene, vUv);',
+    '    soft = texture(uSoft, flip).r;',
+    '    float thrown = texture(uSoft, flip + uShadowOff).r;',
+    '    float shade = clamp(thrown * uShadow.x + soft * uShadow.y, 0.0, 0.85);',
+    '    bg = sc.rgb * (1.0 - sc.a * shade);',
+    '  } else if (uBgMode > 0.5) {',
     '    vec2 uv = clamp(flip * uBgXform.xy + uBgXform.zw, 0.0, 1.0);',
     '    bg = texture(uImage, uv).rgb;',
     '  } else {',
     '    bg = texture(uBlur, flip).rgb;',
+    '  }',
+    '  if (uBgMode > 1.5 && uWrap > 0.0) {',
+    '    vec3 env = textureLod(uScene, vUv, 3.0).rgb;',
+    '    float rim = uWrap * (1.0 - smoothstep(0.4, 0.95, soft));',
+    '    vec3 s = sharp * sharp;',
+    '    sharp = sqrt(s + env * env * rim * (1.0 - s));',
     '  }',
     // Wide, and biased low on purpose. Wide because a narrow window turns the
     // feather back into the hard cutout it was meant to soften — it maps almost
@@ -1356,6 +1406,26 @@ var VideoEffects = (function () {
     this.track = null;
     this.bgReady = false;
     this.bgAspect = 1;
+
+    // The animated scene, when the mode is one. Its buffers are allocated the
+    // first time a scene is chosen and never for blur or an image — the same
+    // "you do not pay for what you did not pick" rule as off. See ensureScene().
+    this.sceneId = null;
+    this.scene = null;
+    this.sceneProgs = {};
+    this.sceneHzSteps = SCENE_HZ.slice();
+    this.sceneStep = 0;
+    this.lastScene = 0;
+    this.lastDraw = 0;
+    this.sceneStart = 0;
+    // How the subject is lit, as measured (lookTarget) and as drawn (look,
+    // eased toward the target every frame). Kept across scene changes: the
+    // room you are in has not changed because the backdrop did.
+    this.look = VideoScenes.defaultLook();
+    this.lookTarget = VideoScenes.defaultLook();
+    this.lastLook = 0;
+    this.lookPrev = null;
+    this.lookCtx = null;
   }
 
   Processor.prototype.targetFps = function () {
@@ -1845,21 +1915,42 @@ var VideoEffects = (function () {
   Processor.prototype.applyBackground = function (mode) {
     var self = this;
     this.mode = normalizeMode(mode);
+    if (this.mode.indexOf('preset:') === 0) {
+      // A scene is a shader, not a download: switching to one is a compile
+      // (once per scene per camera) and nothing else. The compile runs off the
+      // page's thread where the driver allows it, and whatever was showing
+      // keeps showing until it lands — a pick never freezes the call's video.
+      // A scene that will not compile falls back to blur, as a missing image
+      // does.
+      var id = this.mode.slice(7);
+      var want = this.mode;
+      var gl = this.gl;
+      this.bgReady = false;
+      if (!gl) return Promise.resolve();
+      var ready = this.sceneProgs[id] ? Promise.resolve(this.sceneProgs[id])
+                                      : VideoScenes.compileProgramAsync(gl, id);
+      return ready.then(function (prog) {
+        if (self.stopped || self.gl !== gl) return;
+        self.sceneProgs[id] = prog;
+        if (self.mode !== want) return;          // a later pick won
+        self.ensureScene(id);
+      }).catch(function (e) {
+        if (self.mode === want) { self.sceneId = null; self.scene = null; }
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn('[VideoEffects] scene unavailable: ' + (e && e.message ? e.message : e));
+        }
+      });
+    }
+    this.sceneId = null;
+    this.scene = null;
     if (this.mode === 'blur' || this.mode === 'off') {
       this.bgReady = false;
       return Promise.resolve();
     }
-    var load;
-    if (this.mode === 'custom') {
-      load = getCustomImage().then(function (blob) {
-        if (!blob) throw new Error('no custom background stored');
-        return loadBitmap(blob);
-      });
-    } else {
-      var preset = presetById(this.mode.slice(7));
-      if (!preset) { this.bgReady = false; return Promise.resolve(); }
-      load = loadBitmap(preset.src);
-    }
+    var load = getCustomImage().then(function (blob) {
+      if (!blob) throw new Error('no custom background stored');
+      return loadBitmap(blob);
+    });
     return load.then(function (bmp) {
       if (self.stopped || !self.gl) return;
       var gl = self.gl;
@@ -1873,6 +1964,133 @@ var VideoEffects = (function () {
       // rectangle, which would look like the camera had failed.
       self.bgReady = false;
     });
+  };
+
+  // --- scenes ---------------------------------------------------------------
+  //
+  // Allocate the scene's buffers (once), compile its program (once per scene),
+  // and draw its first frame now, so the composite never samples an empty or
+  // mip-incomplete texture. Throws if the program does not compile.
+  Processor.prototype.ensureScene = function (id) {
+    var gl = this.gl;
+    if (!gl) return;
+    id = VideoScenes.resolveId(id);
+    if (!id) throw new Error('unknown scene');
+    if (!this.texScene) {
+      var w = this.canvas.width, h = this.canvas.height;
+      var k = Math.min(1, SCENE_LONG / Math.max(w, h));
+      this.sceneW = Math.max(2, Math.round(w * k));
+      this.sceneH = Math.max(2, Math.round(h * k));
+      this.texScene = texture(gl, this.sceneW, this.sceneH, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+      // Mipmapped: the light wrap reads a coarse level as "the light around
+      // here", for the cost of one generateMipmap per scene frame.
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      this.fbScene = framebuffer(gl, this.texScene);
+      this.allocSoft(this.segW, this.segH);
+      this.sceneStart = performance.now();
+    }
+    if (!this.sceneProgs[id]) this.sceneProgs[id] = VideoScenes.compileProgram(gl, id);
+    this.sceneId = id;
+    this.scene = VideoScenes.byId(id);
+    this.lastScene = 0;
+    this.drawScene(performance.now());
+    this.buildSoft();
+  };
+
+  // The soft mask: the finished mask, shrunk to SOFT_LONG and blurred wide.
+  // What the shadow and the light wrap read — a person's shadow on a wall a
+  // metre behind them is that soft, and a wrap must fade in from the edge.
+  Processor.prototype.allocSoft = function (segW, segH) {
+    var gl = this.gl;
+    var k = SOFT_LONG / Math.max(segW, segH);
+    this.softW = Math.max(2, Math.round(segW * k));
+    this.softH = Math.max(2, Math.round(segH * k));
+    if (!this.texSoftA) {
+      this.texSoftA = texture(gl, this.softW, this.softH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
+      this.texSoftB = texture(gl, this.softW, this.softH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
+      this.fbSoftA = framebuffer(gl, this.texSoftA);
+      this.fbSoftB = framebuffer(gl, this.texSoftB);
+    } else {
+      [this.texSoftA, this.texSoftB].forEach(function (t) {
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, this.softW, this.softH, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+      }, this);
+    }
+    // Nobody, until the first mask says otherwise.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbSoftA);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  };
+
+  // Rebuilt from the finished mask once per inference, by the feather program
+  // (coverage, not light — no gamma). Four draws on a buffer of ~2,000 pixels.
+  Processor.prototype.buildSoft = function () {
+    var gl = this.gl;
+    if (!gl || !this.texSoftA || !this.maskPrimed) return;
+    gl.useProgram(this.pFeather);
+    this.bindTex(this.pFeather, 'uTex', 0, this.texMaskA);
+    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), 1.5 / this.segW, 0);
+    this.drawQuad(this.fbSoftB, this.softW, this.softH);
+    this.bindTex(this.pFeather, 'uTex', 0, this.texSoftB);
+    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), 0, 1.5 / this.segH);
+    this.drawQuad(this.fbSoftA, this.softW, this.softH);
+    this.bindTex(this.pFeather, 'uTex', 0, this.texSoftA);
+    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), 1.6 / this.softW, 0);
+    this.drawQuad(this.fbSoftB, this.softW, this.softH);
+    this.bindTex(this.pFeather, 'uTex', 0, this.texSoftB);
+    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), 0, 1.6 / this.softH);
+    this.drawQuad(this.fbSoftA, this.softW, this.softH);
+  };
+
+  // Ease the look every frame; redraw the scene at its own, lower rate.
+  Processor.prototype.drawScene = function (now) {
+    var gl = this.gl;
+    var dt = this.lastDraw ? (now - this.lastDraw) / 1000 : 0;
+    this.lastDraw = now;
+    VideoScenes.easeLook(this.look, this.lookTarget, Math.min(dt, 0.5));
+    var hz = this.sceneHzSteps[this.sceneStep];
+    if (this.lastScene && (now - this.lastScene) < 1000 / hz) return;
+    this.lastScene = now;
+    var prog = this.sceneProgs[this.sceneId];
+    if (!prog) return;
+    // The clock starts where the chip's thumbnail was taken, so the first
+    // frame is the picture that was picked.
+    var t = VideoScenes.THUMB_TIME + (now - this.sceneStart) / 1000;
+    VideoScenes.setUniforms(gl, prog, this.sceneW, this.sceneH, t, this.look);
+    this.drawQuad(this.fbScene, this.sceneW, this.sceneH);
+    gl.bindTexture(gl.TEXTURE_2D, this.texScene);
+    gl.generateMipmap(gl.TEXTURE_2D);
+  };
+
+  // Measure how the subject is lit, from a 32-wide copy of the frame and the
+  // mask that has just come back. A few times a second is plenty: light
+  // changes when somebody turns a lamp on, not frame to frame. See
+  // VideoScenes.measureSubject() for what is read and why.
+  Processor.prototype.sampleLook = function (mask, mw, mh, now) {
+    if (now - this.lastLook < LOOK_SAMPLE_MS) return;
+    this.lastLook = now;
+    var pw = LOOK_PROBE_W, ph = Math.max(2, Math.round(pw * mh / mw));
+    if (!this.lookCtx || this.lookCanvas.height !== ph) {
+      this.lookCanvas = document.createElement('canvas');
+      this.lookCanvas.width = pw; this.lookCanvas.height = ph;
+      this.lookCtx = this.lookCanvas.getContext('2d', { willReadFrequently: true });
+      this.lookPrev = null;
+    }
+    try {
+      this.lookCtx.drawImage(this.video, 0, 0, pw, ph);
+      var rgba = this.lookCtx.getImageData(0, 0, pw, ph).data;
+      var grid = new Uint8Array(pw * ph);
+      for (var y = 0; y < ph; y++) {
+        var my = Math.min(mh - 1, Math.floor((y + 0.5) * mh / ph));
+        for (var x = 0; x < pw; x++) {
+          grid[y * pw + x] = mask[my * mw + Math.min(mw - 1, Math.floor((x + 0.5) * mw / pw))];
+        }
+      }
+      var stats = VideoScenes.measureSubject(rgba, pw, ph, grid, this.lookPrev);
+      this.lookPrev = grid;
+      this.lookTarget = VideoScenes.lookFromStats(stats, this.lookTarget);
+    } catch (e) { /* a frame that cannot be read leaves the last look standing */ }
   };
 
   // Cover-fit: fill the frame, crop the overflow, never stretch.
@@ -1918,7 +2136,7 @@ var VideoEffects = (function () {
       this.lastSeg = now;
       this.runSegment(now);
     }
-    this.draw();
+    this.draw(now);
     if (this.manualFrames && this.track && this.track.requestFrame) {
       try { this.track.requestFrame(); } catch (e) { /* track ended */ }
     }
@@ -1958,6 +2176,10 @@ var VideoEffects = (function () {
           // Read here and nowhere else: the mask's lifetime ends with this
           // callback.
           if (self.refLoaded) self.referenceStats(data, mask.width, mask.height, now);
+          if (self.sceneId) {
+            self.buildSoft();
+            self.sampleLook(data, mask.width, mask.height, now);
+          }
         } catch (e) { /* the mask's lifetime ends with this callback */ }
       });
     } catch (e) {
@@ -2128,11 +2350,13 @@ var VideoEffects = (function () {
     });
     this.maskPrimed = false;
     if (this.segCanvas) { this.segCanvas.width = w; this.segCanvas.height = h; }
+    if (this.texSoftA) this.allocSoft(w, h);
   };
 
-  Processor.prototype.draw = function () {
+  Processor.prototype.draw = function (now) {
     var gl = this.gl;
     var w = this.canvas.width, h = this.canvas.height;
+    if (now === undefined) now = performance.now();
 
     gl.bindTexture(gl.TEXTURE_2D, this.texCam);
     try {
@@ -2161,8 +2385,10 @@ var VideoEffects = (function () {
       this.texRefB = rt; this.fbRefB = rf;
     }
 
-    var useImage = this.bgReady && this.mode !== 'blur';
-    if (!useImage) {
+    var useScene = !!this.sceneId;
+    var useImage = !useScene && this.bgReady && this.mode !== 'blur';
+    if (useScene) this.drawScene(now);
+    if (!useImage && !useScene) {
       // Box downsample into the blur buffer, then one H+V pair per stride in
       // blurSteps — widening each time, so the whole chain reaches a wide-lens
       // radius while every individual pass is still sampling detail it can see.
@@ -2191,12 +2417,39 @@ var VideoEffects = (function () {
     this.bindTex(this.pComp, 'uMask', 3, this.texMaskA);
     this.bindTex(this.pComp, 'uRef', 4, this.texRefA);
     this.bindTex(this.pComp, 'uCore', 5, this.texCore);
+    // Bound in every mode — a sampler with nothing behind it is an error on
+    // some drivers even in a branch that never reads it.
+    this.bindTex(this.pComp, 'uScene', 6, this.texScene || this.texImg);
+    this.bindTex(this.pComp, 'uSoft', 7, this.texSoftA || this.texMaskA);
     gl.uniform1f(uloc(gl, this.pComp, 'uRefOn'), this.refWeight);
-    gl.uniform1f(uloc(gl, this.pComp, 'uUseImage'), useImage ? 1 : 0);
+    gl.uniform1f(uloc(gl, this.pComp, 'uBgMode'), useScene ? 2 : useImage ? 1 : 0);
+    var sh = this.shadowPlan();
+    gl.uniform2f(uloc(gl, this.pComp, 'uShadowOff'), sh.offX, sh.offY);
+    gl.uniform2f(uloc(gl, this.pComp, 'uShadow'), sh.cast, sh.contact);
+    gl.uniform1f(uloc(gl, this.pComp, 'uWrap'), useScene && this.scene ? this.scene.wrap : 0);
     gl.uniform2f(uloc(gl, this.pComp, 'uEdge'), this.edge.lo, this.edge.hi);
     var x = this.bgXform();
     gl.uniform4f(uloc(gl, this.pComp, 'uBgXform'), x[0], x[1], x[2], x[3]);
     this.drawQuad(null, w, h);
+  };
+
+  // Where your shadow falls and how dark it is, from the measured light.
+  //
+  // The soft mask is sampled TOWARD the light: a shadow falls away from its
+  // light, so the point it darkens is lit by way of you. A light from your
+  // right throws your shadow to the left; a light from above drops it a little.
+  // A light that is strongly to one side is a hard light (the window, the
+  // sun) and gets the darker shadow; a frontal, diffuse one barely casts any.
+  // In flip space, so +y is down the picture.
+  Processor.prototype.shadowPlan = function () {
+    var sc = this.scene, L = this.look;
+    if (!sc || !sc.shadow) return { offX: 0, offY: 0, cast: 0, contact: 0 };
+    return {
+      offX: L.dirX * SHADOW_REACH,
+      offY: -(0.015 + 0.035 * Math.max(0, Math.min(1, L.dirY))),
+      cast: sc.shadow * (0.35 + 0.65 * L.hard),
+      contact: SHADOW_AO
+    };
   };
 
   // --- staying within budget ------------------------------------------------
@@ -2226,6 +2479,16 @@ var VideoEffects = (function () {
       if (typeof console !== 'undefined' && console.info) {
         console.info('[VideoEffects] ' + Math.round(achieved) + ' fps — segmentation stepped to ' +
                      this.segHzSteps[this.segStep] + ' Hz');
+      }
+      return;
+    }
+    // Then the scene: half the redraws, the same picture moving less smoothly.
+    if (this.sceneId && this.sceneStep < this.sceneHzSteps.length - 1) {
+      this.sceneStep++;
+      this.slowWindows = 0;
+      if (typeof console !== 'undefined' && console.info) {
+        console.info('[VideoEffects] ' + Math.round(achieved) + ' fps — scene stepped to ' +
+                     this.sceneHzSteps[this.sceneStep] + ' Hz');
       }
       return;
     }
@@ -2285,6 +2548,23 @@ var VideoEffects = (function () {
      this.pRef, this.pErode].forEach(function (p) {
       if (p) try { gl.deleteProgram(p); } catch (e) { /* ignore */ }
     });
+    [this.texScene, this.texSoftA, this.texSoftB].forEach(function (t) {
+      if (t) try { gl.deleteTexture(t); } catch (e) { /* ignore */ }
+    });
+    [this.fbScene, this.fbSoftA, this.fbSoftB].forEach(function (f) {
+      if (f) try { gl.deleteFramebuffer(f); } catch (e) { /* ignore */ }
+    });
+    var progs = this.sceneProgs;
+    Object.keys(progs).forEach(function (k) {
+      try { gl.deleteProgram(progs[k].program); } catch (e) { /* ignore */ }
+    });
+    this.sceneProgs = {};
+    // A rebuilt context compiles its scene again (applyBackground); until it
+    // lands, the blur shows rather than a scene with no program behind it.
+    this.sceneId = null;
+    this.scene = null;
+    this.texScene = this.texSoftA = this.texSoftB = null;
+    this.fbScene = this.fbSoftA = this.fbSoftB = null;
     if (this.quad) try { gl.deleteBuffer(this.quad); } catch (e) { /* ignore */ }
     if (this.vao) try { gl.deleteVertexArray(this.vao); } catch (e) { /* ignore */ }
     this.gl = null;
@@ -2475,11 +2755,41 @@ var VideoEffects = (function () {
       '<path d="M4 16h16"/></svg>';
     chips.push(blur);
 
-    PRESETS.forEach(function (p) {
-      var c = chip('bg-chip-image', p.label, 'preset:' + p.id);
-      c.style.backgroundImage = 'url("' + p.src + '")';
+    // The scenes. Each chip shows a gradient swatch at once and its real
+    // thumbnail — rendered from the scene's own shader — once that is ready.
+    var sceneChips = PRESETS.map(function (p) {
+      var c = chip('bg-chip-image bg-chip-scene', p.label, 'preset:' + p.id);
+      c.dataset.scene = p.id;
+      c.style.backgroundImage = p.swatch;
       chips.push(c);
+      return c;
     });
+    // The thumbnails are rendered only once the row is actually on screen:
+    // every page renders its pickers at load, inside a closed popover or a
+    // settings card nobody has opened, and five shader compiles are not worth
+    // paying for a picker that may never be seen.
+    var thumbsAsked = false;
+    function paintThumbs() {
+      if (thumbsAsked) return;
+      thumbsAsked = true;
+      VideoScenes.thumbnails().then(function (thumbs) {
+        sceneChips.forEach(function (c) {
+          var url = thumbs[c.dataset.scene];
+          if (url) c.style.backgroundImage = 'url("' + url + '")';
+        });
+      });
+    }
+    if (typeof IntersectionObserver === 'function') {
+      var io = new IntersectionObserver(function (entries) {
+        if (entries.some(function (e) { return e.isIntersecting; })) {
+          io.disconnect();
+          paintThumbs();
+        }
+      });
+      io.observe(el);
+    } else {
+      paintThumbs();
+    }
 
     var custom = null, clearBtn = null, fileInput = null;
     if (opts.allowCustom !== false) {
@@ -2850,6 +3160,11 @@ var VideoEffects = (function () {
       min: STRENGTH_MIN, max: STRENGTH_MAX, def: STRENGTH_DEFAULT
     },
     _runtimeBaseForTest: runtimeBase,
+    // Test hook: the numbers the scenes' shadow and pacing are built from.
+    _sceneConfig: {
+      long: SCENE_LONG, hz: SCENE_HZ, softLong: SOFT_LONG,
+      shadowReach: SHADOW_REACH, shadowAo: SHADOW_AO, lookSampleMs: LOOK_SAMPLE_MS
+    },
     readStrength: readStrength,
     writeStrength: writeStrength,
     setStrength: setStrength,

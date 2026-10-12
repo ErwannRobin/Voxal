@@ -155,8 +155,9 @@ cap-sync: gen-build-info
 	npx cap sync
 	@# The vision runtime is fetched from the service at runtime, not shipped:
 	@# 12 MB of WASM in every App Store / Play download, for a feature most
-	@# users never turn on, is not a trade worth making. The 250 KB model and
-	@# the preset artwork stay bundled — those are small and save a round-trip.
+	@# users never turn on, is not a trade worth making. The 250 KB model stays
+	@# bundled — it is small and saves a round-trip. (The scenes are shaders:
+	@# there is no background artwork to ship at all.)
 	@rm -f ios/App/App/public/assets/seg/vision_* \
 	      android/app/src/main/assets/public/assets/seg/vision_*
 
