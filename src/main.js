@@ -12371,8 +12371,15 @@ function applyImmersiveStageInsets(gridEl) {
   var header = document.querySelector('#screen-room .room-header');
   var headerBox = header ? header.getBoundingClientRect() : null;
   var chromeUp = !stageChromeHidden();
+  // Upright, the header slides in from `translateY(-100%)`, and this runs the
+  // moment the chrome returns — mid-slide its rect still sits above the screen
+  // and would measure 0, leaving the self tile's buttons under it. A fixed
+  // header's layout height ignores the transform; the landscape one is in flow.
+  var headerBottom = !headerBox ? 0
+    : getComputedStyle(header).position === 'fixed' ? header.offsetHeight
+    : headerBox.bottom;
   var insetTop = (headerBox && chromeUp)
-    ? Math.max(0, Math.round(headerBox.bottom - stageBox.top))
+    ? Math.max(0, Math.round(headerBottom - stageBox.top))
     : 0;
   // …and the control stack costs it the band it stands in at the bottom, in
   // both orientations: sideways the talk button leaves the landscape room's

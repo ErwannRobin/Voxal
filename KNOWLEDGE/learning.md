@@ -1942,3 +1942,5 @@ seems too sharp".
 ### Rotating a phone: `resize` fires before the layout has settled
 
 On iOS especially, `resize` can fire while `innerWidth/innerHeight`, media queries and safe-area insets still describe the OLD orientation. The stage's one rAF-debounced measurement then reads stale geometry (insets, grid columns, `object-fit`). `scheduleStageRelayout()` in `main.js` is also driven by `orientationchange`, `screen.orientation` `change` and `visualViewport` `resize`, with settle passes at 150 ms and 400 ms. Not verified on a real device from this container.
+
+- **Measure a sliding panel with its layout size, not `getBoundingClientRect()`.** On the phone video stage the room header is `position: fixed` and enters with `translateY(-100%)` → `0` (0.25s). `applyImmersiveStageInsets()` runs the instant the chrome returns, when the rect still sits above the screen, so `--stage-inset-top` came out 0 and the self tile's flip/background buttons stayed under the header. A fixed header's `offsetHeight` ignores the transform.
