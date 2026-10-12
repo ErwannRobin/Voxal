@@ -12538,13 +12538,33 @@ function updateVideoStage() {
 // changes size — including the first resize that crosses the stage breakpoint,
 // where the stage goes from unmeasurable (hidden) to visible.
 var _stageResizeRaf = null;
-window.addEventListener('resize', function() {
+var _stageSettleTimers = [];
+function scheduleStageRelayout() {
   if (_stageResizeRaf) return;
   _stageResizeRaf = requestAnimationFrame(function() {
     _stageResizeRaf = null;
     updateVideoStage();
   });
-});
+}
+window.addEventListener('resize', scheduleStageRelayout);
+// A phone turned on its side does not settle in one frame: `resize` can fire
+// while innerWidth/innerHeight, the media queries and the safe-area insets still
+// describe the OLD orientation (iOS especially), so the one measurement above
+// reads a layout that is about to change. Measure again once it has landed.
+function onStageOrientationChange() {
+  scheduleStageRelayout();
+  _stageSettleTimers.forEach(clearTimeout);
+  _stageSettleTimers = [150, 400].map(function(ms) {
+    return setTimeout(scheduleStageRelayout, ms);
+  });
+}
+window.addEventListener('orientationchange', onStageOrientationChange);
+if (window.screen && screen.orientation && screen.orientation.addEventListener) {
+  screen.orientation.addEventListener('change', onStageOrientationChange);
+}
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', scheduleStageRelayout);
+}
 
 // The "+N still hidden" count is a property of the scroll position, not of the
 // roster, so it is the one piece of stage state that updates without a render.
