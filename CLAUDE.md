@@ -122,7 +122,7 @@ No framework, no bundler. The frontend is plain HTML/CSS/JS served as static fil
 - `screen-popup.html`, `video-popup.html` — feature popups
 - `version.js` — exports `VOXAL_VERSION` and `VOXAL_BUILD_DATE`
 - `video-effects.js` — camera background blur / virtual backgrounds (see `docs/video-effects.md`)
-- `video-scenes.js` — the five animated backgrounds (office, island, cyber café, mountain, countryside): one generated shader each, no assets, relit to match the subject's light, with the subject's shadow and light wrap (see *Animated scenes* in `docs/video-effects.md`)
+- `video-scenes.js` — the five animated backgrounds (office, island, cyber café, mountain, countryside): each a small ray-marched 3D world in one generated shader (a pinhole camera, a sun and atmosphere, volumetric clouds, soft shadows, reflection and refraction, a camera tone curve), no assets, relit to match the subject's light, with the subject's shadow and light wrap; each scene says how big (`res`) and how often (`hz`) it is drawn (see *Animated scenes* in `docs/video-effects.md`)
 - PeerJS is bundled at `src/assets/peerjs.min.js` — never loaded from a CDN.
 - The MediaPipe segmentation runtime (`src/assets/seg/vision_*`, ~12 MB) is the one exception to "everything is vendored": it is gitignored and staged out of `node_modules` by `seg-assets.sh` (run by `make seg-assets`, the desktop build targets, and the Vercel deploy's `vercel-build.sh`). Bundled into the Tauri app and served same-origin on web; `make cap-sync` strips it from the mobile bundles, which fetch it lazily from `web.voxal.app` — never from `presenceBase()`, which is the presence API. `make cap-sync` strips it from the mobile bundles.
 
@@ -378,8 +378,9 @@ controls both documents render (`renderPicker()`, `renderStrength()`).
 `video-scenes.js` holds the animated scenes the picker offers and must load
 *before* `video-effects.js`, which builds its presets from it; it declares one
 global, `VideoScenes`. Its GLSL lives in template literals, so a backtick in a
-shader comment ends the string — and `patch` and `cast` are reserved words in
-GLSL ES 3.00.
+shader comment ends the string — and `patch`, `cast` and `half` are reserved words
+in GLSL ES 3.00. It reads exactly one texture, `uNoise`, a lattice of random bytes
+the module generates itself (`noiseTexture()`), on texture unit 8.
 `emoji-data.js` is the same *kind* of file but only `index.html` loads it —
 `settings.html` has no chat. It is **generated** (`make emoji-data`, from
 Unicode's `emoji-test.txt`) and declares exactly one global, `EMOJI_GROUPS`;

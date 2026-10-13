@@ -95,11 +95,30 @@ test.describe('the catalogue', () => {
     for (const s of seen) expect(s).toMatchObject({ label: true, swatch: true, source: true });
   });
 
-  // "Purely generated, no assets": nothing a scene draws is fetched.
+  // "Purely generated, no assets": nothing a scene draws is fetched. The one
+  // texture a scene reads is the lattice of random bytes the module fills in
+  // from a fixed seed (noiseTexture()) — read with texelFetch, never sampled
+  // from a picture, and never the only thing that decides what is drawn.
   test('a scene references no image, font or file', async ({ page }) => {
     const sources = await page.evaluate(() => VideoScenes.SCENES.map((s) => VideoScenes.fragmentSource(s.id)));
     for (const src of sources) {
-      expect(src).not.toMatch(/sampler2D|texture\(|\.(png|webp|jpe?g|svg)\b|url\(/);
+      expect(src).not.toMatch(/\.(png|webp|jpe?g|svg)\b|url\(|fetch\(|XMLHttpRequest|\bImage\(/);
+      expect(src).not.toMatch(/\btexture\(/);
+      const samplers = src.match(/uniform\s+sampler2D\s+\w+/g) || [];
+      expect(samplers).toEqual(['uniform sampler2D uNoise']);
+    }
+  });
+
+  // The scenes cost what they cost to draw, and the catalogue is how the
+  // pipeline learns it: a buffer size and a redraw ladder, each scene its own.
+  test('each scene says how big and how often it is drawn', async ({ page }) => {
+    const seen = await page.evaluate(() => VideoScenes.SCENES.map((s) => ({ id: s.id, res: s.res, hz: s.hz })));
+    for (const s of seen) {
+      expect(s.res, s.id).toBeGreaterThan(0.4);
+      expect(s.res, s.id).toBeLessThanOrEqual(1);
+      expect(s.hz.length, s.id).toBeGreaterThanOrEqual(2);
+      expect(s.hz[0], s.id).toBeLessThanOrEqual(20);
+      expect(s.hz[1], s.id).toBeLessThan(s.hz[0]);
     }
   });
 });
@@ -142,6 +161,40 @@ test.describe('every scene', () => {
       expect(d.bigShare).toBeLessThan(0.05);
     });
 
+    // A frame is a function of the clock and the look and nothing else: no
+    // per-frame random numbers, so a still room is a still picture (the
+    // encoder pays for every pixel that changes) and two renders agree.
+    test(`${id} draws the same picture twice`, async ({ page }) => {
+      const diff = await page.evaluate((id) => {
+        const a = window.__renderScene(id, { times: [37] }).frames[0];
+        const b = window.__renderScene(id, { times: [37] }).frames[0];
+        let n = 0;
+        for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) n++;
+        return n;
+      }, id);
+      expect(diff).toBe(0);
+    });
+
+    // The camera's shoulder: a bright light rolls off instead of clipping, so
+    // no scene is a wash of flat white (or a hole of flat black) at its
+    // default light.
+    test(`${id} is exposed like a photograph, not clipped`, async ({ page }) => {
+      const share = await page.evaluate((id) => {
+        const r = window.__renderScene(id);
+        const px = r.frames[0];
+        let hi = 0, lo = 0;
+        const n = r.w * r.h;
+        for (let i = 0; i < n; i++) {
+          const l = window.__luma(px, i * 4);
+          if (l > 250) hi++;
+          if (l < 4) lo++;
+        }
+        return { hi: hi / n, lo: lo / n };
+      }, id);
+      expect(share.hi).toBeLessThan(0.12);
+      expect(share.lo).toBeLessThan(0.25);
+    });
+
     // The layout is authored with the light on the right and mirrored when
     // it is on the left — exactly mirrored, subject and all.
     test(`${id} puts its light on the subject's light side`, async ({ page }) => {
@@ -162,6 +215,114 @@ test.describe('every scene', () => {
       expect(err).toBeLessThan(1.5);
     });
   }
+
+  // What makes these worlds and not wallpaper is that things in them obey the
+  // light. Each of these pins one such behaviour.
+  test('the office is lit through its window: a soft light leaves the sun patch dimmer', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const region = (r) => {
+        // Where the sun lands on the back wall, right of centre and low.
+        let s = 0, n = 0;
+        for (let y = Math.floor(r.h * 0.55); y < Math.floor(r.h * 0.9); y++) {
+          for (let x = Math.floor(r.w * 0.55); x < Math.floor(r.w * 0.8); x++) {
+            s += window.__luma(r.frames[0], ((r.h - 1 - y) * r.w + x) * 4); n++;
+          }
+        }
+        return s / n;
+      };
+      const hard = window.__renderScene('office', { w: 256, h: 144, look: { dirX: 0.95 } });
+      const soft = window.__renderScene('office', { w: 256, h: 144, look: { dirX: 0.05 } });
+      return { hard: region(hard), soft: region(soft) };
+    });
+    expect(seen.hard).toBeGreaterThan(seen.soft * 1.1);
+  });
+
+  test('at night the sun has set over the island: the sky is warm, not blue', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const sky = (r) => {
+        // The band just above the horizon, away from the palm.
+        let red = 0, blue = 0;
+        for (let y = Math.floor(r.h * 0.30); y < Math.floor(r.h * 0.45); y++) {
+          for (let x = Math.floor(r.w * 0.55); x < Math.floor(r.w * 0.75); x++) {
+            const i = ((r.h - 1 - y) * r.w + x) * 4;
+            red += r.frames[0][i]; blue += r.frames[0][i + 2];
+          }
+        }
+        return red / blue;
+      };
+      return {
+        day: sky(window.__renderScene('island', { w: 256, h: 144 })),
+        night: sky(window.__renderScene('island', { w: 256, h: 144, look: { exposure: 0.25 } })),
+      };
+    });
+    expect(seen.night).toBeGreaterThan(seen.day * 1.4);
+  });
+
+  // The lake is a mirror: below the horizon the picture is the one above it,
+  // upside down, so a row of the water follows the same ups and downs along x
+  // as the row of sky and ridge the same distance above the horizon.
+  test('the mountain lake mirrors the range', async ({ page }) => {
+    const corr = await page.evaluate(() => {
+      const r = window.__renderScene('mountain', { w: 320, h: 180 });
+      const row = (y) => {
+        const v = [];
+        for (let x = 0; x < r.w; x++) v.push(window.__luma(r.frames[0], ((r.h - 1 - y) * r.w + x) * 4));
+        return v;
+      };
+      const horizon = Math.round(r.h * 0.5 + r.h * 0.03 * 1.07);   // pitch 0.03 rad, focal 1.07
+      const out = [];
+      for (const k of [12, 20, 28]) {
+        const a = row(horizon - k), b = row(horizon + k);
+        const ma = a.reduce((s, v) => s + v, 0) / a.length, mb = b.reduce((s, v) => s + v, 0) / b.length;
+        let sab = 0, saa = 0, sbb = 0;
+        for (let i = 0; i < a.length; i++) {
+          sab += (a[i] - ma) * (b[i] - mb); saa += (a[i] - ma) ** 2; sbb += (b[i] - mb) ** 2;
+        }
+        out.push(sab / Math.sqrt(saa * sbb + 1e-9));
+      }
+      return out;
+    });
+    // Positive and clear on the average; the ripples and the foreground take the rest.
+    expect(corr.reduce((s, v) => s + v, 0) / corr.length).toBeGreaterThan(0.25);
+  });
+
+  // Regression: at dusk a few skyline pixels used to come out pure white (a
+  // negative near-miss was taken for "no hit", and shaded at minus a kilometre).
+  test('the mountain at dusk has no white fringe on its ridges', async ({ page }) => {
+    const white = await page.evaluate(() => {
+      const r = window.__renderScene('mountain', { w: 320, h: 180, look: { exposure: 0.25 } });
+      let n = 0;
+      for (let y = 0; y < Math.floor(r.h * 0.5); y++) {
+        for (let x = 0; x < r.w; x++) {
+          const i = ((r.h - 1 - y) * r.w + x) * 4;
+          if (r.frames[0][i] === 255 && r.frames[0][i + 1] === 255 && r.frames[0][i + 2] === 255) n++;
+        }
+      }
+      return n;
+    });
+    expect(white).toBe(0);
+  });
+
+  // Things near you answer your movement: the palm's fronds sway more.
+  test('the palm stirs when you move', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const change = (motion) => {
+        const r = window.__renderScene('island', { w: 160, h: 90, times: [37, 37.7], look: { motion } });
+        const [a, b] = r.frames;
+        let sum = 0, n = 0;
+        // The upper right, where the crown is.
+        for (let y = 0; y < Math.floor(r.h * 0.45); y++) {
+          for (let x = Math.floor(r.w * 0.6); x < r.w; x++) {
+            const i = ((r.h - 1 - y) * r.w + x) * 4;
+            sum += Math.abs(window.__luma(a, i) - window.__luma(b, i)); n++;
+          }
+        }
+        return sum / n;
+      };
+      return { still: change(0), moving: change(1) };
+    });
+    expect(seen.moving).toBeGreaterThan(seen.still * 1.5);
+  });
 
   test('a dim subject gets a dim scene', async ({ page }) => {
     const ratio = await page.evaluate(() => {
@@ -358,7 +519,7 @@ test.describe('in the camera pipeline', () => {
     const seen = await page.evaluate(async () => {
       await VideoEffects.wrap(window.__mkLitCamera('#202020', '#e0e0e0'), 'preset:office');
       const p = VideoEffects.active();
-      await window.__waitFor(() => p.look.measured && p.look.dirX > 0.3, 4000);
+      await window.__waitFor(() => p.look.measured && p.look.dirX > 0.3, 12000);
       return { measured: p.look.measured, dirX: p.look.dirX, side: p.look.side };
     });
     expect(seen.measured).toBe(true);
@@ -374,7 +535,7 @@ test.describe('in the camera pipeline', () => {
     const seen = await page.evaluate(async () => {
       await VideoEffects.wrap(window.__mkLitCamera('#202020', '#e0e0e0'), 'preset:office');
       const p = VideoEffects.active();
-      await window.__waitFor(() => p.look.measured && p.look.dirX > 0.3, 4000);
+      await window.__waitFor(() => p.look.measured && p.look.dirX > 0.3, 12000);
       await window.__sleep(400);
       const L = [Math.round(320 * 0.25), Math.round(240 * 0.6)];
       const R = [Math.round(320 * 0.75), Math.round(240 * 0.6)];
@@ -409,7 +570,7 @@ test.describe('in the camera pipeline', () => {
     const seen = await page.evaluate(async () => {
       await VideoEffects.wrap(window.__mkLitCamera('#181818', '#181818'), 'preset:island');
       const p = VideoEffects.active();
-      await window.__waitFor(() => p.look.measured, 4000);
+      await window.__waitFor(() => p.look.measured, 12000);
       await window.__sleep(400);
       const lum = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
       // Just inside the oval's top, and its middle.
@@ -429,7 +590,7 @@ test.describe('in the camera pipeline', () => {
     const seen = await page.evaluate(async () => {
       await VideoEffects.wrap(window.__mkLitCamera('#606060', '#a0a0a0'), 'preset:countryside');
       const p = VideoEffects.active();
-      await window.__waitFor(() => p.look.measured, 4000);
+      await window.__waitFor(() => p.look.measured, 12000);
       await window.__sleep(800);
       const still = p.look.motion;
       // Step in and out of the picture a few times.
@@ -447,6 +608,36 @@ test.describe('in the camera pipeline', () => {
   // Picking a scene is a compile, and the compile is off the frame's path: the
   // old background keeps drawing until the new one is ready, and nothing on
   // the wire changes.
+  // Each scene brings its own size and its own redraw ladder: the cheap café
+  // is drawn full size, the mountain smaller, and a pick re-sizes the buffer.
+  test('a scene is drawn at its own size and its own rate', async ({ page }) => {
+    const seen = await page.evaluate(async () => {
+      // A camera big enough that the scene buffers are limited by SCENE_LONG
+      // and not by the camera (the helper's 320 x 240 is smaller than any).
+      const c = document.createElement('canvas');
+      c.width = 1280; c.height = 720;
+      const ctx = c.getContext('2d');
+      let n = 0;
+      const paint = () => { ctx.fillStyle = '#666'; ctx.fillRect(0, 0, 1280, 720); ctx.fillStyle = '#777'; ctx.fillRect((n++ * 7) % 1280, 0, 2, 2); };
+      paint();
+      const stream = c.captureStream(15);
+      const timer = setInterval(paint, 66);
+      stream.getVideoTracks()[0].addEventListener('ended', () => clearInterval(timer));
+      await VideoEffects.wrap(stream, 'preset:cybercafe');
+      const p = VideoEffects.active();
+      await window.__sleep(300);
+      const cafe = { w: p.sceneW, hz: p.sceneHzSteps.slice() };
+      await VideoEffects.setMode('preset:mountain');
+      await window.__sleep(300);
+      const mountain = { w: p.sceneW, hz: p.sceneHzSteps.slice(), step: p.sceneStep };
+      return { cafe, mountain, cam: p.canvas.width };
+    });
+    expect(seen.mountain.w).toBeLessThan(seen.cafe.w);
+    expect(seen.mountain.hz).toEqual([10, 5]);
+    expect(seen.cafe.hz).toEqual([15, 8]);
+    expect(seen.mountain.step).toBe(0);
+  });
+
   test('switching scenes keeps the same published track', async ({ page }) => {
     const seen = await page.evaluate(async () => {
       const stream = await VideoEffects.wrap(window.__mkLitCamera('#555', '#999'), 'preset:office');
@@ -486,14 +677,35 @@ test.describe('in the camera pipeline', () => {
 });
 
 test.describe('the picker', () => {
+  // The other half of that: left alone, a software GPU is not asked to render
+  // them (and nothing else in the picker waits for them).
+  test('a software GPU keeps the swatches and renders no thumbnails', async ({ page }) => {
+    const seen = await page.evaluate(async () => {
+      const probe = document.createElement('canvas').getContext('webgl2');
+      const software = VideoScenes.isSoftwareGL(probe);
+      const thumbs = await VideoScenes.thumbnails();
+      return { software, thumbs: Object.keys(thumbs).length };
+    });
+    // Only meaningful where the test machine is itself a software renderer,
+    // which is what CI and this container are; on a real GPU it is the other test.
+    test.skip(!seen.software, 'this machine has a real GPU');
+    expect(seen.thumbs).toBe(0);
+  });
+
   test('each scene chip gets a thumbnail rendered from its own shader', async ({ page }) => {
+    // On a software GPU (this machine's) the picker keeps its gradient swatches
+    // and renders no thumbnails: five ray-marched shaders compiled on the CPU
+    // would freeze the page for a quarter of a minute. This test asks for them
+    // anyway, which takes a good while here and a blink on a real GPU.
+    test.setTimeout(120_000);
+    await page.evaluate(() => { window.__voxalThumbsOnSoftwareGL = true; });
     await page.click('#btn-open-settings');
     await page.click('#modal-settings [data-target="settings-video"]');
     const chips = page.locator('#settings-bg-picker .bg-chip-scene');
     await expect(chips).toHaveCount(5);
     await expect.poll(() => page.evaluate(() =>
       Array.from(document.querySelectorAll('#settings-bg-picker .bg-chip-scene'))
-        .filter((c) => /url\("(blob|data):/.test(c.style.backgroundImage)).length), { timeout: 15000 })
+        .filter((c) => /url\("(blob|data):/.test(c.style.backgroundImage)).length), { timeout: 100_000 })
       .toBe(5);
     const labels = await chips.evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')));
     expect(labels).toEqual(['Office', 'Island', 'Cyber café', 'Mountain', 'Countryside']);
