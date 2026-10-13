@@ -418,21 +418,86 @@ before this loses the "experimental".
 
 ## Animated scenes
 
-The presets are not pictures. **Office**, **Island**, **Cyber café**,
-**Mountain** and **Countryside** are each one fragment shader in
-`src/video-scenes.js` — every wall, cloud and leaf is computed from the
-pixel's position and the clock. Nothing is downloaded, nothing is licensed, and
-nothing is stored: there is no artwork anywhere in the repository. That is a
-requirement rather than a style, because it is what lets the scene be **relit
-to match you**, which a photograph never can be.
+The presets are not pictures, and they are not layered drawings either. **Office**,
+**Island**, **Cyber café**, **Mountain** and **Countryside** are each one fragment
+shader in `src/video-scenes.js` that renders a small **3D world** from a pinhole
+camera, lit the way a camera would see it: a sun and a sky from a single-
+scattering atmosphere, ray-marched cumulus, haze that thickens with distance,
+soft shadows, ambient occlusion, reflection and refraction in water and glass,
+light through leaves, and a camera's own filmic shoulder and sRGB curve at the
+end. Nothing is downloaded, nothing is licensed, and nothing is stored: there is
+no artwork anywhere in the repository. That is a requirement rather than a style,
+because it is what lets the scene be **relit to match you**, which a photograph
+never can be.
 
-| Scene | What moves | Takes your shadow |
-|---|---|---|
-| Office | the sunlit patch on the wall, dappled by a tree outside; dust in the beam; the plants | yes — the wall behind you |
-| Island | cumulus, swell, glitter under the sun, the shore lapping, a sail crossing the horizon, the palm | lightly — the sand |
-| Cyber café | the neon breathing, code scrolling on the screens, rain on the window, steam from a cup | yes — the brick wall |
-| Mountain | cirrus, mist in the valley, a bird circling far off, the pines | no — everything is far away |
-| Countryside | cumulus, wind over the wheat, the long grass and its flowers, pollen | no |
+| Scene | What it is | What moves | Takes your shadow |
+|---|---|---|---|
+| Office | A room: five planes, a bookcase of individual books, a fiddle-leaf fig, a lamp, a picture, a windowsill. The window is an **area light** and the sun passes through it for real | the dapple of the tree outside on the sunlit patch, the fig and its shadow, dust in the shaft | yes — the wall behind you |
+| Island | A lagoon at eye height: Fresnel sea, turquoise shallows with **caustics**, a reef with surf, glitter, wet sand that mirrors the sky, a 3D **coconut palm** lit through its leaves, an islet, a sail, gulls | cumulus, the swell, the shore lapping, the palm | lightly — the sand |
+| Cyber café | A brick wall that is a *height field* (so a lamp or neon skimming it picks out every course), pendant lamps, neon, laptops, a mug with steam, jars on a shelf, and a **wet street window** where each drop is a lens | the neon breathing, code scrolling, drops sliding, steam | yes — the brick wall |
+| Mountain | An alpine lake: a **ray-marched range** (snow, strata, forest, haze), a **mirror lake** that reflects it all, mist, pines you could walk around | cirrus and the shade of clouds on the slopes, mist, ripples | no — everything is far away |
+| Countryside | Rolling farmland: a Voronoi **patchwork of fields**, hedgerows, a lane to a farm, an oak (a signed-distance tree, lit through its leaves), sheep, long grass and flowers | wind over the wheat, **cloud shadows** crossing the hills, the grass | no |
+
+### How a scene is built
+
+Every scene is a pinhole camera (50° top to bottom, widened a little in an upright
+frame) looking into a world that is lit, not coloured in. The shared header of
+`video-scenes.js` is what the scenes have in common:
+
+* **The sun and the air.** `atmosphere()` integrates single scattering through a
+  Rayleigh + Mie atmosphere per pixel (8 samples along the view ray, 3 toward the
+  sun), so a low sun turns the horizon gold and a high one leaves the zenith deep
+  blue without anyone choosing those colours. `sunSetup()` puts the sun at an
+  elevation and azimuth and works out the colour of its light after its path
+  through the air (a sunset is already red). `aerial()` fades what is far into the
+  sky it is in front of, with a haze that thins with height.
+* **Clouds.** `cloudMarch()` ray-marches one slab of cumulus: a noise density under
+  a height profile (flat bottoms, billowing tops), lit by marching three samples
+  toward the sun (a dark base under a bright, silver-edged crown) with the sky's
+  glow filling the shade. The same density, looked at from the ground up the
+  sun's ray, is the **shade the clouds throw** on the mountain slopes and the
+  fields.
+* **Terrain.** The mountain and the countryside are height fields ray-marched with
+  steps that grow with distance, a bisection to settle on the surface, a normal
+  from forward differences, and a soft shadow march toward the sun. The
+  mountain's march is in two stages — the lake's banks (a few cheap exponentials)
+  and, from a kilometre out, the range — so rays that meet the lake never pay for
+  the mountains.
+* **Interiors and objects.** The office and the café are analytic planes plus a
+  signed-distance `map()` of the furniture, each piece skipped, cheaply, while the
+  ray is far from its bounding box. The island's palm is analytic too: capsules
+  for the trunk, and each frond a spine with a wing of planar quads either side,
+  the leaflets a comb cut out of them by an alpha test.
+* **The tone curve.** Scenes are lit in physical-looking units (a sunlit wall is
+  several times a mid-grey), so `main()` brings the camera's exposure down, rolls
+  highlights off with an ACES-fit shoulder, encodes sRGB, and adds half a level of
+  *fixed* dither so a smooth sky does not band.
+* **The noise table.** Every scene is built from noise. Hashing four lattice
+  corners per octave was most of what a 3D scene cost, so the corners are
+  generated once, in JS, from a fixed seed (`noiseTexture()`, 256 x 256 bytes,
+  four to a texel) and a scene reads a cell with one `texelFetch`. Nothing is
+  fetched and no picture is sampled — it is a table of random numbers.
+
+Two disciplines run through all of it. **Footprint:** every texture is finer than
+the pixel it is drawn to somewhere, so each is faded out by how much of the world
+one pixel covers (water ripples, brick relief, grass, rows in a field) rather than
+sampled below its own wavelength; that is what keeps water from shimmering, and a
+shimmer costs the encoder bits. **Silhouettes:** a ray-marched skyline is a
+staircase unless the rays that *nearly* touched it are counted — the march keeps
+the closest approach, a few golden-section steps refine it, and the pixel is the
+land by that fraction.
+
+### Looking at them
+
+A shader that draws a world can pass every test and still be ugly, so there is a
+way to look: `make scene-preview` loads `video-scenes.js` into a blank page,
+draws each scene with the real shader (software GL is fine) and writes a PNG per
+scene and a contact sheet to `scene-previews/` (gitignored), with the draw time.
+Options go through `ARGS`: a size (`--size 1024x576`, or `216x384` for an upright
+phone), a moment (`--time 80`), a look (`--look '{"exposure":0.25}'` for the
+evening, `'{"dirX":-0.8,"sideMix":0}'` for the mirror) and `--person`, which draws
+a stand-in head and shoulders over the middle of the frame — where a composition
+is actually judged. See the header of `scripts/scene-preview.mjs`.
 
 ### The light is yours
 
@@ -445,10 +510,10 @@ mask and three things are measured (`VideoScenes.measureSubject()`):
   Measured on you rather than the frame, because the frame's average is mostly
   the room the scene is about to replace. As your face drops below about three
   quarters of a well-lit one (exposure 0.62, fully at 0.28) the scene turns to
-  **evening**: the city lights come on outside the office window,
-  the shelf lamp is lit, the mountain sky goes to dusk. Light sources (a lamp, a
-  screen, the sky through a window) are dimmed less than lit surfaces, as they
-  are in a real dark room.
+  **evening**: the sun sets over the island, the lamp comes on in the office and
+  the town outside its window lights up, the mountain goes to the blue hour, the
+  countryside to dusk. Light sources (a lamp, a screen, the sky through a window)
+  are dimmed less than lit surfaces, as they are in a real dark room.
 * **Direction** — the right half of your silhouette against the left. The side
   of your face that is brighter is the side your light is on, and the scene puts
   its window, its sun or its brightest lamp there. Each scene is authored with
@@ -495,9 +560,9 @@ blurred wide, rebuilt per inference in four draws on ~2,000 pixels.
 How much the mask moved between two samples is the scene's **motion** input. It
 rises at once and settles over a couple of seconds, like air. The things near
 you answer it: dust in the office's sunbeam is pushed away from you and swirls,
-the shelf vines and the fig stir, steam over the café cup bends, the palm's
-fronds and the countryside's grass and flowers move more. All of it is a few
-millimetres of screen — an acknowledgement, not an animation.
+the fig's leaves stir, steam over the café cup bends, the palm's fronds and the
+countryside's grass and flowers move more. All of it is a few millimetres of
+screen — an acknowledgement, not an animation.
 
 ### Quiet on purpose
 
@@ -505,23 +570,40 @@ Every scene is a backdrop to a working call. Its motion is slow and small, and
 there is a second reason for that beyond taste: **every pixel that changes is a
 pixel the video encoder spends bits on**, for everyone receiving you. So:
 
-* the scene is redrawn at 20 Hz (`SCENE_HZ`), not at the camera's rate;
-* nothing flashes — the neon breathes ±7%, the glitter on the sea is sparse and
-  slow, the rain is a few drops sliding down;
+* the scene is redrawn at 20 Hz or less (`SCENE_HZ`, and the scene's own `hz`),
+  not at the camera's rate;
+* nothing flashes — the neon breathes ±7%, the sea's swell is slow and its
+  glitter sparse, the rain is a few drops sliding down, the palm sways a hair;
 * `unit-video-scenes.spec.js` pins it: between two frames a second apart, the
   mean change is under 3 levels of 255 and under 5% of pixels change by more
   than 12.
 
 ### Cost, and the step-down
 
-The scene is drawn into a buffer of 512 on its long side (384 on mobile) and
-upscaled. That is cheaper, and it is also the look: a real camera focused on a
-face shows the room behind it soft. Its buffers — the scene, its mips, the soft
-mask — are allocated the first time a scene is picked and never for blur or an
-image, the same rule that makes **off** free.
+The scene is drawn into a buffer of at most 512 on its long side (384 on mobile)
+and upscaled. That is cheaper, and it is also the look: a real camera focused on
+a face shows the room behind it soft. Each scene says how much of that it needs
+(`res` in the catalogue) and how often it should be redrawn (`hz`, with the rate
+it falls to under load):
+
+| Scene | `res` | `hz` | Why |
+|---|---|---|---|
+| Office | 0.85 | 12 → 6 | objects marched inside bounding boxes; little moves |
+| Island | 0.80 | 10 → 5 | sea, caustics, clouds, the palm's triangles |
+| Cyber café | 1.00 | 15 → 8 | cheap: planes, a few objects, 2D drops |
+| Mountain | 0.70 | 10 → 5 | two terrain marches (the view and the lake's mirror) |
+| Countryside | 0.80 | 10 → 5 | a terrain march, a tree, a farm, fields |
+
+The ray-marched scenes are the most expensive thing the page draws, and sixty to
+eighty per cent of the pixels of a backdrop nobody is looking at closely is plenty.
+The buffer is reallocated when a pick changes the size, and a new scene starts at
+the top of its own ladder. Its buffers — the scene, its mips, the soft mask — are
+allocated the first time a scene is picked and never for blur or an image, the
+same rule that makes **off** free.
 
 Under load, the existing ladder runs first (segmentation steps down), then the
-scene halves to 10 Hz, and only then does the effect give up.
+scene drops to the lower rate of its own ladder, and only then does the effect
+give up.
 
 Picking a scene compiles its shader, once per scene per camera. The compile goes
 through `KHR_parallel_shader_compile` where the driver has it, and whatever was
@@ -537,7 +619,15 @@ starts from (`THUMB_TIME`), so the chip is the picture you get. All five render
 in one small offscreen WebGL2 context that is released as soon as they are done,
 and only once the chip row is actually on screen (an `IntersectionObserver`):
 every page renders its pickers at load, inside a popover or a settings card that
-may never be opened.
+may never be opened. Even then they wait a beat (`THUMB_DELAY_MS`) — the person
+who opened the row is reaching for a chip — and where the driver cannot compile
+off the page's thread (no `KHR_parallel_shader_compile`: a software GPU) each
+shader is compiled in a task of its own, so five compiles never freeze the page
+together. A *software* GPU (SwiftShader, llvmpipe — `VideoScenes.isSoftwareGL()`
+reads the renderer string) skips the thumbnails altogether and keeps the
+swatches: five ray-marched compiles would cost it seconds of a frozen page for a
+chip nobody was waiting on. A test that wants the thumbnails anyway sets
+`window.__voxalThumbsOnSoftwareGL`.
 
 ### From the image presets
 

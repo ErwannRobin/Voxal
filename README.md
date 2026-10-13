@@ -55,7 +55,7 @@ Instant push-to-talk voice rooms.
 
  - **Video stage** - A real video layout that adapts to the room: tiles that reflow with the split, an overflow ribbon, a self-view you can park in any corner, on-tile camera flip, and an immersive full-screen stage on phones and the native apps
  - **Screen sharing** - Optional per participant (desktop/web; not on native mobile)
- - **Camera backgrounds** - Blur, five animated scenes (office, island, cyber café, mountain, countryside) or your own image. The scenes are generated on your GPU with no assets, and relit to match your own light — your shadow falls on the wall behind you. Segmentation runs locally in WebAssembly on your own GPU — no frame is ever sent anywhere to compute it ([details](docs/video-effects.md))
+ - **Camera backgrounds** - Blur, five animated scenes (office, island, cyber café, mountain, countryside) or your own image. The scenes are real-time 3D worlds — ray-marched landscapes and rooms with a sun, volumetric clouds, mirror water and wet glass — generated on your GPU with no assets, and relit to match your own light — your shadow falls on the wall behind you. Segmentation runs locally in WebAssembly on your own GPU — no frame is ever sent anywhere to compute it ([details](docs/video-effects.md))
  - **Optional SFU for video** - Camera and screen-share can route through Cloudflare's Realtime SFU once a room outgrows a comfortable mesh — the default past two participants, switchable to direct-only in Settings → Advanced. It applies to video only and never touches voice ([details](docs/video-routing.md))
 
 ### Rooms & platforms

@@ -44,8 +44,8 @@ prove — that Tauri really does deliver these events and open these windows.
 ## 🎥 Camera background effects — follow-ups
 
 Shipped: blur, five animated generated scenes (office, island, cyber café,
-mountain, countryside — relit to the subject, with shadow, light wrap and
-motion response), custom image, blur strength, edge sharpness, detection
+mountain, countryside — ray-marched 3D worlds, relit to the subject, with shadow,
+light wrap and motion response), custom image, blur strength, edge sharpness, detection
 accuracy, the low-light adaptation, and the experimental fixed-camera empty-room
 reference. See `docs/video-effects.md`.
 
@@ -59,7 +59,22 @@ Deliberately left for later:
 - **Benchmark a scene.** `video-bench.spec.js` measures `off` and `blur`; an
   animated scene adds GPU work and, more importantly, encoder bits. Add
   `preset:office` (and the busiest scene) to the background sweep and compare
-  outgoing bitrate against `blur` at the same resolution.
+  outgoing bitrate against `blur` at the same resolution. The 3D scenes make this
+  more pressing: their `res` / `hz` budgets (see *Cost, and the step-down* in
+  `docs/video-effects.md`) are measured only on a software GPU, where the mountain
+  is the dearest. Time each on a real low-end Android and an integrated laptop GPU
+  before trusting them, and consider per-device defaults (e.g. a lower `res` on
+  mobile than the global `SCENE_LONG` already gives).
+- **Compile the scenes once, ahead of use, where it is cheap.** A scene shader is a
+  second or more to compile on a software GPU (and long enough on ANGLE over
+  Direct3D to need `KHR_parallel_shader_compile`). Warming the program for the
+  background the user chose last time, while the camera permission prompt is up,
+  would hide it entirely.
+- **A software-GL quality tier.** `WEBGL_debug_renderer_info` names SwiftShader,
+  llvmpipe and the like. A `#define LOWQ` (fewer cloud steps, octaves and frond
+  triangles) for those would let a remote desktop or a locked-down VM keep the
+  effect instead of giving up under load — and would let the test suite run the
+  real shaders faster.
 - **Relight the subject, not just the scene.** The light wrap only adds the
   scene's light at your edge. A full relight (shading the face toward the
   scene's key light) needs normals the selfie model does not give.

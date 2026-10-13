@@ -33,6 +33,9 @@ coverage
 coverage-api
 playwright-report
 
+# Pictures rendered by `make scene-preview`: look at them, do not commit them.
+scene-previews
+
 # Benchmark output: measurements of one machine at one moment, not source.
 # Publish a run by pasting the report into a PR or an issue, never by committing
 # the raw NDJSON — a number with no machine beside it is worse than no number.

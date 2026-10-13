@@ -1063,6 +1063,92 @@ generated, matching the subject's light, with their shadow". Full design in
   slow and sparse, redraw the scene below the camera's rate (20 Hz), and pin it
   in a test (mean change between frames a second apart < 3/255).
 
+## Animated scenes, second generation — real 3D
+
+From "do all we can to make the animated backgrounds more realistic — a showcase of
+3D". The five scenes were redrawn as ray-marched worlds (see *How a scene is built*
+in `docs/video-effects.md`). What bit, beyond the first generation's list:
+
+- **Look at it, don't guess.** Every decision here was made on a picture, and the
+  tool for it is now `make scene-preview` (`scripts/scene-preview.mjs`): it loads
+  `video-scenes.js` into a blank page, compiles one scene with
+  `VideoScenes.compileProgram()`, draws it at a chosen size, time and look, and
+  saves a PNG plus a contact sheet, optionally with an oval stand-in for a head
+  and shoulders so the composition is judged with the middle of the frame covered.
+  Headless Chromium's SwiftShader runs WebGL2 fine. It also gives a per-scene
+  cost, which is what led to `res` and `hz`. Rendering a scene at several looks
+  (`exposure: 0.25` for the evening, `sideMix: 0` for the mirror, 216x384 for an
+  upright phone) caught more bugs than any unit test.
+- **`half` is reserved in GLSL ES 3.00 too** (as are `patch`, `cast`, `sample`,
+  `input`, `output`, `filter`...). It fails with "Illegal use of reserved word" at
+  the first use, which for a parameter name is a long way from where you meant it.
+- **A noise table beats hashing.** Value noise computed by hashing four lattice
+  corners per octave was most of a terrain's cost. One 256x256 `RGBA8` texture with
+  the cell's four corners packed per texel makes it a `texelFetch` and some
+  arithmetic: ~35% faster in SwiftShader and ~40% less to compile. It is generated
+  in JS from a fixed seed — not an asset — and lives on its own texture unit (8)
+  because the pipeline's `texture()` helper binds to *whatever unit is active*;
+  `setUniforms()` puts the active unit back. The unit test that forbade
+  `sampler2D` in a scene meant "no picture", and now says so.
+- **A ray over flat water has a tiny height above the land, so a distance-
+  proportional minimum step is all you get.** Steps of `0.5 * h` collapse when `h`
+  is a few metres, and a march from 4 m to 12 km at 5% per step is ~190 steps, not
+  the 72 budgeted. The bad failures were silent: an exhausted march "hit" at the
+  last `t` and painted the lake bed over the lake (a green band across the water),
+  and a reflection ray that ran out of steps showed the near bank instead of the
+  mountains. Count steps as `ln(range / t0) / ln(1 + grow)`. The fix that paid:
+  evaluate the cheap near field (banks) with a separate short march, and start the
+  expensive one where the land can first appear (a kilometre out).
+- **Skyline anti-aliasing from the closest approach is only as good as the
+  closest approach.** The march samples every few hundred metres, so the minimum
+  of what it saw is noise: horizontal streaks across a summit. Refine around the
+  nearest sample (golden-section, six steps) before using it, and treat a refined
+  value below zero as a *hit*, not as a miss — otherwise `t` is the "no hit"
+  sentinel and the pixel is shaded at -1 km, behind the camera, as pure white.
+- **Domain-repeated objects need two things a plain SDF does not.** A row of
+  books, one box per cell, is wrong for any point nearer a neighbour's book than
+  its own cell's (jagged edges), so ask the cell on either side. And a point in an
+  empty cell can be far from every book it knows about while a book two cells away
+  is thin enough to step over, so the march needs a step cap — but only the march:
+  the cap in `map()` turned every ambient-occlusion and normal sample near the
+  shelf into "something is 2 cm away" and drew a grey halo round the case. Make it
+  a global the march sets and clears.
+- **A wave's phase speed grows with its wavelength, so the small ones cycle
+  fastest — and those are the ones the encoder pays for.** Sea chop at 1.2 m with
+  a physical `c = 1.25*sqrt(lam)` moved a third of a wavelength a second and failed
+  the "moves only a little" test by a factor of two. The motion budget is a
+  property of the picture, not of the physics: scale `c` down ~20x, fade each
+  octave out below a pixel, and keep a palm's sway to a few hundredths of a radian
+  (a dark frond against a bright sky is the highest-contrast thing in the frame).
+- **Shaders compile in the page's thread unless the driver does it elsewhere.**
+  On a software GPU (and any browser without `KHR_parallel_shader_compile`) the
+  floor is about a second per scene and three or four for the big ones. Five of
+  those in one task froze the settings page for fifteen seconds, which broke an
+  unrelated test (the "+" chip's file dialog, whose activation expired). Compile
+  the thumbnails one at a time, each in its own task, and after a short delay from
+  the moment the row appears. Even that was not enough on SwiftShader (each
+  compile still blocks for seconds, and tests click within that window), so a
+  software GPU (`VideoScenes.isSoftwareGL()`) skips the thumbnails and keeps the
+  gradient swatches. Tests that want them set `window.__voxalThumbsOnSoftwareGL`.
+- **A night scene still has to read as a picture.** The café's first lighting was
+  physically plausible and averaged 20/255: dark enough that a webcam encoder
+  would smear it and a face would sit in a black hole. Lifting ambient, pendant
+  and wood albedo to ~28/255 kept the mood and passed the "not a flat field" test.
+- **Lighting in physical-looking units wants an exposure.** A sunlit wall is ~10x a
+  shaded one in a real room, so the shaded part has to sit around 0.1-0.3 in linear
+  light for the sun patch to be several times that. `main()` multiplies by 0.55
+  before the ACES shoulder; without it every outdoor scene was a white-hot haze
+  and every sky a washed-out pale blue (an atmosphere model needs its blue
+  channel's scattering coefficient pushed and its extinction scaled to stand in
+  for the multiple scattering a single-scattering sum leaves out).
+- **Environment (cloud container only):** the installed `@playwright/test` expected
+  chromium revision 1243 and `/opt/pw-browsers` held 1194. Point
+  `PLAYWRIGHT_BROWSERS_PATH` at a scratch directory containing
+  `chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell`
+  (a symlink to the 1194 `headless_shell`) and the same for `chromium-1243/`, and
+  the suite runs. A standalone script can simply pass
+  `executablePath: '/opt/pw-browsers/chromium'`.
+
 ## Detection controls — edge sharpness, inference rate, low light
 
 Follow-up to the section below, from "can we control the sharpness and accuracy
