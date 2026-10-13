@@ -1096,7 +1096,7 @@ test.describe('the chat as a column of the room', () => {
     const seen = await page.evaluate(() => {
       // Stand in for a live camera: updateVideoStage() publishes this class, and
       // applyChatDock() is what reads it.
-      document.body.classList.add('video-stage');
+      document.body.classList.add('video-stage', 'video-stage-desktop');
       applyChatDock();
       const alreadyOpen = chatPanelOpen();
       toggleChatPanel(true);
@@ -1133,7 +1133,7 @@ test.describe('the chat as a column of the room', () => {
       // `video-stage` stands in for a live camera. It has to be re-asserted at
       // every measurement: the viewport change queues a rAF in which
       // updateVideoStage() strips it again, there being no real tile behind it.
-      if (wantDocked) { document.body.classList.add('video-stage'); applyChatDock(); }
+      if (wantDocked) { document.body.classList.add('video-stage', 'video-stage-desktop'); applyChatDock(); }
       return {
         docked: document.body.classList.contains('chat-docked'),
         seam: Math.round(

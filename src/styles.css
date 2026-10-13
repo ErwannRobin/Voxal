@@ -1448,7 +1448,7 @@ kbd {
    `body.video-stage-immersive` narrows that to the phone shape below. */
 
 @media (min-width: 861px) {
-  html.is-web body.video-stage:not(.embed-tiny) #screen-room.active {
+  html.is-web body.video-stage-desktop:not(.embed-tiny) #screen-room.active {
     display: grid;
     grid-template-columns: 320px minmax(0, 1fr);   /* voice rail | stage */
     /* The consent banner gets a row of its own, exactly as in the landscape
@@ -1469,11 +1469,11 @@ kbd {
     border-left: none;
     border-right: none;
   }
-  html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-header { grid-area: header; }
-  html.is-web body.video-stage:not(.embed-tiny) #screen-room #room-size-warning { grid-area: warning; }
-  html.is-web body.video-stage:not(.embed-tiny) #screen-room #debug-consent-banner { grid-area: consent; }
+  html.is-web body.video-stage-desktop:not(.embed-tiny) #screen-room .room-header { grid-area: header; }
+  html.is-web body.video-stage-desktop:not(.embed-tiny) #screen-room #room-size-warning { grid-area: warning; }
+  html.is-web body.video-stage-desktop:not(.embed-tiny) #screen-room #debug-consent-banner { grid-area: consent; }
 
-  html.is-web body.video-stage:not(.embed-tiny) #screen-room #video-stage {
+  html.is-web body.video-stage-desktop:not(.embed-tiny) #screen-room #video-stage {
     grid-area: stage;
     display: flex;
     flex-direction: column;
@@ -1485,7 +1485,7 @@ kbd {
 
   /* The voice UI keeps its own markup and behaviour — it is simply stacked
      into the right rail: roster on top, PTT + controls beneath it. */
-  html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-peers-panel {
+  html.is-web body.video-stage-desktop:not(.embed-tiny) #screen-room .room-peers-panel {
     grid-area: rail;
     align-self: start;
     min-height: 0;
@@ -1493,7 +1493,7 @@ kbd {
     padding-bottom: 0;
     overflow: hidden;
   }
-  html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-bottom-bar {
+  html.is-web body.video-stage-desktop:not(.embed-tiny) #screen-room .room-bottom-bar {
     grid-area: rail;
     align-self: end;
     position: static;
@@ -1506,7 +1506,7 @@ kbd {
     gap: 10px;
     min-height: 0;
   }
-  html.is-web body.video-stage:not(.embed-tiny) #screen-room .room-bottom-bar .room-controls { margin-top: 0; }
+  html.is-web body.video-stage-desktop:not(.embed-tiny) #screen-room .room-bottom-bar .room-controls { margin-top: 0; }
 }
 
 /* ── Floating controls (phones) ───────────────────────────────────

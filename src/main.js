@@ -12503,7 +12503,21 @@ function cssEscapeAttr(value) {
 // live. Below the breakpoint it reads 'immersive', exactly as narrow web does.
 var VIDEO_STAGE_MIN_WIDTH = 861;
 
+// A phone held sideways: touch device, and short enough for the landscape
+// regime (same 600px as the stylesheet's landscape reflow). A big phone is
+// 860-930px wide in that pose, so width alone read it as a desktop window.
+var VIDEO_STAGE_PHONE_MAX_HEIGHT = 600;
+
+function videoStageSidewaysPhone() {
+  if (!IS_MOBILE_DEVICE) return false;
+  if (typeof window.matchMedia === 'function') {
+    return window.matchMedia('(max-height: ' + VIDEO_STAGE_PHONE_MAX_HEIGHT + 'px)').matches;
+  }
+  return window.innerHeight <= VIDEO_STAGE_PHONE_MAX_HEIGHT;
+}
+
 function videoStageWideEnough() {
+  if (videoStageSidewaysPhone()) return false;
   if (typeof window.matchMedia === 'function') {
     return window.matchMedia('(min-width: ' + VIDEO_STAGE_MIN_WIDTH + 'px)').matches;
   }
