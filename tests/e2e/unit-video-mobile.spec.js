@@ -1030,6 +1030,106 @@ test.describe('the immersive stage held sideways', () => {
   });
 });
 
+// Turning the phone must give the SAME stage, re-proportioned — not a different
+// one. A big phone is 860-930px wide on its side, which used to cross the desktop
+// stage's width breakpoint: the picture shrank into a window-sized "desktop"
+// grid with a rail beside it and the tiles came out as portrait slivers. Width
+// alone says nothing about whether this is a window or a phone held sideways.
+// Both sizes here are above 861px wide on purpose; the 844px LANDSCAPE above
+// sits under the breakpoint and so never exercised this.
+test.describe('turning a big phone with the camera on', () => {
+  const PORTRAIT_BIG = { width: 430, height: 932 };
+  const SIDEWAYS_BIG = { width: 932, height: 430 };
+
+  test.use({ viewport: PORTRAIT_BIG });
+  test.beforeEach(async ({ page }) => {
+    await fakeMobileUA(page);
+    await page.goto('/');
+    await enterRoom(page, {
+      knownPeerIds: ['p1', 'p2'],
+      connections: [
+        { id: 'p1', pseudo: 'Alice', open: true, videoActive: true },
+        { id: 'p2', pseudo: 'Bob', open: true, videoActive: true },
+      ],
+    });
+  });
+
+  const shape = (page) => page.evaluate(() => {
+    const stage = document.getElementById('video-stage').getBoundingClientRect();
+    const tiles = [...document.querySelectorAll('#video-stage-grid .video-tile')]
+      .map((t) => t.getBoundingClientRect());
+    return {
+      immersive: document.body.classList.contains('video-stage-immersive'),
+      desktop: document.body.classList.contains('video-stage-desktop'),
+      stage: [Math.round(stage.left), Math.round(stage.top),
+        Math.round(stage.width), Math.round(stage.height)],
+      window: [window.innerWidth, window.innerHeight],
+      tiles: tiles.map((r) => [Math.round(r.width), Math.round(r.height)]),
+    };
+  });
+
+  test('sideways it is still the immersive stage, edge to edge', async ({ page }) => {
+    expect(await shape(page)).toMatchObject({ immersive: true, desktop: false });
+
+    await page.setViewportSize(SIDEWAYS_BIG);
+    // The relayout is rAF-driven (and settles at 150/400 ms): poll, don't sleep.
+    // The stage rect follows the window at once, but the tiles only move when
+    // the grid is laid out again — so wait for them too, or this reads the
+    // upright placement (two rows, half the height each) on a slow runner.
+    await expect.poll(() => shape(page)).toMatchObject({
+      immersive: true,
+      desktop: false,
+      stage: [0, 0, 932, 430],
+    });
+    // Two faces side by side, each the full height of the window — what the
+    // sliver (273x364 inside a rail layout) was not.
+    await expect.poll(async () => (await shape(page)).tiles.map(([, h]) => h))
+      .toEqual([430, 430]);
+    const { tiles, window: win } = await shape(page);
+    expect(tiles).toHaveLength(2);
+    for (const [w, h] of tiles) {
+      expect(h).toBe(win[1]);
+      expect(w).toBeGreaterThan(win[0] / 2 - 4);
+    }
+  });
+
+  test('and back upright it stacks again', async ({ page }) => {
+    await page.setViewportSize(SIDEWAYS_BIG);
+    await expect.poll(() => shape(page)).toMatchObject({ stage: [0, 0, 932, 430] });
+    await page.setViewportSize(PORTRAIT_BIG);
+    await expect.poll(() => shape(page)).toMatchObject({
+      immersive: true,
+      stage: [0, 0, 430, 932],
+    });
+    // Same as above: the tiles follow the grid's own relayout, not the stage rect.
+    await expect.poll(async () => (await shape(page)).tiles.map(([w]) => w))
+      .toEqual([430, 430]);
+    const { tiles } = await shape(page);
+    for (const [w, h] of tiles) {
+      expect(w).toBe(430);
+      expect(h).toBeGreaterThan(400);
+    }
+  });
+
+  // The other half of the rule: a real desktop window of the same width, and a
+  // tablet-sized touch screen that is tall, still get the desktop stage.
+  test('a wide, short window that is not a phone keeps the desktop stage', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'userAgent', {
+        get: () => 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+        configurable: true,
+      });
+    });
+    await page.reload();
+    await enterRoom(page, {
+      knownPeerIds: ['p1'],
+      connections: [{ id: 'p1', pseudo: 'Alice', open: true, videoActive: true }],
+    });
+    await page.setViewportSize(SIDEWAYS_BIG);
+    await expect.poll(() => shape(page)).toMatchObject({ desktop: true, immersive: false });
+  });
+});
+
 // A phone has no Space bar to hold and no shortcut to edit, and "installed to
 // the home screen" is the plain web build — so the hint has to follow the
 // DEVICE, not the wrapper it happens to be running in.

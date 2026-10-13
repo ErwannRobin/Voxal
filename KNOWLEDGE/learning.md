@@ -382,6 +382,7 @@ Design: `docs/video-effects.md`. Preview any scene/look headlessly with `make sc
 
 ## Rotation and sliding panels
 
+- **Width alone does not say "desktop window".** A big phone sideways is 860-930px wide, so `min-width: 861px` flipped `videoStageMode()` to `'desktop'` on rotation (rail layout, portrait-sliver tiles) — the "proportions broken after portrait→landscape" bug, which came back after the rotation-timing fix because that fix was about *when* we measure, not *which stage*. `videoStageWideEnough()` is false for `IS_MOBILE_DEVICE` + `max-height: 600px`. The desktop grid CSS is keyed on `body.video-stage-desktop` (not `body.video-stage`), so JS and CSS cannot disagree. Test with a viewport >861px wide AND a mobile UA (`unit-video-mobile.spec.js`, "turning a big phone"); 844px-wide fixtures never cross the breakpoint. A test that fakes a live desktop stage must add `video-stage-desktop` too.
 - On iOS `resize` fires before layout settles (stale `innerWidth`, media queries, safe-area insets). `scheduleStageRelayout()` is also driven by `orientationchange`, `screen.orientation` `change` and `visualViewport` `resize`, with settle passes at 150 and 400 ms. Not verified on a real device.
 - Measure a sliding panel with its layout size (`offsetHeight`), not `getBoundingClientRect()` (the header enters with `translateY(-100%)`, so `--stage-inset-top` came out 0).
 
