@@ -1073,6 +1073,9 @@ test.describe('turning a big phone with the camera on', () => {
 
     await page.setViewportSize(SIDEWAYS_BIG);
     // The relayout is rAF-driven (and settles at 150/400 ms): poll, don't sleep.
+    // The stage rect follows the window at once, but the tiles only move when
+    // the grid is laid out again — so wait for them too, or this reads the
+    // upright placement (two rows, half the height each) on a slow runner.
     await expect.poll(() => shape(page)).toMatchObject({
       immersive: true,
       desktop: false,
@@ -1080,6 +1083,8 @@ test.describe('turning a big phone with the camera on', () => {
     });
     // Two faces side by side, each the full height of the window — what the
     // sliver (273x364 inside a rail layout) was not.
+    await expect.poll(async () => (await shape(page)).tiles.map(([, h]) => h))
+      .toEqual([430, 430]);
     const { tiles, window: win } = await shape(page);
     expect(tiles).toHaveLength(2);
     for (const [w, h] of tiles) {
@@ -1096,6 +1101,9 @@ test.describe('turning a big phone with the camera on', () => {
       immersive: true,
       stage: [0, 0, 430, 932],
     });
+    // Same as above: the tiles follow the grid's own relayout, not the stage rect.
+    await expect.poll(async () => (await shape(page)).tiles.map(([w]) => w))
+      .toEqual([430, 430]);
     const { tiles } = await shape(page);
     for (const [w, h] of tiles) {
       expect(w).toBe(430);
