@@ -11,6 +11,7 @@ The `KNOWLEDGE/` folder at the root of the repo is a persistent knowledge base. 
 | File | Purpose |
 |---|---|
 | `KNOWLEDGE/learning.md` | Facts and gotchas discovered during development. Read on every launch. Append new learnings as they are discovered. |
+| `KNOWLEDGE/archive/learning-full.md` | Uncompressed history behind `learning.md`. Archive only — do **not** read on launch or append to it; consult it only for the detailed reasoning behind a rule. |
 | `KNOWLEDGE/todos.md` | Long-term backlog of features and investigations. Update when items are completed or new ones are added. |
 | `KNOWLEDGE/universal-links-aasa.md` | Step-by-step guide to set up Universal Links (AASA) for clickable room share links. |
 

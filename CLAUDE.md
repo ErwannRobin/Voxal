@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## KNOWLEDGE folder
 
-Read `KNOWLEDGE/learning.md` at the start of every session — it contains non-obvious platform gotchas for iOS, Android, Tauri, and web that are not derivable from the code alone. Append new learnings as they are discovered. Update `KNOWLEDGE/todos.md` when items are completed or new ones identified.
+Read `KNOWLEDGE/learning.md` at the start of every session — it contains non-obvious platform gotchas for iOS, Android, Tauri, and web that are not derivable from the code alone. Append new learnings as they are discovered (one rule plus the reason it bites — keep it condensed). Update `KNOWLEDGE/todos.md` when items are completed or new ones identified.
+
+`KNOWLEDGE/archive/learning-full.md` is the uncompressed history that `learning.md` was condensed from. It is an archive: **do not read it at session start** and do not append to it; open it (or `grep` it) only when you need the detailed reasoning or measurements behind a rule in `learning.md`.
 
 ## Commands
 
