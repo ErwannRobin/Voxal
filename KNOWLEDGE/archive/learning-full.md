@@ -1,0 +1,2032 @@
+# Voxal — Learnings
+
+Things discovered during development that aren't obvious from the code.
+Copilot should read this file at the start of every session.
+
+---
+
+## iOS / Capacitor
+
+- **`navigator.clipboard.writeText`** fails silently in WKWebView (Capacitor iOS). Always use `fallbackCopy()` (textarea + `execCommand('copy')`) as a fallback.
+- **`navigator.share()` with custom scheme URLs** (`voxal://`) — iOS rejects `url:` field for non-http(s) schemes. Pass the deep link in the `text:` field instead. WhatsApp won't make it clickable; Universal Links (HTTPS) are required for that.
+- **`navigator.share()` logs** "Unable to hide query parameters from script (missing data)" — harmless WebKit internal privacy warning, not an error.
+- **`position: fixed`** elements are NOT clipped by `overflow: hidden` ancestors in standard CSS, but the dot visibility issue on desktop was caused by the element being too small (single `●` glyph at 9px). Use a CSS circle (`width`/`height` + `background`) instead of a text character.
+- **Voxal Connect on the web must come back over https, never `voxal://`.** A custom scheme is how the OS routes back into a *native* app; handing one to a browser dead-ends at "no application is configured to open this URL" and the user is never signed in. Web now sends `responseMode=redirect` + `redirect_uri=<origin>/auth/callback` and the server 302s back there; native keeps `responseMode=deep-link`. The server (`ErwannRobin/voxal-presence`, `src/pages/ConnectPage.tsx`) defaults to the deep link when neither param is present, so already-shipped native builds keep working.
+  - **`redirect_uri` must be validated against an ORIGIN allowlist, never a string prefix** — `https://ptt.voxal.app.evil.com` passes a `startsWith` check and is a different site. Reflecting an unlisted origin is an open redirect that hands out a working API token. On a bad `redirect_uri` the server **errors rather than falling back** to the deep link: falling back would dead-end a web user at the OS dialog, i.e. reintroduce the bug as a mystery.
+  - **The popup + `postMessage` design could never have worked**, for two independent reasons. `vercel.json` sets `Cross-Origin-Opener-Policy: same-origin` (needed for SharedArrayBuffer/RNNoise), which severs `window.opener` for cross-origin popups; and the server passed `window.location.origin` as `postMessage`'s `targetOrigin`, which is the *auth* origin, not the opener's — so the browser would refuse delivery regardless. Same-tab redirect avoids both.
+  - **Strip the token from the URL immediately** (`history.replaceState`) once consumed. Left in the address bar it leaks through history, screenshots and the `Referer` header on the next navigation. The rejected-state path scrubs too.
+  - A same-tab redirect tears down an active call, so Connect is blocked while `inRoom`.
+  - **`/auth/callback` must be a REAL FILE (`src/auth/callback.html`), not a `vercel.json` rewrite.** The first attempt rewrote it to `/index.html` and got a hard **404 in production**: with `cleanUrls: true` Vercel redirects `/index.html` → `/`, so a rewrite whose destination is `/index.html` never resolves. A file is served at the extensionless path by `cleanUrls` itself, needs no rewrite, and works on any static host (`npx serve`, Netlify, GitHub Pages) — which matters because `docs/deployment.md` tells self-hosters to deploy `dist/` anywhere. The file only does `location.replace('/' + location.search)`; all token handling stays in `main.js`, so there is one implementation to keep correct.
+- **`navigator.onLine`** is `true` even when there is no TURN configured, so it can never stand in for relay availability. **Do NOT use `METERED_STATUS_STORE_KEY` for this** (the old advice, now wrong): only the *org* path and the manual *Test TURN* button ever write it, so it was blank for anonymous users with a perfectly working relay — that is exactly the "TURN not configured" bug — and being persisted it also kept claiming `ok` long after an org credential died. The badge now derives from `_lastIceResolution`, recorded by `noteIceResolution()` at every return point of `fetchIceServers()`, so it reflects what was actually resolved *this session*.
+- **`PTChannelManager`** (PushToTalkUI) manages the AVAudioSession exclusively. Do NOT call `setActive(true)` on app launch — only inside `didActivateAudioSession` / `didDeactivateAudioSession` callbacks. Also, do NOT call `setCategory` inside `didActivate` — it disrupts WebRTC's existing audio pipeline. Just call `setActive(true)`.
+- **WKWebView JS is suspended in background** even with `audio`/`voip`/`push-to-talk` background modes. The WebContent process (which runs JS) is independent from the main app process. Solution: keep an active Web Audio API graph running (`OscillatorNode → GainNode(0) → destination`) while in a room — iOS's `audio` background mode protects the WebContent process when audio is actively flowing. This makes `evaluateJavaScript` work in background. Route mic through a `GainNode` instead of using `audioTrack.enabled`, so Swift can control PTT gain without JS being needed for the toggle.
+- **AudioContext may be suspended in background** by WebKit even if the process is alive. In `didBeginTransmittingFrom`, call `audioCtx.resume().then(function(){ gainNode.gain.value=1 })` to ensure the context is running before setting gain. Direct `gain.value=1` on a suspended context has no effect.
+- **PTChannelManager async init race**: `PTChannelManager.channelManager(delegate:restorationDelegate:)` is async. If `join()` is called before it completes, the channel is never joined and the Dynamic Island button press silently does nothing. Fix: store `CheckedContinuation` objects and signal them once the manager is ready; `join()` awaits them with a 5s timeout.
+- **`call.resolve()` / `call.reject()`** in Capacitor plugins must be called on the main thread when inside a Swift `Task {}`. Use `await MainActor.run { call.resolve() }` to avoid `unsafeForcedSync` warnings.
+- **Universal Links cold-launch**: iOS delivers the `NSUserActivity` via `scene(_:willConnectTo:options:connectionOptions.userActivities)`, NOT `scene(_:continue:)`. Without handling `willConnectTo`, cold-launch Universal Links are silently dropped. Warm-launch (app already running) correctly uses `scene(_:continue:)`.
+- **`voxal://` custom scheme** is registered in `ios/App/App/Info.plist` under `CFBundleURLSchemes`. Cold-launch deep links come via `App.getLaunchUrl()`, runtime links via `appUrlOpen` event.
+- **RNNoise crackle/sizzle was NEVER a mobile headroom problem — it was a phase bug in the worklet's output buffer, and it hit every device.** (Superseded diagnosis, kept because the wrong conclusion shaped the code for a while: "iOS/Android WebViews can't feed the worklet reliably → underruns → sizzle; laptops have the headroom and sound clean.") The real cause: RNNoise emits **480**-sample frames, `process()` must deliver **128**-sample blocks, and 480 is not a multiple of 128, so production and consumption are permanently out of phase *even though their long-run rates match exactly*. The original `rnnoise-processor.js` had no FIFO — it reset the read pointer (`_outputPos = 0`, `_outputReady = 480`) on every frame, started draining the instant a frame was produced, and wrote `output[i] = 0` the moment it ran dry. Simulated against a real 128-sample block clock: **5.07% of the outgoing audio was hard silence, in 75 dropouts per second** (~800 over 10.6s), with samples produced ≈ samples consumed. Pure arithmetic ⇒ identical on every device, and audible only to the *remote* peer — which is why it survived so long and why "whatever the source device" was the giveaway. Fix: a ring FIFO (`RING_SIZE = FRAME*4`) that frames *append* to, plus a **`PREFILL = FRAME*2`** pre-fill before playout starts. Measured: 1-frame pre-fill → 0.013% zero-fill / 2 startup dropouts; **2-frame → 0.000% / 0 dropouts**, for 20 ms of added latency (invisible on PTT; 1 frame leaves no headroom for real worklet jitter). On overflow drop the **oldest** sample; never reset the read pointer — that is the original bug. On underrun, re-prime rather than trickling out starved blocks. Pinned by `tests/e2e/unit-rnnoise-worklet.spec.js`, which loads the real worklet file with only the WASM surface stubbed (3 of its 6 cases fail against the pre-fix file).
+- **`getNoiseSuppressionMode()` still defaults to `'browser'` on `IS_MOBILE_DEVICE`** — any phone/tablet, native app **or** mobile browser. Detection: `IS_NATIVE_MOBILE || /Mobi|Android|iPhone|iPad|iPod/i.test(UA) || (maxTouchPoints>1 && /Mac/.test(platform))` — the last clause catches iPadOS Safari's desktop-macOS UA. **That default was a workaround for the buffer bug above and is now worth re-testing on a real device**; if mobile is clean, RNNoise can go back to being the default everywhere. The Settings "Standard" option is the OS path (labelled "System built-in suppression").
+- **Pin the worklet node to mono.** `AudioWorkletNode`'s default `channelCountMode: 'max'` lets a stereo microphone through as two channels while the processor only ever reads `input[0]` — the right channel is dropped silently. Pass `channelCount: 1, channelCountMode: 'explicit'`. Likewise `MediaStreamAudioDestinationNode` defaults to **2** channels and would upmix the mono worklet output back to stereo for nothing (`opusSdpTransform` forces `stereo=0` downstream anyway).
+- **`_cleanup()` in the worklet is reachable before `_initWasm()` resolves** (the node can be torn down while the WASM module is still compiling), so it must not assume the exports exist — a bare `this._rnnoise_destroy(...)` throws inside the port handler and leaves the processor alive. `_initWasm` needs the mirror guard: re-check `this._destroyed` after the `await`, or it allocates state that nothing will ever free.
+
+## macOS / Tauri
+
+- **`make dev`** (`npx tauri dev`) does NOT register the `voxal://` URL scheme. Run `make build-debug` once and open the `.app` bundle to register it. The registration persists while switching back to `make dev`.
+- **`src/build-info.js`** (gitignored, stamped with real commit + timestamp) used to be web-only and deleted before every `cap-sync`. It's now regenerated by `gen-build-info` before every native build too (`build`/`build-debug`/`build-signed`/`cap-sync`), so About/Settings can show the real build date + commit hash on desktop and mobile. `make dev` does NOT regenerate it — a stale file from a prior `make build` will show in dev mode until the next real build.
+- **Global PTT shortcut default** is `Shift+Space` (changed from `Ctrl+Backquote`).
+- **Device labels in `settings.html` (separate Tauri WebView)** can stay generic (`Microphone 1`, `Camera 1`) until that window itself gets media permission. A one-time `getUserMedia` probe in preferences unlocks real labels for `enumerateDevices()`.
+  - **…but that probe MUST NOT run during a call — it was killing live calls.** Preferences is a *separate WebView*, and a `getUserMedia` there reconfigures the shared macOS capture session; stopping the probe tracks then tears it down, taking the **main window's live mic *and* camera** with it. Symptom: opening Preferences mid-call instantly dropped both audio and video, with nothing in the signaling layer to explain it. The probe fired unconditionally from `refreshMediaDeviceSelectors()` at window load, so simply *opening* the window was enough. Two guards now: skip entirely while `localStorage['room-active']` is set (published by `publishRoomActive()` in `main.js` at every join/leave), and request only the device *kinds* whose labels are actually missing — the old `{audio:true, video:true}` lit the camera to fix a microphone name. When skipped it does **not** set `_mediaLabelProbeTried`, so it retries once the room ends (a `storage` listener on `room-active` re-runs it).
+  - **`room-active` is cleared at `main.js` load, not trusted.** The main window is its only writer, so a value still present at startup is leftover from a crash or a mid-call reload. Getting this wrong permissively drops a call; restrictively it costs generic device names. Clear it.
+- **Desk View / virtual cameras** can render incorrectly (split frame) when we force fixed camera constraints (`width/height` ideals). Prefer selecting by `deviceId` only and let the OS pick the native profile.
+
+## Android / Capacitor
+
+- **Host connection check gotcha**: host peers do not have a `connections.get(roomCode)` DataConnection entry to themselves. Running host-connection liveness checks unconditionally (host + non-host) triggers false host-migration on resume/foreground.
+- **Host migration race**: stale `close` events from the dead host can fire after a new host is elected. Guard `initiateHostMigration(...)` with the specific disconnected host id, and preserve existing `media` links when a reconnected joiner replaces only its `data` channel.
+- **Host migration timing**: the elected host can receive incoming `DataConnection`s before it has locally flipped `isHost = true`. Non-host peers should accept those migration-time joiner connections when they are the smaller peer ID, and `MediaConnection.close` handlers must not tear down an otherwise healthy `data` channel for that peer.
+- **Host election source of truth**: elect the next host from a stable membership set updated by `peer-list` / `peer-joined` / `peer-left`, not from `connections.keys()`. Live media/data links can disappear transiently and cause split-brain if they drive election.
+- **Host migration: retry before re-electing**: when `connectToNewHost()` fails to open a DataConnection, do NOT immediately trigger `initiateHostMigration()` (which forgets the elected host and self-promotes). Instead, retry with a generation counter to discard stale events. Only re-elect after exhausting retries.
+- **Old room codes should stay joinable**: any peer still in the room can accept a misdirected late joiner and send a `redirect` message to the current host. Only the deputy should auto-promote on incoming joiners when the current host connection is actually gone.
+- **Heartbeat is bidirectional**: the host broadcasts periodic heartbeats so non-host peers can detect a dead host, and non-host peers send heartbeats back so the host can evict stale peer connections. PeerJS may not emit prompt `close` events for silent disconnects.
+- **Freeze room membership during host migration**: when the host dies, snapshot the remaining peers, keep placeholders/aliases for that frozen set through handoff, and only prune peers that still have not reattached after a settle timeout. Do not let the first post-migration `peer-list` immediately shrink the logical room.
+- **`peer-list` must refresh aliases even for peers with live media**: after host migration, some peers are already connected by `MediaConnection`. Do not skip pseudo updates just because `prev.media` exists, or names stay stale until another rename event arrives.
+- **Peer list reset during migration**: non-host peers often track other members with media-only connections. `MediaConnection.close` must keep a placeholder entry for any peer still present in `knownPeerIds`, or host migration will wipe the visible peer list until everyone reconnects.
+- **Duplicate joiner DataConnections**: the host must replace duplicate `DataConnection`s from the same peer and ignore stale callbacks. Otherwise an old connection's `close` handler can remove the new one and re-broadcast `peer-joined` / `peer-left` incorrectly.
+- **Duplicate reconnect ordering matters**: when replacing a peer's `DataConnection`, store the new connection in `connections` first, then close the old one. Closing the old connection first lets a synchronous stale `close` handler think it is still current and evict the peer.
+- **`peer-unavailable` during room runtime is often non-fatal**: after joining, PeerJS can emit `Could not connect to peer ...` for a side `MediaConnection` to a non-host peer that has gone stale or is reconnecting. Do not route those through the global fatal `showError(...)` path once `inRoom` is true; warn and let host reconciliation / later retries fix the mesh.
+- **A dead host is reported more than once, and the extra reports outlive the join**: the broker queues every signalling message sent to a peer that is not there and answers each one with its own `EXPIRE`, so `peer.on('error')` fires `peer-unavailable` several times for a single `peer.connect()`. The first one rejects the join and the caller falls back to `createRoom()`; the repeats land while that fallback is still awaiting `fetchIceServers()`, i.e. with `inRoom` still `false` — which is exactly the case the rule above does *not* cover, so they used to reach `showError()` and put "Room not found or host is unreachable" on screen for a room that then opened perfectly. This is what a user joining an empty named room saw. Two halves to the fix: `joinRoom()` captures its own `Peer` (`joinPeer`) and drops any settled-phase error once `peer` is no longer that object, and every caller that falls back (`joinChannel`'s `recoverOrCreate`, `joinOrCreateByChannelName`, `attemptRejoin`) calls `discardJoinPeer()` — which `createRoom()` also does defensively, since a failed join otherwise leaves a second `Peer` holding a broker socket, an id the broker still hands out, and a live `peer.on('connection')` that would accept a joiner into a room nobody is in.
+- **A named code must never reach `joinRoom()` directly**: `joinRoom()` resolves a name to whatever host the lobby last published and then *fails* if that host is gone — it has no claim-the-slot fallback, which is `joinOrCreateByChannelName()`'s job. Every entry point therefore dispatches on `UUID_RE.test(code)`. The invite flow had two halves and only one of them did: `startInviteRoomJoin()` dispatched, but `_tryNativeAppThenJoin()`'s "the native app never opened" fallback called `joinRoom()` flat. (The iframe `join` command is deliberately not in this list — `docs/iframe-embed.md` defines its `roomCode` as a peer id.)
+- **Authoritative `peer-list` on duplicate reconnect**: when the host replaces a duplicate joiner connection, it should broadcast a fresh `peer-list` to all peers, and clients should remove peers omitted from that list to clear stale room entries.
+- **Peer rename convergence should not rely only on `pseudo-assigned`**: packet ordering/transient signaling issues can leave a joiner with a stale local name. Include the receiver’s canonical `selfPseudo`/`selfPseudoColor` in host `peer-list` payloads and re-apply it client-side so duplicate names self-heal.
+- **Host migration is "rejoin the room with the new host"**: a single `connectToHost(hostId, { mode: 'initial' | 'migration' })` primitive handles both flows. Migration success is defined as **the new host's first authoritative `peer-list` arriving** — not the DataConnection opening. A `roomState` machine (`idle`/`connecting`/`connected`/`migrating`) makes the trigger idempotent. Failed candidates are added to `_migrationExcluded` so re-election skips them. Audio MediaConnections to non-host peers are never touched during migration; only the old host's `data` and `media` are torn down.
+- **`connectToHost(..., { mode: 'initial' })` must not require `inRoom`**: first-time joins run before `finishJoin()` flips `inRoom = true`. Keep the `inRoom` guard for migration/reconnect paths only, or peers can connect to PeerJS but never actually join a host-created room.
+- **Split brain can start from asymmetric `peer-left` delivery before host death**: one peer may process a final host-relayed `peer-left` while another does not, so `knownPeerIds` diverges just before election. Fix by basing migration election on the last authoritative host `peer-list` snapshot, not the live incrementally mutated roster.
+- **Local election remained unstable even with authoritative snapshots**: different peers can still have different last host `peer-list` snapshots when the host dies. The current mitigation is to have the host publish a sticky successor chain (`deputyId`, `successorIds`) in every `peer-list` and heartbeat, and have all migration / self-promotion decisions follow that chain instead of recomputing locally from membership.
+- **Split-brain root cause — `broadcastHostPeerLists()` missing on new peer join**: when a **new** (non-reconnecting) peer joins, the host sends `peer-joined` (no `successorIds`) to existing peers but never called `broadcastHostPeerLists()`. Reconnecting peers triggered the broadcast but new joins did not. So existing peers kept stale `authoritativeSuccessorIds` that excluded the new deputy and elected themselves on host death. Fix: always call `broadcastHostPeerLists()` after sending `peer-joined`, for both new and reconnecting peers.
+- **Split-brain root cause — spurious `joiner-data-close` during `leaveRoom()`**: PeerJS fires the `close` event **synchronously** via EventEmitter when `dataConn.close()` is called. `leaveRoom()` sets `inRoom = false` then calls `removePeer()` which calls `conn.data.close()`. The `joiner-data-close` handler fires while `inRoom: false` but `connections` is still populated, so the old `isCurrentPeerDataConnection` guard passed. The handler called `broadcastHostPeerLists()` which pruned half-closed connections and sent surviving peers a corrupted peer-list overwriting their `authoritativeSuccessorIds`. Fix: `isCurrentPeerDataConnection` now returns `false` when `!inRoom`.
+- **Host authority must be based on open signaling links, not remembered peers**: after migration, media-only leftovers can survive in `connections` / `knownPeerIds` long after a peer stopped participating in the current room. The host should publish `peer-list` / successor state only for peers with an open `DataConnection`, and prune host-side ghost peers when becoming host or before broadcasting authoritative room state.
+- **Migration "reconnection dance" (roster flicker) root cause**: `becomeHost()` previously called `pruneHostGhostPeers()` immediately, removing all peers without open DataConnections (which at migration time = everyone, since the new host only had media-connections to them). Fix: on `becomeHost()`, instead of pruning, call `ensurePlaceholdersForKnownPeers()` (add placeholder entries for all known peers) and `startMigrationSettle()`. During the settle window, `buildHostPeerList` uses `knownPeerIds` (not just connected peers) so non-host peers don't see a blank roster. After 8s, `broadcastHostPeerLists()` fires with pruning re-enabled to clean up any peers that never reconnected.
+- **Custom Capacitor Android plugin methods** must use `@PluginMethod` from `com.getcapacitor.PluginMethod`; without it, JS calls (e.g. `window.Capacitor.Plugins.AudioForeground.start()`) are not exposed.
+- **Android 12+ `AppOps` attribution logs** (`attributionTag ... not declared in manifest`) can come from service `getSystemService(...)` calls using the default empty context. Declare a `<attribution>` tag in `AndroidManifest.xml` and use `createAttributionContext(...)` before accessing services like `AudioManager` or `NotificationManager`.
+
+## Device-info diagnostics panel (dev mode)
+
+- **What a browser/WebView can and cannot report** (drives the `collectDeviceInfo()` fallbacks — all probes are best-effort, missing values render as "—"):
+  - **Per-process CPU usage is NOT exposed** to any browser or WebView (web/Tauri/Capacitor alike). There is no API. We show `navigator.hardwareConcurrency` cores instead and mark usage N/A. Never add a busy-loop sampler for this — it would defeat the "no perf impact" requirement.
+  - **Memory**: `performance.memory.usedJSHeapSize` (Chromium only, JS heap ≠ real RSS) for the app; `navigator.deviceMemory` for total (coarse, capped at 8 GB). Neither is real process memory.
+  - **Architecture + OS version** need `navigator.userAgentData.getHighEntropyValues(['architecture','bitness','platformVersion'])` — **async**, Chromium-only, absent on Safari/Firefox. Cache the result (immutable per session). Map `arm/64→arm64`, `x86/64→x64`.
+  - **Laptop vs Desktop is unknowable from the UA.** Heuristic: a device on battery power that is *not charging* is a portable → label "Laptop"; otherwise "Desktop". Needs `navigator.getBattery()` (async, deprecated but works in Chromium; absent in Safari).
+  - **Battery low-power mode and true "background" state are NOT web-exposed.** We report `document.visibilityState === 'hidden'` as a background proxy and leave low-power `null`.
+  - **`navigator.connection`** gives `effectiveType` (caps at `'4g'` — you cannot distinguish 4G from 5G on web), and on desktop Chrome `type` is usually absent (only `effectiveType`). Signal quality is derived from `effectiveType`/`downlink`.
+  - **Mic name/sample-rate/channels** come from the live `audioTrack.getSettings()` + `.label` — read the existing `stream`/`audioTrack`; **never call getUserMedia just to fill the panel** (perf + a spurious permission prompt). Headset detection reads `enumerateDevices()` output labels (needs prior mic permission for labels).
+  - **Real link latency/packet loss** are better measured by the *viewer* from its own `conn.webrtcStats` (RTT/loss the host already polls per peer) than self-reported — the panel merges the peer's self-reported network block with the viewer's WebRTC stats.
+- **Collection is strictly on-demand** (self panel = local; remote = a `device-info-request`/`device-info-response` round-trip the host relays). Nothing is polled or sent in steady state, so zero runtime cost. The host advertises `debugMode` in every `peer-list`/`heartbeat`; non-host peers mirror it into `_hostDebugMode` so the "i" button only shows while the host is actually debugging. Sharing is **opt-in with explicit consent**: `debug-share-device-info` is `accepted` | `declined` | unset (old `true`/`false` migrate to accepted/declined), and `respondToDeviceInfoRequest` replies `declined:true` unless the value is `accepted` — so **nothing is transmitted until the participant accepts**. When a non-host peer is in a room whose host has `debugMode` on and their consent is still `unset`, a warning banner (`#debug-consent-banner`, Accept/Decline) is shown via `updateDebugConsentBanner()` (driven from the `debugMode` change in `handleHostMessage`, `finishJoin`, and `leaveRoom`); Accept/Decline set the consent globally, mirrored by the Settings → Advanced toggle. In the landscape grid the banner occupies a full-width `consent` row at the top (collapses to 0 when hidden).
+- **A flat `max-height: Nvh` on an anchored popover is not a viewport fit** — it caps the height while knowing nothing about *where* the panel was opened, so a 70vh device panel anchored to a roster row two-thirds down a phone screen still runs off the bottom. `_positionAnchoredPopover()` (shared by the device-info and stats popovers) measures the space beside the anchor and sets an inline `max-height` from it, so `overflow-y: auto` actually engages and the panel scrolls instead of overflowing. Two details that matter: when opening **upwards** anchor the `bottom` edge (not `top`), so async content — which this panel is full of — grows *away* from the anchor and can never re-escape the viewport; and flip up only when the space below is genuinely cramped, not merely because the content is tall, or panels jump around as they fill in. Add `overscroll-behavior: contain` too, or scrolling past the end drags the room behind it.
+  - **`position: fixed` popovers must NOT add `window.scrollY`/`scrollX` to `getBoundingClientRect()`.** Fixed coordinates are already viewport-relative, so the scroll offset double-counts and throws the panel off-screen. Both popovers carried this; it was invisible only because the room screen is `height:100vh; overflow:hidden` and never scrolls.
+- **Remote debug logs are a SEPARATE consent from the device-info snapshot, and deliberately so.** A snapshot is one bounded payload the user can reason about ("my OS, my mic, my battery"); a log stream is open-ended and carries whatever the app happens to print. So the `log-session-*` flow does **not** reuse `debug-share-device-info` as an "on" switch: every request raises an explicit per-session prompt (`#log-consent-prompt`) on the peer's own device naming the requester, **nothing is captured or transmitted until Allow is pressed**, and the session auto-expires (`REMOTE_LOG_MAX_MS`, 10 min) with a persistent `#log-share-indicator` banner + Stop button for as long as it runs. The one thing that *is* inherited is refusal: a device whose `deviceInfoConsent()` is `'declined'` is auto-declined without a prompt — someone who already said no is not asked again.
+  - **Hook the console, not `devLog()`.** `devLog` writes to `console.log` anyway, so capturing the console captures it *and* everything the page/PeerJS/the browser prints, plus `window` `error` / `unhandledrejection` — which is the "it just stopped working" evidence a curated log never has. Capturing both sources instead double-reports every `devLog` line.
+  - **The capture must be held off while flushing.** Sending a batch can itself log (PeerJS warns on a closed channel), which re-enters the capture that produced the batch and never settles. `_logCaptureBusy` guards the send; a repeatedly failing send stops the session rather than queueing into the void.
+  - **Backfill from `_devLogBuffer` on grant**, so the log does not start at "now" — by the time someone thinks to ask, the interesting failure is already in the ring buffer. A *re-request* clears the viewer's entries first: the peer replays its buffer, so keeping the old ones shows the overlap twice.
+  - **Viewer state must live outside the popover.** `updatePeerList()` calls `closeDeviceInfoPopover()` routinely, so a stream anchored to the popover would die on the next roster change. Sessions live in `_remoteLogSessions` (peerId → state/entries) and the log itself renders in a fixed `#remote-log-panel`, not inside the popover.
+  - Entries arriving for a peer with no `active` session are **dropped** — a peer cannot push its log at a viewer that never asked, or one that already stopped.
+- **WebKit (Safari + Tauri's WKWebView on macOS, and iOS web) supports NONE of the Chromium-only diagnostics APIs** — `performance.memory`, `navigator.deviceMemory`, `navigator.connection` (Network Information API), `navigator.getBattery()`. On those engines the panel would show almost all "—" (the "can't see anything in Network / memory / battery on the Mac native app" report). Two mitigations:
+  1. **Native Tauri command `get_device_stats`** (`src-tauri/src/lib.rs`) returns what the WebView can't: real **process RSS + total memory (bytes)** and **process + system CPU %** (via `sysinfo`), **battery level/charging** (via `starship-battery`), and — macOS-only, by shelling out to system tools — **connection type** (Wi-Fi/Ethernet via `route -n get default` + `networksetup -getairportnetwork`) and **Low Power Mode** (`pmset -g`). `collectDeviceInfo()` awaits it (`_getNativeDeviceStats()`) and overrides the web values when present. CPU needs two `sysinfo` samples spaced by `MINIMUM_CPU_UPDATE_INTERVAL` (~200 ms), done in `spawn_blocking`; on-demand only, so no steady-state cost. App-defined commands need **no** capability entry in Tauri v2 (only plugin commands do) — mirror `presence_fetch`. `sysinfo`/`starship-battery` add no new *system* libs on any platform (procfs/sysfs/IOKit/Win32); the macOS shell-outs are best-effort (a sandbox denial just yields `None` → "—"), so CI is unaffected.
+  2. **Latency + packet loss come from WebRTC `getStats()`, which works on every engine** — the *viewer* fills them from its own `conn.webrtcStats` for that peer, independent of the peer's self-report. The panel renders the Network section (with link stats) even before/without a peer response, and `showDeviceInfoPopover` collects a fresh sample on open instead of waiting for the 5 s poll. Memory is now **bytes end-to-end** (`_fmtBytes`); `navigator.deviceMemory` GB is converted to bytes so native and web render identically.
+- **Why the Network section looked empty on the Mac even though the main-UI stats worked:** the main-UI WebRTC stats (dot popover / inline badges) are **per-remote-peer** — the dot is only clickable on *other* rows. Clicking "i" on **your own** row has no single peer link, so latency/loss were `null` and (on WebKit) `navigator.connection` is empty too → the whole section read blank. Fix: the **self** panel now passes `_aggregateLinkStats()` (mean RTT + worst packet loss across all `connections[*].webrtcStats`) instead of `null`, so your own row shows real link numbers, and native `net_type`/`low_power` fill Connection/Battery on desktop.
+- **Still genuinely unavailable:** connection *type*/signal on **iOS-web** WebKit (no Network Information API; desktop is now covered natively), input `volume`, and `channelCount` on WebKit `getSettings()` — these stay "—". On *Capacitor native* mobile they could be filled via `@capacitor/device` + `@capacitor/network`, but those plugins aren't installed and adding them needs a native rebuild (not OTA) — deferred.
+
+## Orientation: native portrait-lock + web landscape support
+
+- **Native apps are hard-locked to portrait** (per-platform, no single switch):
+  - **iOS (Capacitor):** `ios/App/App/Info.plist` → `UISupportedInterfaceOrientations` (iPhone) lists *only* `UIInterfaceOrientationPortrait`; `~ipad` keeps `Portrait` + `PortraitUpsideDown`. Capacitor honors the plist directly — no plugin needed.
+  - **Android (Capacitor):** `android:screenOrientation="portrait"` on the `MainActivity` in `AndroidManifest.xml`. Leave the existing `android:configChanges="orientation|…"` — with a locked orientation there's nothing to handle, and removing it is unnecessary.
+- **Web does NOT force portrait — it adapts to landscape instead.** A browser can't truly lock orientation outside fullscreen anyway (`screen.orientation.lock` rejects in a normal tab), and the two hacks both look bad: a "please rotate" overlay is annoying, and **counter-rotating the whole page 90°** (rotate `<body>`, swap `100dvh`/`100dvw`) works visually but its **fatal flaw is that width media queries still see the physical landscape viewport**, so every width breakpoint (`max-width:640px`, `min-width:861px`, …) misfires and responsive components fall back to the wrong layout. Both approaches were tried and rejected. **Instead, make the layout responsive:** on `@media (orientation: landscape) and (max-height: 600px)` reflow Home and Room from the default vertical flex stack into a **full-width two-column CSS grid**:
+  - **Room:** header spans the top; below it a **peers list (2/3)** and the **talk button + controls (always 1/3)** sit side by side. The `.room-bottom-bar` is normally `position:absolute` pinned to the bottom with a 220px reserve on the peers panel; in the grid it becomes `position:static` in the `main` (1/3) area.
+    - **Handedness setting** (`handedness` = `left` | `right`, default `right`) picks which side the talk button is on — set as `data-hand` on `<html>` in the head inline script (no-flash), toggled live from a segmented control in Settings → System (reuses the `.theme-toggle` style; hidden on native via `html.is-native #settings-handedness{display:none}` since landscape is web-only). Right-handed = `grid-template-columns: 2fr 1fr` with areas `"peers main"`; left-handed override flips to `1fr 2fr` / `"main peers"`. The talk button stays the 1/3 column either way.
+  - **Home:** brand | actions, `1fr 1fr`.
+  - **Full width:** `@media (min-width: 640px)` caps `.screen { max-width: 480px }` (the centered desktop column). In landscape you must override it with `max-width: none` (+ drop the side borders) or the "full width" grid stays trapped at 480px. Easy to miss.
+  - **Web only:** scope with `html.is-web` — a class set in the head inline script (`!window.__TAURI__ && !Capacitor.isNativePlatform()`), so the reflow never touches native (which is portrait-locked) or Tauri. Also prefix `body:not(.embed-tiny)` (embeds have their own layout) and target `#screen-<name>.active` (id+`.active`) so an inactive screen stays `display:none` — a plain `#screen-x { display:grid }` would override `.screen{display:none}` and show a hidden screen.
+  - Gate is `max-height:600px` (catches phones ~≤430px tall in landscape *and* short desktop windows) — tall desktop/tablet landscape (>600px) keeps the centered stack, which already has room.
+
+## Web / CSS
+
+## Web / CSS
+
+- **Embedded Voxal video** requires `allow="camera; microphone"` on the embedding `<iframe>`. If Voxal is nested inside other iframes, each ancestor must also delegate camera access.
+- **Pseudo storage scope**: on plain web, store the pseudo in `sessionStorage` so each browser tab can have its own name. On Tauri/Capacitor, keep using `localStorage` so the single app window persists it and the desktop settings window can sync it.
+- **`min-height: 100vh` + `overflow-y: auto`** causes the page to scroll. Use `height: 100vh; overflow: hidden` on `body` and `.screen`, with `flex: 1; overflow-y: auto; min-height: 0` only on the scrollable child.
+- **Settings modal "can't scroll back to the top" on mobile** was the same flexbox trap, one level deeper: `.modal-content` (column, `max-height:100vh`, `overflow:hidden`) → `.modal-body` (`flex:1`) → `.modal-settings-scrollable` (`flex:1; overflow-y:auto`). A flex child's automatic minimum size is `min-content`, so **without `min-height:0` the middle `.modal-body` refuses to shrink below its content height**; when a section expands, `.modal-content` overflows past `100vh`, and since `.modal` centers it (`align-items:center`), the overflow is clipped at **both** top and bottom → the header/top is unreachable. Fix: `min-height:0` on **every** flex ancestor in the scroll chain (`.modal-body` *and* `.modal-settings-scrollable`), not just the innermost. **Chromium (Playwright) does not reproduce this** — its flex `min-height:auto` handling is more forgiving; the bug is WebKit/iOS-specific, so a geometry E2E assertion passes with or without the fix. Guard it by asserting the computed `min-height` instead.
+- **…but `min-height:0` alone was NOT enough — the top was still cut off on mobile.** Second, coupled cause: `.modal-content` used `max-height: 100vh` while `.modal` centers it (`align-items:center`). On mobile browsers **`100vh` is the *large* viewport (address-bar-hidden)**, taller than the visible area, so once a section expands and content grows to `100vh`, vertically centering it pushes the fixed header *above* the visible top — unreachable, because a `position:fixed` overlay doesn't page-scroll. Fix (in the `max-width:640px` block): size the modal to the **dynamic** viewport `height:100dvh` (with a `100vh` fallback line first) and switch `.modal` to `align-items:stretch` so the content is pinned to the top with header/footer flush and only the middle `.modal-settings-scrollable` overflows. Again Chromium can't show the vh/dvh gap (headless has no browser chrome; `dvh==vh`), so guard by asserting computed `align-items:stretch` + that the header/footer rects sit within `innerHeight`. Both halves are needed: `min-height:0` makes the *inner* element the scroller; `dvh`+`stretch` keeps the *outer* modal within the visible viewport.
+- **Toast positioning**: `position: fixed` at the bottom of the viewport (not `position: absolute` inside a screen) — otherwise clipped by `overflow: hidden` on `.screen`.
+- **Copy toast** uses `.visible` class (opacity 1) / no class (opacity 0), not `.hidden`. This avoids a flash of the toast on page load.
+- **Status dot** (`#turn-badge`): `position: fixed` top-right. Use a CSS circle (`width`/`height` + `background-color`) not a text glyph — glyphs are too small and color-dependent.
+- **`white-space: nowrap` alone is not enough** to prevent a popover from stretching — also add `width: max-content`.
+- **`navigator.share()` with both `text` and `url` set to the same invite link** can produce malformed duplicated links in some share targets. For HTTP invite links, share with `url` only.
+- **`navigator.share()` inside an iframe** can throw `NotAllowedError: Permission denied` unless embedding pages explicitly allow web-share. Always keep a copy-to-clipboard fallback for embedded web usage.
+- **iframe postMessage targets should match the embedding parent origin**. Voxal iframe embeds should pass `parentOrigin` when available, and `getAllowedParentOrigin()` can fall back to `document.referrer` for older embeds so `postMessage` doesn't fail on `www.voxal.app` vs `web.voxal.app` mismatches.
+
+- **PushToTalk framework Swift method names** (iOS 16+; verified by compiling against `PushToTalk.framework/Headers/*.h` in the iOS SDK): `channelDescriptor(restoredChannelUUID:)`, `channelManager(_:didJoinChannel:reason:)`, `channelManager(_:didLeaveChannel:reason:)`, `channelManager(_:channelUUID:didBeginTransmittingFrom:)`, `channelManager(_:channelUUID:didEndTransmittingFrom:)`, `channelManager(_:receivedEphemeralPushToken:)`, `incomingPushResult(channelManager:channelUUID:pushPayload:)`, `channelManager(_:didActivate:)`, `channelManager(_:didDeactivate:)`. The PTT button events are `didBeginTransmittingFrom`/`didEndTransmittingFrom`, NOT `didActivate`/`didDeactivate` (those are only audio-session lifecycle). Ignore the `source == .developerRequest` case in the transmit callbacks — it is your own `requestBeginTransmitting`/`stopTransmitting` echoing back.
+- **The ObjC header lies about two selectors**: `PTChannelManagerDelegate.h` declares `didActivateAudioSession:`/`didDeactivateAudioSession:`, but Swift API notes **rename** them to `channelManager(_:didActivate:)`/`channelManager(_:didDeactivate:)`. Using the header spelling fails to compile ("has been renamed to …"). Always trust the compiler over the raw header here.
+- **All of `didJoinChannel`, `didLeaveChannel`, `didBeginTransmittingFrom`, `didEndTransmittingFrom`, `receivedEphemeralPushToken`, `incomingPushResult`, `didActivate`, `didDeactivate` are REQUIRED** protocol methods (only `failedToJoin/Leave/Begin/Stop` are `@optional`). Omitting any one fails conformance → the plugin won't compile. `incomingPushResult` must return a non-nil `PTPushResult` (`.leaveChannel` is a safe no-op when you have no push backend).
+- **`PTChannelManager`/delegate types are iOS 16+, but a Capacitor plugin class must stay available on the iOS 15 deployment target** (Capacitor instantiates it via the ObjC runtime regardless of Swift `@available`). You can't put `@available` on a stored property, so type-erase the manager: store `_channelManager: Any?` + expose an `@available(iOS 16.0, *)` computed `channelManager` accessor. Guard every entry point with `#available`/`@available`.
+- **Voxal PTT model is "always hear others, PTT only gates your mic"** → call `setTransmissionMode(.fullDuplex, …)` in `didJoinChannel` (the framework default is half-duplex, which blocks receive while transmitting). The mic itself is gated in JS via `audioTrack.enabled`; Swift only relays button events and (de)activates the shared `AVAudioSession`.
+- **The PTT framework cannot be exercised in the iOS Simulator** (no PTT hardware/entitlement runtime). `xcodebuild -sdk iphonesimulator … CODE_SIGNING_ALLOWED=NO` verifies the Swift *compiles* against the SDK, but Lock-Screen transmit, receive-after-transmit (does `didDeactivate`'s `setActive(false)` kill WebRTC playback?), and the system UI appearing on join all need a real device.
+- **New Capacitor Swift plugin files** added as `.swift` files inside `ios/App/App/` must be manually registered in `project.pbxproj` (PBXBuildFile, PBXFileReference, PBXGroup, and PBXSourcesBuildPhase). The file existing on disk is not enough — if not in the project file, it is never compiled and `window.Capacitor.Plugins.PluginName` will be `undefined` at runtime.
+
+## Testing
+
+- **An AudioWorklet module can be unit-tested on the main thread.** `rnnoise-processor.js` is not importable (it subclasses `AudioWorkletProcessor` and calls `registerProcessor`, neither of which exists outside the worklet scope), but you can `fetch()` the real file, define both globals, `eval` it, and capture the class from `registerProcessor`. Stub only the WASM surface `_processFrame` reaches for — `_HEAPF32`, `_wasmMemory` (**same `ArrayBuffer`**, or the buffer-detach check re-creates the view), `_wasmInputPtr`/`_wasmOutputPtr`, `_rnnoise_process_frame` — and the FIFO/priming logic under test is the shipped code, not a re-implementation. Feed it 128-sample blocks and count zeros in the output. Deterministic, ~1s, no audio hardware.
+- **~~The RNNoise worklet does NOT initialise under headless Chromium (mesh harness)~~ — wrong conclusion, it WAS the code.** (Superseded: this used to read "confirmed identical on the pre-fix worklet, so it is the harness, not the code.") The real cause: `initRNNoise()` posted a **pre-compiled `WebAssembly.Module`** to the worklet over `node.port.postMessage({ type: 'wasm-module', module })`. Structured-cloning a compiled `Module` across a `MessagePort` into an `AudioWorkletGlobalScope` is not reliably supported — `postMessage` does not throw, `AudioContext.state` reads `'running'`, `addModule()`/`compileStreaming()` both resolve, `onprocessorerror` never fires, but the worklet's `port.onmessage` simply never fires either, so `initRNNoise()` always hits its 5 s timeout and `getMicStream()` silently falls back to the raw stream — reproduced live in a real (non-headless) Chromium build, not just the mesh harness, which is what exposed the wrong diagnosis. **Fix: fetch raw WASM bytes (`fetch(...).arrayBuffer()`), post them as a *transferable* `ArrayBuffer` (`postMessage({type:'wasm-bytes', bytes}, [bytes])`), and compile+instantiate inside the worklet with `WebAssembly.instantiate(bytes, imports)` (returns `{module, instance}`, unlike the Module-argument overload which returns `instance` directly).** Transferable `ArrayBuffer`s have none of the cross-realm structured-clone risk that a compiled `Module` does. ~~**Never assert `stream._rnnoiseOriginal` in a `@mesh` test** — it is always absent there.~~ **Also superseded:** with the bytes fix, RNNoise *does* fully initialise under the mesh harness — `initRNNoise()` returns `true`, `_rnnoiseCtx.state` is `'running'`, and `getMicStream()` returns a real graph destination with `_rnnoiseOriginal` set. Mesh tests now genuinely exercise the RNNoise capture path rather than only its fallback.
+- **Removing a 5-second stall broke five mesh tests, and the tests were wrong, not the fix.** Once `initRNNoise()` stopped timing out, the host's mic resolved *before* the joiner arrived instead of after, so `connectOutgoingAudioToPeers()` found an empty roster and never placed a call. Audio still worked perfectly: a PeerJS `MediaConnection` is **bidirectional** — the caller sends its mic, and `handleIncomingCall()` answers with `call.answer(stream)`, so ONE connection carries both directions, and each side attaches the other's stream via `attachAudio()`. The old behaviour created *two* redundant connections purely because of the stall's timing. What actually broke was the test's proxy metric: `getState().incomingAudio` counted `conn.media` (calls we *answered*) as a stand-in for "can I hear them", which reads 0 on the side that happened to place the call rather than answer it. It now counts attached `<audio id="audio-…">` elements holding a **live** inbound track — the property the tests actually mean, and strictly stronger than counting connection objects. **Lesson: when a timing change breaks a test, check whether the test was measuring a proxy that the old timing happened to satisfy.** Bisect by checking out just `src/` at the suspect commit (`git checkout <sha> -- src/`) and re-running — same machine, same harness, one variable.
+- **`makePeer({ storage })`** (mesh fixture) seeds arbitrary `localStorage` before load, for settings that are read once at load or at first mic acquisition (`noise-suppression`, `mic-device-id`, …). Setting them after `page.goto` is too late.
+- **`npx serve` can exceed the 120 s `webServer.timeout` on a cold npx cache.** It works on the second attempt once the package is cached. A substitute like `python3 -m http.server` gets you most of the suite but fails `unit-auth-callback.spec.js`: those depend on `cleanUrls` serving `src/auth/callback.html` at the extensionless `/auth/callback`, which the plain server 404s.
+
+- **`main.js` is a flat (non-module) classic script**, so every top-level `function` declaration becomes a property of `window` and the `var`/`let` state (`peer`, `isHost`, `inRoom`, `roomCode`, `knownPeerIds`, `connections`, `_authoritativeSuccessorIds`, `_lastAuthoritativePeerIds`, `myPseudo`, `_anonymousProfile`, …) lives in the page's global scope. This means Playwright can **unit-test the pure logic in-browser** via `page.evaluate` — call `window.fnName(...)` and seed/read globals directly — with no bundler, no module refactor, and no live PeerJS/WebRTC. Used for host-election, successor-chain, room-code, pseudo-dedup, and peer-list logic. Helper: `tests/e2e/_helpers.js` (`seedRoom` / `callFn`). Assign to `let` globals (`peer = {...}`) and mutate `const` collections (`connections.set(...)`, `knownPeerIds.add(...)`); each test gets a fresh page so globals reset on `page.goto('/')`.
+- **The mesh harness's local PeerServer must bind `127.0.0.1` explicitly.** `PeerServer({ port, … })` with no `host` listens on the IPv6 wildcard `::`, which throws `listen EAFNOSUPPORT: address family not supported` in containers without IPv6 (every mesh test then fails at fixture setup, with nothing to do with the app). The client half of the fixture already pointed at `127.0.0.1`; the server now matches.
+- **Playwright only collects `*.spec.js` / `*.test.js`** (default `testMatch`), so shared helpers named `_helpers.js` are safely ignored and never run as an empty test file.
+- **The theme toggle and most settings controls live inside the settings modal's sidebar sections** (`#settings-system`, etc.), hidden until their `.prefs-nav-btn[data-target=…]` is clicked. UI tests must navigate the sidebar first.
+- **Host-migration / election invariants are now regression-covered** in `tests/e2e/unit-host-election.spec.js` (split-brain guard: election follows the authoritative snapshot + successor chain, never the live `connections` roster). Add a case here whenever a new migration edge case is fixed.
+- **Coverage (`make coverage-e2e`)** uses `monocart-coverage-reports` + Playwright's Chromium V8 coverage, gated behind `COVERAGE=1` so normal runs have zero overhead and never import the dep (dynamic `import()` inside the auto fixture). **`entryFilter` must be set on the `CoverageReport` instance that calls `.add()`** (per-test), not only on the `.generate()` instance in global teardown — otherwise vendored entries (peerjs) are cached and still appear. Both share `tests/e2e/coverage-options.js`. main.js sits ~21% because most of it is side-effectful WebRTC/DOM glue the in-browser unit tests don't drive; the pure logic is the well-covered part.
+- **`npm install` of any dev dep can bump `@playwright/test`** within the `^1.61.0` range, and a newer Playwright expects a newer Chromium build (e.g. 1223 → 1228). Symptom: `browserType.launch: Executable doesn't exist at …chromium_headless_shell-<n>…`. Fix: `npx playwright install chromium chromium-headless-shell`.
+- **`make coverage-rust`** needs a one-time `rustup component add llvm-tools-preview` + `cargo install cargo-llvm-cov`; the target preflights and prints the install commands if the subcommand is missing.
+
+## Multi-peer mesh E2E (`make test-mesh`)
+
+- **Real PeerJS + real WebRTC between isolated Chromium contexts.** A local PeerServer (the `peer` dev dep) runs per Playwright worker (port `9100+workerIndex`) with `generateClientId: () => randomUUID()` so host room codes match `UUID_RE` and joins take the direct path. Each peer is its own `browser.newContext()` (independent storage + WebRTC). The app is pointed at the broker via `localStorage['peerjs-server']`, read by `peerServerOptions()` in `main.js` (defaults to `{}` = cloud broker in prod). Tests are tagged `@mesh`; the `unit` project `grepInvert`s them so the fast suite stays clean.
+- **Chromium flags required:** `--use-fake-device-for-media-stream`, `--use-fake-ui-for-media-stream`, `--autoplay-policy=no-user-gesture-required`, and crucially `--disable-features=WebRtcHideLocalIpsWithMdns` — without the last one, loopback ICE uses mDNS-hidden candidates and peers never connect under automation.
+- **Drive the real globals, await the real signals.** `createRoom`/`joinRoom` take `onJoined`; assert convergence via `expect.poll` on rendered `#peers-list .peer-item` rows and on state getters (`isHost`, `roomCode`, `currentDeputyId`). Before killing a host, wait until all survivors agree on a deputy (`waitForSharedDeputy`) — migration is undefined if the successor chain never propagated (it ships in `peer-list` + heartbeat every 2s).
+- **FIXED — multi-survivor host-migration split-brain (found by this harness).** When a host vanished and 2+ peers survived, the room could split into two hosts that never reconcile. Two contributing causes, both fixed:
+  1. **Dying host poisons survivors.** On `peer.destroy()` (page still alive — not a clean `leaveRoom`), PeerJS closes the host's data connections in a *synchronous cascade*. Each `dataConn.on('close')` ran the host's joiner-left handler and broadcast `peer-left` + a shrunken `peer-list`/`successorIds` (dropping peers whose host-link merely collapsed alongside the host's) to the still-connected survivors — resetting their `_authoritativeSuccessorIds` *mid-election* so a non-deputy elected itself. **`peer.destroyed` is FALSE inside those close handlers** (it flips true only after the cascade), so checking it inline doesn't help. Fix: **defer the peer-left/roster broadcast one tick (`setTimeout(…, 0)`) and re-check `peer.destroyed`/`inRoom`/`isHost`** — a self-destroying host then skips the broadcast; a genuine single leave still broadcasts.
+  2. **Survivor abandons the rightful deputy too fast.** Until the elected deputy actually `becomeHost()`s (worst case after the ~7s heartbeat timeout), it redirects/closes incoming connections, so a survivor's connect attempts fail. With only 3 retries (~6s) the survivor exhausted them, excluded the rightful deputy, and self-promoted. Fix: widen the retry budget (`HOST_MAX_RETRIES` 3→8, `HOST_RETRY_DELAY` 2000→1500, ≈12s) so a survivor outlasts the deputy's promotion window before abandoning it.
+- **Host + deputy (or deeper cascade) failing together** is handled by the ordered successor chain: a survivor elects the deputy, fails to reach it, adds it to `_migrationExcluded`, and re-elects the next successor (`proceedWithHostElection`); if the whole chain is gone it `leaveRoom()`s. The wide retry budget from fix #2 made a *dead* deputy slow to skip (it can't tell "slow to promote" from "gone"), so **`peer-unavailable` for the current `_migrationCandidateId` fast-fails**: `handlePeerRuntimeError` parses the unreachable id from "Could not connect to peer `<id>`" and, when it matches the candidate while `roomState==='migrating'`, calls `initiateHostMigration(id)` to exclude + re-elect immediately. Dead candidates are skipped instantly (broker says so); slow-but-alive ones still get the full budget. The deputy's id stays registered on the broker while it lives, so `peer-unavailable` for it is a reliable "gone" signal. Regression-guarded by the `host and deputy crashing together` mesh test.
+- **Test note:** assert migration outcomes with ONE combined `expect.poll` for the *converged* state (one host + one room code + correct roster), not sequential polls — sequential checks race through transient mid-migration windows and false-fail. A true permanent split still fails the combined poll. Regression-guarded in `mesh.spec.js` (both crash and graceful kill paths, `--retries=0`-stable).
+
+## Outgoing audio quality ("they can't hear me, it's chopped")
+
+- **Untuned WebRTC defaults are the main cause of chopped/robotic audio, and the damage lands on the *listener*, not on you.** Nothing in your own playback tells you your uplink is being chopped, which is why this class of report ("the interlocutor created a room and couldn't hear me well") was previously undiagnosable. Four knobs, all applied in the "Audio quality tuning" section of `main.js`:
+  1. **Opus fmtp via PeerJS `sdpTransform`** (`opusSdpTransform`, passed through `audioCallOptions()` to **both** `peer.call(...)` and `call.answer(...)` — PeerJS supports the hook on offer *and* answer). Forces `useinbandfec=1` (decoder rebuilds isolated lost packets instead of dropping them → the single biggest anti-chop win), `usedtx=1`, `stereo=0`/`sprop-stereo=0`, `maxaveragebitrate`, and adds `a=ptime:40` to the Opus m= section (`setOpusPtime()`, see below). **Parse, don't append:** match the opus `a=rtpmap` line with `[^\r\n]*` (not `.*`) or the trailing `\r` gets swallowed and inserting after it produces `\r\r\n`; and never string-replace the bare `opus/48000` prefix — that corrupts the `/2` suffix. Merge into the existing fmtp params so browser-set values like `minptime=10` survive. The transform is idempotent.
+  2. **DTX (`usedtx=1`) is what makes a released talk button cheap, because PTT gates the mic with `audioTrack.enabled = false`, not by removing the track.** A disabled track still feeds the encoder silence, and without DTX that is 50 packets a second to every peer: measured 33–46 kb/s per link, not far off a speaker's 61. With DTX it is one packet per 400 ms, ~5 kb/s per link including RTCP. It was `usedtx=0` until 2026-09 on the theory that gaps would leave the jitter buffer cold and clip the first word; measured (4-peer bench room, press after 2.5 s of silence, onset = first energy at each listener minus first energy at the speaker's own track), onset was **91 ms with DTX vs 100 ms without** at 20 ms packets, and 112 vs 119 at 40 ms. No clipping showed up, and concealment stayed at 0% while the speaker talked. Caveat: synthetic source, headless Chromium, loopback — a real voice with soft onsets was not tested.
+     - **`a=ptime` is a *receiver* preference, and libwebrtc honours it.** Its SDP parser copies the remote description's `a=ptime` into every audio codec's parameters, and the Opus encoder picks the next supported frame size at or above it. So the `a=ptime:40` in *our* local offer/answer sets what the *far side* sends us; PeerJS runs `sdpTransform` on both, so both directions get 40 ms. A peer on an older build keeps sending 20 ms until it updates — mixed rooms negotiate per direction, nothing breaks. It is a media-level attribute, not an fmtp param: it must sit in the Opus m= section, replace (never duplicate) one already there, and leave other sections alone. Measured per link (4 peers, one speaker): 20 ms → 40 ms took a speaker from 61 to 47 kb/s without DTX, 50 → 38 with it, for +19–21 ms onset. **60 ms is worse, not better, in Chromium**: 24.7 packets/s instead of 16.7 and *more* bytes than 40 ms (62 kb/s per link), with later onset. Cause not established (a guess: libwebrtc's encoder config does not treat 60 ms as a native frame). Re-measure before ever raising it.
+     - **A disabled track's "silence" is not a fixed size.** In the same room, same settings, the host's silent frames carried a 3-byte payload and the listeners' 32–35 bytes, every sender confirmed as the disabled `audioTrack` at `audioLevel` 0 (so not a hot mic). Cause unknown. DTX makes it moot, but it is why a pre-DTX benchmark's listener column was so close to the speaker's.
+     - **DTX makes loss rates noisy unless the window has enough packets.** A quiet link now carries ~12 packets per 5 s stats tick, so a single loss read as 8% — enough to trip `AUDIO_POOR_LOSS_PERCENT` and widen the jitter buffer on a healthy link. `_lossWindow()` keeps the window open (cursor unmoved, previous rate carried forward) until it holds `AUDIO_LOSS_MIN_PACKETS` (50). Counters going backwards (one of two links to a peer closed) restart the window instead of waiting to climb back past a stale cursor.
+  3. **Receiver jitter buffer via `RTCRtpReceiver.playoutDelayHint`** — Chromium's default target delay is tiny, so a few tens of ms of jitter chop the audio. `AUDIO_PLAYOUT_DELAY_BASE` (80 ms) on every link, escalating to `AUDIO_PLAYOUT_DELAY_POOR` (200 ms) on measured loss/jitter **or as soon as the path is `relay`**. For PTT, trading latency for smoothness is the right call. **Chromium-only** — feature-detect with `'playoutDelayHint' in receiver`; WebKit (Safari, Tauri's WKWebView) has no equivalent, so desktop-Mac/iOS-web get no buffer help.
+  4. **Sender `setParameters`**: `maxBitrate` + `networkPriority`/`priority: 'high'` (DSCP marking) so one speaker's N mesh uploads don't congest each other.
+- **`getStats()` only ever describes the direction you *receive*.** `inbound-rtp` cannot show that a peer isn't hearing you. The loss *they* see on the stream *you* send is in **`remote-inbound-rtp`** (their RTCP receiver reports coming back), with `outbound-rtp.packetsSent` as the denominator. `_collectPeerStats` now reports both as `lossPercent` (↓) and `outLossPercent` (↑) — the ↑ number is the one that diagnoses "they can't hear me". Surfaced in the dev-mode inline badges, the stats popover, and the device-info Network section.
+- **`_collectPeerStats` must sample BOTH MediaConnections.** A mesh peer can have two: `conn.media` (the call we answered) and `conn.audioMediaOut` (the call we opened). Sampling only `conn.media` left half the links in a 3+ peer room completely unmeasured. Raw counters are summed across both PCs and the delta taken against the previous tick; ICE type reports the **worst** path (relay > srflx > host), since that is the one degrading the call.
+- **A speaker uploads one Opus stream per listener, so a redundant MediaConnection directly chops the audio others hear.** `handleIncomingCall` answers with the live `stream` when it has one, which makes that connection **full duplex** — so a second, outgoing `peer.call` to the same peer uploads the same mic twice. `connectOutgoingAudioToPeers` now skips a peer when `peerAlreadyReceivesOurAudio(conn)` (the answered PC's senders already include our *current* mic track — identity-compare the track object and check `readyState === 'live'`, so a stale post-device-change track doesn't count).
+  - **Known remaining gap (glare):** when two peers call each other simultaneously, neither has answered yet, so the duplication is not yet observable and both connections survive. Bounded (never more than one *outgoing* call per peer) but not eliminated. Fixing it needs a deterministic tie-break — the lower peer ID closes its own redundant `audioMediaOut` — and that is **not safe to add naively**: `MediaConnection.close` fires the remote's `clearPeerMedia`, which calls `detachAudio(peerId)` and nulls `media`, killing playback that the surviving `audioMediaOut` had already attached. Any teardown fix must first make `clearPeerMedia` re-attach from the surviving connection's remote stream.
+  - The 2-peer case does **not** duplicate: the joiner calls the host, the host answers with its live mic, and the host never initiates (`handleJoinerDataConnection` does not call `connectOutgoingAudioToPeers`). Duplication only appears at 3+ peers.
+- **Anonymous rooms are the worst case for all of the above** because `fetchIceServers()` step 3 hands them `DEFAULT_FALLBACK_TURN` — four allocations against `openrelay.metered.ca` with shared public credentials that are rate-limited and may already be dead. There is no org TURN to fall back on, so a peer needing a relay gets a lossy shared one. Treating `iceType === 'relay'` as "poor" up front is a mitigation, not a fix; the durable fix is a real TURN server (see the STUN/TURN note below).
+- **The jitter buffer is adjustable — Settings → Advanced → Jitter buffer (`jitter-buffer` key).** `auto` (default, the adaptive behaviour above) or a manual 0–500 ms value; `0` hands it back to the browser. Precedence is **local manual → host push → adaptive**, resolved by `effectivePlayoutDelay()`; `playoutDelaySource()` reports which one won and is surfaced in the stats popover so "is my override actually applied?" is answerable. Any unparseable stored value reads as `auto`, so a corrupt key can never wedge audio at a silly buffer size.
+  - **`playoutDelayHint` is receiver-side, so a host wanting to smooth out a choppy room has to change the *listeners'* buffers, not its own.** That is why the host can push a room-wide value: while the host has **dev mode on** and a manual value set, `hostJitterBroadcastMs()` puts `jitterMs` in every `peer-list` + `heartbeat` (same channel as `debugMode`), and peers mirror it into `_hostJitterMs`. Gated on dev mode so a stale personal setting can never quietly govern other people's audio, and **local manual wins over the host push** so an explicit user choice is not overridden. Treated as untrusted like every other host field — `sanitizeJitterMs()` clamps to 0–500 and a non-numeric/absent value clears the override (so an older host that omits the field is simply a no-op; the change is additive and tolerant, no `PROTOCOL_VERSION` bump).
+  - The control is duplicated into `settings.html` (the separate Tauri preferences window has no module system), and the main window applies a change made there via the `storage` event — `JITTER_BUFFER_KEY` had to be added to that handler's `relevantKeys`.
+- **A setting read only inside `getMicStream()` does not apply until the NEXT room join, and that is a bug, not a limitation.** `noise-suppression` and `mic-device-id` both had it: their `change` handlers wrote `localStorage` and stopped, and `getMicStream()` runs once per join — so changing either mid-call visibly did nothing until the next session. `reacquireMicForRoom()` fixes it by re-acquiring and swapping the track on every live sender. Things it has to get right, each of which was a real trap:
+  - **Use `sender.replaceTrack(newTrack)`, not a teardown + `connectOutgoingAudioToPeers()`.** `replaceTrack` swaps without renegotiating, so listeners hear no gap; re-calling re-opens the glare window where two peers call each other simultaneously (see the duplicate-MediaConnection note above).
+  - **Walk BOTH MediaConnections per peer** — `conn.media` (answered, full duplex when we had a mic) and `conn.audioMediaOut` (the call we opened) — the same pair `_collectPeerStats` has to sample. Swapping only one leaves half the links on the old mic.
+  - **Inherit `audioTrack.enabled`.** PTT gates with `enabled`, not by removing the track, so a swap mid-press must carry the press state over or it mutes the speaker (or unmutes a released one).
+  - **A failed re-acquire must keep the previous stream.** Install the new stream only after `getMicStream()` resolves, and on any throw keep the old one wired up — a failed swap that leaves the call mute is far worse than an unchanged setting.
+  - **Tear the OLD stream down after the swap, never before**, and via `stopMicStreamFully()` (below), not `getTracks().forEach(stop)`.
+  - Serialise against `_micAcquirePromise` (the join-time / first-press guard) or you get two live capture tracks.
+- **`applyRNNoise()`'s returned stream is a graph DESTINATION, so stopping its tracks releases nothing.** It stashes `_rnnoiseSource` / `_rnnoiseDest` / `_rnnoiseOriginal` on the stream "so we can disconnect later" — and for a long time **nothing ever read them** (one write site, zero read sites, repo-wide). Two consequences: the real `getUserMedia` track behind `_rnnoiseOriginal` kept running after every call (mic indicator lit, device held), and because the graph shares one `_rnnoiseNode`, every acquisition summed another source into it — two mics mixed into one RNNoise instance. `stopMicStreamFully(stream)` is now the only sanctioned way to release a `getMicStream()` result. Note it must call **`_rnnoiseNode.disconnect(dest)`** — the one-argument form; a bare `.disconnect()` on the shared node severs every other consumer.
+- **Dropped packets are now legible instead of a single rolling percentage.** One 5s window hides brief dropouts entirely, which is what made "it cut out for a second" impossible to confirm. `_collectPeerStats` additionally keeps cumulative totals (`packetsLostTotal`/`packetsReceivedTotal` and the outbound pair), `peakLossPercent`/`peakOutLossPercent`, and a 60-sample rolling history (~5 min) per direction. The stats popover renders an SVG sparkline per direction (`_buildLossSparkline`, scaled to the worst sample with a 5% floor so a low-but-nonzero line still reads), now/peak, and the totals — plus the active jitter-buffer target and its source. No dependency; the sparkline is hand-built DOM.
+- **"Can they hear me?" audio check (dev mode) — the one question local stats can never answer.** `remote-inbound-rtp` proves our packets *arrived*; it says nothing about whether audio was decoded, whether the peer's `<audio>` element is playing, or how much NetEq had to fabricate. All of those are receiver-side, so the peer must measure and report them. `startAudioCheck(peerId)` transmits for `AUDIO_CHECK_WINDOW_MS` (2.5 s) via the normal `setTalking` path while the peer samples its own inbound stats across the same window; it replies with **deltas** (the link may have been up for minutes). Reuses the `device-info` host relay and the same sharing consent, so it inherits the existing privacy gate; the UI lives in the device-info popover, which is already dev-mode + remote-peer only.
+  - **The signals that matter** (all confirmed present in Chromium — do not assume, they vary by engine): `totalAudioEnergy` on `inbound-rtp` proves non-silent audio was **decoded**; `concealedSamples / totalSamplesReceived` is how much NetEq had to **invent**, measured *after* FEC recovery and jitter-buffer success, so it tracks what was actually heard far better than packet loss; `media-playout.synthesizedSamplesDuration` is what the **speaker rendered**; and the `<audio>` element's `paused`/`muted`/`volume` catch autoplay blocks and dead outputs, **which no RTP statistic can ever see**. Never report `sinkId` itself — it is a device identifier; send only whether one is set.
+  - **`media-source.totalAudioEnergy` (sender side) is what makes the verdict trustworthy.** Without our own mic energy over the same window, "your audio never arrived" and "you didn't say anything" are indistinguishable from the peer's report — and blaming the network for a muted mic is the worst possible diagnostic. When the local reading is unavailable, assume we *did* speak rather than accusing the user of silence.
+  - **A null "before" sample is not a failure.** The requester starts transmitting as it asks, so the audio link may be *created* during the window. Everything in the "after" sample then accumulated inside the window, making a zero baseline exactly right — treating it as "no audio link" reports a false negative on a healthy peer. (Found by the mesh test: `speak()` returns before the MediaConnections actually form, so audio links appear a beat later; poll on `incomingAudio` before asserting anything about them.)
+  - **Verdict precedence matters**: playback faults (muted / paused / no element) outrank everything, because packets can be *perfect* and still inaudible. Then silence, then the concealment ratio (<2% good, <10% choppy, else bad). Regression-tested in `unit-audio-quality.spec.js`, plus two `@mesh` cases — one healthy round trip, and one where the peer mutes the `<audio>` element and the check correctly reports `unheard` while the sender's own stats stay clean.
+  - **A "one check at a time" guard must key on *in flight*, not on *exists*.** `startAudioCheck()` bailed whenever `_audioCheck.peerId` matched, which is also true of a *finished* check — so the "Test again" button the finished state renders could never restart anything. The guard now also requires `!_audioCheck.result`. Same class of bug as any idempotence guard written against object identity instead of against the state it is meant to protect.
+  - **The check's state outlives the popover that shows it, so re-opening must reset it.** `_audioCheck` is a module-level var and `closeDeviceInfoPopover()` does not touch it (deliberately — `updatePeerList()` closes the popover routinely, and killing an in-flight check on every roster change would be worse). So `showDeviceInfoPopover()` calls `cancelAudioCheck()` on the way in: a fresh open starts at "Run check" instead of re-displaying a stale "No sound was sent" verdict from the previous open.
+  - `.btn-ghost` in this codebase is the **destructive/quiet** variant (transparent, red hover) — do not reuse it for neutral actions; it reads as unstyled text and hovers red.
+- **Network echo test (Settings → Audio → "Test over network") — hear your own outgoing audio.** Two `RTCPeerConnection`s in the page, both `iceTransportPolicy: 'relay'`, wired to each other through the real `fetchIceServers()`; capture via `getMicStream()` and **both** SDPs through `opusSdpTransform()`, so the test runs the production capture + codec path. **The recorded artefact is the RETURNED stream, not the mic** — that is the entire point, and what separates it from the pre-existing `startMicTest`, which records the raw mic and therefore only proves capture works.
+  - **`ontrack` fires on NEGOTIATION, not on media flow.** It resolves as soon as the remote description is applied, even when ICE never connects and not one packet is exchanged. Treating it as success made the test cheerfully report "Speak now — recording…" with the relay disabled and zero audio moving. **Success must be defined as `inbound-rtp.packetsReceived > 0`**, polled with a deadline. Regression-guarded by the `@mesh` case "echo test reports no relay instead of pretending to work".
+  - **Relay-only ICE with no reachable relay gathers ZERO candidates and stays in `iceConnectionState: 'new'` forever — it never reaches `'failed'`.** Never wait on `'failed'`; use an explicit timeout plus a candidate count. The resulting "no relay reachable" message is itself a genuine diagnostic (firewalled peers cannot reach you either), not a test failure.
+  - **A muted `<audio>` sink still populates `inbound-rtp` but zeroes `totalAudioEnergy`.** The muted sink is required — it keeps the decode pipeline pulling without howling the speakers back into the mic — so loudness must come from an `AnalyserNode` RMS on the returned stream instead (the same technique `startMicTest` already uses for its level meter). Connect the analyser **only** to the source, never to `ctx.destination`.
+  - Blocked while `inRoom`: `applyRNNoise` shares one `_rnnoiseCtx`/`_rnnoiseNode`, so a second mic source would mix into the live call. The per-peer "Can they hear me?" check covers the in-call case.
+  - **Not ported to `settings.html`** (the Tauri preferences window): it has no `fetchIceServers`, no `opusSdpTransform` and no RNNoise path, so duplicating it means ~400 lines including a WASM worklet into a window that already caused one drift bug. That window points at the main window instead. Revisit only if `settings.html` ever gets a shared module.
+- **Prefetch ICE on load for EVERY user, not just signed-in ones.** Both `fetchIceServers()` prefetch sites lived inside `if (presenceConfigured())`, so an **anonymous** visitor issued *zero* credential requests on the welcome screen and only resolved ICE inside `createRoom()`/`joinRoom()`, which `await`s it. That put the endpoint's latency — plus a cold serverless start — squarely on the critical path of joining, and left the relay badge stuck on "Checking relay…" indefinitely. Measured after the fix: welcome page interactive in ~240 ms against a deliberately slow 1.5 s endpoint (fire-and-forget, nothing waits), and the subsequent join resolves in ~5 ms with **zero** extra requests off the warm cache.
+- **Edge-cache the credential endpoint; do NOT let the browser cache it.** The response is identical for every caller — the function's module cache hands out one mint for ~80% of its TTL — so `Vercel-CDN-Cache-Control` / `CDN-Cache-Control` changes only *who* serves it, and removes the cold start. Keep `Cache-Control: no-store` so a *browser* never replays a credential past its expiry (the client tracks `expires_at` itself). Consequence worth knowing: the per-IP rate limiter now only sees CDN misses — acceptable, since its job was bounding provider API calls and edge caching bounds them harder.
+- **Anonymous users get TURN via our own `/api/ice-servers` endpoint (`api/ice-servers.js`) — a relay key can NEVER ship in the client.** `src/` is static files, so anything embedded is readable and the quota is drained by whoever finds it. The endpoint holds the secret and mints **short-lived** Cloudflare TURN credentials (1,000 GB/mo free ≈ 30k relayed call-hours; a relayed 2-peer call is ~29 MB/h). This is Cloudflare's **TURN** service, not the SFU we rejected — it relays encrypted DTLS-SRTP and cannot hear the audio, so the privacy guarantee holds. Slots into `fetchIceServers()` as step **2.5**, after every explicitly configured source, before the dead public fallback.
+  - **Do NOT copy the UDP-only filter from Cloudflare's `turn-worker` example.** It keeps only `turn:` + `udp`. That strips `turn:…?transport=tcp` and `turns:` — precisely the transports that traverse the strict firewalls TURN exists for (UDP/3478 is commonly blocked), i.e. it would break the feature for exactly the users who need it. `toIceServers()` keeps everything Cloudflare returns, and a test asserts it.
+  - **Cache the minted credential server-side** for ~80% of its TTL and share it across callers: request volume then costs zero extra Cloudflare API calls, and the TTL — not the request rate — is what bounds abuse. Per-IP rate limiting is **best-effort only** (serverless instances are ephemeral and plural, so it throttles a hot instance, not a distributed attack); say so in the code rather than implying a security boundary.
+  - **Endpoint URL resolution**: same-origin `/api/ice-servers` on plain web (so a self-hoster automatically uses their own endpoint, not ours), absolute `https://ptt.voxal.app/api/ice-servers` on native — Capacitor/Tauri load the page from `capacitor://` or the asset protocol, where a relative path resolves to nothing. Overridable via `localStorage['anon-turn-url']`.
+  - Client fetch must pass **`cache: 'no-store'`** — a cached credential is one that outlives its own expiry, the same class of bug as the stale `anonymous-rooms` GETs below. `tauriFetch` routes through Rust and is immune; verified `presence_fetch` accepts an arbitrary URL, so no Rust change was needed.
+  - `package.json` is `"type": "module"`, so `api/*.js` must be **ESM** (`export default handler`), not CommonJS. Pure helpers live in `api/_turn.js` and are covered by `node --test "api/*.test.js"` (wired into `make test` as `test-api`) — note `node --test api/` does not work, it resolves `api` as a module path.
+- **A relay status indicator must be source-aware, not just a server count.** Falling through to `DEFAULT_FALLBACK_TURN` still yields four "relay servers", so a naive count would paint a confident green tick over the known-dead public relay. `turnStatusSummary()` keys off *which source* answered (`embed`/`org`/`metered`/`anonymous`/`fallback`) and calls `usingDefaultFallbackRelay()` to demote the retired built-in to a warning. Before the first resolution it reports "Checking relay…" rather than "not configured" — never claim absence before looking.
+- **"Configured" and "working" are different claims.** Only a relayed round trip proves a relay works, so the status line appends `· verified` solely after a *Test over network* run whose `iceType` was `relay` (`_relayVerifiedAt`), and never on a source we already distrust.
+- **CONFIRMED: the built-in fallback TURN relay is dead.** metered.ca **retired** the shared `openrelayproject` credentials in favour of per-account API keys, so `DEFAULT_FALLBACK_TURN` fails for every anonymous user — they have **no working TURN at all**. Direct/STUN still connects, but symmetric-NAT/firewalled peers cannot. This is very likely a deeper cause of the original "anonymous room sounds chopped" report, not just a quality issue. Working options, all already supported without a rebuild: metered.ca free tier (20 GB/mo) pasted into Settings → Advanced, a custom relay, or org TURN.
+- **`onicecandidateerror` is the only thing that says WHY no relay appeared** — without it "no relay reachable" is unactionable. The codes that matter: **401/403** = the relay answered and *rejected* us (credentials dead/revoked); **701** = could not establish the connection (server down or network blocked); **no error at all** = packets vanished unanswered, which is what a UDP block looks like. `diagnoseRelayFailure()` maps these to plain-English fixes, and short-circuits to "the built-in relay has been retired" when the only relays in play are the known-dead defaults (`usingDefaultFallbackRelay()`) — blaming the user's network for a server we know is gone is the wrong answer. Chromium-only event; guard it.
+- **Cloudflare Workers cannot host an echo/media service — decided against, do not re-litigate.** Workers are V8 isolates: no UDP sockets, no ICE agent, no DTLS/SRTP stack, so they cannot terminate WebRTC media at all. The only Cloudflare product that can is **Cloudflare Realtime** (ex-Calls), an SFU with an HTTP/SDP API where a Worker would be control plane only. Rejected because an SFU **decrypts** media, putting the user's voice in plaintext on a third party — contradicting `docs/turn-and-ice.md`'s "a TURN relay only forwards encrypted DTLS-SRTP, so it never has access to the audio" — and because it would test a path the app never uses in production, at the cost of an account, secrets and per-GB billing. The relay loopback gives the same diagnostic with no infrastructure.
+  - **This rejection stands, unmodified, for audio.** A later, narrower feature (`docs/video-routing.md`) does add an optional Cloudflare Realtime SFU integration — but scoped exclusively to **camera/screen-share**, which are already architecturally independent full-mesh `MediaConnection` sets from audio. Voice/PTT never touches the SFU, under any setting; the guarantee this entry describes is fully intact. The motivation is different too: video/screen genuinely hit the O(n²) mesh-bandwidth ceiling in larger rooms (see the "Scaling to large audiences" entry below), which was never true of the diagnostic-echo idea this entry rejected.
+  - `selectVideoTopology()` in `src/main.js` is the enforcement point: it can only ever return `mode:'sfu'` when the user has explicitly chosen `allow-sfu` — never for `prefer-p2p` (reports a degraded P2P decision instead, letting the UI prompt) and never for `p2p-only` (unconditionally P2P, regardless of SFU availability or room size). Backend: `api/sfu-session.js` + `api/sfu-track.js`, an HMAC-signed short-lived capability token (not the anonymous-and-unscoped shape `api/ice-servers.js` uses for TURN, since a capability needs to bind to a specific room/participant/kind/action) proxying SDP negotiation to Cloudflare so the app secret never reaches the client — same "secrets never ship to the client" posture as the TURN endpoint.
+  - **A connected SFU session proves NOTHING about media flowing.** With Cloudflare Realtime, routing is driven by the `tracks[]` instruction in the `tracks/new` call, *not* by the SDP exchange. The first implementation shipped without any `tracks[]` at all: sessions negotiated cleanly, ICE connected, the "☁ Relayed" badge lit up — and every remote camera was black, because Cloudflare had never been told what to forward. Two specifics that make this easy to get wrong:
+    - **A subscriber must NAME the remote track**: `tracks:[{location:'remote', sessionId:<publisher's CF session>, trackName}]`. Merely adding a `recvonly` transceiver gets you a transceiver nothing ever fills. Voxal carries the publisher's `{sessionId, trackName}` as `providerRef` over its own signaling (`video-offer`/`screen-offer`, plus `peer-list` for late joiners); `sfuSubscribeTrack()` now refuses to negotiate without it rather than producing a silent black tile.
+    - **A remote pull is answered with an OFFER, not an answer.** Cloudflare responds `requiresImmediateRenegotiation: true` and describes the track it will forward; the client answers and posts that answer back (`api/sfu-renegotiate.js`). Blindly doing `setRemoteDescription({type:'answer'})` on that response — as the first version did — cannot work.
+    - **Cloudflare reports per-track failures inside a 200**, on `tracks[].errorCode`/`.errorDescription`. An HTTP-status-only check happily accepts a session that will never carry media, which is why `cloudflareTrackError()` exists and why both SFU endpoints surface Cloudflare's own error text to the client's dev log. Debugging a media path with no error output costs far more than the code to surface one.
+  - **The SDP offer goes on `tracks/new`, never on `sessions/new`.** Cloudflare's documented lifecycle is `POST sessions/new` *with no request body* → `{sessionId}`, then `POST sessions/<id>/tracks/new` **carrying the offer** → the answer, and only then does ICE/DTLS come up and media flow. `sessions/new` accepts a `sessionDescription`, which is the trap: give it one, fail to hand the resulting answer to the client, and the next `tracks/new` is rejected with `session_error: "Session is not ready yet. Please ensure the PeerConnection is connected before making this request"` — Cloudflare is telling you the transport it is being asked to add tracks to never completed its handshake. `api/sfu-track.js` does both hops server-side, so the client still makes one round trip. Note `{}` is not equivalent to no body here; `callCloudflare()` omits the body and the `content-type` header entirely when there is nothing to send.
+  - **Pure-helper tests cannot see a malformed request body — which is how two protocol bugs shipped back-to-back.** `api/_sfu.test.js` covered token signing and URL building perfectly while both the missing `tracks[]` and the misplaced offer sailed past it, because nothing ever asserted on what actually went over the wire. `api/sfu-track.test.js` closes that gap by stubbing `globalThis.fetch` and inspecting the outbound Cloudflare requests. For any endpoint that is fundamentally a *proxy*, the request it emits is the behaviour worth testing; the helpers it uses on the way there are not. Verify such a test by running it against the pre-fix code — one that passes either way is decoration.
+  - **`selectVideoTopology()`'s capacity threshold is its own constant, `VIDEO_SFU_THRESHOLD_PEERS`, not the audio-only `ROOM_SOFT_WARN_PEERS`.** The first version reused `ROOM_SOFT_WARN_PEERS` (8) for both; real testing showed that was far too high for video specifically — an 8-participant room with a camera on still showed "Direct" for everyone, since 8 is not *more than* 8. Video/screen is much heavier per participant than audio, so it now switches at a much lower bar (`VIDEO_SFU_THRESHOLD_PEERS = 2`, i.e. more than 2 total participants). If video routing ever looks "stuck" on Direct in a room that should be large enough, check which threshold constant is actually being read before assuming the topology selector itself is wrong.
+  - **A topology *decision* function is not a *migration*.** `reconcileVideoTopology()` re-ran `decideVideoTopology()` and republished on the winning path, which looked complete and was not: `unpublishLocalTrack()` only tore down the SFU branch, so a P2P→SFU migration left every outgoing mesh `MediaConnection` running and the publisher uploaded N direct streams *and* one to Cloudflare — strictly worse than never migrating. The viewer side had the mirror bug: the `video-offer` handler subscribed via the SFU without dropping the incoming mesh stream, leaving two live streams for one track. Whenever a "switch between strategies" function is written, the teardown of the losing path is separate work from the setup of the winning one, and it is the half that silently goes missing. Related: the decision was also never re-run on roster change (only on preference change), so before `reconcileVideoTopologyForRoster()` **only new joiners ever used the relay** — anyone already sharing stayed on the mesh for the life of the call. Debounce it and memoize on the participant count; migrating interrupts video briefly, so flapping on a join/leave burst is worse than reacting a second later.
+  - **A token with a TTL that gets re-minted per operation is a rate limiter waiting to fire.** The SFU capability token is valid for 300 s and scoped to `{roomCode, participantId, kind, action}` — all stable for a whole share — yet `sfuMintCapability()` hit `/api/sfu-session` on every publish, every subscribe and every reconnect retry. `/api/sfu-session` rate-limits to 30/min **per IP**, and per-IP is exactly the wrong axis for WebRTC: every participant behind one NAT, and every browser window in a local multi-peer test, shares one budget. Symptom was a new joiner's camera black for everyone else — the newest subscription is the one that loses the race. Cache the token for its TTL (with a renewal margin), **and cache the in-flight promise**, because concurrent subscribes fired off one broadcast will all miss a result-only cache and mint in parallel anyway. Also: a 429 is temporary and must be reported distinctly from a 503 — treating it as "no SFU here" demotes the whole room to P2P over a transient limit.
+  - **Anything driven by a broadcast must be idempotent, because the broadcast fires far more often than its contents change.** `peer-list` is re-sent on every join, leave, prune, rename and settings change, and its late-joiner branch called `sfuSubscribeVideo()` unconditionally for every SFU publisher in it. Each call built a fresh `RTCPeerConnection` and overwrote `conn.videoMedia` *without closing the previous one* — a leaked peer connection and Cloudflare session per publisher per broadcast. The fix was to route it through `applyRemoteTrackTopology()`, which already had the unchanged-`{mode, ref}` guard; the bug was a second code path bypassing an existing guard, not a missing one. Worth checking for the same shape wherever a periodic or event-driven "sync" message triggers connection setup. One subtlety: "unchanged" must be verified against real live state (an open peer connection), not against remembered metadata — the provider ref is stored *before* the subscribe is attempted, so a failed attempt otherwise looks identical to a healthy one and is never retried.
+  - **Byte-rate deltas must be taken per RTCPeerConnection, never across a summed set.** `bytesSent`/`bytesReceived` are cumulative per connection, so "sum every pc, diff against last tick" spikes when a peer joins (their whole lifetime total lands in one sample) and goes *negative* when one leaves. `_pcByteCursors` is a `WeakMap` keyed on the pc so each is compared only against its own previous reading; a departed pc simply stops contributing, and a `WeakMap` means a closed one is collectable. Also: the first sighting of a pc must report zero, not its lifetime total. Same trap applies to any cumulative counter read over a changing population.
+  - **A preference allowlist must name every valid value, including the one that used to be the default.** `videoRoutingPreference()` originally read `(v === 'allow-sfu' || v === 'p2p-only') ? v : DEFAULT` — correct only while `DEFAULT` was `'prefer-p2p'`. The moment the default flipped to `'allow-sfu'`, an explicitly stored `'prefer-p2p'` fell through the allowlist and was silently overridden *back to the relay*: precisely the silent privacy downgrade this feature exists to prevent. Caught by a persistence unit test, not by review. Any "validate against a list, else default" accessor carries this latent trap the day its default changes.
+- **The stats popover had `pointer-events: none`,** which meant its own "click inside keeps it open" branch could never fire (`popover.contains(e.target)` was never true) and it could not scroll. Removed, with `max-height: 60vh; overflow-y: auto`, and `showStatsPopover` now flips the panel above its anchor when the taller content would run off the bottom.
+- **Stats polling must NOT be gated on dev mode.** The `storage` handler used to `stopStatsPolling()` when dev mode was switched off, but the poll also feeds the adaptive jitter buffer and the peer dot's ICE colour — both non-dev features. It now always polls (`startStatsPolling` already gates the dev-only badge rendering internally). `startStatsPolling` was already called unconditionally on join, so this only fixed the toggle path.
+- Tests: `tests/e2e/unit-audio-quality.spec.js` (SDP transform incl. CRLF/`/2`-suffix integrity and idempotence, jitter-buffer escalation, the dedup guard, the setting's clamping/precedence/host-push handling, loss history + sparkline geometry, and the settings-UI flow) and two `@mesh` cases — `a speaker opens at most one outgoing audio call per listener` and `audio links negotiate Opus with in-band FEC, DTX on and 40 ms packets` (the latter reads the **real negotiated `localDescription`**, so it proves the transform survives PeerJS).
+
+## Audio output routing (loudspeaker ⇄ earpiece) — what each platform can actually do
+
+- **`setSinkId` is a desktop-only API and always will be for this purpose.** It is **not implemented on Android at all** — Chrome *and* the WebView — because the platform gives no way to move an individual audio stream to a chosen device; and WebKit never shipped it. So the existing `applySpeakerSink()` / `applySpeakerSinkToAllAudio()` path (the Settings → speaker picker) can never be the mobile speaker/earpiece switch, and `#select-speaker-device` is correctly desktop-only. Don't try to route mobile audio through it.
+- **Which means there are exactly two mobile levers, and one platform with none:**
+  | Surface | Mechanism | Ships how |
+  |---|---|---|
+  | iOS native (WKWebView) | `AVAudioSession` category options + `overrideOutputAudioPort` | App Store build |
+  | Android native | `AudioManager.setCommunicationDevice` (API 31+) / `setSpeakerphoneOn` | Play Store build |
+  | iOS web (Safari) | `navigator.audioSession.type` | instantly / OTA |
+  | **Android web** | **nothing — there is no API** | — |
+  | Desktop web + Tauri | `setSinkId` (already there); earpiece is meaningless | — |
+  So `probeAudioRouteBackend()` resolves to `'native'` / `'web-audiosession'` / `null`, and `#btn-audio-route` is **hidden** on `null` rather than offered as a dead control.
+- **The route is session state and is deliberately never persisted** — every room starts on the loudspeaker. It is reset only at the two *real* join sites (`finishJoin()` and `createRoom()`'s `peer.on('open')`), **never** from the other two `publishRoomActive(true)` call sites: those are `becomeHost()` and the migration handler, which fire *mid-call*, and hooking them would yank a user back to the loudspeaker mid-sentence because the host died. `publishRoomActive()` looks like the tidy single hook and is the wrong one.
+- **Detecting native support needs a *call*, not a presence check.** Capgo ships `main.js` over the air, so a binary older than the JS bundle still exposes `Capacitor.Plugins` — the object is there, the method is not, and Capacitor rejects the promise. `probeAudioRouteBackend()` therefore `await`s `getRoute()` and catches; a stale binary falls through to the web backend.
+- **Gate the web backend on `IS_MOBILE_DEVICE`, not just on the API.** Safari on macOS implements `navigator.audioSession` too, and an "Earpiece" button on a laptop is nonsense.
+- **iOS: never use `overrideOutputAudioPort(.speaker)` for the speaker route.** It is a hard override that beats a connected headset. The loudspeaker comes from the `.defaultToSpeaker` *category option* and the earpiece from its absence; both then clear any lingering override with `.none`. A wired/BT headset outranks the category default, so it keeps the audio in either mode — which is what a user plugging in headphones expects.
+- **iOS: the category is reset by things we don't control**, so the desired route has to be remembered and re-applied — audio interruptions (the pre-existing `AppDelegate` handler) and WKWebView reconfiguring the session when `getUserMedia()` starts. Hence `AudioRoute.desired` + an `AVAudioSession.routeChangeNotification` observer, and `AppDelegate.configureAudioSession()` delegating to `AudioRoute.apply()` instead of setting the category inline (inline, restoring after an interruption dragged an earpiece call back to the speaker). The route-change observer must **skip** `.newDeviceAvailable` / `.oldDeviceUnavailable` / `.override` — those *are* the system picking a headset, and re-applying would fight it.
+- **iOS: still never call `setActive(_:)`** — `PTChannelManager` owns activation exclusively (see the PushToTalk notes above). `setCategory` + `overrideOutputAudioPort` is enough; the pre-existing `configureAudioSession()` already worked without it. Do check the `NSError` on both — an unchecked error is the documented reason these calls appear to "do nothing".
+- **Android: the earpiece is only selectable in `MODE_IN_COMMUNICATION`**; in the default mode the request is silently ignored. But the **speaker route restores `MODE_NORMAL`** and clears any pinned device, i.e. returns the device to exactly the state the app left it in before this feature existed (which already played through the loudspeaker). Leaving a finished call in communication mode hands the volume keys to the call stream.
+- **Android: `isSpeakerphoneOn()` alone cannot report the route.** It is `false` in `MODE_NORMAL`, which would read as "earpiece" while audio is on the loudspeaker — so `currentRoute()` has to check the mode first. `minSdk` is 24, so `setCommunicationDevice` (API 31+) needs the `setSpeakerphoneOn` fallback.
+- **WebKit reconfigures its audio session around `getUserMedia()`**, which can silently reset the route. `reassertAudioRoute()` re-applies the user's choice after both `acquireMicForRoom()` and `reacquireMicForRoom()` succeed, rather than letting the platform quietly win.
+- **The native half cannot ship via Capgo OTA** — Swift/Kotlin needs a store release. The JS half ships immediately and lights up when a new binary lands, which is exactly why the probe has to tolerate the mismatch.
+- Tests: `tests/e2e/unit-audio-route.spec.js`. `IS_NATIVE_MOBILE` / `IS_MOBILE_DEVICE` are `const`s evaluated while `main.js` loads, so every stub (`window.Capacitor`, `navigator.audioSession`) must be installed with `addInitScript`, before `goto`.
+
+## Robustness & room scale
+
+- **Treat all incoming peer messages as untrusted.** Any peer drives the data channel, so a malformed/buggy/hostile message must never throw out of a `data` handler and disrupt the room. The original crash was `handleHostMessage` doing `msg.peers.map(...)` unguarded on a `peer-list` — and it threw *after* `applyHostRoutingHints()` had already mutated the successor chain, leaving half-updated state mid-migration. Pattern: guard fields (`(msg.peers || [])`), reject non-objects at the top (`if (!msg || typeof msg !== 'object') return`), and route the non-host dispatch through `safeHandleHostMessage()` which `try/catch`es so one bad packet is dropped, never fatal. Regression test: `tests/e2e/unit-robustness.spec.js`.
+- **Audio is a full WebRTC mesh, so it does not scale to large rooms.** Connections grow ~O(n²) and, worse, a single speaker uploads one Opus stream *per listener* (the speaker's uplink is the real ceiling — listen-only peers don't fix it; only an SFU would). Lazy mic already avoids listener↔listener links (a peer that never speaks never initiates a `MediaConnection`), so silent listeners are cheap, but a busy room still degrades. There is **no hard cap** (joining is never blocked); instead `updateRoomSizeWarning()` (called from `updatePeerList`) shows an advisory `#room-size-warning` banner — soft (amber) at `ROOM_SOFT_WARN_PEERS` (8), hard (red) at `ROOM_HARD_WARN_PEERS` (12). Count is taken from the rendered roster (`#peers-list .peer-item`), hidden in tiny-embed.
+- **STUN is not firewall traversal — TURN is.** `fetchIceServers()` always returns STUN (Google public), but STUN only helps hole-punch *permissive* NATs; symmetric NAT / corporate firewalls need a **TURN relay**, specifically over **TCP/443 and TLS (`turns:`)** — UDP/3478 is commonly blocked. Org/metered TURN is gated (relays cost bandwidth and static creds get scraped/drained), so when neither is configured the step-3 fallback now adds a best-effort free TURN relay (`DEFAULT_FALLBACK_TURN`, public Open Relay creds — shared/rate-limited, may need a per-account key now). Override without a rebuild via `localStorage['turn-fallback']` (JSON `RTCIceServer[]`, or `'[]'` to disable). A relay only forwards encrypted DTLS-SRTP, so it can't hear the audio — using one doesn't break the privacy story. Durable fix for anonymous traversal = your own coturn behind a rate-limited public short-lived-cred endpoint. Tests: `tests/e2e/unit-ice-fallback.spec.js`.
+- **ICE resolution precedence (`fetchIceServers`)**: (0) ICE servers pushed by the embedding page via `postMessage {type:'config', iceServers}` → (1) org/presence backend TURN → (2) metered.ca localStorage creds → (3) STUN + free relay fallback. The advanced settings UI is a friendly front-end for #3: radios Automatic / Off / Custom map to `turn-fallback` unset / `'[]'` / a single `RTCIceServer` (`relayStateFrom/ToStorage`).
+- **Embedders can inject their own TURN without self-hosting or a Voxal account** via `postMessage {type:'config', iceServers:[…]}`. It wins over all other sources, is in-memory only (parent re-sends each load; creds never hit localStorage), and is **origin-validated** — the embed must set `?parentOrigin=https://site` and the message origin must match `getAllowedParentOrigin()`. Cross-origin parents can't write the iframe's localStorage, so this (or an `auth` token → org TURN) is the only way to configure TURN in a hosted embed. Tests: `tests/e2e/unit-iframe-config.spec.js`.
+- **Inbound iframe `postMessage` origin gating is opt-in via `?parentOrigin`.** `isTrustedParentMessage(e)` gates *all* commands (`auth`/`join`/`create`/`key`/`config`): if the embed declared `?parentOrigin=https://site`, every message must come from that origin; if it didn't, any origin is allowed (legacy/back-compat). So an embed locks itself down by passing `parentOrigin`. `config` is additionally strict on its own (its inline check rejects cross-origin even with no `parentOrigin`, since it carries credentials).
+
+## Protocol versioning & updates
+
+- **`PROTOCOL_VERSION` (int) is sent in `hello` + `peer-list`; bump it only on wire-protocol changes.** It's separate from `VOXAL_VERSION` (display string) — many app releases share one protocol version. Peers record each other's `{protocolVersion, appVersion}` (`noteRemoteVersion`), warn once on skew (deduped via `_versionWarned`), and show a one-time "refresh to update" toast if any peer is on a *newer* protocol. Missing `protocolVersion` (pre-versioning peer) is treated as `0`. **Keep protocol changes additive & tolerant** (default missing fields, ignore unknown ones) — you can't force simultaneous upgrade in a P2P mesh, so mixed-version rooms must keep working; only gate behind a version bump for a genuinely breaking change.
+- **Updates reach users automatically, and the protocol is pure JS in `src/`:** web always loads the latest; desktop via the Tauri updater (`tauri-plugin-updater`, signed, `latest.json`); native mobile via **Capgo OTA** (`@capgo/capacitor-updater`, `autoUpdate:true`, `mobile-update.json`, `notifyAppReady()` for crash auto-revert). So protocol/JS changes ship to iOS/Android **over-the-air without App/Play Store review** — only native-shell changes (Swift/Kotlin plugins, entitlements, native deps) need a store release. Tag a GitHub release → all platforms converge within a launch or two.
+
+## Video stage (web desktop) — a tile grid with the voice UI railed right
+
+- **The room is a voice UI first, so the stage had to be strictly additive.** `body.video-stage` is set by `updateVideoStage()` **only while a camera or screen is genuinely live**, and every layout rule hangs off that class — an audio-only room therefore renders byte-identically to before the feature existed. This is the assertion worth keeping (`unit-video-stage.spec.js`: "an audio-only room never gets the class" / "keeps the flex stack"); everything else about the stage is negotiable, that isn't.
+- **Reuses the landscape reflow's technique**: flip `#screen-room.active` into a named-area CSS grid and re-assign the *existing* nodes to areas (`stage | rail`), so `.room-peers-panel` and `.room-bottom-bar` keep their markup, JS and behaviour and simply stack into a right-hand rail. Two traps that the landscape block documents and this block hits identically: **`max-width: none`** is mandatory or the grid stays trapped in the centered 480px desktop column, and because declaration order decides ties in this file the video block must come **after** the landscape block — whose selectors are now qualified `:not(.video-stage)` (the `.active` rules *and* all six child rules) so the two grids never fight.
+- **Anything that can appear above the room needs its own grid row, not a share of `header`.** The stage grid gave `#debug-consent-banner` `grid-area: header`, the same cell as `.room-header` — two elements in one grid cell *stack*, so the banner's Accept / Decline buttons rendered directly on top of the room's own header controls (settings, room code, copy, share, leave). The landscape block had already got this right with a dedicated `consent` row; the stage grid now mirrors it. The row is `auto`, so it collapses to zero height whenever the banner is `.hidden` and costs an audio-only room nothing.
+- **`auto-fit` cannot lay out a conference grid.** CSS can size columns but knows nothing about the leftover *height*, so `repeat(auto-fit, minmax(180px, 1fr))` put three tiles in one short row and left the bottom two-thirds of the stage empty. `bestGridColumns(count, w, h, aspect)` picks the column count maximising tile area for the measured box and `layoutVideoStageGrid()` writes it inline; the `auto-fit` rule stays as the pre-measurement fallback. Consequence: the column count is *measured*, so it must be recomputed on `resize` (rAF-throttled) — including the resize that crosses the breakpoint, where the stage goes from unmeasurable to visible.
+- **Reconcile by key; never rebuild.** `updateVideoStage()` is wired into a single place — the end of `updatePeerList()` — because every video/screen state change already refreshes the roster, so the two can never drift. But that means it runs on *every* roster tick, and **reassigning `video.srcObject` restarts playback and visibly flashes the tile**. `_syncVideoTile()` assigns it only when the stream object actually changed; `unit-video-stage.spec.js` pins this by counting setter calls through a patched property descriptor. (Note `srcObject` is defined on `HTMLMediaElement.prototype`, not `HTMLVideoElement.prototype` — walk the chain to find the descriptor.)
+- **The roster's camera icon is a control, and it must not change meaning under the user.** It used to be suppressed while the stage showed that peer (via a `videoStageIsActive()` helper, now gone) on the grounds that a floating viewer on top of a tile is redundant — but that left the roster with *no* per-participant video control at all on the very surface that has the most video. The icon now stays for everyone with a live camera (or screen), and `togglePeerVideoWatch()` branches on **`videoStageAvailable()`, never on whether the stage currently has tiles**: hiding the last visible tile stands the stage down, and a count-based gate would at that moment silently re-mean the icon as "open a floating viewer", leaving nothing that could un-hide the peer. `videoStageAvailable()` is a media query, so it cannot go stale mid-tick the way an observational DOM check ("is `#video-stage` visible?") does.
+  - **Hiding a peer is local and says nothing on the wire.** `_hiddenStageKeys` (tile keys) only filters what *you* render — the peer's camera keeps running and no message is sent, because no participant gets to reach across the room and switch off somebody else's camera. Deliberately *not* persisted, and cleared in `resetVideoState()`: it is a choice about this call. A hide is also released as soon as its source disappears, so a peer who turns their camera off and on again comes back visible instead of staying hidden behind an icon nobody remembers pressing.
+  - **On your own row the icon shows/hides your *self-view*, and must not touch the stream.** It briefly called `startVideoShare`/`stopVideoShare` and that was wrong: the footer Camera button already owns whether you transmit, and two controls for one stream is how you end up switching off a camera you only meant to stop looking at. It toggles `camera:self` in the same `_hiddenStageKeys` set as everyone else, and is therefore only rendered where a self-view exists to hide — `localVideoActive && videoStageAvailable()`, never as an "off" affordance for a camera that is not on.
+- **The stage and the floating viewer are alternatives, never both.** `videoStageAvailable()` gates on `IS_TINY_EMBED`, `html.is-web` and a `matchMedia('(min-width: 861px)')` check, matching the CSS. Where it is false — mobile, tiny embed, narrow web (**and, until the desktop-window work below, Tauri desktop**, which was on its WebviewWindow pop-out) — the icon opens/closes `openVideoViewer()`/`openScreenViewer()`; where it is true the same press shows/hides that peer's tile. Both readings are "am I watching this person", which is why one icon can carry both.
+- **The self-view is a draggable badge, not a tile — except when it is the only camera.** `selfBadgeTileKey()` minimizes `camera:self` into `#video-stage-self` whenever another *camera* tile is visible (a screen share doesn't count — alone with someone's screen you are still the only face), and an explicit pin outranks minimising in either direction. `renderVideoStage()` gained a third container and routes by key, so the badge↔grid transition **moves the same element** and never reassigns `srcObject` (which would flash the tile — the counting test now covers this path too).
+  - **Edge-anchored, not free-floating — and four corners were not enough.** Dropping the badge at an arbitrary offset means the next window resize parks it over someone's face, so it is anchored. The first version anchored it to the four **corners**, and that read as a bug: let go halfway down a side and it flew off to a corner you did not pick. It now stores an **edge plus a fraction along it** (`left:0.42`), which survives every size for the same reason a corner does — there is nothing to recompute, only a fraction to multiply — while landing where you actually let go. Still decided by the badge's **centre**, so the snap is where it looks like you dropped it.
+    - `selfBadgePlacementFor()` and `selfBadgeOffsets()` are pure and are exact inverses, via the one `_selfBadgeTravel()` that both read. They must be: anything else and the badge drifts a few pixels every time it is picked up and put down.
+    - The offsets are **inline**, written by `applySelfBadgePlacement()` from measured boxes; the `[data-corner]` rules in the stylesheet are only the fallback that holds the badge before it has ever been measured (it is `hidden`, so unmeasurable, until the render that reveals it — hence the explicit call at the END of `renderVideoStage()`, after the layout).
+    - **Do not hand the badge back to the stylesheet before re-placing it.** `applySelfBadgePlacement()` measures, and measuring flushes layout — so clearing the inline offsets first makes the badge visibly jump to a corner and animate back from there.
+  - **`touch-action: none` on the badge is not enough to own the gesture.** It is
+    read off the element the touch **started** on, and the press that reaches
+    the badge sometimes starts somewhere else: parked beside the mic (or tucked
+    under the bottom edge) the badge lies *under* the control bar, which
+    forwards the press (`selfBadgeAtPoint()`). The bar says `manipulation`
+    (inherited from `body`), so the browser panned the room out from under the
+    drag. Three things fix it, and all three are needed:
+    - a non-passive `touchmove` on `document` that `preventDefault()`s for the
+      length of the drag (a *passive* listener may not call it at all);
+    - `touch-action: none` on the bar itself while the badge is parked there
+      (`body.self-badge-on-bar`), because on WebKit the compositor decides at
+      **touchstart** whether it may scroll, and by the first `touchmove` it can
+      be too late;
+    - `setPointerCapture()` — but **only once the press has become a drag**, past
+      `SELF_BADGE_DRAG_SLOP`. A captured pointer delivers its `click` to the
+      capturing element, so capturing at `pointerdown` silently took
+      click-to-pin away from the tile inside the badge. The test for the plain
+      click is what caught it.
+  - **`pointercancel` is not `pointerup`.** The system taking the gesture back (a
+    second finger, an edge swipe, a call arriving) is not a choice of where the
+    badge goes, so it restores the stored placement instead of committing
+    wherever the drag had reached.
+  - **Dragged off the stage, it tucks rather than springing back.** Pushed past a border by more than `SELF_BADGE_TUCK_MIN`, the drop leaves it under that border with `SELF_BADGE_PEEK` showing. That sliver is a *handle*, not a picture: its own controls are hidden, and the click-to-pin every tile carries is swallowed there — a tap means "bring it back", which is the only way back in. The drag itself is clamped to leave that same sliver, so a badge can never be pushed somewhere no pointer can reach it.
+  - **Listen for `pointermove`/`pointerup` on the window, not on the badge.** The pointer routinely leaves a 200px badge mid-drag; a `pointerup` delivered elsewhere would leave it glued to the cursor. The listeners are added on `pointerdown` and removed on release.
+  - **A drag ends with a `click`, and every tile has a click-to-pin handler**, so moving the badge would also blow it up into the focus slot. A capture-phase listener on the badge swallows exactly that one click when the pointer moved more than `SELF_BADGE_DRAG_SLOP`; a genuine click still pins.
+- **Every tile is `muted`.** Audio travels on its own MediaConnection and is already played by the audio pipeline; an unmuted tile double-plays every voice.
+- **Self-view must be mirrored** (`transform: scaleX(-1)`, camera tiles only) — an unmirrored self-view reads as wrong. A **screen** share must never be mirrored and must use `object-fit: contain`; cropping it loses content.
+- **A peer whose camera is on but whose stream has not arrived keeps its slot** as an initial-letter placeholder, rather than letting the whole grid reflow under the user when a stream blips.
+- **Video senders had none of the tuning audio senders get, and capture was completely uncapped** — `selectedCameraConstraints()` set only `facingMode`/`deviceId`, so a 1080p camera was encoded once *per peer*. This mattered less while only one remote camera could be watched at a time; a tile grid makes every stream live at once. `tuneVideoSenders(pc, kind)` mirrors `tuneAudioSenders`'s defensive shape (feature-check, early-return when already tuned, swallow errors, `.catch()` the promise) and sets `maxBitrate` + `degradationPreference` + `contentHint`, plus `scaleResolutionDownBy` stepped by peer count since a sharer uploads one encode per peer.
+  - **A screen share gets `maintain-resolution` + `contentHint: 'detail'`, never a resolution scale** — dropping resolution to save frames makes text unreadable, which defeats the point of sharing a screen. Cameras get `balanced` + `'motion'`.
+  - Capture caps are **`ideal`/`max`, never `exact`** — the Desk View / virtual-camera split-frame note above still applies, so the OS must stay free to pick its native profile.
+  - **PeerJS creates the `RTCPeerConnection` asynchronously**, so senders may not exist when `peer.call()` returns. `tuneVideoCall()` applies on the next tick *and* again on `stream`. The incoming-call handlers answer with `new MediaStream()` and therefore have no video senders to tune — correctly skipped, not an oversight.
+- **`video-mode-enabled` was force-written `true` on load and again in `resetVideoState()`**, so the key could never hold a user's choice and `#video-mode-setting` referenced an element that did not exist anywhere in the HTML. The reader is now `readVideoModeEnabled()` — absent means "never chosen", so only an explicit `'false'` disables it and shipping the feature needed no migration — and a real toggle lives in Settings → Video.
+- Container note: `/opt/pw-browsers` ships Chromium **1194** in the old `chrome-linux/` layout while `@playwright/test` 1.62 wants build **1234** in the Chrome-for-Testing `chrome-linux64/` layout, and the CDN is proxy-blocked. Symlinking the 1194 tree into the 1234 paths (`chrome-linux64` → `chrome-linux`, `chrome-headless-shell` → `headless_shell`) runs the whole suite fine.
+
+## Video stage on mobile — the immersive shape
+
+- **One selector decides the shape, and everything else already followed it.** The stage shipped desktop-only behind `videoStageAvailable()`, and because `updateVideoStage()`, `togglePeerVideoWatch()` and the self-view badge *all* consult that single function, bringing the whole feature to phones was one function, not a sweep. It is now `videoStageMode()` → `'none' | 'desktop' | 'immersive'`, with `videoStageAvailable()` kept as a derived boolean so no call site changed. `'none'` is the tiny embed and any surface with neither platform class. (It **used to include Tauri**, which carried neither `is-web` nor `is-native`; the desktop-window work below moved it onto `is-web` + `is-desktop-app`, so it now reads `'desktop'` or `'immersive'` by width like web does.) Native resolves to `'immersive'` at **any** width without measuring, because a native tablet in portrait is 768–1024px and would otherwise trip the desktop breakpoint — it can't actually match the desktop CSS, which is `html.is-web`-qualified, so a width test there would disagree with the stylesheet.
+- **Publish the mode as a body class instead of re-deriving it in CSS.** A media query would have to duplicate the `is-web`/`is-native`/tiny-embed reasoning and could then disagree with the JS that renders the tiles. `body.video-stage-immersive` (set by `updateVideoStage()` alongside `body.video-stage`) means the immersive block needs **no `@media` at all**, which also sidesteps the declaration-order fight documented in the landscape/desktop blocks — it can't tie with rules it shares no specificity contest with. Both classes obey the same rule: set only while a camera or screen is genuinely live, so an audio-only room still renders byte-identically.
+- **An absolutely-positioned child is laid out against its container's PADDING box, not its content box.** `#screen-room` carries `env(safe-area-inset-*)` padding, so the obvious way to make the stage bleed edge-to-edge — offset it by the padding, `top: calc(-1 * …)` on all four sides — **overshoots by exactly twice the padding** (measured: a 390px room produced a 426px stage). Plain `inset: 0` already spans the padding and reaches the physical edges, while the chrome keeps the padding and stays inside the safe area. Caught by asserting the stage's `getBoundingClientRect()` equals the room's; a visual check would have missed 18px of overhang under a status bar.
+- **"Edge to edge" is about the stage, not the tiles — and skipping that distinction buries half the UI.** With the stage at `inset: 0` the grid ran the full height, so the **bottom tile's name bar sat under the 184px control stack** (measured: tiles at 0–421 and 423–844, bar starting at 648). The fix is to inset the *grid* by the space the chrome actually occupies while the *stage background* stays full-bleed, so video still reaches the physical edges. The bottom inset is **measured** (`applyImmersiveStageInsets()`), not a constant: the control stack changes height with content — a name wraps, the Screen button is absent on mobile.
+  - **The measured inset must come off the CONTENT box before choosing a column count.** `layoutVideoStageGrid()` measured `getBoundingClientRect()`, which is the *border* box and still includes the new padding — so `bestGridColumns()` was sizing tiles against space they do not get.
+  - The measurements are published as `--stage-inset-top/bottom` **on `documentElement`, not on the stage**, because two things outside the stage need them: the corner-anchored self-view badge, and the panel scrim.
+- **The header and roster are sliding panels, not fading chrome — and the first design was wrong on both counts.** The first pass faded them on an idle timer *and* recoloured everything over video (white text, translucent black buttons). Both were mistakes: an idle timer means the header disappears while you are reading it, and a video-only palette means switching a camera on **restyles the room**, which is exactly what a consistent UI must not do. They are now off-screen while video is live and pulled back over the tiles by a drag handle (top-centre for the header, right-centre for the roster), keeping the app's **own surface colours** — which is also what makes them legible over video with no palette of their own. `.room-action-btn` already has `background: var(--bg-card)` and a border, so there was never anything to fix.
+  - **They overlay rather than reserve space**, so revealing one never reflows the video — which also collapses the inset logic to just the bottom bar.
+  - **`sign` in a drag must be the direction of the GESTURE, not of the transform that hides the panel** — they are opposites. The header hid *upward* (`translateY(-100%)`) but was opened by pulling **down**; encoding the transform direction made every drag clamp to 0 and refuse to open, while the tap path kept working, so only the drag test caught it. (The header is no longer one of these panels — see *The header is chrome, not a panel* below — but the rule still holds for the roster and the chat.)
+  - ~~**The scrim must stop above the control stack.**~~ **Superseded:** it stops nothing; it covers `inset: 0` and the *bar* is lifted over it instead. See *The header is chrome, not a panel* below. The invariant it was protecting — the talk button is never dimmed and never un-tappable — is unchanged, and `elementFromPoint` is still the right guard, because the button stays perfectly visible while being unclickable.
+  - The two panels are **mutually exclusive** (opening one closes the other), and the inactive one's handle is hidden while the other is open, or it floats as a live control on top of a panel it does not belong to.
+- **The flip button belongs ON the self-view tile, not in the room's control row.** It is a property of that camera, not of the room. The payoff is structural: `renderVideoStage()` **moves the same tile element** between the grid and the minimized badge, so one button automatically serves both without a second implementation or any repositioning logic. Two things it must do: `stopPropagation` on `click` (every tile carries a click-to-pin handler) *and* on `pointerdown` (the badge carries a drag), and counter-mirror itself (`scaleX(-1)`) since the front-camera tile it sits on is mirrored and its icon would otherwise read backwards.
+- ~~**Hiding `#ptt-hint` in immersive mode is worth the 40px.**~~ **Superseded:** it loses its ink, not its space (`visibility`), because taking its space moved the mic. Upright, that is; sideways it goes entirely. See *The header is chrome, not a panel* below.
+- **The PTT button and control row are never hidden, by any mechanism.** This is a push-to-talk app — hiding the one control people reach for without looking is hostile, and it is the same "the room is a voice UI first" principle that made the desktop stage strictly additive.
+- **A stubbed media stream must be a real `MediaStream`.** The stage assigns it to `video.srcObject`, which throws `TypeError: The provided value is not of type '(MediaSourceHandle or MediaStream)'` on a plain object. Construct a real one (`new MediaStream()`) and override only `getVideoTracks`/`getTracks` on the instance.
+- **A camera flip is not a stop, and the distinction is on the wire.** `flipCamera()` reuses `reacquireMicForRoom()`'s shape — acquire first, keep the old stream on any throw, `replaceTrack` every live sender (mesh `videoMediaOut` **and** the SFU publisher pc), stop the old stream last, re-run `tuneVideoSenders()` because a replaced track carries none of the old encoder parameters. What it must **not** do is send anything: `conn.videoActive` means "this peer is sharing", a live share never re-announces itself, so a `video-stop` during a flip would delete the tile for everyone permanently. The regression test asserts `replaceTrack` was called and **zero** messages were sent — a teardown-and-republish implementation fails it on the message count.
+- **On a phone the facing mode must outrank a stored `deviceId`.** A phone's device list is not stable enough across sessions for a pinned id to mean anything, and the flip is expressed as `facingMode` — so `selectedCameraConstraints()` branches on `IS_MOBILE_DEVICE` and ignores the stored camera id there. Desktop keeps the stored id. Mirroring becomes conditional too (`data-facing` on the self tile): a mirrored *rear* camera is simply backwards.
+- **`navigator.connection`'s absence must fall through to the MOBILE cap, never the desktop one.** WebKit — every iOS browser — has no Network Information API, so a naive `if (conn && slow) mobile; else desktop` hands iPhones the desktop bitrate. `cameraMaxBitrate()` returns the mobile cap whenever `IS_MOBILE_DEVICE`, and only *lowers* it further when a connection object reports `saveData` or 2g/3g.
+- **Pause a backgrounded camera with `track.enabled = false`, never `track.stop()`.** `enabled` needs no renegotiation, is instantly reversible, and leaves `conn.videoActive` untouched so nobody's tile disappears — the same lever PTT already uses for the mic. Driven from both `visibilitychange` **and** Capacitor's `appStateChange`: on iOS the WebContent process can be suspended before a `visibilitychange` is dispatched, so the native signal is the more reliable of the two, and both are idempotent.
+- **A wake-lock sentinel is auto-released whenever the page is hidden**, so returning to the foreground is the *only* place it can be re-taken — hence `_stageWakeLockWanted` (the intent) being tracked separately from `_stageWakeLock` (the sentinel), and re-requested in the existing `visibilitychange` handler. Feature-detect: Chromium and Safari 16.4+ only.
+- **Android had NO `android.permission.CAMERA` at all**, so `getUserMedia({video})` failed silently in the app while working fine on mobile web. Capacitor's `BridgeWebChromeClient` maps the WebView's `RESOURCE_VIDEO_CAPTURE` onto a runtime `CAMERA` request, but a permission missing from the manifest is auto-denied. Add `uses-feature android.hardware.camera` + `.autofocus` with **`required="false"`** so Play does not hide a voice app from camera-less devices. Do **not** add `camera` to the foreground service's `foregroundServiceType` — capture is paused when the app backgrounds, so no camera FGS is needed, and declaring one pulls in extra Play Console declaration requirements. iOS needed nothing: `NSCameraUsageDescription` was already in `Info.plist`.
+- **This ships in two halves, and only one of them is OTA.** The JS/CSS reaches phones immediately (web) and via Capgo (native); the Android manifest permission needs a Play Store build. Same pattern as the audio-route feature, and `probeAudioRouteBackend()`'s "call it, don't presence-check it" lesson applies — the flip button is gated on an `enumerateDevices()` result, which fails honestly on a binary that lacks the permission.
+- **Two pre-existing tests encoded the old contract and had to be rewritten, not patched.** Both used "narrow viewport" as a stand-in for "no stage" — exactly the rule being reversed. They now drive the surfaces that genuinely have no stage (remove `is-web` to get the Tauri branch) and a new case asserts the *opposite* for a phone-width viewport. When a behaviour change breaks a test, check whether the test was asserting the mechanism or the intent.
+- Container note for running the suite here: `/opt/pw-browsers` ships Chromium **1194**, `@playwright/test` 1.62 wants **1234**. Symlink `chromium-1234/chrome-linux64` → `chromium-1194/chrome-linux`, and build `chromium_headless_shell-1234/chrome-headless-shell-linux64/` as a real directory of symlinks into `chromium_headless_shell-1194/chrome-linux` with the binary additionally aliased as `chrome-headless-shell`. Note the **`-linux64` suffix on the headless-shell directory** — the earlier note in this file omitted it and the launch fails with "Executable doesn't exist" until it is added.
+
+
+## The glass dock and the tap-away chrome (phone stage only)
+
+- **Glass belongs where the control stack is on a picture, and nowhere else.** The first cut put the dock on the desktop stage too and narrowed the rail to pay for it; that was the wrong trade. On a desktop the voice UI is railed *beside* the video — it is app chrome on app background, costs the tiles no height, and a dark translucent slab there is an affectation. The dock is therefore scoped to `body.video-stage-immersive`, and the desktop block in `styles.css` is byte-for-byte what it was.
+- **A panel on video cannot use the app's palette, so everything inside it has to be recoloured — except the one control people recognise by sight.** The tint is dark in *both* themes (`rgba(16,16,20,0.42)` + `backdrop-filter: blur(22px) saturate(180%)`), because a light panel over a dark frame reads as a hole and a theme-following one cannot be relied on to keep white text legible. `--text-muted`, `--bg-raised` and `--border` inside the dock would be dark-on-dark in the light theme, so `.ptt-hint`, `kbd`, `.btn-icon` and `.room-action-btn` all get light-on-glass overrides. The **talk button is left completely alone** — same border, same states, same size as in a voice room; it is what the app *is*, and restyling it costs more than it buys. The existing "switching a camera on must not restyle the room" test had to be split accordingly: the panels still must not change, the talk button still must not change, the buttons beside it now must.
+- **`transition` on a panel makes every computed-style assertion a race.** The dock cross-fades in, so `getComputedStyle` read on the frame the body class lands returns the value it is coming *from* — transparent. Two tests looked like a specificity bug and were not; they now poll until the value settles (`pickSettled()` in `unit-video-mobile.spec.js`). Worth remembering before debugging any "my rule isn't applying" in this codebase.
+  - The probe that nearly sent that debugging the wrong way: walking `document.styleSheets` with `if (rule.cssRules) recurse(); else check(rule.selectorText)`. In current Chromium a plain `CSSStyleRule` **has** a `cssRules` property (nested CSS) — an empty `CSSRuleList`, which is **truthy** — so every style rule takes the recursive branch and nothing is ever checked. Test for `rule.selectorText` first.
+- **The tiles run full-bleed UNDER the dock**, which is what makes "tap to put it away" reveal anything at all. `applyImmersiveStageInsets()` no longer pads the grid's bottom; only the **ribbon** still clears the dock, because a row of faces behind the talk button is not a picture with a panel on it, it is three people you cannot see.
+- **A tap on the video toggles the chrome; a LONG PRESS pins a tile.** The tap used to pin, which reshapes the whole stage — far too big a thing to hang off the same gesture as "show me the picture". The press mirrors the chat's own row-menu press exactly (450 ms, 10px slop, a `_stagePinPressFired` flag that swallows the click it leaves behind *and expires on its own*, because the tile is re-laid-out under the finger and the click can land somewhere the stage never sees). `contextmenu` has to be prevented or the platform's "save video" menu lands on top of it, and the tiles need `-webkit-touch-callout: none` + `user-select: none`.
+- ~~**The slab is a PSEUDO-ELEMENT that grows outward, never padding on the bar.**~~ **Superseded — there is no slab.** The reasoning below is still the reason the bar's *box* is untouchable, and it is why replacing the slab with per-control glass changed no geometry at all. Kept for that. This is the whole trick, and it took two goes to find. Padding, a border and a `border-radius` on `.room-bottom-bar` itself all change its box, so turning a camera on shoved the control row up by 11px — and those two controls are exactly the ones people reach for without looking. `::before { position: absolute; inset: -12px -8px -6px; z-index: -1 }` carries every bit of the glass *outside* the bar instead, so the bar keeps the box it has in a voice room to the pixel. (`z-index: -1` works because the bar already carries `z-index: 20`, so it is the stacking context the negative index is relative to; and the insets stop short of the screen on every side, or the pill reads as a bar welded to the bottom.)
+- **Hiding the control row has to take its INK, not its space.** The bar is anchored to the bottom of the screen and the row comes *after* the button in source order, so `display: none` on the row pulled the talk button 50px down. `visibility: hidden` leaves the geometry alone and costs no picture — the bar paints nothing once the slab has faded, so the video shows straight through where the row was. An earlier attempt reordered the row above the button with `order: -1`; it worked, but it is not what the controls should look like, and this is better anyway because it also holds in landscape (where the bar is a row and `order` fixes nothing).
+  - The cost is a band of see-through video at the bottom that is **not** part of `#video-stage`, so the tap that should bring the chrome back lands on the bar and goes nowhere. The bar forwards it (`initStagePanelHandles()`), one way only: while the dock is up it is a control surface, and a thumb that misses a button should not put the whole panel away.
+- **A status line that only takes space when it has something to say is a control that moves every time the room has news.** `.ptt-status:empty { display: none }` looked like free real estate on a phone; it pushes the talk button 16px whenever the room needs to say "microphone muted". It reserves its 16px here exactly as it does in a voice room.
+- ~~**The one thing that still moves on a camera toggle is the mic**, by the 27px of the `Hold Space…` hint.~~ **Superseded — and it was not deliberate enough to keep.** Nothing moves now: the hint is `visibility: hidden`, so the mic lands on the same pixel in a voice room and a video one. See below.
+- **With the chrome away, the mic now DROPS to the bottom (2026-10, asked for by the owner).** The row still hides by `visibility`, so the bar's box is unchanged; the mic alone moves, by `translate: 0 var(--ptt-drop)` — not `transform`, which carries the press scale and would be overwritten. `--ptt-drop` is the bar's bottom minus the mic's *layout* bottom, measured in `applyImmersiveStageInsets()`; anything that reads the mic's rect while it slides (`selfBadgeBarSlots()`) must take the translate back out (`pttLayoutBottom()`) and add the target drop, or a badge parked beside the mic lands mid-slide. "Same pixel in a voice room and a video one" still holds with the chrome up.
+- **`body.stage-chrome-hidden` must be cleared whenever the immersive stage stands down**, or the next room opens with its controls already hidden and no video on screen to explain why.
+
+## The header is chrome, not a panel (phone stage, second pass)
+
+The dock shipped, was used on real phones, and came back with a list. Every item
+on it is the same mistake in a different place: a *decision* made for the person
+using the room, instead of a control put where they can reach it.
+
+- **A drag handle at the very top of the screen cannot be reached on a PWA or in
+  a native app.** The room header used to be a sliding panel opened by a 22px tab
+  at `top: env(safe-area-inset-top)`. On the desktop web that is fine; installed
+  to the home screen, or inside the Capacitor apps, that band is the system
+  status bar — the OS takes the gesture and the header never comes down, so
+  Settings, the room code and Leave are simply *gone*. The header is now part of
+  the chrome: it arrives and leaves with the control row, on the same tap. There
+  is no handle to miss, and `STAGE_PANELS` is down to the roster (the chat keeps
+  its own).
+- **A Capacitor app asks the OS to overlay the status bar, and then some Android
+  WebViews report `env(safe-area-inset-top: 0)`.** `setOverlaysWebView({overlay:
+  true})` is called at startup, so there is *always* a bar up there to clear —
+  but the inset that is supposed to describe it can come back zero, and the
+  header's buttons end up under a system bar that eats every touch aimed at them.
+  Hence `--stage-safe-top`, which is the raw inset on the web and
+  `max(inset, 24px)` under `html.is-native` (24px is the shortest Android status
+  bar; a notched device keeps its own larger value).
+- **A panel that overlays must not also reserve.** The header lies ON the picture
+  exactly as the dock does — `position: fixed`, nothing reserved — so the tiles
+  are on the same pixels whether it is there or not. `applyImmersiveStageInsets()`
+  now pins the grid's `padding-top` at 0 (it used to be 26px for the handle, and
+  0 while the chrome was away, which reflowed the whole stage on every tap).
+  `--stage-inset-top` survives as the header's *measured height*, used only to
+  place things that must clear it: the self-view badge's top corners, and the two
+  controls on the self camera's own tile (flip, background) — a button pinned to
+  the top of a tile is otherwise pinned under the header. That last one is only
+  caught by a **click** test; `getComputedStyle` says the button is perfectly
+  visible.
+- **A rule across the middle of a panel lying on a face is a scratch.** The line
+  above the control row is right in a voice room — the bar *is* the bottom of the
+  page there and the line separates the talk button from its controls. On the
+  dock there is already an edge, the slab's own. It goes with
+  `border-top-color: transparent`, **never** `border-top: none`: the 1px is part
+  of the box, and removing it moves everything above it.
+- **`visibility: hidden` is the house rule for this bar, and the hint was the
+  one thing still breaking it.** `#ptt-hint` was `display: none` in immersive
+  mode, which took its line with it — and the bar is bottom-anchored, so the mic
+  dropped by the whole height of the hint the moment a camera came on. The mic is
+  *the* control people reach for without looking; it now lands on the same pixel
+  in both kinds of room. Same treatment for `.ptt-status` in clean mode (it used
+  to be kept on the grounds that it says why the room cannot hear you — but the
+  button already says that: a green ring, an accent fill, or neither).
+- **With the slab gone, the talk button has to become its own piece of glass.**
+  An opaque disc on a photograph is a hole punched in the frame. It takes the
+  dock's own tint/sheen/blur — factored into `--glass-tint`, `--glass-sheen`,
+  `--glass-blur` on the bar — and keeps the **accent ring**, which is how the
+  talk button is recognised anywhere in the app. (First shipped for clean mode
+  and landscape only; now it is every control, everywhere on this stage — see
+  *The slab was a plank* below.)
+- **The scrim stops nothing now; the bar is lifted over it.** A scrim that ended
+  in a hard horizontal line two thirds of the way down the screen read as a grey
+  box someone had left on the video, not as the room standing back. It is
+  `inset: 0` at `z-index: 38`, and `.room-bottom-bar` goes to `z-index: 39`
+  **only while a scrim is actually up** (`stage-roster-open`, or `chat-overlay`)
+  — scoped, so nothing else in the room changes stacking order. Panels stay at
+  40, so where a panel covers the bar the panel still wins.
+- **The chat handle no longer turns accent when the drawer is open.** It is the
+  one control on screen in *every* room, and it was the only one that changed
+  colour under your thumb. The drawer sliding in says "the chat is showing" a
+  good deal louder than a purple icon does.
+- **Turning a camera on is not a decision about the microphone.** `startVideoShare()`
+  used to latch hands-free ("sharing your face while holding a key would be
+  absurd"). In a push-to-talk app, opening a live microphone because somebody
+  pressed a *camera* button is the one thing it must not do. The `?video=1`
+  deep link still arrives hands-free — that link asks for it by name and sets it
+  itself, in `autoStartVideoOnJoin()`. (Screen share still latches; nobody has
+  complained about that one yet.)
+- **The talk hint follows the DEVICE, not the wrapper.** `Hold <kbd>Space</kbd>…`
+  was swapped for a plain sentence only under `window.Capacitor.isNativePlatform()`
+  — so a phone with the site installed to its home screen, which runs the plain
+  web build, was told to hold a key it does not have. It is `IS_MOBILE_DEVICE`
+  now, in `setFreeHand()` and at startup both, and the copy names the thing the
+  finger is actually on: *"Hold the mic to talk · x2 for hands-free"*.
+
+### The slab was a plank, and most of it was empty
+
+The follow-on from the round above, and the cheapest change in it.
+
+- **A panel that exists to back two controls and a line of text is not worth a
+  fifth of somebody's face.** The dock was a blurred slab the full width of the
+  screen and the height of an 80px talk button plus a button row — and once the
+  hint had been reserved-but-hidden (to keep the mic on its pixel) a good third
+  of it was empty glass. Deleting the `::before` and moving the same
+  tint/sheen/blur onto each control gives the identical material in roughly a
+  tenth of the area, with the video running unbroken between the chips.
+- **A control that relied on the slab for contrast is a white button on a white
+  face without it.** `.room-action-btn` wore `rgba(255,255,255,0.10)` — a *light
+  wash*, which only worked because the slab underneath was doing the darkening.
+  Alone it has to carry the dark tint itself. Same for any text left on bare
+  video: `text-shadow` on the bar, since `.ptt-status` and the hint have nothing
+  behind them now.
+- **Removing a pseudo-element is not `display: none`, and a test that checks
+  `display` will not notice.** `getComputedStyle(el, '::before').display` on a
+  pseudo that was never generated comes back **`block`**, not `none` — the rule
+  simply does not exist, so the property takes its initial value. The landscape
+  test that asserted `display === 'none'` back when the slab was switched off
+  there passed for the wrong reason and would have kept passing over a
+  half-deleted rule. `content` is the honest check: it reads `none` when no
+  pseudo-element is generated.
+- **Once the bar paints nothing, its tap has to work both ways.** The band it
+  covers is not part of `#video-stage`, so the bar forwards taps on its own
+  background — but only ever *to bring the chrome back*, on the grounds that
+  while the controls sat on a plank the bar was a control surface and a missed
+  button should not put the panel away. With the plank gone that thumb is on the
+  picture, exactly as it is an inch higher up, and it now toggles in both
+  directions. `_stageTapOnChrome()` still exempts every real control, so missing
+  one is the only way to reach it.
+- **The empty-glass item in `todos.md` closed itself.** It was logged as "take
+  the talk button out of the bar and let the slab hug the control row" — more
+  moving parts than that round wanted. Deleting the slab solves the same problem
+  with a deletion, and the mic keeps the position that caused the gap.
+
+### Sideways, the room was rendering into a 480px letterbox
+
+The single worst thing in this round, and it had been shipping:
+
+- **`.screen { max-width: 480px }` from 640px up applies to the room with a
+  camera live.** The immersive stage is `inset: 0` on `#screen-room`, so the
+  room's width *is* the picture's width. Upright a phone is narrower than the cap
+  and nothing shows. Turned sideways it is 844px, and the video was drawn into a
+  480px column in the middle of the window with app background either side. The
+  landscape voice grid lifts the cap for exactly this reason and is qualified
+  `:not(.video-stage)`, so a room with video never reached it. Lifted now for
+  `body.video-stage-immersive` in **any** orientation — there is no regime where
+  that stage wants a column; it *is* the window.
+- **That was also why the drag handles looked detached from their panels.** They
+  are `position: fixed`, so they sit on the *viewport's* edges — which were a
+  couple of hundred pixels away from the picture they belonged to. Nothing was
+  wrong with the handle offsets; the room was the wrong width.
+- **A centred flex row centres the GROUP, not the mic.** Sideways the bar was
+  `justify-content: center` with the mic and the buttons side by side, so the mic
+  sat left of the centre line — and the thumb goes to the middle of the *screen*.
+  It is a `1fr auto 1fr` grid with the mic in the middle track, so the mic is on
+  the line whatever weighs on either side of it.
+- **`visibility: hidden` reserves WIDTH as well as height.** The hint kept for
+  the mic's sake upright is what pushed the landscape buttons ~100px out from the
+  mic, and lifted the mic off the bottom of a 390px screen. Sideways both lines
+  are `display: none`: there is no voice layout to line up with there anyway.
+- **No slab sideways.** One short row of controls does not need a blurred plank
+  covering a third of a face behind it; the controls carry the glass themselves.
+
+### Sideways again: the chrome is a column, and a fit is two limits
+
+- **A handle that rides its panel's edge must not add the safe-area inset.** The
+  panels are anchored at `left: 0` / `right: 0` and carry the inset as
+  **padding**, so the visible edge is the width and nothing else. The open-state
+  handle offsets added `max(env(safe-area-inset-*), 0px)` on top of the width,
+  which is zero in portrait — where it was checked — and 44–59px on a notched
+  phone **sideways**, exactly where the user saw the handle floating in the
+  picture attached to nothing. Closed, the inset is right: that keeps the tab out
+  from under the notch.
+- **`@media (min-width: 640px)` is a phone on its side.** A landscape phone is
+  844px wide, so the block meant to grow the talk button for a tablet grew it to
+  96px on a 390px-tall screen — while the same phone's *video* room drew it at 62,
+  because the immersive landscape block says so. A room must not resize the
+  control the whole app is for because a camera came on. The landscape voice grid
+  now pins the same 62.
+- **Sideways the chrome is a rail, not two bands.** A header across the top and a
+  row of buttons across the bottom cost a 390px-tall screen a third of its
+  height; sideways there is width to spare instead. Both are one fixed column
+  down the left, the talk button stays bottom-centre (the thumb goes to the
+  middle of the *screen*), and the rail starts inboard of the roster handle so
+  the two are never on the same pixels.
+  - The buttons are `position: fixed`, which takes them **out of the bottom
+    bar's grid** — so the bar shrinks to the mic, and `--stage-inset-bottom`
+    hands that height back to the ribbon and the self-view.
+  - Which edge the chrome is on is **measured, not re-derived from the media
+    query**: a header narrower than 60% of the stage IS the rail. That is what
+    moves the stage's no-go margin from `--stage-inset-top` to
+    `--stage-inset-left` — one or the other, never both — so the self-view
+    clears the chrome sideways the same way it clears the header upright.
+  - The rail leaves sideways (`translateX`), so its **vertical** geometry stays
+    true while the chrome is away; `--stage-rail-top` (the header's measured
+    bottom, in viewport coordinates, since the buttons are fixed too) is
+    published even then, or the stack jumps before it slides out.
+- **The rail was the wrong idea, twice over, and the fix was a deletion.** First
+  it grew a roster of its own beside the sliding panel (two left columns), then
+  the panel was docked into it (one column, but a column of floating cards that
+  looked like nothing else in the app). What was actually wanted was already
+  written: the **landscape voice reflow**. Sideways, a room with a camera on is
+  that room — the same grid, the same header row, the same talk column, the same
+  participants panel behind the same handle — with the picture as a LAYER behind
+  it (`#video-stage` at `z-index: 0`, the chrome at 21). Every rail rule, both
+  roster implementations, `--rail-x`/`--rail-w`, `--stage-rail-top`,
+  `--stage-rail-peers-top` and two JS helpers went; the landscape rules simply
+  stopped excluding video.
+  - The exclusion is now `:not(.video-stage-desktop)` — the DESKTOP stage is the
+    one regime with a room shape of its own — and `updateVideoStage()` publishes
+    that class. "Not the desktop stage" is the honest condition; "has video at
+    all" never was.
+  - The test that matters measures the two on one page, either side of a camera
+    being switched on: header, bar, mic, controls and hint must land on the same
+    pixels.
+  - A header that is a grid ROW cannot hide by sliding: `translateY(-100%)` moves
+    it by its own height and leaves the top of it on screen (a fixed band ran off
+    the top because its height WAS its offset). Ink, not space — `visibility`.
+  - **The talk button is the exception, and the button row is why.** Everything
+    else went back to the landscape room's own places; the mic did not stay in
+    its 1/3 column because the three labelled buttons under it do not fit in
+    263px — wrapped, they walk up the screen. It takes the bottom of the room,
+    full width and centred, which is also where the thumb goes when the picture
+    is the whole window. The inset stays a single bottom band in both
+    orientations, so the measurement stayed simple: the side-column branch
+    written for the rail was dead the moment the mic came back to the middle,
+    and went.
+- **One crop limit is not enough, and the symmetry is a trap.** Fitting a picture
+  to a tile by the ratio mismatch alone cannot tell a phone held upright showing
+  a 16:9 camera (mismatch 3.85, and cropping the sides is what every video call
+  does) from a phone held sideways showing an upright camera (mismatch 3.84, and
+  cropping the ends takes the head off). They are the same number. So
+  `stageVideoFit()` picks its limit from the DIRECTION of the crop: a tile
+  narrower than the picture loses the sides and is allowed 4×; a tile wider loses
+  the top and bottom and is allowed 1.4×. A shared screen is never cropped at
+  any shape.
+  - The intrinsic size arrives with the **first frame**, not with the element, so
+    the choice is re-made on `loadedmetadata` and `resize` as well as on every
+    layout pass, and the stylesheet's `object-fit` is the answer until then.
+    Starting from `contain` means the worst case is a moment of black bars;
+    starting from `cover` would be a moment of somebody's cropped face.
+
+### Running the suite in this container (updated)
+
+`/opt/pw-browsers` ships Chromium **1194**; `@playwright/test` 1.63 wants
+**1243** and the download is blocked. The symlink recipe further up still works,
+but the cheaper route is a throwaway config that reuses the real one and pins the
+binary — no symlink farm, nothing to undo:
+
+```js
+// .pw-local.config.js (not committed)
+import base from './playwright.config.js';
+export default { ...base, projects: base.projects.map((p) => ({ ...p,
+  use: { ...(p.use||{}), launchOptions: { ...((p.use||{}).launchOptions||{}),
+    executablePath: '/opt/pw-browsers/chromium' } } })) };
+```
+
+Then `npx playwright test --config=.pw-local.config.js`. Note
+`/opt/pw-browsers/chromium` is a symlink to the **binary**, not to a directory.
+
+## Conference layout — dividing the stage, and what happens past the fourth face
+
+- **The obvious layout metric is the wrong one, and it is wrong in a way that shows up only on phones.** "Pick the arrangement whose largest inscribed 16:9 rectangle is biggest" describes a *letterboxed* tile — but a tile fills its cell and the video is `object-fit: cover`, so a mismatched cell **crops** the frame instead of shrinking it. Scored that way, four faces on a portrait phone came out as **1 column × 4 rows**: four full-width 390×140 letterbox strips, each showing a horizontal band across the middle of a person. The metric loved it because a wide cell holds a big 16:9 rectangle; the viewer hated it because a 2.8:1 strip cuts off foreheads and chins.
+  - The fix is to score what is actually displayed — cell area × the fraction of the frame that survives the crop — and to charge the two crop directions **differently**: a cell *wider* than the frame crops top and bottom (the part you are looking at) and is charged in full (`frame/cell`); a cell *narrower* than the frame crops left and right (mostly background) **and renders the subject larger**, so it is charged at the square root. With that asymmetry the same phone lands on 2×2, which is what every other conferencing app shows there.
+  - It also means "prefer a vertical split" is not a bolted-on preference — it falls out of the scoring, because splitting vertically is what produces the narrower cells.
+- **The tie is the common case, not an edge case.** Two tiles on a 16:9 stage come out *exactly* the same size stacked or side by side, and the old `>` comparison silently kept the first candidate it saw — which was `cols = 1`, i.e. stacked. Every tie-break has to be explicit: within `STAGE_AREA_TOLERANCE` (20% — the metric is a heuristic, both arrangements fill the box) prefer the **balanced** arrangement (`|cols - rows|` smallest), then prefer the extra **column**.
+- **An incomplete last row is centred with a doubled track count** (`repeat(cols*2, 1fr)`, every tile `span 2`, the last row's first tile offset by `cols - remainder + 1`). The gap arithmetic works out to *exactly* the same tile widths as `repeat(cols, 1fr)` — a spanning item absorbs the gap between its two tracks — so this costs nothing and turns "three faces, one shoved into the bottom-left corner" into the familiar 2-over-1.
+  - Consequence for tests: **columns can no longer be counted as distinct `left` values.** The centred row starts half a tile off every other row's grid lines, so 3 tiles in 2 columns reads as "3 distinct lefts". Count the widest row instead.
+- **Past a bounded number of tiles another face makes every face worse.** `stageGridCapacity()` caps the grid — a hard **4 on a phone** (2×2 is the last arrangement that reads at 390px), 12 on desktop — and additionally shrinks the cap while the measured cell would fall below `STAGE_MIN_TILE_W/H`, so a short stage cannot "fit" nine tiles 40px tall. Everyone else is minimized into the **overflow ribbon** along the bottom.
+- **Capacity and the ribbon can chase each other across ticks if you let them.** The ribbon takes its height off the grid, so a capacity computed from the *live* grid box shrinks when the ribbon appears, which pushes another tile into the ribbon, and so on. `stageGridBox()` therefore adds the ribbon's reserve back into the measured height and `stageGridCapacity()` subtracts it exactly once, both using the same constant (`STAGE_RIBBON_RESERVE`, kept in step with `--stage-ribbon-tile-h`). Deterministic, and no observer loop.
+- **Grid membership is by most recent speaker, but it has to be STICKY.** Rank is "screen share, then whoever spoke most recently" (`_speakerRecency`, stamped in `updatePeerTalking`/`updateSelfTalking` — the same call sites that already toggle the talking ring, so no new polling). A grid rebuilt from that ranking on every press would re-sort itself constantly and be unreadable, so `partitionStageTiles()` keeps incumbents in their existing order and only the peer who was actually displaced moves. One press = one swap.
+  - `noteStageSpeaker()` re-renders **only when the talker is currently in the ribbon**, i.e. only when there is something to promote — otherwise a press costs one `Map` write.
+  - Tiles are **moved between containers, never rebuilt**, so a demotion into the ribbon does not reassign `srcObject` and the video does not flash. Same rule as the self-view badge.
+- **The bottom clearance belongs to whatever is last in the stack.** In immersive mode `applyImmersiveStageInsets()` used to give the grid a measured `padding-bottom` so tiles clear the control stack; with a ribbon under it, that inset has to move to the *ribbon* (and the grid drop to 0), or the ribbon sits squarely on the talk button. The self-view badge needs the same treatment, hence `--stage-ribbon-height` published alongside the existing insets.
+- **With a focus tile (a screen share) there is no ribbon** — the grid is already a horizontally scrolling filmstrip, and a second overflow strip under the first is just two scrollers doing one job.
+- **The "+N" pill counts what is off the end of the strip, not what exists.** It is a function of the scroll position, so it is the one piece of stage state that updates on `scroll` (rAF-throttled) rather than on a render. Style it as a **chip with the app's own surface colour**, not a gradient fade: the strip sits over black bars and bright frames alike, and a fade is invisible against the former.
+
+## Sync rule
+
+Every change to `src/` MUST be mirrored to:
+- `ios/App/App/public/`
+- `android/app/src/main/assets/public/`
+
+Use Python string replacement scripts for multi-line patches to avoid manual errors.
+
+## Workflow
+
+- Suggest a commit message in the final response only when the current turn actually changed repository files.
+- **Open a pull request for every significant piece of work.** Pushing the branch is not the deliverable — if there is no PR for the work, open one. A **merged** PR is finished and cannot track follow-ups: restart the branch from the latest `main` (keeping the branch name, rebasing any unmerged commits onto it) and open a *new* PR. Fill in `.github/PULL_REQUEST_TEMPLATE.md` rather than writing a free-form body.
+- **Node 24 + Playwright 1.60** emits `DEP0205` (`module.register()` deprecated) from Playwright internals during `playwright test`. This is upstream noise, not app code. `package.json` suppresses only that code via `NODE_OPTIONS=--disable-warning=DEP0205` in `test:e2e`.
+
+## Host migration refactor
+
+- Host migration uses a state machine (`idle`/`connecting`/`connected`/`migrating`) and reuses `connectToHost(hostId, { mode })` for both initial join and migration. Migration success = first authoritative `peer-list` from the new host, not DataConnection open. Failed candidates are added to `_migrationExcluded` to allow re-election without restart. Audio MediaConnections to non-host peers are never touched during migration.
+
+- **Android App Links** (`https://ptt.voxal.app/?room=…` opening the app) require: (1) `autoVerify="true"` intent filter in `AndroidManifest.xml`, (2) `src/.well-known/assetlinks.json` deployed with the release certificate SHA-256 fingerprint. The `appUrlOpen` Capacitor event fires for both `voxal://` and HTTPS links — `handleDeepLink()` already handles both. **Release keystore:** `~/.android/voxal-release.jks` (alias `voxal`); credentials in `android/keystore.properties` (gitignored). SHA-256: `FF:5A:37:5C:...` (see `assetlinks.json`). Build signed AAB with `make build-android`.
+
+- **Android signing setup**: `android/app/build.gradle` reads `android/keystore.properties` when present; if absent (e.g. CI without the key), the release build is unsigned. `versionCode` must be incremented before each Play Store upload — it's in `defaultConfig` in `build.gradle`. `versionCode 2` = first Play Store release.
+
+---
+
+- **Verified GitHub release tags** require a locally-created signed annotated tag (`git tag -s`) pushed before `gh release create`. Tags created purely via the GitHub API (which is what `gh release create` does without a pre-existing tag) are lightweight and never show Verified. Use SSH signing: configure `gpg.format = ssh` + `user.signingkey = <pub key content>` + `tag.gpgsign = true`, and add the public key as a **signing key** (not auth key) on GitHub under Settings → SSH keys. `make release` now handles this automatically.
+
+- **Dependabot `glib` security alerts (>=0.15,<0.20) are currently upstream-blocked** in this repo: `tauri 2.11.x` pulls `gtk 0.18.x`, which pins `glib ^0.18`, so `glib 0.20+` cannot be selected yet. `cargo update -p glib --precise 0.20.0` fails with a version-selection conflict. Resolution depends on upstream `tauri/gtk-rs` moving to newer `glib`.
+- **Dependabot `rand` security alerts (`>=0.7,<0.8.6`) are partially upstream-blocked**: we can update `rand 0.8.5 -> 0.8.6`, but `rand 0.7.3` remains via `tauri-utils -> kuchikiki -> selectors 0.24 -> phf_codegen 0.8 -> phf_generator 0.8 (rand ^0.7)`. `cargo update -p rand@0.7.3 --precise 0.8.6` fails with a resolver conflict until upstream updates that chain.
+- **`bundle.createUpdaterArtifacts: true` makes `tauri build` REQUIRE the signing key** — with `plugins.updater.pubkey` set, the build fails ("A public key has been found, but no private key…") unless `TAURI_SIGNING_PRIVATE_KEY` is present, because it must sign the updater artifacts. So `make build` **always builds unsigned**, passing `--config '{"bundle":{"createUpdaterArtifacts":false}}'` to skip artifact creation — no key, no password prompt, never fails. (An earlier version auto-signed when a key was *found on disk* (`~/.tauri/voxal.key`), but that surprised users with a "Decrypting updater signing key… Password:" prompt from a password-protected key — don't couple `build` to key presence.) Signing lives only in `make build-signed` / `make release`. (`tauri build --config <json>` takes inline JSON when the arg isn't a file path and deep-merges it over `tauri.conf.json`.)
+- **Tauri updater `TAURI_SIGNING_PRIVATE_KEY` must be the base64-of-whole-keyfile string** (what `tauri signer generate` outputs), passed verbatim. Do NOT wrap it with a literal `untrusted comment: minisign secret key\n` header before passing it — Tauri base64-decodes the env value first, so the prepended text corrupts the decode and yields `failed to decode secret key: ... scrypt parameters too high`. The `release-linux.yml` and `release-windows.yml` "Prepare Tauri updater signing key" steps must both write the extracted `payload` directly to `GITHUB_ENV` (no header wrapping).
+
+## Lazy mic (join muted) — peer.call / peer.connect can return undefined
+
+- With **"join muted, acquire mic on first speak"**, the global `stream` is `null` until the user first speaks (`setTalking` → `getMicStream` → `connectOutgoingAudioToPeers()`). Any code that does `peer.call(peerId, stream)` at join time will get `undefined` back (PeerJS returns undefined for a null/missing MediaStream) and then crash on `.on('stream', …)`. The peer-list handler must route outgoing audio through the guarded `connectOutgoingAudioToPeers()` (checks `!stream`, tracks calls via `audioMediaOut`) — not a raw `peer.call`. Incoming audio is tolerant: `handleIncomingCall` answers with `stream || new MediaStream()`.
+- **`peer.connect(id)` / `peer.call(id, …)` also return `undefined` when the Peer is disconnected from the signaling broker** ("Cannot connect to new Peer after disconnecting from server"). `connectToHost` and `_attemptHostConnection` guard the return value: if undefined, call `peer.reconnect()` (when `peer.disconnected`) and then retry / re-elect / reject instead of dereferencing `.on`.
+
+## Tiny-embed "pop out" — sessionStorage is per-window on web
+
+- On **web** (not Tauri/Capacitor) the display name lives in **sessionStorage** (`pseudo-session`), not localStorage — see `shouldPersistPseudoGlobally()`. sessionStorage is **per top-level browsing context**: a window opened via `window.open` gets a *fresh, empty* sessionStorage even at the same origin. So a "pop out" flow cannot rely on the new window inheriting the current identity — the name must be passed explicitly. `tinyPopoutUrl()` appends `&name=<pseudo>` (and `&color=<hex>` for auto-assigned anon names). (localStorage *is* shared across same-origin windows, so presence token / theme carry over fine — only the ephemeral pseudo needed the URL hop.)
+- **Restore the identity in bootstrap, not `loadInitialPseudo()`.** `loadInitialPseudo()` runs at the top-level `let myPseudo = …` line (~781), which is *before* `ANON_COLOR_CHOICES` (`var`, ~1203) and `_anonymousProfile` (`var`, ~1217) are initialized — calling `isAnonymousProfile()` there throws (reads undefined array), and any `_anonymousProfile = …` you set gets clobbered when line 1217 later runs `var _anonymousProfile = null`. So `applyPopoutIdentityFromUrl()` runs from the `DOMContentLoaded` bootstrap instead (after all top-level init, before the auto-join). If `?color=` is a valid anon pair (`isAnonymousProfile(name,color)`) it restores `_anonymousProfile` and keeps `myPseudo` empty → the colored dot + "auto-assigned name" detection survive; otherwise it's treated as a manual pseudo. **Passing an anon name as a plain manual pseudo drops `pseudoColor` (null) and makes it undetectable as anonymous** — that's the bug the color param fixes.
+- The pop-out URL also sets `&forceWeb=1` so the standalone window joins in-browser immediately instead of showing the "Open in the app?" interstitial (`_tryNativeAppThenJoin`).
+- **WebRTC can't move between windows**: pop-out opens the new window, then the embed calls `leaveRoom()`. `window.open` must run synchronously in the click handler (user-activation) or it's popup-blocked; if it returns `null` (e.g. iframe `sandbox` without `allow-popups`) we keep the session and emit `{type:'popout-blocked'}` to the parent. The pop-out button is **opt-in**: it only appears when `IS_TINY_EMBED && _isIframe && ALLOW_POPOUT` (`body.embed-can-popout`), hidden in `tiny-micro` (<100 px). `ALLOW_POPOUT` is enabled by adding `?popout=1` (aliases `allowPopout` / `canPopout`) to the iframe `src`.
+- The corner button reuses `.btn-icon`, which sets `font-size:28px; line-height:1` — that inherited text metric creates a phantom line box that shifts/shrinks the tap target. The `.tiny-popout-btn` override must zero `font-size`/`line-height` (and `svg { display:block }`) so the hit box matches the icon.
+- **Stacking-context trap (why the pop-out button was only clickable on its right edge):** the tiny `.room-bottom-bar` is `position:absolute; z-index:20`. A child with a *higher* `z-index` (the button was `z-index:40`) is still trapped inside the bar's `z:20` stacking context, so the whole bar — button included — renders **below** the peers panel (`z-index:30`), which overlaid the button's left ~27px and stole the clicks (confirmed via `elementFromPoint`). Fix: the button (and the "powered by" note) must be **direct children of `#screen-room`** so their z-index is compared against the panel's in the same context. `unit-popout.spec.js` guards both the DOM location and full-width hit-testing. General rule in this codebase: absolutely-positioned tiny-embed overlays belong directly under `#screen-room`, not nested in the bottom bar.
+
+## Tiny-compact "Your name" input (pre-join Start screen)
+
+- The pre-join invite/Start screen (`#screen-invite-loading`, shown for a `?room=` deep-link before the user taps Start) already has a wired `#input-pseudo-invite` (its `input` listener calls `setMyPseudo`). In **full tiny** it sits inline beside the Start button; in **compact** it was CSS-hidden. Showing it in compact is purely CSS: set `.invite-loading-panel` to `flex-direction:column` and un-hide `.invite-pseudo-field` (scoped `:not(.tiny-connecting)` so it disappears once connecting).
+- The placeholder is a static `"Your Name"`; the field is left **empty** for an auto-assigned name (`showTinyInviteConnect` sets value only for a manual name). Prefilling the anon name as the value would risk committing it as a *manual* pseudo — dropping `pseudoColor` + anon-detection — the same bug class as the pop-out `?color=` fix.
+- **Sizing gotcha:** `input[type=text]` uses an iOS-zoom-avoidance trick — `font-size:16px` + `transform:scale(0.8125)` + `width:calc(100%/0.8125)` — so it renders visually at 13px. `getBoundingClientRect()` returns the *scaled* (smaller) box. To make the field match the Start button, do **not** override `font-size`/`width` (that fights the compensation and yields a narrower, shorter box); keep the base rule and only bump vertical `padding` (~11px) to equal the button height. Regression-tested by comparing the two `getBoundingClientRect` widths/heights.
+- (An earlier attempt put this input on the **in-room** compact screen instead; that was the wrong screen and was reverted — the request was the pre-join waiting screen.)
+
+## Browser HTTP cache can poison anonymous-rooms lookups (and cache partitioning hides it)
+
+- The `anonymous-rooms` Supabase edge function sends **no `Cache-Control` header**, so browsers may cache GET lookup responses — *including error responses* — and replay them for days. Observed live: a `410 Gone` for `?room=<name>` replayed with a 3-day-old `Date:` header while the actual room was alive (direct curl → 200). The app believed the room didn't exist → `createRoom()` fork; the follow-up slug re-claim `POST` then 409'd ("room_code already in use") because the room *was* live.
+- **Why it looked iframe-specific:** Chrome partitions the HTTP cache by **top-level site**. The portal-iframe partition had no poisoned entry, top-level `web.voxal.app` did — so the identical join worked embedded and failed top-level. When a web-only bug differs between iframe and top-level with identical code paths, suspect cache/storage partitioning before code.
+- Fix (client): `cache: 'no-store'` on all anonymous-rooms **GETs** (`joinOrCreateByChannelName` lookup, `lookupRoom`, `lookupRoomInfo`). POST/PATCH/DELETE aren't browser-cached. The Tauri path is immune (`tauriFetch` routes through Rust). Server should also send `Cache-Control: no-store` (edge fn lives in a separate repo — still TODO).
+- Debug tip that cracked it: check the **`Date:` response header** in DevTools — a stale date proves a cache replay regardless of what the status code claims.
+
+## Anonymous-rooms service semantics (probed live)
+
+- `room_code` (named room slug) is **case-sensitive** and restricted to `[A-Za-z0-9_-]{1,64}` — a POST with spaces fails 400 and the failure is swallowed (`publishRoom` catch → room silently never registered).
+- Records expire **1 h** after last POST; the host heartbeat re-POST (`PUBLISH_HEARTBEAT_MS` = 50 min) renews `expires_at` and **rotates the secret**. Only ~10 min slack: laptop sleep / tab suspension past that lets a live room's record expire. After host migration the new host has no `_publishSecret`, so nobody heartbeats and the record rots.
+- Expired-but-unpurged rows are inconsistent: GET → `410 Gone`, but POST re-claim of the same slug → `409` (uniqueness still counts the expired row) — a temporary dead zone for the name. DELETE is clean (GET → 404, re-claim OK).
+- Presence-path room creation (`joinChannel` → `createRoom(postPresence)`) registers the room **only in org presence, never in anonymous-rooms** — so org-created named rooms are invisible to anonymous joiners (reverse of the bug fixed in PR #63).
+
+## Cross-window features on desktop: settings.html cannot borrow main.js
+
+- On Tauri, settings are a **separate `WebviewWindow` loading `settings.html`**, which has no module system and duplicates its constants/helpers from `main.js` by hand. Anything in settings that needs real app machinery (`fetchIceServers()`, `opusSdpTransform()`, the RNNoise capture path) therefore **cannot be implemented there** — the honest options are to fork hundreds of lines (which is how settings.html's constants drifted before) or to **ask the main window to do it**.
+- The working pattern is the **localStorage command bridge**: one key carries the request (`echo-test-request`), another carries the state (`echo-test-state`); the main window's existing `storage` listener executes and re-publishes. Two gotchas that bite:
+  - A `storage` event **does not fire in the window that wrote the value** — the writer must render optimistically or it gets no feedback at all.
+  - Writing an **identical value fires nothing**. Include a timestamp (`at`) so consecutive identical commands still dispatch.
+  - The two windows can disagree about what is running (a reopened preferences window starts blank), so a command that turns out to be a no-op must still **re-publish current state** or the remote UI sticks on "Stopping…".
+- **Do not "solve" a desktop gap by pointing the user at the main window's settings UI.** On Tauri that gear is deliberately hidden (the menu bar owns Preferences), so "run it from ⚙ → Audio" described a control that does not exist on that platform, and the network test was simply unreachable there.
+
+## z-index: `document.body`-appended popovers are siblings of `.modal`
+
+- `.conn-status-popover` (200) outranked `.modal` (100), so on web it painted **through** the settings dialog — and because the badge that toggles it sits *behind* the modal, it could not then be dismissed. The modal is now **400**, and `openSettings()` closes the popover outright.
+- The trap when raising a modal: `showTurnServersPopover()` appends its element to **`document.body`**, so despite being *anchored* to `#turn-test-status` inside the modal it is a **sibling** of `.modal`, not a descendant. Raising `.modal` above it made it invisible. Any body-appended popover that belongs to modal content must outrank the modal (it is now 500). Check for `document.body.appendChild` before changing a modal's z-index.
+
+## ICE resolution is identity-scoped — re-resolve on sign-in/sign-out
+
+- `fetchIceServers()` picks its source by **who you are** (embed > org > local metered.ca > anonymous > public fallback). Signing in, signing out, or switching org therefore invalidates the previous answer. `refreshIceServers()` clears `_lastIceResolution` (badge returns to "Checking relay…" rather than asserting the old identity's result), clears `_relayVerifiedAt` (a verified round trip proved the *old* relay worked), and re-runs the resolution.
+- The `metered-status` / `metered-count` / `metered-servers` keys are written by **both** the org leg and the manual metered.ca test button. Clear them on refresh **only when the previous resolution was `source === 'org'`**, or signing out wipes a user's unrelated manual test result.
+- The **anonymous credential cache is deliberately kept** across identity changes: those credentials are not bound to an account, so dropping them buys nothing but an extra round trip.
+- Watch out in tests: the unconditional startup prefetch means `_anonTurnError` is **already set** by the time a test body runs (the static test server 404s `/api/ice-servers`), which silently routes `diagnoseRelayFailure()` down the "credential service is down" branch. Tests targeting the other branches must wait for `_lastIceResolution !== null` and then clear `_anonTurnError`.
+
+## Microphone permission cannot be persisted by the page — and iOS is the sharp case
+
+- There is **no API to keep a `getUserMedia` grant**. The browser owns it, keyed by origin. The app can only name the control that makes it stick.
+- **iOS Safari scopes the grant to the DOCUMENT**, so every reload re-prompts no matter what the user picked in the prompt itself. The only thing that survives is the per-site toggle: **aA in the address bar → Website Settings → Microphone → Allow**. Every browser on iOS is WebKit underneath, so they all behave this way — check the iOS branch *before* the Safari branch when sniffing.
+- Within a single page session iOS **does** reuse the grant: stopping all tracks and calling `getUserMedia()` again does not re-prompt. (Verified on device — an earlier assumption that it would was wrong, so don't "fix" `leaveRoom()`/`stopMicTest()` to hold the stream open on that basis.)
+- **`navigator.permissions.query({ name: 'microphone' })` is Chromium-only** — Safari and Firefox both reject the descriptor, and Safari is exactly where the problem shows up. But there IS a second signal that works everywhere: **device labels**. `enumerateDevices()` only exposes a `label` to a document that holds a capture permission, so an *unlabelled* microphone means no grant yet and therefore a prompt is coming. On iOS the labels go back to empty after every reload, mirroring the document-scoped grant exactly. `micPermissionState()` tries the Permissions API, falls back to the label probe, and only then to timing (`MIC_PROMPT_MIN_MS` = 800 ms).
+- Sample the state **before** `getUserMedia()` — afterwards it is `granted` either way and the distinction is gone. `micPermissionState()` must never throw: it sits on the critical path of acquiring the mic.
+- Testing this in headless Chromium is fiddly: `--use-fake-ui-for-media-stream` **auto-grants at the browser level**, so `permissions.query` reports `granted` before any call and a "first prompt" cannot be reproduced. Use `--use-fake-device-for-media-stream` alone (a fresh context then reports `prompt` with 0 labelled mics), or stub `permissions.query`/`enumerateDevices` to reproduce the Safari shape. Also note this container has **no audio hardware**, so `enumerateDevices()` returns no `audioinput` at all and the label probe correctly returns `unknown` — stub it in tests rather than relying on real devices.
+- Chromium browsers put **"Safari" in their UA**, so desktop Safari can only be identified by the *absence* of `Chrome|Chromium|Edg/`. iPadOS Safari claims to be macOS — use the `Mac` + `maxTouchPoints > 1` test (same trick as `IS_MOBILE_DEVICE`).
+- Gate the hint on **two** prompts across separate visits (`mic-prompt-count`), not one: a single prompt is a first visit working correctly.
+- …and gate it on **this page load having actually been prompted** (`_micPromptedThisSession`), not just the historical count. Otherwise the hint outlives the setting change that fixed it: a user who follows the advice still carries `mic-prompt-count >= 2` forever and would keep being told how to fix something that is already fixed. The count is history; the session flag is current state, and both must hold.
+- **Where it goes matters.** The hint first landed in the PTT column, where it pushed the talk button down the screen. It belongs in the **peer list**, built by `updatePeerList()` alongside the invite nudge (`.room-invite-nudge`) — that is the room's established home for a line of transient advice, and the list absorbs the extra row without moving anything. Consequence: it is rebuilt with the list, so refreshing it means calling `updatePeerList()`, not toggling a `hidden` class.
+- The ✕ on the hint and the **Settings → Advanced** toggle are one preference (`mic-hint-dismissed`), so both go through `setMicHintEnabled()` rather than writing the key themselves — otherwise dismissing leaves the toggle stale. The toggle row hides itself when `micPermissionHint()` returns null, so native builds are not offered a control for a hint that can never appear.
+- **CSS ordering trap, hit twice.** `styles.css` is one long file with mostly single-class selectors, so *declaration order decides ties*. The mic-hint block sits early (next to the debug-consent banner) while `.btn-icon` (`font-size: 28px`) and `.room-invite-nudge` (`margin-top: 2px`) are both declared later — so `.mic-hint-close` rendered a giant ✕, and `.mic-hint-row`'s `margin-top: auto` was silently overridden, leaving the row mid-panel instead of pinned. Both fixes are to qualify the selector: `.btn-icon.mic-hint-close`, `.room-invite-nudge.mic-hint-row`. When adding a modifier class for an element that also carries a base class from elsewhere in the file, check which block comes last.
+- Pinning a row to the bottom of `.peers-list`: `margin-top: auto` (it is a flex column) pushes it down when there is spare room and collapses to 0 once the list scrolls; `position: sticky; bottom: -8px` then keeps it visible over a scrolling list, the negative offset cancelling the list's 8px bottom padding. The sticky row needs `background: var(--bg-surface)` — the exact `.peers-list` background — or peer rows show through it.
+
+## Tiny embed: acquire the mic on join when the grant is already persisted
+
+- **"Join muted, acquire on first speak" is a policy about PROMPTS, not about the microphone.** The tiny embed defers `getUserMedia()` because an iframe the user never interacted with throwing a permission prompt at them is hostile — but once the browser holds a persisted grant, the call raises no prompt at all, and staying lazy only costs the first syllable of the first press while the device spins up. `shouldAcquireMicOnJoin()` therefore probes `micPermissionState()` and acquires eagerly when (and only when) the answer is a definite `'granted'`. `'unknown'` — no Permissions API and no labelled device to probe, i.e. WebKit before any grant — must stay lazy: guessing wrong there produces exactly the unprompted prompt the policy exists to avoid. Non-tiny is unconditional as before.
+- **Both join paths (`createRoom`'s `peer.on('open')` and `finishJoin`) carried the same 17-line auto-acquire block, and the press path in `setTalking` carried a third copy of the acquisition itself.** They are now one `acquireMicForRoom(reason)` + `autoAcquireMicOnJoin()`. This is not tidying: the join-time acquire and the first press **must share `_micAcquirePromise`**, or a press landing while the eager acquisition is in flight starts a second `getUserMedia()` and the room ends up holding two live capture tracks. `setTalking` already sets `_pendingTalkingStart` before bailing on an in-flight promise, so the shared completion honours a press that arrived mid-acquisition whichever path started it.
+- **Failure has to be reported differently depending on who asked.** A press that fails owes the user the mic-denied dialog; a background acquisition nobody requested must not hijack the screen with `showScreen('error')` — it logs and lets the next press try again and report properly. That is the whole meaning of the `reason` argument (`'press'` | `'join'`); the spinner on the tiny self chip is likewise only for a press, since nothing visible should change for an acquisition the user did not initiate.
+- Tests: `tests/e2e/unit-tiny-mic.spec.js` — the decision table, "no prompt when ungranted" asserted as a `getUserMedia` **call count of 0** (the only honest way to test the absence of a prompt), the single-acquisition guarantee under a mid-flight press, and both failure reports. The unit project has no fake-media flags and the container has no audio hardware, so `getUserMedia` is stubbed and `noise-suppression` forced to `off` to keep RNNoise's WASM worklet out of it.
+
+## Presence `room_id` is a *public* code — never post the peer id into it
+
+- The presence API **echoes the session row it just stored**, and every consumer of that echo (`joinChannel`'s registration callback, `syncPresenceChannelSession`, the iframe `create` path) adopted `room_id` as `activeChannelRoomId`. `buildPresenceSessionPayload()` used to fall back to `roomCode` — the raw PeerJS peer id — so hosting an **empty named channel** posted the UUID, got it echoed back a fraction of a second later, and `roomDisplayCode()` (`activeChannelRoomId || activeChannel || …`) swapped the channel name in the room header for a UUID. The room then also grew a "Publish room to public lobby" button (`hasChannelNameCode` went false): a named channel became indistinguishable from a fresh anonymous room, *immediately after joining it*.
+- `room_id` means "the room's shareable public code" — a published lobby slug, or the channel's own code. The peer id is already carried by `peer_id`; repeating it there buys nothing and is actively harmful. The field is now **omitted** when there is no public code.
+- Adoption goes through `publicAssociatedRoomId()`, which rejects empties, our own `peer.id`, the current `roomCode`, and **any bare UUID** — the same "a UUID is not a shareable code" rule `saveRejoinSnapshot()`/`recordRecentRoom()` already applied. The guard matters beyond our own payload: any *other* client (an older build, a different host) that posted its peer id would otherwise push a UUID into every joiner's header.
+- Testing this without a broker: `main.js` resolves `Peer` off the global at call time, so a fake can be installed with `page.evaluate` — but **not** with `addInitScript`, because `peerjs.min.js` loads afterwards and overwrites `window.Peer`. See `tests/e2e/unit-presence-channel.spec.js`.
+
+## "Is this peer sharing" is signaling state — never clear it from a transport teardown
+
+- `videoStageTiles()` builds the video stage from `conn.videoActive` / `conn.screenActive`, and skips a peer whose flag is false. That flag means **"this peer is sharing"**: it is set by `video-offer`/`screen-offer` and cleared by `video-stop`/`screen-stop`. It is deliberately not derived from whether a stream is currently attached, so a tile survives a momentary reconnect instead of flickering out.
+- The consequence, which cost a full debugging round: **anything that clears the flag removes the peer from the stage until the next `video-offer` — and a live share never re-announces itself.** So `detachRemoteVideo`/`detachRemoteScreen` (which clear it) are only for a share that genuinely ended. Swapping a track's *transport* — mesh ↔ SFU — must go through `detachRemoteVideoTransport`/`detachRemoteScreenTransport`, which drop the stream and the connection carrying it and leave the flag alone.
+- Symptom to recognise, because it names the cause: **a peer joining a room that had already switched to the SFU saw nobody, while everybody already in the room saw the newcomer fine.** The asymmetry *is* the diagnosis — a newcomer learns about existing publishers from `peer-list`, everyone learns about a newcomer from `video-offer`, and only the first path ran a teardown. When a bug is directional, compare the two code paths that carry the same information in opposite directions before reaching for anything subtler.
+- Also note "no tile" and "black tile" are different failures with different causes. A black tile means the subscription is broken (badged **⚠ Relay failed**); a missing tile means the app does not believe the peer is sharing at all. Diagnosing one as the other wastes the round.
+
+## A pre-set field can fake a "previous state" that never existed
+
+- The `peer-list` handler used to write `conn.videoTopology = {mode:'sfu'}` before calling `applyRemoteTrackTopology()` — which reads exactly that field as "what was carrying this track before". Every first sight of an already-relayed publisher therefore looked like a *transport migration*, and tore down a subscription that had never been opened.
+- The rule this generalises to: when a function's job is to **compare against recorded state and act on the difference**, only that function may write the state it compares. Callers pre-filling it for convenience turn a comparison into a tautology. Same shape as the `_localVideoTopology[kind]` in-flight guard in `reconcileVideoTopology()`.
+
+## Async work must re-resolve `connections.get(id)` after every await
+
+- `connections` entries were rebuilt with `connections.set(id, Object.assign({}, prev, update))` on every `peer-list`. An in-flight `sfuSubscribeTrack()` holds its `conn` reference across two round trips (mint, then negotiate), so a broadcast landing mid-flight left it writing `videoMedia` to an object the map no longer held. The next broadcast then saw no live media, tore down and re-subscribed — churn that never converged, and the reason a peer stayed invisible even after later joins.
+- Two fixes, both needed: the handler now **mutates in place**, and `sfuSubscribeTrack` **re-reads the map after its awaits** (also closing a real leak — a peer that leaves mid-negotiation would otherwise strand a live `RTCPeerConnection`).
+- Idempotency that keys off a *live* peer connection has a hole exactly as wide as the negotiation: there is no connection yet while one is being built. `_sfuSubscribeInFlight` closes it by returning the pending promise, the same shape as `_sfuCapabilityInFlight` for mints. A guard against duplicate work must cover the window *before* the work's evidence exists, not just after.
+- Testing the window: stub the endpoints with `page.route` and **hold the negotiate open** with a promise the test resolves, then drive the concurrent event in between. Asserting on the *number of negotiate calls* is what distinguishes "joined the in-flight subscribe" from "started a second one" — the end state looks identical either way, which is why the first version of this test passed against the unfixed code and proved nothing.
+
+## A green CI workflow is not a merge gate — the gate lives in repository settings
+
+- `tests.yml` running on every PR only *reports*; nothing about it stops a red PR from being merged. Blocking the merge needs a **branch ruleset** on GitHub (Settings → Rules), which is not stored in the repository and therefore cannot be added by a commit. The ruleset is checked in at `.github/rulesets/main-required-tests.json` purely so it is reviewable and importable — GitHub never reads it from there. Applying it is a one-time manual step; see `docs/required-checks.md`.
+- Require **one aggregate check** (`All tests green`, the last job in `tests.yml`), not each job by name. A ruleset that lists jobs individually silently stops covering any job added later, and renaming a job quietly turns its rule into a check that will never report. The aggregate job uses `if: always()` and treats anything that is not `success` — including `skipped` and `cancelled` — as failure, so it fails closed.
+- A required check that never reports blocks the merge rather than allowing it, which is why "the check is missing" and "the check passed" must never be collapsed into one branch of an automation. The Dependabot auto-merge script had exactly that hole: it merged on the `Tests` workflow's own conclusion, which says nothing about CodeQL, nothing about a check still running, and nothing about a job that never started.
+
+- **A workflow cannot open a pull request against its own protected branch.**
+  Two restrictions, and hitting the first hides the second. (1) `gh pr create`
+  with `GITHUB_TOKEN` fails with *"GitHub Actions is not permitted to create or
+  approve pull requests"* unless Settings → Actions → General → "Allow GitHub
+  Actions to create and approve pull requests" is on — a repository setting, so
+  no commit can fix it. (2) Even with that on, nothing `GITHUB_TOKEN` pushes or
+  opens starts a workflow run (GitHub suppresses those events so workflows
+  cannot trigger themselves), so `All tests green` never reports on that PR —
+  and per the bullet above, a required check that never reports blocks the
+  merge. **Ticking the setting therefore clears the error and leaves the PR
+  permanently unmergeable.** Escaping this needs a token belonging to a real
+  actor (a fine-grained PAT in a secret), which is a credential to create,
+  store and rotate.
+
+- **So when CI wants to write to the repository, make it a manual target
+  instead.** The README coverage badge cost a ruleset-dodging branch-plus-PR
+  dance and ~60 lines of workflow, and the one time it actually fired it put a
+  red X on the explicitly non-blocking `Coverage` check, because `gh pr create`
+  was refused and the step exited 1. The badge itself was never the problem —
+  writing it *from CI* was. It is now `make coverage-badge`, which is a
+  dependency on `coverage-e2e` plus the `--write-badge` flag the script already
+  had: no token, no permissions, no branch, and the diff lands in the same
+  commit as whatever changed the number. The cost is that it is only as fresh
+  as the last person who ran it, which is the honest trade — a badge nobody
+  refreshes is visibly stale, whereas a badge refreshed by broken automation
+  looks authoritative and isn't.
+
+- **A manual step must fail loudly where the CI version was allowed to shrug.**
+  `--write-badge` exited 0 with a warning when no report existed, which was
+  right for a non-blocking job and wrong the moment a human types the command:
+  it leaves the author believing the README was refreshed when nothing was
+  measured. It now exits 1. The same inversion applies to the staleness risk —
+  CI always had a fresh report by construction, a developer's working tree may
+  have one from last week, so the target re-measures rather than trusting
+  what is on disk.
+
+- **`continue-on-error` on a job stops it failing the *run*, not the check.**
+  That run's conclusion was `success` while `Coverage (non-blocking)` still
+  carried a red X of its own, next to a green merge. A job marked non-blocking
+  can still put a failure in front of a reviewer, so a step that is genuinely
+  advisory has to handle its own failure and exit 0 — the label on the job does
+  not do it.
+
+## Testing main.js: what makes a path reachable, and what makes it unreachable
+
+Raising `main.js` coverage past 80% turned on four techniques, in order of how
+much they unlocked:
+
+- **Swap the global, not the module.** `main.js` is a classic script, so
+  `Peer`, `fetch`, `navigator.mediaDevices.getUserMedia` and
+  `getDisplayMedia` are all replaceable with a `page.evaluate` before the code
+  under test runs. A stub `Peer` whose `connect()` returns an `on`/`emit`
+  object drives `createRoom`, `joinRoom`, `connectToHost`, the retry ladder and
+  `handleJoinerDataConnection` end to end with no broker — PeerJS connections
+  are EventEmitters, and nothing else about them is load-bearing.
+  Note the ordering trap already recorded above: `addInitScript` is too early
+  (`peerjs.min.js` overwrites `window.Peer` afterwards); `page.evaluate` after
+  `goto` is right.
+- **A synthetic MediaStream is a real MediaStream.** `canvas.captureStream()`
+  for video and an `AudioContext` + `MediaStreamAudioDestinationNode` for audio
+  give real tracks with real `readyState`, so "did this release the device?"
+  is directly assertable. Two `RTCPeerConnection`s in one page also make the
+  network echo test testable for real — `startEchoTest({iceTransportPolicy:
+  'all'})` is the documented entry point, since production forces `'relay'` and
+  CI has no TURN server.
+- **Bootstrap listeners are only reachable through events.** Everything inside
+  the `DOMContentLoaded` handler — the keyboard PTT path, the settings
+  controls, the `storage` bridge, the pointer handlers — has no exported
+  function to call. Dispatch a real `KeyboardEvent`/`PointerEvent`/
+  `StorageEvent`, or click the element. Two gotchas: a `storage` event never
+  fires in the window that wrote the value, so the test must dispatch it by
+  hand; and the settings modal shows one card at a time with the rest at
+  `display:none`, so `.focus()` silently does nothing until the test reveals
+  them.
+- **Mode constants are frozen at load, so the URL is the switch.**
+  `IS_TINY_EMBED`, `FORCE_WEB_JOIN`, `ALLOW_POPOUT` and `_isIframe` are IIFEs
+  evaluated once. `page.goto('/?embed=tiny')` is the only way into the compact
+  roster and the Start-first invite screen; a same-origin child iframe is the
+  only way into the `postMessage` command handler.
+
+**Correction to what that last point implied.** `IS_TAURI_DESKTOP`,
+`IS_NATIVE_MOBILE` and `IS_MOBILE_DEVICE` are frozen at load too — which makes
+them settable by exactly the same trick, and taking that seriously moved
+coverage from 80% to ~84%. `page.addInitScript` runs *before* `main.js`, so a
+fake `window.__TAURI__` / `window.Capacitor` / `navigator.userAgent` installed
+there is what those consts read. Unlike `window.Peer` there is no vendored
+script to overwrite them afterwards, so here `addInitScript` is right and
+`page.evaluate` after `goto` is too late. A fake bridge of ~40 lines — an event
+bus with `listen`/`once`/`emit`, and a `WebviewWindow` class that records its
+options and its `once` handlers — makes the whole desktop half of `main.js`
+testable: the pop-out loopback, the preferences/about/dev-log windows, the
+global PTT shortcut, `tauriFetch`, and Voxal Connect's system-browser hand-off.
+See `tests/e2e/unit-tauri-desktop.spec.js` and `unit-video-popout.spec.js`.
+
+What the fake genuinely cannot prove is that *Tauri* delivers those events and
+opens those windows — only that `main.js` reacts correctly when it does. That
+half needs `tauri-driver`.
+
+Four more traps found doing it:
+
+- **A `let`/`const` at the top level of a classic script is NOT on `window`.**
+  `connections`, `audioTrack`, `freeHandMode`, `myPseudo` are `let`, so
+  `window.audioTrack = …` inside `page.evaluate` creates an unrelated property
+  and the code under test never sees it. Use the bare identifier
+  (`audioTrack = …`) — assignment reaches the real global lexical binding.
+  `var`s and `function` declarations *are* on `window`, which is why the same
+  file can use `window.becomeHost()` and bare `connections` in one breath.
+- **`addEventListener('click', someFn)` captures the function object.**
+  Reassigning `window.someFn` afterwards does not redirect the listener, so a
+  spy installed after load never fires. Assert the effect instead of
+  intercepting the call.
+- **`window.location.assign` cannot be stubbed in a real browser**, which is
+  why `buildConnectUrl()` is split out. To test the navigation itself, point
+  the target at the test origin (`localStorage['voxal-connect-url'] =
+  location.origin`) and let it really happen — `sessionStorage` survives, so
+  the marker written before the redirect is readable on the other side.
+- **This sandbox never finishes ICE gathering** (no UDP), so any code that
+  awaits end-of-candidates hangs until the test times out. Dispatching a bare
+  `new Event('icecandidate')` at the peer connection resolves the wait exactly
+  as a real gathering completion does — `event.candidate` is `undefined`, which
+  is what the `if (!ev.candidate)` check reads. Harmless where gathering does
+  complete.
+
+And two on the `api/` side:
+
+- **A serverless handler's module scope is its cache, so give each test its
+  own.** `api/ice-servers.js` keeps its credential cache and rate-limit map in
+  module scope on purpose (that is what makes request volume free). Rather than
+  exporting a test-only reset, `await import('./ice-servers.js?fresh=N')` gives
+  a handler with both empty — ESM caches per specifier, and the query string
+  makes each one a different specifier.
+- **`node --test --experimental-test-coverage` then emits one lcov `SF` record
+  per module instance.** Summing per-record `LF`/`LH` counts that file several
+  times over and averages its coverage instead of unioning it, so a file every
+  line of which is covered somewhere reads as partly covered — `api/` showed
+  83% when it was really 99.7%. `scripts/coverage-report.mjs` now merges the
+  `DA` records per file first. lcov allows repeated `SF` records; consumers are
+  expected to merge them.
+
+## Camera background effects — the five things that bit
+
+Full design in `docs/video-effects.md`. What is not derivable from the code:
+
+- **A canvas that is never redrawn emits exactly one frame.** The E2E fake
+  camera (`canvas.captureStream(15)` over a static fill) delivers a single frame
+  and then stops, so `requestVideoFrameCallback` fires once and the render loop
+  stalls silently — the pipeline looks broken when it is the *source* that has
+  stopped. `unit-video-effects.spec.js` repaints its fake camera on an interval.
+  Anything driving a real capture loop in a test needs the same.
+
+- **`import('assets/seg/x.mjs')` throws — that is a *bare* specifier**, not a
+  relative URL, and dynamic import does not resolve it against the document.
+  It must be `./assets/…`, or an absolute URL. `video-effects.js` runs every
+  runtime path through `new URL(u, document.baseURI).href` for this reason.
+
+- **MediaPipe's `canvas:` option takes over that canvas's GL context** and
+  freely resets viewport, framebuffer and blend state. Handing it your own
+  render canvas means saving and restoring GL state around every inference, on
+  five different webviews. Give it a throwaway canvas and take the mask back as
+  a `Uint8Array` — 37 KB at 256×144, well under the cost of being clever.
+
+- **`@mediapipe/tasks-vision` unpacks to ~36 MB**, of which the SIMD build we
+  actually use (`vision_wasm_internal.{js,wasm}` + `vision_bundle.mjs`) is
+  ~12 MB. The npm package does *not* contain the `.tflite` models — those come
+  from `storage.googleapis.com/mediapipe-models/…` and have to be vendored
+  separately. `selfie_segmenter_landscape.tflite` is 250 KB.
+
+- **`ImageSegmenter` returns its mask at the size of the frame you hand it**, not
+  at the model's input size. Passing a 640x480 video back gives a 640x480 mask
+  (300 KB read across per inference, not the 37 KB a 256x144 one would be), and
+  if you then resample it into a hardcoded 16:9 buffer you crush 480 rows into
+  144 and clip the subject. Downscale the frame yourself first — the model
+  resizes internally anyway, so nothing is lost and the geometry comes out
+  right. `mask.width`/`mask.height` will tell you this in about a minute; the
+  docs will not.
+
+- **Every stage of a mask pipeline erodes the subject** — the feather blur, the
+  composite's `smoothstep`, and the mask's own lag behind a moving frame. Each
+  is small, they compound, and the result is somebody's face getting blurred at
+  the edges. Dilate before feathering and bias the threshold low: a sliver of
+  sharp background is far less noticeable than a soft ear.
+
+- **A confidence mask read via `getAsUint8Array()` is 0–255, not 0–1.** The
+  selfie model publishes a *single* confidence mask (`getLabels()` → `["selfie"]`),
+  not one per class — so index 1 is `undefined` there, while other segmenters
+  put the person at index 1 behind the background. Handle both, and check
+  `getLabels()` rather than assuming.
+
+- **The static site is `ptt.voxal.app`, and `presenceBase()` is not it.**
+  `localStorage['service-url']` defaults to a Supabase edge function
+  (`…supabase.co/functions/v1/session`) and has never served files out of
+  `src/`. Anything a native build needs to fetch from the site itself must use
+  the `DEFAULT_ANON_TURN_URL` / SFU pattern — an override key, same-origin on
+  web, absolute `https://ptt.voxal.app/…` on native. Getting this wrong is
+  completely invisible on the web, where the same-origin branch wins, and breaks
+  the feature outright on the desktop and mobile apps.
+
+- **A file input must be `.click()`ed synchronously inside the user gesture.**
+  One awaited promise beforehand — an IndexedDB read, a `caches.match`, anything
+  — spends the user activation, and WebKit then silently declines to open the
+  picker. No error, no console warning; the tap just does nothing. Read whatever
+  you need *ahead* of the click and keep the handler synchronous. Related: an
+  input with `display: none` will not open a picker in WKWebView either, so hide
+  it with `opacity: 0` and a 1px box instead.
+
+- **`overflow-x: auto` clips vertically too.** A horizontally scrolling strip
+  will slice the tops and bottoms off anything drawn outside its children's
+  boxes — `box-shadow` rings, focus outlines, badges. Pad the container and pull
+  it back with a negative margin.
+
+- **A single temporal blend factor on a segmentation mask cannot win.** Slow
+  blending lags a moving subject and clips it; fast blending lets per-inference
+  noise through and the matte boils. Blend asymmetrically — grow fast (~0.85),
+  shrink slowly (~0.2) — because flicker is almost entirely pixels dropping out
+  for one inference and returning.
+
+- **`Content-Length` is the compressed size** when the response is encoded,
+  while a `ReadableStream` reader gives you decompressed bytes — so a progress
+  bar computed as `loaded / contentLength` sails past 100%. Treat the header as
+  a hint, keep an approximate total as a fallback, and clamp below 1 until the
+  work is actually done.
+
+- **`captureStream(0)` + `track.requestFrame()` is the precise path**, but
+  Safari has `captureStream` without `requestFrame`. Feature-detect and fall
+  back to `captureStream(fps)`; do not assume the manual path exists.
+
+- **Vercel caps `buildCommand` at 256 characters**, and enforces it as *schema
+  validation* — the deploy fails before the build starts, so the error names the
+  schema and says nothing about what you were trying to run. Anything beyond a
+  one-liner belongs in a script (`vercel-build.sh`) with the JSON side kept to
+  `sh vercel-build.sh`.
+
+- Generated beats licensed for backgrounds. The four 1280×720 WebP presets
+  (~20 KB, from a Python generator) were later replaced by shaders that ship no
+  bytes of artwork at all — see the next section.
+
+## Animated scenes — shaders instead of pictures
+
+From "replace the virtual backgrounds with realistic, subtle animations, purely
+generated, matching the subject's light, with their shadow". Full design in
+`docs/video-effects.md` → *Animated scenes*. What bit:
+
+- **A canvas's alpha is not "data" to the page.** The scene shader writes how
+  near each surface is into alpha, for the composite's shadow. Rendered into an
+  FBO that is fine; rendered into a default `alpha: true` canvas and exported
+  with `toDataURL`, every far surface came out *transparent* — the island, the
+  mountain and the countryside previews were pure white. Any canvas that only
+  displays such a shader needs `alpha: false`.
+
+- **GLSL ES 3.00 reserves words a scene wants to use.** `patch` (a sunlit
+  patch) and `cast` (a cast shadow) are both reserved and fail with "Illegal use
+  of reserved word". Neither is reserved in GLSL ES 1.00, so code ported from a
+  WebGL1 shader trips on it.
+
+- **A backtick in a GLSL comment ends a JS template literal.** The shaders live
+  in template strings; one `` `s` `` in a comment turned the rest of the file
+  into a syntax error. `node --check` finds it in a second.
+
+- **`pow(x, 2.0)` with negative `x` is undefined, and so is `smoothstep` with
+  edge0 ≥ edge1.** SwiftShader computes both "as expected", which is exactly why
+  it is a trap: some real drivers return NaN for the first, and a falling edge
+  written as `smoothstep(0.9, 0.1, x)` is not guaranteed by the spec. The scenes
+  use `sq(x)` for gaussians and their own `sstep()` everywhere.
+
+- **The test GPU has no `KHR_parallel_shader_compile`, and its cost is the JIT,
+  not the pixels.** Rendering five 160×90 thumbnails took ~1.7 s on headless
+  SwiftShader; halving the size changed nothing. Each new program is JIT-compiled
+  on first draw and the next synchronous GL call waits for it. On a real GPU the
+  same work is milliseconds, and with the extension it is off the main thread —
+  but the suite pays ~2 s every time a picker scrolls into view. Thumbnails are
+  therefore rendered only when the chip row is actually visible
+  (`IntersectionObserver`), never at page load, and read back with
+  `OffscreenCanvas.convertToBlob()` rather than a blocking `toDataURL()`.
+
+- **Measure the illuminant on the room, not on the face.** The first idea —
+  tint the scene by the subject's average colour — would have turned every scene
+  orange: skin is not grey. The webcam has already white-balanced, so gray-world
+  over the whole frame gives the *residual* cast, which is what the scene must
+  match; follow it only halfway and clamp it, or a green wall turns the sky
+  green. Exposure is the opposite: measure it on the subject's confident core,
+  because the frame's average is mostly the room being replaced.
+
+- **Direction needs hysteresis, and a mirror needs a crossfade.** Half-face
+  asymmetry flips sign whenever the head turns. The window changes sides only
+  past ±0.35 (eased), and a change draws both mirrored layouts and fades between
+  them for ~1 s. A scene authored with its light on the right and mirrored is
+  also why scenes carry no text, no clock: they would read backwards.
+
+- **A moving background is a bitrate cost for every receiver.** Keep the motion
+  slow and sparse, redraw the scene below the camera's rate (20 Hz), and pin it
+  in a test (mean change between frames a second apart < 3/255).
+
+## Animated scenes, second generation — real 3D
+
+From "do all we can to make the animated backgrounds more realistic — a showcase of
+3D". The five scenes were redrawn as ray-marched worlds (see *How a scene is built*
+in `docs/video-effects.md`). What bit, beyond the first generation's list:
+
+- **Look at it, don't guess.** Every decision here was made on a picture, and the
+  tool for it is now `make scene-preview` (`scripts/scene-preview.mjs`): it loads
+  `video-scenes.js` into a blank page, compiles one scene with
+  `VideoScenes.compileProgram()`, draws it at a chosen size, time and look, and
+  saves a PNG plus a contact sheet, optionally with an oval stand-in for a head
+  and shoulders so the composition is judged with the middle of the frame covered.
+  Headless Chromium's SwiftShader runs WebGL2 fine. It also gives a per-scene
+  cost, which is what led to `res` and `hz`. Rendering a scene at several looks
+  (`exposure: 0.25` for the evening, `sideMix: 0` for the mirror, 216x384 for an
+  upright phone) caught more bugs than any unit test.
+- **`half` is reserved in GLSL ES 3.00 too** (as are `patch`, `cast`, `sample`,
+  `input`, `output`, `filter`...). It fails with "Illegal use of reserved word" at
+  the first use, which for a parameter name is a long way from where you meant it.
+- **A noise table beats hashing.** Value noise computed by hashing four lattice
+  corners per octave was most of a terrain's cost. One 256x256 `RGBA8` texture with
+  the cell's four corners packed per texel makes it a `texelFetch` and some
+  arithmetic: ~35% faster in SwiftShader and ~40% less to compile. It is generated
+  in JS from a fixed seed — not an asset — and lives on its own texture unit (8)
+  because the pipeline's `texture()` helper binds to *whatever unit is active*;
+  `setUniforms()` puts the active unit back. The unit test that forbade
+  `sampler2D` in a scene meant "no picture", and now says so.
+- **A ray over flat water has a tiny height above the land, so a distance-
+  proportional minimum step is all you get.** Steps of `0.5 * h` collapse when `h`
+  is a few metres, and a march from 4 m to 12 km at 5% per step is ~190 steps, not
+  the 72 budgeted. The bad failures were silent: an exhausted march "hit" at the
+  last `t` and painted the lake bed over the lake (a green band across the water),
+  and a reflection ray that ran out of steps showed the near bank instead of the
+  mountains. Count steps as `ln(range / t0) / ln(1 + grow)`. The fix that paid:
+  evaluate the cheap near field (banks) with a separate short march, and start the
+  expensive one where the land can first appear (a kilometre out).
+- **Skyline anti-aliasing from the closest approach is only as good as the
+  closest approach.** The march samples every few hundred metres, so the minimum
+  of what it saw is noise: horizontal streaks across a summit. Refine around the
+  nearest sample (golden-section, six steps) before using it, and treat a refined
+  value below zero as a *hit*, not as a miss — otherwise `t` is the "no hit"
+  sentinel and the pixel is shaded at -1 km, behind the camera, as pure white.
+- **Domain-repeated objects need two things a plain SDF does not.** A row of
+  books, one box per cell, is wrong for any point nearer a neighbour's book than
+  its own cell's (jagged edges), so ask the cell on either side. And a point in an
+  empty cell can be far from every book it knows about while a book two cells away
+  is thin enough to step over, so the march needs a step cap — but only the march:
+  the cap in `map()` turned every ambient-occlusion and normal sample near the
+  shelf into "something is 2 cm away" and drew a grey halo round the case. Make it
+  a global the march sets and clears.
+- **A wave's phase speed grows with its wavelength, so the small ones cycle
+  fastest — and those are the ones the encoder pays for.** Sea chop at 1.2 m with
+  a physical `c = 1.25*sqrt(lam)` moved a third of a wavelength a second and failed
+  the "moves only a little" test by a factor of two. The motion budget is a
+  property of the picture, not of the physics: scale `c` down ~20x, fade each
+  octave out below a pixel, and keep a palm's sway to a few hundredths of a radian
+  (a dark frond against a bright sky is the highest-contrast thing in the frame).
+- **Shaders compile in the page's thread unless the driver does it elsewhere.**
+  On a software GPU (and any browser without `KHR_parallel_shader_compile`) the
+  floor is about a second per scene and three or four for the big ones. Five of
+  those in one task froze the settings page for fifteen seconds, which broke an
+  unrelated test (the "+" chip's file dialog, whose activation expired). Compile
+  the thumbnails one at a time, each in its own task, and after a short delay from
+  the moment the row appears. Even that was not enough on SwiftShader (each
+  compile still blocks for seconds, and tests click within that window), so a
+  software GPU (`VideoScenes.isSoftwareGL()`) skips the thumbnails and keeps the
+  gradient swatches. Tests that want them set `window.__voxalThumbsOnSoftwareGL`.
+- **A night scene still has to read as a picture.** The café's first lighting was
+  physically plausible and averaged 20/255: dark enough that a webcam encoder
+  would smear it and a face would sit in a black hole. Lifting ambient, pendant
+  and wood albedo to ~28/255 kept the mood and passed the "not a flat field" test.
+- **Lighting in physical-looking units wants an exposure.** A sunlit wall is ~10x a
+  shaded one in a real room, so the shaded part has to sit around 0.1-0.3 in linear
+  light for the sun patch to be several times that. `main()` multiplies by 0.55
+  before the ACES shoulder; without it every outdoor scene was a white-hot haze
+  and every sky a washed-out pale blue (an atmosphere model needs its blue
+  channel's scattering coefficient pushed and its extinction scaled to stand in
+  for the multiple scattering a single-scattering sum leaves out).
+- **Environment (cloud container only):** the installed `@playwright/test` expected
+  chromium revision 1243 and `/opt/pw-browsers` held 1194. Point
+  `PLAYWRIGHT_BROWSERS_PATH` at a scratch directory containing
+  `chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell`
+  (a symlink to the 1194 `headless_shell`) and the same for `chromium-1243/`, and
+  the suite runs. A standalone script can simply pass
+  `executablePath: '/opt/pw-browsers/chromium'`.
+
+## Detection controls — edge sharpness, inference rate, low light
+
+Follow-up to the section below, from "can we control the sharpness and accuracy
+of the detection, and adapt it to brightness". Three preferences
+(`edge-sharpness`, `detection-quality`, `light-adapt`), and what was not obvious
+before building them:
+
+- **The mask's working size is NOT an accuracy knob, and it looks exactly like
+  one.** `ImageSegmenter` resizes whatever you hand it to the model's own
+  256-wide input, so raising `SEG_LONG` buys a bigger readback of identical
+  information. The honest knob is the inference *rate*: the mask lags the frame
+  by one segmentation interval, so 24 Hz sees ~40 ms of lag where 10 Hz sees
+  100 ms, and the temporal blend (per inference, not per frame) smooths over
+  less. `detection-quality` therefore picks a rate ladder, not a resolution.
+
+- **A quality setting has to hand the adaptive step-down a full ladder, not a
+  single rate.** Each rung is `[start, …, 6]`, and switching restarts at the
+  top: the rungs differ between ladders, so "keep the current index" means
+  different things in each, and a device that needs stepping down gets stepped
+  down again within one 5 s measurement window anyway. Reset that window too —
+  judging a new rate by a window that began under the old one is an instant
+  spurious step-down.
+
+- **Hand out a copy of the ladder, never the shared constant.** The processor
+  mutates its own ladder position; sharing the table would let one call's
+  step-down rewrite the defaults for every later one in the session.
+
+- **The three edge numbers are one control.** Feather radius, the composite's
+  `smoothstep` window and `MASK_DILATE` cannot be exposed separately — a narrow
+  window on a wide feather is a hard edge (see below). One preference derives
+  all three through `edgeProfile()`, and *softer dilates further*, because a
+  wider soft band still has to sit outside the real subject.
+
+- **Pin the midpoint of a slider you carved out of tuned constants.** The whole
+  risk of turning `MASK_FEATHER`/`MASK_EDGE_*`/`MASK_DILATE` into a preference
+  is that the default silently stops being the tuned value for everyone who
+  never opens the setting. A test asserts `_edgeProfile(0.5)` equals the four
+  constants exactly.
+
+- **Low light is fixable before inference and unfixable after.** The selfie
+  model degrades in the dark by collapsing its confidence toward the middle of
+  the range — no downstream filter recovers what it never saw. Brightening the
+  segmenter's own downscaled copy through a canvas `ctx.filter` of
+  `brightness() contrast()` costs one string assignment per inference and is
+  the entire mechanism.
+
+- **Measure the CENTRE, not the frame, or you make backlight worse.** The case
+  that breaks segmentation is a window behind you: the frame's average is high
+  while your face is the darkest thing in it, so a full-frame gain would darken
+  the one region the model needs. The centre half of a 12×8 probe is where a
+  webcam's subject is, near enough — and `getImageData` on 96 pixels a couple
+  of times a second is genuinely free.
+
+- **Ease the gain, and never darken.** A gain that jumps when you lean forward
+  makes the mask breathe; 25% per sample fixes that. Clamping to `[1, 2.6]`
+  means an ordinary room gets gain 1, which sets no filter at all — the feature
+  costs nothing where it is not needed.
+
+- **Never let the adaptation reach the published frame.** It brightens a private
+  256-wide copy; the picture on the wire is untouched. Pinned by a test that
+  reads the composited canvas while the gain is at full stretch — a dark room
+  must stay dark for everyone else.
+
+- **`ctx.filter` is not everywhere.** Older WebKit has no canvas filter at all;
+  feature-detect (`typeof ctx.filter === 'string'`) and leave the frame alone
+  there rather than half-applying anything.
+
+- **Measure the filter's own output and you have built a feedback loop.** The
+  luma probe reads a separate canvas drawn straight from the `<video>`, not the
+  seg canvas the gain was just applied to — same class of bug as the mask
+  compounding into its own input, below.
+
+## Fixed camera — the empty-room reference (experimental)
+
+From "could a picture of the room without me improve the detection, for a
+camera that does not move". What was not obvious:
+
+- **A thresholded confidence mask is not "where the model is unsure".** The
+  first fusion trusted the model wherever its blended mask was above 0.8 and
+  let the reference decide the rest. Against a hard-edged mask that is the
+  whole mask: the reference was left only the dilate's 3-texel halo and changed
+  almost nothing. The model is confidently wrong near its edge as often as it is
+  unsure there, so the protected "core" has to be an EROSION of the mask (4
+  texels), not a threshold of it.
+
+- **Compare like with like, filter included.** The camera was box-sampled
+  through four taps and the reference sampled once. On a striped test room every
+  stripe boundary came out as "different" and stayed sharp: a one-pixel line
+  along every edge in the room. Run both through the same taps.
+
+- **Webcams re-meter when you walk back in.** Auto-exposure and white balance
+  change the whole room the moment the subject returns, so a raw comparison
+  calls everything foreground. Measure a per-channel gain over what the model
+  calls room (a 64-wide probe, twice a second) and apply it to the reference.
+
+- **A reference must be able to give up on its own.** A knocked camera or a
+  lamp turned on makes it actively harmful. The same probe gives the share of
+  the room that still matches; below 55% it is set aside, above 70% trusted
+  again — two thresholds, or it flickers on a borderline room.
+
+- **Let the reference only take away, never add.** `m * max(diff, core)` cannot
+  cut in anything the model did not already include, so a shadow or a moving
+  curtain elsewhere in the room can never appear sharp.
+
+- **An opt-out must forget, not just stop using.** Switching the setting off
+  drops the picture. It never touches storage in the first place.
+
+## Background blur quality — grey background, cardboard-cutout edge
+
+Two independent bugs, both invisible in isolation, both plainly visible in the
+finished picture. Symptom as reported: "a bit too grey, and the face detection
+seems too sharp".
+
+- **A separable blur kernel that does not sum to 1 is a brightness multiplier.**
+  The hand-typed 9-tap table in `video-effects.js` summed to **0.838** (`w0`
+  and `w1` were wrong; `w2`–`w4` matched the textbook values, which is why it
+  looked right at a glance). Two passes left the background at **70%**
+  brightness — a flat `rgb(0,170,0)` came out `rgb(0,120,0)`, measured. That is
+  most of the "grey". The *same* program feathered the mask, so the feather
+  also capped at 0.7, which shifted the composite's `smoothstep` threshold
+  inward and hardened the edge the feather exists to soften. One typo, both
+  complaints. Weights are now generated by `gaussianHalfKernel(sigma, taps)`
+  and the shader source is built from them, so this cannot recur.
+
+- **Blurring sRGB-encoded values is not blurring light.** Averaging encoded
+  values pulls every mixture toward the middle: highlights dull instead of
+  blooming, colour goes to porridge. Each colour pass now linearises its taps
+  and re-encodes on write (gamma 2.0 — a multiply and a `sqrt`, mediump-safe).
+  Keep the intermediate buffer sRGB-*encoded*: 8 bits of *linear* light bands
+  visibly in the darks. The mask feather must NOT get this treatment —
+  coverage is not light — hence two programs from one generator.
+
+- **A narrow smoothstep window on a wide feather is still a hard edge.** It
+  maps nearly the whole gradient to 0 or 1 and keeps a sliver as the
+  transition. Feather radius and window width are one control, not two;
+  `smoothstep(0.10, 0.42)` kept ~30% of the ramp. Now `MASK_FEATHER = 1.4` with
+  `smoothstep(0.12, 0.78)` (~70% of the ramp) and `MASK_DILATE = 3` so the
+  wider band still sits wholly outside the subject.
+
+- **Downsampling with one bilinear tap is a point sample in all but name.** One
+  tap reads 4 source texels of the 16+ a destination texel covers; the rest
+  come back as aliasing, and aliasing that moves with the frame is exactly the
+  "boiling" of a cheap blur. Four taps at the quarters of a destination texel
+  box-filter the whole footprint for three extra fetches on a tiny buffer.
+
+- **Blur at a fixed buffer size, not a fixed fraction of the frame.** `frame/4`
+  means a 4K camera gets a relatively *weaker* blur than a 720p one and pays
+  ~9× more for it. A fixed-size buffer makes the strength and the cost constant
+  across cameras.
+
+- **A stride wider than the detail it samples does not blur that detail, it
+  skips it** — and what survives is structured, moving aliasing, which the eye
+  reads as "the blur isn't really blurring" however large the sigma is on
+  paper. This is why repeating one stride N times is the wrong way to get a big
+  radius. Successive Gaussians add *variances*, so N iterations with
+  **doubling** strides reach `sqrt((4^N - 1)/3)` times the first one's radius —
+  three are worth 4.6× — while every pass is still sampling detail it can
+  actually see, because the pass before it just smoothed that detail. First
+  stride stays under a texel.
+
+- **Express a visual knob in units that mean something.** Blur strength is one
+  value, sigma over the frame's long side; buffer size, stride count and stride
+  widths are all derived. Before that it was an emergent property of three
+  unrelated constants, which is how it ended up mis-tuned twice without anyone
+  being able to point at the number.
+
+- **"Blurred enough" is not a number you can pick for someone.** Three rounds
+  of tuning (2.6% → 4.5% → "still not much") said the disagreement was about
+  taste, not correctness — the rendered radius matched the declared one at every
+  step. It is now a preference (Settings → Video, `blur-strength`), default
+  0.08, range 0.02–0.20. When a second round of visual feedback arrives on the
+  same knob, that is the signal to ship the knob rather than guess again.
+
+- **A perceptual slider should be geometric, not linear.** The eye reads blur as
+  a ratio: 2% → 4% is dramatic, 18% → 20% is invisible. A linear range input
+  spends most of its travel inside "already unreadable". Map slider position to
+  value with `MIN * (MAX/MIN)^t` so every part of the travel is worth the same.
+
+- **Derive the pass count, not just the stride.** One slider spanning a 10x
+  sigma range cannot hold its pass count still: the first stride grows past a
+  texel at the top end and the blur starts skipping detail instead of averaging
+  it. Take the fewest passes whose first stride is still under a texel (2 at the
+  bottom of the range, 5 at the top) and the character stays constant.
+
+- **Test the arithmetic AND the picture; they fail differently.** That the
+  strides sum to the declared strength is arithmetic. That the strides reach
+  the shader is not — a uniform in the wrong units or a dropped iteration
+  leaves the arithmetic perfect and the blur small. Probing a blurred
+  black/white edge on the rendered canvas catches the second: with the strides
+  wired up, one sigma into the dark side reads 99; with the shader stuck on the
+  first stride, 13.
+
+- **This is all testable headlessly.** `unit-video-effects.spec.js` already
+  runs the real GL pipeline with only inference stubbed
+  (`window.__voxalSegStub`), so a pixel probe of the composited canvas catches
+  a shader regression directly — the brightness guard fails at 120 against the
+  old kernel and passes at 170 with the fix.
+
+- **A feedback filter must never read the buffer its own post-processing wrote.**
+  The mask pipeline is blend -> dilate -> feather, and the blend's `uPrev` was
+  the *finished* mask, so dilate and feather were re-applied to their own
+  output ~15x a second and compounded. Measured off the GPU on a silhouette
+  edge at texel 71.7 of a 256-wide mask: the 50% point sat at 61 — 10.7 texels
+  OUTSIDE the subject — and the soft band spanned texels 34-68 against a
+  feather configured for ~8. Fix: two ping-pong pairs, one for the blend's
+  memory and one for the derived mask, with the work pair given a fixed
+  direction so no swap can reintroduce the loop.
+
+- **A compounding-feedback bug does not present as itself.** This one was
+  reported three times as "the background blur isn't strong enough", because
+  what you see is a wide sharp halo around the person that no blur radius can
+  remove. Two rounds went into the blur — which was correct all along, and
+  measurably so — before anyone read the mask. **When turning a knob up does
+  not produce the expected effect, stop turning it and go measure the thing it
+  feeds.** Rendering the composited canvas to a PNG and looking at it found in
+  one step what three rounds of arithmetic missed.
+
+- **Test the steady state, not just the first frame.** A filter that compounds
+  looks correct on inference 1 and wrong on inference 20. The regression test
+  samples the mask edge early and late and asserts it has not moved; the
+  geometry assertions alone pass on the broken code while the drift is small.
+
+---
+
+## Join-time media
+
+- **`setFreeHand(true)` before the microphone exists silently loses the state.**
+  It enables the *track* (`if (audioTrack) audioTrack.enabled = active`), and at
+  join time there is no track yet — the device is still starting behind
+  `_micAcquirePromise`. `acquireMicForRoom()` then landed on
+  `audioTrack.enabled = false` unconditionally, so the room showed "● Live" over
+  a muted microphone. It now lands on `freeHandMode`. Anything that latches
+  hands-free before or during a join (the `?video=1` auto-start does exactly
+  this) depends on that.
+
+- **A URL parameter must not write a Settings key.** `?video=1` needs the
+  Camera/Screen controls on, so it sets `videoModeEnabled` in memory — never
+  `VIDEO_MODE_KEY`. `resetVideoState()` re-reads the key on leave, so the user's
+  stored choice comes back by itself. Writing the key instead would silently
+  change a preference for every later, parameter-free visit.
+
+- **A `?room=…` page never finishes loading under Playwright's `goto`.** The
+  invite bootstrap hands off to `voxal://join?room=…` via a hidden link click,
+  and the navigation to a custom scheme leaves the `load` event pending, so
+  `page.goto('/?room=abc')` times out. Tests that only need a query string
+  should pick one that is not `room` (or pass `forceWeb=1`).
+
+
+---
+
+## In-room chat
+
+- **A persistent drawer must not be a `STAGE_PANELS` entry.** `STAGE_PANELS`
+  (the header and roster slide-ins) is torn down by `applyVideoStageMode()`'s
+  `closeStagePanels()` on *every* relayout that is not the immersive phone
+  stage — the chat drawer registered there would slam shut on desktop the moment
+  anyone's camera state changed. The drawer therefore has its own body class
+  (`chat-open`) and only borrows the mutual exclusion, in `setStagePanel()`.
+
+- **Push-to-talk owns Space, so a text field has to take the keyboard back.**
+  `shouldIgnorePTTShortcuts()` used to check `editingSelfPseudo` alone; with a
+  composer in the room, typing a space started transmitting and Enter toggled
+  hands-free. It now bails on any focused `INPUT`/`TEXTAREA`/`contenteditable`.
+  Anything that adds a text field to the room screen depends on that.
+
+- **Fanning a relay out to *everyone* — the sender included — buys two things at
+  once.** The echo back to the sender is a free ack (it is what clears
+  `_chatPending`), and it leaves every peer holding a full replica of the
+  transcript, so host migration needs no transfer at all: whoever is promoted
+  serves the joiner backfill out of its own log. The existing relays
+  (`talking`, `peer-renamed`) exclude the sender because they are state the
+  sender already has; a log is not.
+
+- **A handle belongs on the edge its panel comes from.** The roster used to
+  slide in from the right, which was fine while it was the only side panel. With
+  a chat on the right too, `sign` (the direction of the GESTURE that opens it)
+  and the transform that hides it both had to flip for the roster — those are
+  opposites, and getting one without the other is a panel that refuses to open.
+
+- **Deleting a panel means auditing what used to hide for it.** While the chat
+  was opened from a button, a rule hid the roster's right-edge handle whenever
+  the drawer covered it. Once that handle became the chat's own, the same rule
+  hid the thing you had just grabbed — and the symptom was Playwright timing out
+  on "element is not visible" after a click that had already worked.
+
+- **Docking a panel decides where it goes; a separate rule decides whether it is
+  open.** An early version tied the two together and opened the chat the moment a
+  camera went live — a conversation nobody had started appearing mid-call. They
+  are still separate, but the answer to the second question is now *yes on a
+  desktop*: `chatOpensOnEntry()` opens it on entry to the room screen when the
+  window is at least `CHAT_DOCK_MIN_WIDTH` and the stage is not the immersive
+  one. Two things make that safe where the camera-triggered version was not — it
+  happens on *entry*, never mid-call, and it never focuses the composer (see the
+  push-to-talk note above). It does move the video tiles: `unit-video-layout`'s
+  `enterRoom()` collapses the chat so it still measures the box it describes.
+
+- **An auto-opened panel needs a "shut here" flag as well as a stored
+  preference.** Persisting only the deliberate collapse left a resize re-opening
+  a drawer that had just been closed some other way — every `resize` re-asks the
+  auto-open question. `_chatCollapsedHere` is set by *any* close and cleared by
+  `resetChatState()` (i.e. per room), so the stored default applies once per
+  room rather than once per layout event.
+
+- **A control that rides on a draggable edge must drop its own transition.**
+  `.stage-handle-right` eases `right` so it glides out when the drawer opens —
+  which during a *resize* drag leaves it chasing the pointer a quarter of a
+  second behind the seam it is attached to. `body.chat-resizing` now kills it,
+  the same way it already killed the drawer's. Measured mid-drag: after
+  `mouse.up()` everything settles and the bug is invisible.
+
+- **A panel that changes positioning regime changes what "its edge" means.** As
+  a fixed drawer the chat is flush to the viewport, so an offset of the drawer's
+  width lands exactly on its separator. Docked, it is a grid *column* — its left
+  edge is that width plus `#screen-room`'s own `padding-right`, so the same
+  offset floated the handle 18px clear of the seam the moment a camera went on.
+  Anything anchored to a panel's edge needs one rule per regime, not one number.
+
+- **`body.video-stage` as a stand-in for a live camera does not stay put.** A
+  test that adds the class by hand and then changes the viewport loses it: the
+  resize queues a rAF in which `updateVideoStage()` recomputes the class from the
+  tiles that are actually there and takes it straight back off. Re-assert it at
+  each measurement, or measure inside the one synchronous `evaluate` that set it.
+
+- **A control wired by the layout that *usually* shows it is dead everywhere
+  else.** The chat's edge handle is on screen in every room, but
+  `initStagePanelHandles()` was only called from `updateVideoStage()` under
+  `mode === 'immersive'` — so on a desktop the bubble was a real, styled,
+  hover-able button with no listener on it at all. It is now wired from
+  `initChatUI()`, which runs once wherever the chat exists. Nothing about the
+  element's appearance says which of the two happened.
+
+- **A one-row `<textarea>` paints a scrollbar down an empty box.** Its
+  `scrollHeight` includes its own padding, so it reports itself overflowing by a
+  pixel or two and `overflow-y: auto` believes it. The auto-grow toggles
+  `overflow-y` between `hidden` and `auto` instead of leaving it on `auto`.
+
+- **The separating space between a name and its message belongs in the DOM, not
+  in a `::after`.** Generated content is invisible to `textContent` and to a
+  copy-paste of the transcript, and it does not disappear when the name it
+  follows is visually hidden on a grouped row.
+
+- **The host must stamp the sender id AND enforce the id's prefix.** Rewriting
+  `peerId` to the connection's own id is the obvious half — it stops a peer
+  posting under someone else's name. The other half is less obvious: message ids
+  are minted by senders and receivers dedupe on them, so without requiring the
+  `<senderId>:` prefix a peer could mint the id another peer is *about* to use
+  and have that future message silently swallowed everywhere.
+
+- **A `position: fixed` child is not fixed to the window if any ancestor has a
+  transform.** The chat peek's own host carried `transform: translateX(-50%)` to
+  centre its stack, which silently made it the containing block for anything
+  fixed inside it. Dropping the transform is half the fix; the other half is
+  that the host lived inside `#screen-room`, which is `overflow: hidden` — and
+  on a desktop a voice-only room is a ~480px column centred in the window, so
+  the clear space the anchored bubble wants is entirely *outside* the element it
+  was a child of. It is moved to `<body>` for that shape and back afterwards.
+
+- **A roster row is not the name in it.** `.peer-label-row` is an `inline-flex`
+  span but its flex parent stretches it to the full width of the roster column —
+  393px of it in a 480px room — so a tail aimed at its right edge landed
+  nowhere near the text. Only the innermost name span (now `.peer-name`) has the
+  text's own box. Measure the thing you mean, not the box around it.
+
+- **The box that decides is not always the box that positions.** The peek opens
+  at the last character of the sender's name, over the rest of the roster row —
+  that is what makes it read as coming out of the name. But the *name* cannot
+  also decide whether that shape applies: a name is short, so there is room to
+  its right on a phone too, and the bubble would cover the roster it is supposed
+  to be pointing into. `#peers-list` answers that question instead — clear space
+  beside the whole panel means a desktop, and no breakpoint is needed.
+
+- **Place stacked callouts top-down, not in arrival order.** Nudging each new
+  bubble clear of the ones already placed is only correct if they are placed in
+  the order their anchors appear down the screen. In arrival order a message
+  from someone ABOVE the previous sender gets pushed down past them, and the
+  bubbles end up in the reverse of the order the names are in.
+
+- **What shares an anchor should share a line.** Two bubbles pointing at the
+  same name are not two things to keep apart — they are one run, and pushing the
+  second one down walks it away from the name it belongs to and towards the next
+  person's. They go side by side out of the name instead, with a tail only on
+  the one that starts the run: a tail on the second would point at the first
+  bubble rather than at the person. Collision avoidance then works on the run,
+  not the bubble, so a wrapped line never parts from its own first line.
+
+- **`textContent` cannot see what CSS hid.** The anchored peek drops the sender's
+  name (the tail says it) by hiding the span, not by leaving it unrendered — the
+  stacked shape still needs it. A test asserting what the bubble *shows* has to
+  read `innerText`; `textContent` reports the hidden name and passes a bubble
+  that renders it too.
+
+- **`make cap-sync` writes `src/build-info.js`, and three About tests then
+  fail.** `gen-build-info` stamps the real commit into a gitignored
+  `src/build-info.js`, and `unit-settings-readouts.spec.js` asserts the
+  *unstamped* fallback a contributor sees. So `make cap-sync && make test` fails
+  three tests that have nothing to do with the change under test. Delete
+  `src/build-info.js` before running the suite.
+
+- **⌘E never reaches a web page on macOS.** It is the system's "Use Selection
+  for Find", handled above the page in both WebKit and Chromium, so the camera
+  shortcut the palette printed simply did nothing on the one platform it was
+  copied from (Google Meet is a *desktop app* there). ⌘U is free. The lesson is
+  the general one: a single-modifier letter key is worth testing on the actual
+  OS before printing it in a menu — the browser is not the only thing that can
+  take it. `ROOM_ACCEL_SHORTCUTS` entries now carry a list of keys so a moved
+  binding does not have to break the old one.
+
+- **A transform is still the OLD one on the frame the class changes.** The chat
+  drawer is slid in by a class that flips a `transform`, so
+  `getBoundingClientRect()` read inside `toggleChatPanel()` reports where the
+  drawer is *leaving*, not where it is going. Anything deciding "is the drawer
+  covering the room?" has to use `offsetWidth` (unaffected by transforms) plus
+  where the panel is pinned, or wait a frame — and waiting a frame means the
+  scrim appears a quarter of a second after the drawer, which reads as a bug.
+
+- **`offsetParent` is null for `position: fixed`.** Both the chat drawer and the
+  stage panels are fixed, so the usual `if (!el.offsetParent) return;` visibility
+  guard rejects them in Chromium whether they are on screen or not. Test
+  `offsetWidth` instead.
+
+- **A badge inside the stage cannot paint above the control bar, whatever its
+  z-index.** The stage carries `z-index: 5` and therefore its own stacking
+  context, so a child of it can never out-paint the bar's `z-index: 20` sibling
+  — no value of the child's own z-index helps. Parking the self-view in the band
+  beside the mic works visually (the bar is transparent there) but the press
+  that should pick the badge up lands on the bar. The fix is to forward it: the
+  bar hit-tests the badge's own rect and hands the event to its pointerdown.
+
+- **A measurement in the wrong place starts a transition nobody asked for.**
+  `applyChatDock()` runs inside `updateVideoStage()`, right after the class that
+  switches the room to the immersive stage. Adding a `getBoundingClientRect()`
+  there (to publish `--room-bar-inset`) flushed style mid-change, and the header
+  — which has `transition: transform 0.25s` and goes from in-flow to
+  `translateY(-100%)` — started animating away from a position the user had
+  never seen it in, instead of simply being off screen. The test that caught it
+  reads the header's box straight after entering the room and found it still on
+  screen. Rule of thumb: a function that only toggles classes must go on
+  toggling classes; take the measurement lazily, or only on the path that reads
+  it (here, only while the drawer actually overlays the room).
+
+- **`CSSStyleRule` has a `cssRules` property now.** Chromium ships CSS Nesting,
+  so the usual `if (r.cssRules) { walk(r.cssRules); return; }` recursion in a
+  stylesheet walker skips every ordinary rule and reports that nothing matches.
+  Test `r.cssRules && r.cssRules.length`, and do not `return` afterwards. Worth
+  knowing before debugging the app for an hour over a broken debug script.
+
+- **`min-height` on a flex child beats the container's `max-height`.** The emoji
+  grid has `min-height: 190px` as a *floor* so a picker with six recents does
+  not collapse to two rows. On a phone in landscape (390px tall) that floor plus
+  the search box and tabs is more than the picker's own `max-height: 60vh`, so
+  the picker overflows the box it declared. Anything with a pixel floor inside a
+  viewport-capped column needs the floor relaxed in a short-viewport query, not
+  just the cap.
+
+## The desktop app's window is part of its layout
+
+- **`is-native` meant two incompatible things, and one of them was wrong.** The
+  head inline script tagged *both* Capacitor mobile and Tauri as `is-native`, so
+  the Mac app inherited the phone reasoning everywhere: `videoStageMode()`
+  returned `'immersive'` at any width, and every `html.is-web` layout regime —
+  the landscape reflow, the desktop stage grid, the docked chat column — was
+  unreachable on a desktop OS. Capacitor is portrait-locked with one column to
+  give; Tauri is a *resizable desktop window*. They now split: `is-native` is
+  Capacitor only, and Tauri carries **`is-web` + `is-desktop-app`**. Nothing in
+  the 34 `html.is-web` rules had to change — the Mac simply started matching the
+  regimes that were already written for a wide window. (Two `html.is-native`
+  settings-modal rules already carried a comment saying they only ever meant
+  Capacitor mobile; that comment is now literally true.)
+
+- **On the Mac, the window IS the layout — so the window resizes, not the room.**
+  `applyDesktopWindowShape()` (Tauri-only, no-op everywhere else) sizes the
+  window from the configuration: the chat drawer grows it to the right by
+  exactly the drawer's width, and a live stage gives it the landscape shape the
+  desktop web app uses. It is called from the three places that publish the
+  configuration — `toggleChatPanel()`, `updateVideoStage()`, `showScreen()` —
+  and is idempotent, comparing against the current size before asking.
+
+- **`setSize` takes a LOGICAL inner size, which is exactly `window.innerWidth`.**
+  The webview fills the window's inner box, so the current size needs no
+  `innerSize()` + `scaleFactor()` round-trip and no extra permission: plain CSS
+  pixels in, plain CSS pixels out. The `dpi` namespace (`window.__TAURI__.dpi.
+  LogicalSize`) is a separate global from `window.__TAURI__.window` — the v2
+  IIFE exports `app, core, dpi, event, image, menu, mocks, path, tray, webview,
+  webviewWindow, window`, and `setSize` re-wraps anything that is not already a
+  `Size`, so the real constructor is the safe thing to pass.
+  Permissions needed in `capabilities/default.json`: `core:window:allow-set-size`
+  (the resize), plus `allow-outer-position`, `allow-scale-factor` and
+  `allow-set-position` for pulling a grown window back on screen. Only the first
+  is load-bearing — the on-screen nudge is best-effort and swallows a refusal.
+
+- **Never resize the window from inside the chat separator's drag.** The drag
+  measures `window.innerWidth - e.clientX`; growing the window mid-drag moves
+  the very edge that measurement starts from, and the drawer chases its own
+  growth without converging. The window follows on `pointerup` (and on the
+  keyboard `nudgeChatWidth()`), never on `pointermove`.
+
+- **The strip reserved for the drawer must be the STORED width, not
+  `readChatWidth()`.** That reader clamps to 90% of the *current* window — the
+  narrow one we are about to grow — so a 360px drawer reserved 315px of a 350px
+  window and then didn't fit the window it caused. `storedChatWidth()` clamps to
+  the drawer's own bounds only; `readChatWidth()` is now that, plus the viewport
+  clamp.
+
+- **Tell your own resizes from the user's, or you will eat their sizing.** The
+  window the app is showing while the room is plain (minus the drawer, while the
+  chat is open) is remembered as the voice column and handed back when the extra
+  space is no longer needed. Every `setSize` echoes back as a `resize` event, so
+  `noteDesktopWindowResize()` ignores anything within 2px of what it just asked
+  for — and ignores resizes made under a live stage entirely, since that width is
+  ours, not a statement about the voice column.
+
+- **The chat must not auto-open on the desktop app.** `chatOpensOnEntry()` reads
+  "wide window" as "room to spare", which is true everywhere except the one
+  surface that *chose* its own width: on the Mac a window wide enough for the
+  chat is one we made wide, so the rule would open the drawer, which would grow
+  the window, in the middle of joining a call.
+
+- **The drawer's strip is reserved on `body`, not on `#screen-room`.** The
+  screens are body's flex items at `width: 100%` and the chat panel is
+  `position: fixed` in the gap, so one `padding-right` moves the room, the
+  roster and the absolutely-positioned talk bar together — and it matches the
+  panel's own width rule cap-for-cap (`min(var(--chat-width), 92vw)`), which the
+  window was grown to fit.
+
+- **Expect one frame of the wrong stage shape.** `setSize` is async, so the tick
+  that turns a camera on still measures the narrow window and publishes
+  `video-stage-immersive`; the resize event brings `updateVideoStage()` straight
+  back with the landscape width. Chasing that would mean teaching
+  `videoStageMode()` about a pending window size, which is a second source of
+  truth for the same question.
+
+- **A reaction cannot aim at a row that is about to be re-rendered.** The peek
+  that flies from the reactor's name to the reacted message measures its target
+  once, synchronously. Announcing it from inside `applyChatReaction()` put that
+  measurement *before* the `renderChat()` its own callers run, so the glyph flew
+  to a row that no longer existed a microsecond later — and the flash it left on
+  that row was thrown away with it. `applyChatReaction()` now returns
+  `'added'`/`'removed'` and the callers announce after rendering.
+
+- **A transform animation is not where the element is.** Any test that measures
+  a peek's placement has to read `offsetLeft`/`offsetTop`, never
+  `getBoundingClientRect()`: both the reaction's flight and the bubble's own
+  entrance are transform keyframes, so a rect read mid-animation is off by
+  whatever the animation is currently doing. The anchored host is pinned to all
+  four edges, so a child's offset box is already in window coordinates.
+
+- **A shortcode is a Unicode name, not a Slack alias.** `src/emoji-data.js` is
+  generated from Unicode's `emoji-test.txt`, so `:party_popper` finds 🎉 and
+  `:tada` finds nothing. Prefix matching picks the *shortest* name that starts
+  with what was typed, which is why `:par` is 🪂 (parachute) and not 🎉. Adding
+  aliases would mean a second dataset to keep in step with the catalog.
+
+- **The composer's blur must not race the suggestion it is being clicked on.**
+  A `mousedown` on a menu item blurs the textarea before the `click` fires, so
+  the menu is dismissed out from under the pointer. Two things fix it together:
+  the menu accepts on `mousedown` with `preventDefault()` (so the caret is never
+  lost), and the blur handler closes on a short timer rather than immediately.
+
+- **"26 hours ago" is not yesterday.** `unit-chat.spec.js`'s day-separator test
+  seeded a message at `now - 26h` and expected a "Yesterday" label — which is
+  two calendar days back whenever the suite runs between midnight and 02:00, so
+  it went red purely on the clock. A test about calendar days has to be anchored
+  to one (yesterday midday), never to an offset in hours.
+
+
+- **A link preview dies silently on a dead hostname.** Sharing
+  `https://web.voxal.app/?room=demo` showed no card because `index.html`'s
+  `og:image`/`twitter:image`/`og:url` still pointed at `ptt.voxal.app`, which
+  **has no DNS record any more** (`web.voxal.app` resolves to Vercel;
+  `ptt.voxal.app` is `NXDOMAIN`). A scraper that cannot resolve the image host
+  just drops the image — there is no error anywhere, and the page itself is
+  perfectly healthy, so the bug looks like "OG is broken" rather than "one host
+  is gone". When a preview misbehaves, resolve every absolute URL in the head
+  before reading any code: `getent hosts <host>` is the whole test.
+  Same reason the OG host should be the one `VOXAL_WEB_URL` hands out — the
+  domain people are actually sent to is the domain the card must live on.
+  The card was only the visible half. The same dead host was also the mobile
+  seg-assets base (`video-effects.js`), the native anon-TURN and SFU endpoints
+  (`main.js`), the Website button in `about.html`, and the iOS/Android
+  associated-domain declarations — all moved to `web.voxal.app` too. Two of
+  those do **not** take effect by deploying: an entitlement and an intent-filter
+  live in the binary, so Universal Links and App Links stay broken on every
+  installed build until it is replaced and re-verified.
+
+  The one place the retired host must STAY is `handleDeepLink()`'s accepted-host
+  list. A shipped build cannot un-share the invites it already handed out, so a
+  retired host is removed from what you *hand out* long before it is removed
+  from what you *accept* — `unit-deep-link-auth.spec.js` pins that asymmetry so
+  a later tidy-up does not quietly break old links.
+
+---
+
+## Benchmarking
+
+- **Chromium's fake microphone is a 440 Hz sine, and it silently invalidates any
+  bandwidth measurement.** Opus encodes a pure tone at a small fraction of the
+  32 kb/s `OPUS_MAX_BITRATE` ceiling, so a mesh measured against
+  `--use-fake-device-for-media-stream` alone reports an upload cost far below a
+  real call's — the harness flatters itself and nothing looks wrong. Fix:
+  `--use-file-for-fake-audio-capture=<16-bit mono WAV>` pointed at a
+  speech-shaped file. `scripts/gen-bench-audio.mjs` synthesises one from a
+  **seeded** PRNG (noise → three formant resonators → 4 Hz syllabic envelope
+  with real pauses), so it is byte-identical on every machine and two runs stay
+  comparable. Measured on that source, a 2-peer speaker uploads ~46 kb/s at the
+  transport level — the 32 kb/s payload plus RTP/RTCP/STUN/DTLS.
+- **A noise suppressor will gate a synthetic benchmark source and leave you
+  timing silence.** Desktop defaults to `rnnoise` (`getNoiseSuppressionMode()`),
+  which is exactly the code path that decides the synthetic signal is not
+  speech. The benchmark therefore pins `noise-suppression: off` and measures the
+  three modes as their own scenario. Measured at 2 peers: `off` and `browser`
+  are indistinguishable, `rnnoise` costs ~8 points more of one core.
+- **`ps %cpu` cannot measure a window.** That column is an average over the
+  process's entire lifetime, so on a browser that has been up two minutes it
+  reports near-nothing however hard the measured 30 seconds worked it. Sample
+  cumulative CPU *time* (`ps -o time=`) twice and difference it over the wall
+  clock instead. The `TIME` format differs by platform (`[[DD-]HH:]MM:SS[.ss]`),
+  and so does the process selector: macOS `ps` reads `-e` as "show the
+  environment too", not "every process", so `-axo` is the portable form.
+- **`browser.process()` does not exist on the Playwright *test runner's*
+  `browser` fixture** — it is on the Node API's `Browser`, not the one the
+  fixture hands you, and the call throws `browser.process is not a function`.
+  To find the browser's processes, walk this Node process's own descendants from
+  `ps` and keep the ones whose args look like Chromium. That also lets the
+  measurement exclude node, the static server and the PeerServer broker — the
+  broker stands in for a remote signaling server, so its cost is not the
+  client's.
+- **A Playwright project with its own `testDir` cannot be reached by another
+  project's grep.** That is what keeps `tests/bench/` out of `make test` and
+  `make test-mesh` no matter how they are filtered. The one hole is
+  `npx playwright test` with no `--project`, which collects *every* project —
+  which is why `make coverage-e2e` now names `--project=unit --project=mesh`
+  explicitly instead of relying on there being only two.
+- **Until DTX was switched on, listeners uploaded almost as much as the
+  speaker.** Measured in a 4-peer room with one talker under `usedtx=0`:
+  speaker ↑ 145 kb/s, *listener* ↑ 135 kb/s — a disabled PTT track still sends
+  50 packets of silence a second per link. Runs published before that change
+  show it; with `usedtx=1` a listener's upload is ~5 kb/s per link. Quote the
+  listener column anyway: it is the one that says whether that is still true.
+- **In a benchmark room every listener has duplicate audio links (glare).**
+  `openAudioMesh()` presses every peer's talk button at once, which is exactly
+  the simultaneous-call case the dedup guard cannot see (see "Known remaining
+  gap (glare)" above): in a 4-peer room a listener held 5 audio links for 3
+  peers and sent on all of them. That inflates the listener column, and it is
+  real in the product too whenever two people press within a signaling round
+  trip of each other. DTX makes a silent duplicate cheap; a talking one still
+  uploads twice.
+- **Room CPU in the benchmark has real run-to-run variance and must not be read
+  as a precise figure.** A 4-peer all-speaking run measured *lower* than the
+  same room with one speaker (85% vs 110% of one core) purely from browser
+  warm-up ordering. The bandwidth columns are stable to a few percent; CPU is
+  not. Compare CPU only across repeated runs, and only between configurations
+  measured back to back.
+- **An inline SVG chart scaled by its `viewBox` becomes unreadable on a phone,
+  and nothing warns you.** `width:100%` on an SVG with a 760-wide viewBox means a
+  12px label renders at about 4px at 390px viewport — no overflow, no error, no
+  console warning, just text nobody can read. Fix: keep the chart at a legible
+  minimum width below the breakpoint (`min-width:620px`) and let its container
+  scroll sideways. A swipe beats a magnifying glass, and a horizontal-overflow
+  check on the *document* passes either way, so it will not catch this — look at
+  a phone-width screenshot instead.
+- **Chromium's fake CAMERA understates video the same way its fake mic
+  understates audio.** The built-in device is a rolling gradient with a bouncing
+  ball — flat colour, no texture, a motion field the encoder predicts almost
+  perfectly — so a camera measured against it looks far cheaper than it is.
+  Fix: `--use-file-for-fake-video-capture=<file.y4m>`, generated by
+  `scripts/gen-bench-video.mjs` (seeded subject over a textured room, plus
+  per-frame grain). Three practical notes: raw Y4M is the only format that flag
+  reads, so a two-second 720p loop is ~80 MB (gitignored, generated on demand);
+  the file's own header sets the frame rate, which is why the built-in device
+  delivers 20 fps and the file delivers the 30 the app asks for; and ffmpeg
+  bundled with Playwright is a stripped build with **no** y4m demuxer, so "ffmpeg
+  says the file is invalid" proves nothing — let Chromium open it instead.
+- **`getDisplayMedia()` hangs forever under automation without
+  `--auto-select-desktop-capture-source`.** There is no picker to click and no
+  error either; the promise simply never settles. With the flag, headless
+  Chromium captures its own virtual screen at 1280x720 and screen-share is
+  measurable. What it encodes is not a real desktop, so it is the video number
+  most worth re-checking by hand.
+- **`conn.webrtcStats` is audio-only, so a video benchmark has to read
+  `getStats()` itself.** The app's collector filters `kind === 'audio'`
+  throughout, which means nothing in the shipped instrumentation knows what
+  resolution or frame rate the camera is sending. Without
+  `outbound-rtp.frameWidth/frameHeight/framesPerSecond` a room that buckled to
+  320x180 at 6 fps would appear in the report as a room that "used less
+  bandwidth". `qualityLimitationReason` is what separates the two causes:
+  `cpu` is the harness running every peer on one machine, and `bandwidth` on
+  loopback is the app's own `CAMERA_MAX_BITRATE` ceiling, not a congested link.
+- **`VideoEffects` can turn a background off in the middle of a benchmark, and
+  say so only in a toast.** The overload guard steps segmentation down and then
+  calls `applyVideoBackground('off')` on a device that cannot keep up — which is
+  correct product behaviour and fatal to a naive measurement: the run reports
+  the cost of a plain camera under the heading "blur". Record whether the effect
+  was still engaged at the END of the window (`localVideoStream._effectsProcessor`,
+  plus the stored mode, which the drop clears) and publish that count beside the
+  CPU figure. In a 4-core container with a software GPU it gives up within about
+  15 seconds, so that machine cannot measure the feature at all — which is
+  itself worth knowing.
+- **A remote video track goes `live` well before a frame has been decoded.** For
+  "how long until I can see the room", polling `remoteVideoStream`'s track state
+  answers a different, easier question than the user's. `inbound-rtp.framesDecoded
+  > 0` is the honest clock; on loopback the gap is a few milliseconds, on a real
+  link it is a keyframe wait.
+- **Camera costs roughly twelve times what voice does, per link.** Measured at
+  two peers on the seeded scene: ~590 kb/s of camera against ~48 kb/s of Opus,
+  both transport level. Multiply by N-1 for the mesh and the reason
+  `selectVideoTopology()` exists stops being theoretical.
+- **Host migration does not actually interrupt the audio.** The benchmark
+  measures two clocks — new host elected, and audio restored — expecting a gap.
+  There is almost none (7879 ms vs 7884 ms in a 3-peer run): both are just the
+  ~7 s heartbeat timeout, because `MediaConnection`s to non-host peers are never
+  torn down during migration. The room is leaderless for 7 seconds; it is never
+  silent. Worth knowing before quoting migration as an outage.
+- **`performance.memory` is quantized to 100 KB buckets, which is wider than
+  most of what a memory benchmark is looking for.** Chromium rounds
+  `usedJSHeapSize` unless it is launched with `--enable-precise-memory-info`,
+  so a leak of a few tens of kilobytes per rejoin is invisible in it and a
+  deliberate saving looks like noise. CDP's `Performance.getMetrics` reports
+  `JSHeapUsedSize` exactly, and it comes with `Nodes`, `JSEventListeners` and
+  `Documents` — the three counters that actually catch a leak in this app,
+  since a heap figure can stay flat while roster rows, chat rows and `<audio>`
+  elements pile up. Playwright reaches it with
+  `page.context().newCDPSession(page)`, and `HeapProfiler.collectGarbage` is
+  what makes two samples comparable at all: without a forced collection the
+  difference between them is mostly what the allocator had not swept yet.
+- **A memory benchmark's baseline must be the FIRST cycle, not a fresh page.**
+  A room's first join allocates structures that are then reused, so measuring
+  growth from a page that has never joined reports that one-time cost as a leak
+  and sends somebody chasing it for an afternoon. Join, leave, *then* take the
+  baseline; a leak is a per-rejoin figure that holds steady, not a single step.
+- **`domContentLoadedEventEnd` is a real readiness mark for this app, and only
+  because of how `index.html` is built.** `main.js` is a classic script at the
+  end of `<body>` — no `defer`, no module — so parsing blocks on it, and the
+  bootstrap runs in a `DOMContentLoaded` listener, which has to return before
+  the mark is taken. By then `createRoom()` exists and a click does something.
+  Add `defer`, or move to modules, and the number keeps being emitted while
+  quietly meaning something else; `tests/bench/app-metrics.js` would have to
+  change in the same commit.
+- **`inRoom` is a `let`, so `window.inRoom` is `undefined`.** Top-level `let`
+  and `const` in a classic script are lexical globals and never become
+  properties of `window`, unlike `var` and function declarations (`leaveRoom`
+  is on `window`; `inRoom` is not). In a `page.evaluate()` it has to be read as
+  a bare identifier, which is why `getState()` guards every one of them with
+  `typeof`. A benchmark that polled `window.inRoom` would wait forever on a
+  peer that had joined perfectly.
+- **LCP is not in the performance timeline as an ordinary entry.**
+  `performance.getEntriesByType('largest-contentful-paint')` returns nothing;
+  it needs a `PerformanceObserver` with `buffered: true`, and one created and
+  read in the same tick can still come back empty on a page that has plainly
+  painted — two `requestAnimationFrame`s of grace fixes it. FCP, by contrast,
+  is a normal `paint` entry.
+- **A "warm load" measures the static server as much as the app.** What a
+  reload can take from the cache is decided by the cache headers the server
+  sends, so the warm *transfer* figure belongs to the harness, not to
+  production — with a server that sends none, a warm reload re-downloads
+  everything and the column repeats the cold one. The warm *timings* are still
+  the app's own: the same parse, compile and boot with the bytes in hand, and
+  they came out roughly twice as fast as cold in this container.
+- **`docs/benchmark.html` is a build output, so a fix that lands only there is
+  undone by the next publish.** It is emitted verbatim from the template
+  literal at the end of `scripts/bench-html.mjs`, and `make bench-publish`
+  overwrites it. A code-scanning alert filed against a line of the page (the
+  first one was the tooltip's `innerHTML`, "DOM text reinterpreted as HTML")
+  therefore has to be fixed in the generator, with the page brought back into
+  step — otherwise the alert reappears on the next run and nobody knows why.
+  The two blocks are byte-identical by construction: `diff` the region between
+  the `Hover layer` comment and the closing `</html>` and the only difference
+  should be the ``` ` ``` that closes the template literal.
+- **Escaping on the way in does not survive `getAttribute()`.** The charts put
+  labels into `data-title` / `data-rows` through `esc()`, but the browser
+  decodes an attribute when it is read back, so the value that reaches the
+  tooltip is the raw text again. Handing it to `innerHTML` re-opens it as
+  markup. The tooltip is built with `createElement` + `textContent` instead;
+  only the swatch's `--series-N` colour, which is an index the generator owns,
+  is still assembled as a string. Keep the key's label a **bare text node**
+  next to the swatch, the way the concatenated markup had it — `.tt-key` is
+  `display:inline-flex`, so wrapping it in a `<span>` turns an anonymous flex
+  item into a real one and is a change to the box tree for no reason.
+
+## CI cost: macOS runners are ~10x Linux — gate them, never filter the required workflow
+
+- **The two macOS jobs were ~all of the Actions bill.** `Analyze (swift)`
+  (CodeQL, ~20 min — it has to really compile Capacitor and every plugin) ran on
+  every PR and push, and `Rust tests` ran on macOS for tests that are pure logic.
+  Rust tests now run on Linux (gating) and again on macOS only when `src-tauri/`
+  changes, after Linux is green — the crate has `#[cfg(target_os = "macos")]`
+  code Linux never compiles. Swift CodeQL runs only when its inputs change
+  (`ios/`, `package.json`/`package-lock.json` — the plugins it compiles live in
+  `node_modules` — `capacitor.config.json`, the workflow) or a manual dispatch — the weekly
+  cron re-scans JS and Java/Kotlin only, so Swift picks up new CodeQL queries
+  only on its next input change (run it by hand to force one).
+- **Never put `paths`/`paths-ignore` on `tests.yml` itself.** It produces the
+  required `All tests green`; a workflow filtered out never reports it, and a
+  missing required check blocks the merge. Skip per job from a `changes` job
+  (`dorny/paths-filter`) and let the aggregate accept `skipped` *only* where
+  `changes` said so — it stays fail-closed.
+- **Never cache what CodeQL must watch being compiled.** A cached `DerivedData`
+  or Gradle build output lets the build skip compilation and CodeQL extracts
+  nothing. Cache fetched sources only (SPM `SourcePackages`, `~/.gradle/caches`).
+- **A plugin bump that drops a Swift dependency needs `Package.resolved`
+  regenerated.** Dependabot only touches `package.json`/`package-lock.json`, so
+  the committed `ios/App/App.xcodeproj/.../swiftpm/Package.resolved` keeps the
+  stale pin (`@capgo/capacitor-updater` 8.51.19 dropped `BigInt`). Xcode 26
+  does not report this: `xcodebuild -resolvePackageDependencies` *crashes*
+  (`NSInvalidArgumentException … count of array (9) differs from count of index
+  set (8)`, exit 134), which looks like a Swift/CodeQL failure but isn't. Fix:
+  `npx cap sync ios`, then `xcodebuild -resolvePackageDependencies -project
+  App.xcodeproj -scheme App -clonedSourcePackagesDirPath <fresh dir>` in
+  `ios/App` — it crashes once but writes the right file; a second run is clean.
+  Use a fresh dir: a stale DerivedData checkout fails with "has uncommitted
+  changes".
+
+## Promo film (`docs/promo.html`)
+
+- **The container's Chromium cannot encode H.264 or AAC with WebCodecs.** It is
+  an open-source build: `VideoEncoder.isConfigSupported({codec:'avc1.…'})` and
+  `AudioEncoder` with `mp4a.40.2` both answer `supported: false`, while VP9, AV1
+  and Opus work. So the page falls back to VP9 (+ Opus) inside MP4 there, and the
+  real `avc1`/`avcC` + `mp4a`/`esds` path of the MP4 writer was verified another
+  way: ffmpeg-made H.264 (Annex B, `aud=1`) and ADTS AAC, re-packed to AVCC/raw in
+  Node, muxed by `MUX.muxMP4`, then decoded cleanly by ffmpeg. `pip install
+  imageio-ffmpeg` gives a static ffmpeg in this container (Playwright's own
+  ffmpeg build is too stripped to probe files). Chrome/Safari on macOS and
+  Windows do have H.264 + AAC — an export from one of them is still worth a look.
+- **A variable font's width axis can be pinned per family through `FontFace`.**
+  `ctx.fontStretch` is not in every browser, but `new FontFace('Vox Display',
+  buf, { stretch: '118%' })` — a single value, not a range — makes every
+  `ctx.font` using that family render at 118% width, because the requested
+  stretch is clamped into the face's declared range. One woff2 buffer backs both
+  "Vox Display" (118%) and "Vox Text" (100%).
+- **`shadowBlur` / `shadowOffset` are device pixels**, blind to the canvas
+  transform. Everything else in the film is in design units, so those two are
+  multiplied by `ctx.getTransform().a` / `.d` where they are set.
+- **`OfflineAudioContext` left a lone full-scale sample at two kick onsets**
+  (a one-sample spike to 1.0 with its neighbours at -0.03). `renderSoundtrack()`
+  therefore de-clicks isolated single-sample spikes and normalises the peak to
+  -1 dBFS after rendering, rather than trusting the graph's own headroom.
+- **Chrome's VP9 encoder reports no `decoderConfig.colorSpace` and signals BT.601
+  (smpte170m) in the bitstream.** An early MP4 writer stamped a BT.709 `colr` box
+  regardless, contradicting it. Colour metadata is now written only from what the
+  encoder reports; with no report, the bitstream is left to speak.
+- **VP9 overshoots a thin bitrate target ~2× with film grain** (Draft, 720p: asked
+  1.0 Mb/s, got 1.95). The size estimate in the export panel adds a per-pixel
+  floor for that; it is an estimate, and says so.
+- **Background tabs throttle timers, not `MessageChannel`.** The exporter yields
+  between frames through a `MessageChannel` round-trip, so an export keeps going
+  at full speed when the tab is hidden.
+
+## Git hooks and ESLint
+
+- **Hooks are plain `sh` in `.githooks/`, enabled by `core.hooksPath`**, not
+  husky or lefthook: the repo avoids dependencies on purpose, and the whole
+  mechanism is one `git config`. `npm install`'s `prepare` runs
+  `scripts/install-hooks.mjs`, which **must never fail an install**. Vercel's
+  build and CI run `npm ci` with no `.git` (or with `CI` set), and a
+  `core.hooksPath` someone set for another tool is left alone.
+- **A partially staged file is linted from the index** (`git show :path |
+  eslint --stdin --stdin-filename path`). Linting the working tree would check
+  code that is not being committed, and pass or fail the wrong thing.
+- **`rustfmt --check` exits 0 when reading stdin, even while printing a
+  diff.** Only a file argument makes it fail. The hook needs the staged copy, so
+  it pipes it through `rustfmt --emit stdout` and compares the result with the
+  input instead. The first version of the hook let a misformatted file through
+  silently.
+- **ESLint and classic scripts:** `src/*.js` share one global scope, so
+  top-level declarations are globals other files use. That is why the config
+  uses `vars: 'local'` for unused-vars, declares each cross-file global by hand
+  under `languageOptions.globals`, and sets `no-redeclare` with
+  `builtinGlobals: false` (otherwise the file that declares a global is flagged
+  for redeclaring it). Tests turn `no-undef` off: `page.evaluate` callbacks
+  reach hundreds of `main.js` globals.
+- **The first ESLint pass found a test that asserts less than it says:**
+  `unit-sfu-resilience.spec.js` "gives up after the retry budget" counts
+  over-budget calls in `extra` but never checks it. Asserting it needs care
+  (retries scheduled earlier can fire late), so it carries a TODO rather than a
+  rushed fix.
+
+### Rotating a phone: `resize` fires before the layout has settled
+
+On iOS especially, `resize` can fire while `innerWidth/innerHeight`, media queries and safe-area insets still describe the OLD orientation. The stage's one rAF-debounced measurement then reads stale geometry (insets, grid columns, `object-fit`). `scheduleStageRelayout()` in `main.js` is also driven by `orientationchange`, `screen.orientation` `change` and `visualViewport` `resize`, with settle passes at 150 ms and 400 ms. Not verified on a real device from this container.
+
+- **Measure a sliding panel with its layout size, not `getBoundingClientRect()`.** On the phone video stage the room header is `position: fixed` and enters with `translateY(-100%)` → `0` (0.25s). `applyImmersiveStageInsets()` runs the instant the chrome returns, when the rect still sits above the screen, so `--stage-inset-top` came out 0 and the self tile's flip/background buttons stayed under the header. A fixed header's `offsetHeight` ignores the transform.
