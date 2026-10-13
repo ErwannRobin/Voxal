@@ -286,13 +286,19 @@ var VideoEffects = (function () {
   var PRESETS = VideoScenes.SCENES;
 
   // The scene buffer's long side. Small on purpose: it is cheap, and a real
-  // camera focused on a face shows the room behind it soft anyway.
+  // camera focused on a face shows the room behind it soft anyway. A scene may
+  // ask for less (`res` in the catalogue, a fraction of this): the ray-marched
+  // landscapes are the most expensive thing the page draws, and sixty per cent
+  // of the pixels of a backdrop nobody is looking at closely is plenty.
   var SCENE_LONG = IS_MOBILE ? 384 : 512;
   // How often the scene itself is redrawn. Its motion is slow by design, and a
   // background that changes on every frame is one the encoder pays for on every
   // frame — so it runs well under the camera's rate, and halves under load
-  // before anything else is given up.
+  // before anything else is given up. This is the default; a scene that costs
+  // more to draw says so (`hz` in the catalogue) and is drawn less often.
   var SCENE_HZ = [20, 10];
+  // How long the picker is on screen before its scene thumbnails start to render.
+  var THUMB_DELAY_MS = 600;
   // The subject's light is re-measured this often (a 32-wide probe).
   var LOOK_SAMPLE_MS = 250;
   var LOOK_PROBE_W = 32;
@@ -1976,22 +1982,34 @@ var VideoEffects = (function () {
     if (!gl) return;
     id = VideoScenes.resolveId(id);
     if (!id) throw new Error('unknown scene');
+    var want = VideoScenes.byId(id);
+    var cw = this.canvas.width, ch = this.canvas.height;
+    var k = Math.min(1, SCENE_LONG * (want.res || 1) / Math.max(cw, ch));
+    var nw = Math.max(2, Math.round(cw * k)), nh = Math.max(2, Math.round(ch * k));
+    if (this.texScene && (nw !== this.sceneW || nh !== this.sceneH)) {
+      // Another scene, another size: the buffer follows it.
+      try { gl.deleteTexture(this.texScene); } catch (e) { /* ignore */ }
+      try { gl.deleteFramebuffer(this.fbScene); } catch (e) { /* ignore */ }
+      this.texScene = null;
+    }
     if (!this.texScene) {
-      var w = this.canvas.width, h = this.canvas.height;
-      var k = Math.min(1, SCENE_LONG / Math.max(w, h));
-      this.sceneW = Math.max(2, Math.round(w * k));
-      this.sceneH = Math.max(2, Math.round(h * k));
+      this.sceneW = nw;
+      this.sceneH = nh;
       this.texScene = texture(gl, this.sceneW, this.sceneH, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
       // Mipmapped: the light wrap reads a coarse level as "the light around
       // here", for the cost of one generateMipmap per scene frame.
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
       this.fbScene = framebuffer(gl, this.texScene);
-      this.allocSoft(this.segW, this.segH);
-      this.sceneStart = performance.now();
+      if (!this.texSoftA) this.allocSoft(this.segW, this.segH);
+      if (!this.sceneStart) this.sceneStart = performance.now();
     }
     if (!this.sceneProgs[id]) this.sceneProgs[id] = VideoScenes.compileProgram(gl, id);
     this.sceneId = id;
-    this.scene = VideoScenes.byId(id);
+    this.scene = want;
+    // Each scene brings its own redraw rate; a new one starts at the top of
+    // its ladder, and the governor walks it down again if it has to.
+    this.sceneHzSteps = (want.hz || SCENE_HZ).slice();
+    this.sceneStep = 0;
     this.lastScene = 0;
     this.drawScene(performance.now());
     this.buildSoft();
@@ -2768,16 +2786,23 @@ var VideoEffects = (function () {
     // every page renders its pickers at load, inside a closed popover or a
     // settings card nobody has opened, and five shader compiles are not worth
     // paying for a picker that may never be seen.
+    //
+    // And not the instant the row appears either: the person who opened it is
+    // reaching for a chip, and whatever the page does in the first moments is
+    // work they will feel (a compile can take seconds where the GPU is soft).
+    // The swatches are already there; the pictures replace them a beat later.
     var thumbsAsked = false;
     function paintThumbs() {
       if (thumbsAsked) return;
       thumbsAsked = true;
-      VideoScenes.thumbnails().then(function (thumbs) {
-        sceneChips.forEach(function (c) {
-          var url = thumbs[c.dataset.scene];
-          if (url) c.style.backgroundImage = 'url("' + url + '")';
+      setTimeout(function () {
+        VideoScenes.thumbnails().then(function (thumbs) {
+          sceneChips.forEach(function (c) {
+            var url = thumbs[c.dataset.scene];
+            if (url) c.style.backgroundImage = 'url("' + url + '")';
+          });
         });
-      });
+      }, THUMB_DELAY_MS);
     }
     if (typeof IntersectionObserver === 'function') {
       var io = new IntersectionObserver(function (entries) {
