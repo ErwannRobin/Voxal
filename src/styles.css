@@ -4658,7 +4658,7 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
 .video-bg-progress .btn { align-self: flex-start; }
 
 /* Fixed camera: the empty-room reference, under the chips. Only present while
-   the (experimental) setting is on and an effect is running. */
+   the setting is on (the default) and an effect is running. */
 .video-bg-reference {
   margin: 10px 0 0;
   padding-top: 10px;
@@ -4675,6 +4675,124 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
   color: var(--text-muted);
 }
 .video-bg-reference-actions { display: flex; gap: 8px; align-items: center; }
+
+/* The guided capture of the empty room (startVideoReferenceCapture()). The
+   whole window, a dark scrim in both themes and large print: the person reading
+   it is walking away from the screen. The scrim is the same from the countdown
+   to the end of the capture, so the light the screen throws on the room does
+   not change while the room is photographed; the white flash comes after. */
+.video-ref-guide {
+  position: fixed;
+  inset: 0;
+  z-index: 9600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+  background: rgba(8, 8, 14, 0.97);
+  color: #fff;
+  outline: none;
+}
+.video-ref-guide-card {
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+}
+.video-ref-guide-view {
+  position: relative;
+  width: min(100%, calc(42vh * 16 / 9));
+  aspect-ratio: 16 / 9;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #000;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.14);
+}
+/* The scrim is dark in both themes, so the dark theme's green and red, fixed. */
+.video-ref-guide[data-phase="done"] .video-ref-guide-view { box-shadow: 0 0 0 3px #4ade80; }
+.video-ref-guide[data-phase="failed"] .video-ref-guide-view { box-shadow: 0 0 0 3px #f87171; }
+.video-ref-guide-preview {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transform: scaleX(-1);   /* a self-view, mirrored like the tile */
+}
+.video-ref-guide-preview[data-facing="environment"] { transform: none; }
+/* The countdown, over the picture: readable from across the room. */
+.video-ref-guide-count {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(96px, 26vh, 240px);
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  text-shadow: 0 4px 30px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+.video-ref-guide-count:empty { display: none; }
+.video-ref-guide-count.tick { animation: video-ref-tick 0.9s ease-out both; }
+@keyframes video-ref-tick {
+  0%   { transform: scale(1.4); opacity: 0; }
+  20%  { transform: scale(1);   opacity: 1; }
+  100% { transform: scale(1);   opacity: 1; }
+}
+.video-ref-guide-title {
+  margin: 4px 0 0;
+  font-size: clamp(24px, 4.6vh, 40px);
+  font-weight: 800;
+  line-height: 1.15;
+}
+.video-ref-guide[data-phase="done"] .video-ref-guide-title { color: #4ade80; }
+.video-ref-guide[data-phase="failed"] .video-ref-guide-title { color: #f87171; }
+.video-ref-guide-text {
+  margin: 0;
+  max-width: 460px;
+  font-size: clamp(15px, 2.4vh, 19px);
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.82);
+}
+.video-ref-guide-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.video-ref-guide-actions .btn { font-size: 15px; padding: 11px 22px; }
+.video-ref-guide[data-phase="capturing"] .video-ref-guide-actions { visibility: hidden; }
+/* The photo-taken flash. */
+.video-ref-guide-flash {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  opacity: 0;
+  pointer-events: none;
+}
+.video-ref-guide.flash .video-ref-guide-flash { animation: video-ref-flash 0.6s ease-out both; }
+@keyframes video-ref-flash {
+  0%   { opacity: 0; }
+  8%   { opacity: 0.95; }
+  100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .video-ref-guide-count.tick { animation: none; }
+  /* Still a blink, never a full white strobe. */
+  @keyframes video-ref-flash {
+    0%   { opacity: 0; }
+    20%  { opacity: 0.35; }
+    100% { opacity: 0; }
+  }
+}
+@media (max-height: 480px) {
+  .video-ref-guide-view { width: min(100%, calc(34vh * 16 / 9)); }
+}
 
 .bg-chip {
   flex: 0 0 auto;

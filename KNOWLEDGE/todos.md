@@ -87,7 +87,8 @@ Deliberately left for later:
   `REF_CORE_ERODE`, the stale/fresh hysteresis) is reasoned, and only checked
   against a synthetic striped room. Try: hair against a plain wall, a white
   shirt against a white wall, a desk lamp switched on mid-call, and a laptop
-  lid nudged. If it helps, drop "(experimental)"; if not, remove it.
+  lid nudged. It is now on by default (no longer "experimental") with a guided
+  capture, so this tuning matters more; if it does not help, remove it.
 
 - **Share the WebGL context with MediaPipe.** The mask currently crosses the CPU
   as a 37 KB `Uint8Array` per inference. Keeping it a GPU texture would remove
