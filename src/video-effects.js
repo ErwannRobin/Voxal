@@ -227,9 +227,11 @@ var VideoEffects = (function () {
 
   // --- a fixed camera: the empty-room reference -----------------------------
   //
-  // EXPERIMENTAL, and off unless switched on. When the camera does not move, a
-  // picture of the room without you in it says, pixel by pixel and at far more
-  // than the model's 256-wide resolution, what is NOT you: anything that still
+  // On by default, but idle until the user captures the room from the
+  // background menu (Settings → Video → Fixed camera switches it off). When
+  // the camera does not move, a picture of the room without you in it says,
+  // pixel by pixel and at far more than the model's 256-wide resolution, what
+  // is NOT you: anything that still
   // looks like the empty room. That is a second opinion, and it is strongest
   // exactly where the model is weakest — the edge, the hair, the shoulder.
   //
@@ -533,17 +535,20 @@ var VideoEffects = (function () {
   // --- the empty-room reference: the preference ----------------------------
 
   function readReference() {
-    // Off unless switched on: it asks something of the user (step out of the
-    // picture) and only helps a camera that does not move.
-    try { return localStorage.getItem(REFERENCE_KEY) === 'on'; }
-    catch (e) { return false; }
+    // On unless switched off. Being on costs nothing by itself: the pipeline
+    // only changes once a picture has been captured, which the user asks for
+    // from the background menu. So the switch is an opt-OUT — absent is on,
+    // and only 'off' is stored. ('on', written by the build that made this an
+    // opt-in, still reads as on.)
+    try { return localStorage.getItem(REFERENCE_KEY) !== 'off'; }
+    catch (e) { return true; }
   }
 
   function writeReference(on) {
     on = !!on;
     try {
-      if (on) localStorage.setItem(REFERENCE_KEY, 'on');
-      else localStorage.removeItem(REFERENCE_KEY);
+      if (on) localStorage.removeItem(REFERENCE_KEY);
+      else localStorage.setItem(REFERENCE_KEY, 'off');
     } catch (e) { /* private mode — it still applies for this session */ }
     return on;
   }

@@ -353,16 +353,18 @@
                 your outline. Does nothing at all in ordinary light.
               </p>
               <div class="settings-field settings-inline-toggle" style="margin-top:12px">
-                <label for="btn-bg-reference" style="flex:1">Fixed camera (experimental)</label>
+                <label for="btn-bg-reference" style="flex:1">Fixed camera</label>
                 <div id="settings-bg-reference"></div>
               </div>
               <p class="settings-hint">
                 For a camera that does not move. During a call, open the background
-                menu on your own video and capture the room without you in it — the
-                cut-out is then checked against that picture, which sharpens the edge
-                around hair and shoulders. The picture stays in memory on this device,
-                is never sent or saved, and is forgotten when you switch this off.
-                It is set aside on its own if the camera moves or the light changes.
+                menu on your own video and choose <em>Capture empty room</em>: a countdown
+                gives you time to step out of the picture, and a click tells you when you
+                can come back. The cut-out is then checked against that picture, which
+                sharpens the edge around hair and shoulders — as long as the camera stays
+                where it was. The picture stays in memory on this device, is never sent
+                or saved, and is forgotten when you switch this off. It is set aside on
+                its own if the camera moves or the light changes.
               </p>
             </div>
           </div>
@@ -887,6 +889,28 @@
     </div>
 
     <!-- Global toast (fixed position, never clipped) -->
+    <!-- Fixed camera: the guided capture of the empty room. The whole window
+         and large print on purpose — by the time it matters the user is
+         across the room. Driven by startVideoReferenceCapture(); data-phase
+         is leave / capturing / done / failed. -->
+    <div id="video-ref-guide" class="video-ref-guide hidden" role="dialog" aria-modal="true" tabindex="-1"
+         aria-labelledby="video-ref-guide-title" aria-describedby="video-ref-guide-text">
+      <div class="video-ref-guide-card">
+        <div class="video-ref-guide-view">
+          <video id="video-ref-guide-preview" class="video-ref-guide-preview" muted playsinline autoplay></video>
+          <div class="video-ref-guide-count" aria-hidden="true"></div>
+        </div>
+        <p id="video-ref-guide-title" class="video-ref-guide-title" aria-live="assertive"></p>
+        <p id="video-ref-guide-text" class="video-ref-guide-text"></p>
+        <div class="video-ref-guide-actions">
+          <button type="button" id="btn-video-ref-retry" class="btn btn-primary">Try again</button>
+          <button type="button" id="btn-video-ref-ok" class="btn btn-primary">OK, I'm back</button>
+          <button type="button" id="btn-video-ref-cancel" class="btn btn-secondary">Cancel</button>
+        </div>
+      </div>
+      <div class="video-ref-guide-flash" aria-hidden="true"></div>
+    </div>
+
     <div id="copy-toast" class="copy-toast">Copied!</div>
 
     <!-- Video viewer panel (floating, for video prototype) -->

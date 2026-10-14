@@ -344,12 +344,30 @@ So the segmenter gets **its own canvas**, and the mask comes back as a
 and sub-millisecond. Sharing the context is a documented future optimisation,
 not something this version needs.
 
-### A fixed camera: the empty-room reference (experimental)
+### A fixed camera: the empty-room reference
 
-Off unless Settings → Video → **Fixed camera** is on (`bg-reference`). With it
-on, the background popover on your own tile offers **Capture empty room**: a
-three-second countdown to step out of the picture, then `REF_CAPTURE_FRAMES`
-(12) frames averaged into a picture of the room without you. From then on every
+On unless Settings → Video → **Fixed camera** is switched off (`bg-reference`;
+absent means on, only `off` is stored). Being on costs nothing by itself — the
+pipeline changes only once a picture exists. The background popover on your own
+tile offers **Capture empty room**, which opens a full-window guide
+(`#video-ref-guide`, `startVideoReferenceCapture()` in `main.js`) written for
+somebody who is walking away from the screen:
+
+1. **Leave** — "Step out of the picture", the live self-view, and a big
+   `VIDEO_REF_COUNTDOWN_S` (5) countdown over it. The last three seconds beep
+   (`playCountdownBeep()`), the "1" a fifth higher.
+2. **Capturing** — `REF_CAPTURE_FRAMES` (12) frames averaged into a picture of
+   the room without you (well under a second).
+3. **Done** — a white flash over the window and a synthesised shutter click
+   (`playShutterClick()`), then "you can come back — don't move the camera or
+   the computer". The flash comes **after** the capture on purpose: the screen
+   lights the room, and a white frame during it would be learnt as the room's
+   colour. The dark scrim is the same from the countdown to the end of the
+   capture for the same reason.
+4. **Failed** — "you were still in the picture" (or no frames at all), with
+   *Try again*.
+
+Escape or *Cancel* leaves at any point but the capture itself. From then on every
 frame is compared with that picture at `REF_LONG` (640) wide — two and a half
 times the model's resolution — and the comparison is allowed to correct the
 cut-out's edge.
@@ -413,8 +431,9 @@ twice a second. Nothing about it swaps a track.
 **Not measured on a real room.** Every threshold above (`REF_SCORE_LO/HI`,
 `REF_MATCH_MAX`, the core window, the erosion) is reasoned from how webcams and
 the model behave, and checked only against a synthetic striped room in
-`unit-video-effects.spec.js`. Expect them to need tuning against a real webcam
-before this loses the "experimental".
+`unit-video-effects.spec.js`. Expect them to need tuning against a real webcam;
+the reference sets itself aside when the room stops matching, so a bad tune
+costs a sharper halo, not a broken picture.
 
 ## Animated scenes
 

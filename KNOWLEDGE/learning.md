@@ -312,9 +312,10 @@ Design: `docs/video-effects.md`. Preview any scene/look headlessly with `make sc
 - Feather radius, the composite `smoothstep` window and `MASK_DILATE` are ONE control (`_edgeProfile()`; softer dilates further). A narrow window on a wide feather is a hard edge (now `MASK_FEATHER 1.4`, `smoothstep(0.12,0.78)`, `MASK_DILATE 3`). Pin the slider midpoint: a test asserts `_edgeProfile(0.5)` equals the four tuned constants.
 - Low light: brighten only the segmenter's private 256-wide copy via canvas `ctx.filter` `brightness() contrast()` (never the published frame; feature-detect `typeof ctx.filter === 'string'`). Measure the **centre** (12×8 probe) not the frame (backlight), ease gain 25% per sample, clamp `[1, 2.6]` (gain 1 sets no filter), and read luma from a separate canvas fed by the `<video>` (no feedback loop).
 
-## Fixed camera (empty-room reference, experimental)
+## Fixed camera (empty-room reference)
 
 - Protect an **erosion** of the mask (4 texels) from the reference, not a threshold of it. Compare like with like (same 4-tap sampling for camera and reference). Compensate auto-exposure/white balance with a per-channel gain measured over what the model calls room (64-wide probe, 2×/s). The reference gives up by itself: set aside below 55% match, trusted again above 70%. It can only **take away** (`m * max(diff, core)`), never add. Switching off forgets the picture; it's never stored.
+- The capture guide's flash and any bright UI change must come **after** `captureReference()` resolves: the screen lights the room, so a white frame mid-capture is learnt as the room's colour. Keep the scrim identical from countdown to capture end. While the user walks away, focus the dialog, never a button — Space is PTT and also clicks a focused button. Beeps run from a timer, so resume `_audioCtx` in the click that starts the guide (iOS refuses later).
 
 ## Background blur quality
 

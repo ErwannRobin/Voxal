@@ -1405,20 +1405,25 @@ test.describe('the empty-room reference', () => {
     });
   }
 
-  test('is off by default, and the toggle in Video stores the opt-in', async ({ page }) => {
+  test('is on by default, and the toggle in Video stores the opt-out', async ({ page }) => {
     expect(await page.evaluate(() => [VideoEffects.readReference(), VideoEffects.referenceState()]))
-      .toEqual([false, 'off']);
+      .toEqual([true, 'inactive']);
     await page.click('#btn-open-settings');
     await page.click('#modal-settings [data-target="settings-video"]');
     const btn = page.locator('#settings-bg-reference .toggle-btn');
-    await expect(btn).toHaveAttribute('aria-checked', 'false');
+    await expect(btn).toHaveAttribute('aria-checked', 'true');
     await btn.click();
     expect(await page.evaluate(() => [
       VideoEffects.readReference(), localStorage.getItem(VideoEffects.REFERENCE_KEY),
       VideoEffects.referenceState(),
-    ])).toEqual([true, 'on', 'inactive']);
+    ])).toEqual([false, 'off', 'off']);
     await btn.click();
     expect(await page.evaluate(() => localStorage.getItem(VideoEffects.REFERENCE_KEY))).toBe(null);
+    // The value the opt-in build stored still reads as on.
+    expect(await page.evaluate(() => {
+      localStorage.setItem(VideoEffects.REFERENCE_KEY, 'on');
+      return VideoEffects.readReference();
+    })).toBe(true);
   });
 
   test('the score calls the same room the same, and a person different', async ({ page }) => {
@@ -1552,8 +1557,8 @@ test.describe('the empty-room reference', () => {
       await __sleep(300);
       const r = await VideoEffects.captureReference();
       const had = VideoEffects.hasReference();
-      localStorage.removeItem(VideoEffects.REFERENCE_KEY);
-      window.dispatchEvent(new StorageEvent('storage', { key: VideoEffects.REFERENCE_KEY, newValue: null }));
+      localStorage.setItem(VideoEffects.REFERENCE_KEY, 'off');
+      window.dispatchEvent(new StorageEvent('storage', { key: VideoEffects.REFERENCE_KEY, newValue: 'off' }));
       return { r, had, has: VideoEffects.hasReference(), state: VideoEffects.referenceState(),
                loaded: VideoEffects.active().refLoaded };
     });
@@ -1566,6 +1571,7 @@ test.describe('the empty-room reference', () => {
     await installScene(page);
     await page.evaluate(async () => {
       VIDEO_REF_COUNTDOWN_S = 0;
+      VideoEffects.setReference(false);
       VideoEffects.writeMode('blur');
       await startVideoShare();
     });
@@ -1577,11 +1583,98 @@ test.describe('the empty-room reference', () => {
     await expect(page.locator('#video-bg-reference')).toBeVisible();
     await expect(page.locator('#btn-video-bg-forget')).toBeHidden();
     await page.click('#btn-video-bg-capture');
+    // The capture takes the window, and says when it is over.
+    await expect(page.locator('#video-bg-popover')).toBeHidden();
+    await expect(page.locator('#video-ref-guide')).toHaveAttribute('data-phase', 'done');
+    await page.click('#btn-video-ref-ok');
+    await expect(page.locator('#video-ref-guide')).toBeHidden();
+
+    await page.click('.video-tile-self.video-tile-camera .video-tile-bg');
     await expect(page.locator('.video-bg-reference-text')).toHaveText(/Using your empty-room picture/);
     await expect(page.locator('#btn-video-bg-capture')).toHaveText('Capture again');
 
     await page.click('#btn-video-bg-forget');
     await expect(page.locator('.video-bg-reference-text')).toHaveText(/capture the room without you/);
     expect(await page.evaluate(() => VideoEffects.hasReference())).toBe(false);
+  });
+
+  // The guide is for somebody walking away from the screen: what it says, what
+  // it plays and when, in order.
+  test('the guided capture: leave, count down with beeps, flash and click, come back', async ({ page }) => {
+    await page.evaluate(() => showScreen('room'));
+    await seedEffectsRoom(page);
+    await installScene(page);
+    await page.evaluate(async () => {
+      VIDEO_REF_COUNTDOWN_S = 4;
+      VideoEffects.writeMode('blur');
+      await startVideoShare();
+      window.__voxalSegStub = { empty: true };
+      window.__cues = [];
+      window.playCountdownBeep = (last) => __cues.push(last ? 'beep-last' : 'beep');
+      window.playShutterClick = () => __cues.push('click');
+      window.__phases = [];
+      const g = document.getElementById('video-ref-guide');
+      new MutationObserver(() => {
+        const ph = g.classList.contains('hidden') ? 'hidden' : g.dataset.phase;
+        if (__phases[__phases.length - 1] !== ph) __phases.push(ph);
+      }).observe(g, { attributes: true });
+    });
+    await page.click('.video-tile-self.video-tile-camera .video-tile-bg');
+    await page.click('#btn-video-bg-capture');
+
+    const guide = page.locator('#video-ref-guide');
+    await expect(guide).toBeVisible();
+    await expect(guide).toHaveAttribute('data-phase', 'leave');
+    await expect(page.locator('#video-ref-guide-title')).toHaveText(/Step out of the picture/);
+    await expect(page.locator('#video-ref-guide-text')).toHaveText(/Leave the camera/);
+    await expect(page.locator('.video-ref-guide-count')).toHaveText('4');
+    await expect(page.locator('#video-ref-guide-preview')).toHaveJSProperty('paused', false);
+    // Space is push-to-talk: Cancel must not be holding focus while you leave.
+    expect(await page.evaluate(() => document.activeElement.id)).toBe('video-ref-guide');
+
+    await expect(guide).toHaveAttribute('data-phase', 'done', { timeout: 8000 });
+    await expect(page.locator('#video-ref-guide-title')).toHaveText(/you can come back/);
+    await expect(page.locator('#video-ref-guide-text')).toHaveText(/Don’t move the camera or the computer/);
+    await expect(page.locator('#btn-video-ref-ok')).toBeFocused();
+    const seen = await page.evaluate(() => ({ cues: __cues, phases: __phases }));
+    // Only the last three seconds beep, the last one differently — and the
+    // click comes after the capture, never during it.
+    expect(seen.cues).toEqual(['beep', 'beep', 'beep-last', 'click']);
+    expect(seen.phases).toEqual(['leave', 'capturing', 'done']);
+    expect(await page.evaluate(() => VideoEffects.referenceState())).toBe('ready');
+
+    await page.click('#btn-video-ref-ok');
+    await expect(guide).toBeHidden();
+    expect(await page.evaluate(() => document.getElementById('video-ref-guide-preview').srcObject)).toBe(null);
+  });
+
+  test('the guide says so when you were still in the picture, and can be cancelled', async ({ page }) => {
+    await page.evaluate(() => showScreen('room'));
+    await seedEffectsRoom(page);
+    await installScene(page);
+    await page.evaluate(async () => {
+      VIDEO_REF_COUNTDOWN_S = 0;
+      VideoEffects.writeMode('blur');
+      await startVideoShare();
+      window.playCountdownBeep = () => {};
+      window.playShutterClick = () => { window.__clicked = true; };
+    });
+    await page.click('.video-tile-self.video-tile-camera .video-tile-bg');
+    await page.click('#btn-video-bg-capture');
+    const guide = page.locator('#video-ref-guide');
+    // The stub's oval is a person as far as the model can tell.
+    await expect(guide).toHaveAttribute('data-phase', 'failed');
+    await expect(page.locator('#video-ref-guide-title')).toHaveText(/still in the picture/);
+    await expect(page.locator('#btn-video-ref-retry')).toBeFocused();
+    expect(await page.evaluate(() => !!window.__clicked)).toBe(false);
+
+    // Try again, and walk away from it mid-countdown.
+    await page.evaluate(() => { VIDEO_REF_COUNTDOWN_S = 5; });
+    await page.click('#btn-video-ref-retry');
+    await expect(guide).toHaveAttribute('data-phase', 'leave');
+    await page.keyboard.press('Escape');
+    await expect(guide).toBeHidden();
+    expect(await page.evaluate(() => [_videoRefCountdown, VideoEffects.referenceState()]))
+      .toEqual([0, 'none']);
   });
 });
