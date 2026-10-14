@@ -58,7 +58,9 @@
 // side, per scene) and upscaled. That is cheaper, and it is also the look: a
 // real camera focused on a face shows the room behind it slightly soft. The
 // ray-marched landscapes cost the most, so they are drawn smaller and less
-// often (`res`, `hz` in the catalogue).
+// often (`res`, `hz` in the catalogue). Then it goes through a lens (FOCUS_FRAG)
+// that softens what is far more than what is near — which is also what keeps
+// a moving sea from costing the encoder a fortune.
 
 var VideoScenes = (function () {
   'use strict';
@@ -2952,6 +2954,94 @@ void main() {
     return id ? HEADER + SOURCES[id] + MAIN : null;
   }
 
+  // --- focus ----------------------------------------------------------------
+  //
+  // The lens. A scene is drawn sharp everywhere, and a camera focused on a face
+  // does not see a room like that: what is behind you is soft, and what is far
+  // away is softer. So the finished scene goes through one more pair of passes
+  // before it is composited — a Gaussian whose width follows the scene's own
+  // alpha, the same nearness that decides where your shadow falls. Nearness 0
+  // (the sky, the hills, the street through the window) takes the whole
+  // FOCUS_FAR; nearness 1 (the wall a metre behind you) takes 1 - FOCUS_NEAR of
+  // it. That ratio is the lens's: a camera focused at 0.6 m blurs a wall at
+  // 1.6 m about 0.6 as much as it blurs the horizon.
+  //
+  // It is also the cheapest bitrate the scenes can give back. Books, brick,
+  // fronds and glitter on a lake are detail the encoder pays for in every
+  // keyframe and every moving pixel, for everyone receiving you, and none of it
+  // is what anybody is looking at.
+  //
+  // Separable, in two passes over the scene buffer (a few hundred pixels wide,
+  // at the scene's own redraw rate — never per camera frame). The taps are
+  // spaced by the centre's sigma, so the weights would not depend on it; what
+  // makes them depend on each tap is that a tap spreads by ITS OWN blur, never
+  // by more than the centre's. A near, sharper edge therefore does not smear
+  // across the far, softer view next to it, and the far view reaches into the
+  // near edge only as far as that edge's own blur.
+  //
+  // Blurred in linear light (gamma 2: square, then sqrt), like the camera blur,
+  // so a lamp or the sun on water stays a glow rather than turning grey — and
+  // that includes the filtering BETWEEN texels: a tap falls between two, and
+  // the hardware's bilinear filter would average them in sRGB, which is most of
+  // the blur at these radii. So each tap fetches its two texels and squares
+  // them before it mixes them. Each pass dithers its own 8-bit output again:
+  // the averaging removes the scene's dither, and a sky quantised twice would
+  // band.
+  var FOCUS_FAR = 0.004;   // sigma on the far distance, as a fraction of the buffer's height
+  var FOCUS_NEAR = 0.4;    // how much less a surface at nearness 1 is blurred
+  var FOCUS_TAPS = 7;      // each side, per pass, 0.4 sigma apart: the kernel reaches 2.8 sigma
+
+  function glf(v) { return (v === Math.round(v) ? v.toFixed(1) : String(v)); }
+
+  // The source is generated, so the preview script can try another lens
+  // (`--focus far,near`) without editing this file.
+  function focusSource(far, near) {
+    return `#version 300 es
+precision highp float;
+out vec4 outColor;
+uniform sampler2D uSrc;
+uniform vec2 uRes;   // the scene buffer, px
+uniform vec2 uDir;   // (1, 0) for the first pass, (0, 1) for the second
+float sigma(float near) { return ${glf(far)} * uRes.y * (1.0 - ${glf(near)} * near); }
+float hash12(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+// One tap, off pixels from this one along the pass: the two texels either
+// side of it, squared, then mixed. Alpha (nearness) is mixed as it is.
+vec4 tap(float off) {
+  float f = floor(off);
+  ivec2 lim = ivec2(uRes) - 1, dir = ivec2(uDir);
+  ivec2 a = ivec2(gl_FragCoord.xy) + dir * int(f);
+  vec4 ta = texelFetch(uSrc, clamp(a, ivec2(0), lim), 0);
+  vec4 tb = texelFetch(uSrc, clamp(a + dir, ivec2(0), lim), 0);
+  float w = off - f;
+  return vec4(mix(ta.rgb * ta.rgb, tb.rgb * tb.rgb, w), mix(ta.a, tb.a, w));
+}
+void main() {
+  vec4 c = texelFetch(uSrc, ivec2(gl_FragCoord.xy), 0);
+  float s0 = max(sigma(c.a), 1e-3);
+  vec3 acc = c.rgb * c.rgb;
+  float near = c.a, wsum = 1.0;
+  for (int k = 1; k <= ${FOCUS_TAPS}; k++) {
+    for (int side = -1; side <= 1; side += 2) {
+      vec4 t = tap(float(k * side) * 0.4 * s0);
+      // How far this tap is from the centre, in units of its own blur.
+      float d = float(k) * 0.4 * s0 / max(min(sigma(t.a), s0), 1e-3);
+      float w = exp(-0.5 * d * d);
+      acc += t.rgb * w;
+      near += t.a * w;
+      wsum += w;
+    }
+  }
+  vec3 o = sqrt(acc / wsum) + (hash12(gl_FragCoord.xy + uDir * 37.0) - 0.5) / 255.0;
+  outColor = vec4(o, near / wsum);
+}
+`;
+  }
+  var FOCUS_FRAG = focusSource(FOCUS_FAR, FOCUS_NEAR);
+
   // --- drawing --------------------------------------------------------------
   //
   // A tiny renderer that owns nothing: it is handed a GL context, a program and
@@ -3211,6 +3301,9 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     byId: byId,
     resolveId: resolveId,
     fragmentSource: fragmentSource,
+    FOCUS_FRAG: FOCUS_FRAG,
+    focusSource: focusSource,
+    _focusConfig: { far: FOCUS_FAR, near: FOCUS_NEAR, taps: FOCUS_TAPS },
     compileProgram: compileProgram,
     compileProgramAsync: compileProgramAsync,
     setUniforms: setUniforms,

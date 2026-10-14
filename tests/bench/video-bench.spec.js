@@ -90,16 +90,21 @@ test.describe('bench video @bench', () => {
   //
   // The mirror of `noise-suppression`, and the same question: a feature that
   // runs on every frame of every call that turns it on. Segmentation is
-  // MediaPipe in WebAssembly on the GPU plus a WebGL composite, so the cost
-  // lands on CPU and on the frame rate the encoder is handed — not on the wire.
+  // MediaPipe in WebAssembly on the GPU plus a WebGL composite, so a blur's
+  // cost lands on CPU and on the frame rate the encoder is handed — not on the
+  // wire. A scene's also lands on the wire (below).
   //
   // Held at one room size with everything else pinned, because the number that
   // matters is the delta between off and on, not either absolute.
   //
-  // `blur` rather than a scene or an image: the blur is what most people leave
-  // on. An animated scene adds its own shader and, more to the point, moving
-  // pixels for the encoder — worth its own row one day (KNOWLEDGE/todos.md).
-  for (const background of ['off', 'blur']) {
+  // `blur` because it is what most people leave on, and two of the animated
+  // scenes because they cost something blur does not: a scene is a shader of
+  // its own, and moving pixels the encoder has to pay for. The office is the
+  // everyday pick; the island is the dearest to encode (its sea moves across
+  // half the picture — `make scene-preview ARGS='--bits'` measures each scene
+  // offline). At CAMERA_MAX_BITRATE the encoder spends the cap whatever it is
+  // given, so a busy background shows up in "Picture sent" as much as in bits.
+  for (const background of ['off', 'blur', 'preset:office', 'preset:island']) {
     test(`video background — ${background}`, async ({ makePeer }) => {
       test.setTimeout(HOLD_MS + 300_000);
       const size = Math.min(2, MAX_SIZE);
@@ -116,7 +121,7 @@ test.describe('bench video @bench', () => {
         // classic-script app does not have.
         storage: background === 'off' ? {} : { 'video-background': background },
         holdMs: HOLD_MS,
-        label: `bg-${background}`,
+        label: `bg-${background.replace(':', '-')}`,
       });
 
       // Still liveness only. An effect that never started, or that the app's own
@@ -125,7 +130,7 @@ test.describe('bench video @bench', () => {
       // weak device does. So it is recorded and reported (the report's
       // "Still running" column), never asserted: failing here would throw away the
       // measurement that says the machine gave up.
-      if (background === 'blur' && !run.peers.some((p) => p.effects && p.effects.engaged)) {
+      if (background !== 'off' && !run.peers.some((p) => p.effects && p.effects.engaged)) {
         console.warn(
           '! background effect was not running at the end of this run — ' +
             'either it never started (no WebGL / missing runtime, see `make seg-assets`) ' +

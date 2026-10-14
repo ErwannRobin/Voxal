@@ -56,10 +56,13 @@ Deliberately left for later:
   per-scene shadow/wrap strengths are reasoned and checked only on synthetic
   subjects. Try: a window to one side, an overhead office light, a desk lamp at
   night, a face lit only by the screen.
-- **Benchmark a scene.** `video-bench.spec.js` measures `off` and `blur`; an
-  animated scene adds GPU work and, more importantly, encoder bits. Add
-  `preset:office` (and the busiest scene) to the background sweep and compare
-  outgoing bitrate against `blur` at the same resolution. The 3D scenes make this
+- **Benchmark a scene on a real GPU.** `video-bench.spec.js` now sweeps
+  `preset:office` and `preset:island` beside `off` and `blur`, and
+  `make scene-preview ARGS='--bits --person'` measures each scene's encoder cost
+  offline (the lens cut it 50–83%; see *The lens* in `docs/video-effects.md`).
+  Neither has been run on real hardware: in the container the effect gives up
+  under SwiftShader. Run `make bench` on a laptop with a GPU and compare the
+  scene rows' "Picture sent" against `blur`. The 3D scenes make this
   more pressing: their `res` / `hz` budgets (see *Cost, and the step-down* in
   `docs/video-effects.md`) are measured only on a software GPU, where the mountain
   is the dearest. Time each on a real low-end Android and an integrated laptop GPU
@@ -78,6 +81,11 @@ Deliberately left for later:
 - **Relight the subject, not just the scene.** The light wrap only adds the
   scene's light at your edge. A full relight (shading the face toward the
   scene's key light) needs normals the selfie model does not give.
+- **Tune the lens on a real call.** `FOCUS_FAR` (0.004) and `FOCUS_NEAR` (0.4)
+  were picked from previews and the offline bit count. Check them on a phone
+  (a 384-long buffer upscaled to the screen) and a large desktop window, and
+  consider a per-scene strength (the café's lights would take more) or a
+  Settings → Video slider — a constant in the shader today, a uniform tomorrow.
 - **Optional switch for the interactions.** Shadow, light wrap and the motion
   response are always on with a scene. If anyone finds them distracting, a
   Settings → Video toggle is a uniform each — no track swap.

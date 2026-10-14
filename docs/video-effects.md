@@ -497,7 +497,11 @@ Options go through `ARGS`: a size (`--size 1024x576`, or `216x384` for an uprigh
 phone), a moment (`--time 80`), a look (`--look '{"exposure":0.25}'` for the
 evening, `'{"dirX":-0.8,"sideMix":0}'` for the mirror) and `--person`, which draws
 a stand-in head and shoulders over the middle of the frame — where a composition
-is actually judged. See the header of `scripts/scene-preview.mjs`.
+is actually judged. The pictures go through the lens (below) as a call's do;
+`--sharp` leaves it out, `--focus far,near` tries another one, and `--alpha`
+shows the nearness channel instead of the colour. `--bits` also says what each
+scene costs a video encoder (see *The lens*). See the header of
+`scripts/scene-preview.mjs`.
 
 ### The light is yours
 
@@ -577,6 +581,66 @@ pixel the video encoder spends bits on**, for everyone receiving you. So:
 * `unit-video-scenes.spec.js` pins it: between two frames a second apart, the
   mean change is under 3 levels of 255 and under 5% of pixels change by more
   than 12.
+
+### The lens
+
+A scene is drawn sharp everywhere, and a camera focused on a face does not see
+a room like that. So the finished scene goes through one more pair of passes
+before the composite reads it (`FOCUS_FRAG` in `video-scenes.js`, driven by
+`focusScene()` in `video-effects.js`): a Gaussian whose width follows the
+scene's alpha — the same nearness that decides where your shadow falls. The far
+distance (nearness 0: the sky, the hills, the street through the window) takes
+`FOCUS_FAR`, 0.4% of the buffer's height as a sigma; the wall a metre behind
+you (nearness 1) takes 60% of that (`FOCUS_NEAR` 0.4), which is the ratio a lens
+focused at 0.6 m has between a wall at 1.6 m and the horizon. It is gentle on
+purpose: books and bricks stay readable, the view through the window and the
+sea go soft.
+
+Three details make it work:
+
+* **A tap spreads by its own blur, never by more than the centre's.** The
+  weight of each tap is its Gaussian in units of `min(its sigma, the centre's)`.
+  A near, sharper edge therefore does not smear across the far, softer view
+  beside it (`unit-video-scenes.spec.js` checks a white near wall against a
+  black far view, with a control).
+* **Linear light, including between texels.** Squared, blurred, square-rooted,
+  like the camera blur — so a lamp or the sun on water stays a glow. At these
+  radii most taps fall between two texels, and the hardware's bilinear filter
+  would average those in sRGB (fine black-and-white stripes came out at 149 of
+  255 instead of ~180). So each tap `texelFetch`es its two texels and squares
+  them before mixing.
+* **Dithered after each pass.** The averaging removes the scene's own dither,
+  and a sky quantised to 8 bits twice would band.
+
+It runs on the scene buffer at the scene's own rate — two draws of a few hundred
+pixels across, ten to fifteen times a second, never per camera frame — and its
+one extra buffer (`texSceneTmp`) is allocated with the scene's, never for blur or
+an image. The buffer is mip-complete from the moment it is allocated, because
+the lens reads it on the very first frame and an incomplete mipmapped texture
+samples as black. A lens that will not compile leaves the scene sharp rather
+than falling back to the blur.
+
+It is also the cheapest bitrate the scenes can give back. `make scene-preview
+ARGS='--bits --person'` encodes four seconds of each scene at its own redraw
+rate through VP9 at a fixed quantizer (32), so the bytes are the picture's
+difficulty and nothing else:
+
+| Scene | Keyframe, sharp → lens | Motion, sharp → lens |
+|---|---|---|
+| Office | 6.9 → 5.3 KB | 33 → 13 kb/s |
+| Island | 12.3 → 6.5 KB | 184 → 32 kb/s |
+| Cyber café | 9.7 → 6.3 KB | 32 → 16 kb/s |
+| Mountain | 9.3 → 5.1 KB | 119 → 20 kb/s |
+| Countryside | 9.2 → 5.3 KB | 27 → 8 kb/s |
+
+Measured on a software GPU at 512 x 288 with the stand-in subject (the encoder
+does not care which GPU drew the picture). Compare rows with each other, never
+with a call's bandwidth: a call's encoder works to `CAMERA_MAX_BITRATE`, so
+there the saving is bits the encoder can spend on the person instead — which
+no benchmark has measured yet. The island's sea and the mountain's lake were
+the dearest things any scene drew. What the lens itself costs to draw is small
+next to the scene: on a software GPU, about a fifth of the café's frame (the
+cheapest scene), and lost in the run-to-run noise of the mountain's.
 
 ### Cost, and the step-down
 

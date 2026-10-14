@@ -48,6 +48,76 @@ test.beforeEach(async ({ page }) => {
     };
     window.__luma = (px, i) => 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
 
+    // Run the focus passes (FOCUS_FRAG, or another lens's source) over a
+    // picture given as RGBA bytes, top row first, and hand back the result the
+    // same way round. Alpha is the nearness, exactly as a scene writes it.
+    window.__focus = (src, W, H, frag) => {
+      const c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      const gl = c.getContext('webgl2', { alpha: false, preserveDrawingBuffer: true });
+      const sh = (type, text) => { const o = gl.createShader(type); gl.shaderSource(o, text); gl.compileShader(o); return o; };
+      const p = gl.createProgram();
+      gl.attachShader(p, sh(gl.VERTEX_SHADER, '#version 300 es\nin vec2 aPos;\nout vec2 vUv;\n' +
+        'void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }\n'));
+      gl.attachShader(p, sh(gl.FRAGMENT_SHADER, frag || VideoScenes.FOCUS_FRAG));
+      gl.bindAttribLocation(p, 0, 'aPos');
+      gl.linkProgram(p);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      const flip = (px) => {
+        const o = new Uint8Array(W * H * 4);
+        for (let y = 0; y < H; y++) o.set(px.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4);
+        return o;
+      };
+      const tex = [], fbs = [];
+      for (let i = 0; i < 2; i++) {
+        tex[i] = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex[i]);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, i ? null : flip(Uint8Array.from(src)));
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        fbs[i] = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbs[i]);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex[i], 0);
+      }
+      gl.useProgram(p);
+      gl.viewport(0, 0, W, H);
+      gl.uniform1i(gl.getUniformLocation(p, 'uSrc'), 0);
+      gl.uniform2f(gl.getUniformLocation(p, 'uRes'), W, H);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, tex[0]);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbs[1]);
+      gl.uniform2f(gl.getUniformLocation(p, 'uDir'), 1, 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.bindTexture(gl.TEXTURE_2D, tex[1]);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbs[0]);
+      gl.uniform2f(gl.getUniformLocation(p, 'uDir'), 0, 1);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      const px = new Uint8Array(W * H * 4);
+      gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
+      return Array.from(flip(px));
+    };
+    // How much fine detail a picture holds: the mean luma step between
+    // horizontal neighbours, over the columns [x0, x1).
+    window.__detail = (px, W, H, x0 = 0, x1 = W) => {
+      let sum = 0, n = 0;
+      for (let y = 0; y < H; y++) {
+        for (let x = Math.max(1, x0); x < x1; x++) {
+          const i = (y * W + x) * 4;
+          sum += Math.abs(window.__luma(px, i) - window.__luma(px, i - 4));
+          n++;
+        }
+      }
+      return sum / n;
+    };
+
     // A camera whose picture is lit from one side: a horizontal ramp, dark on
     // `dark` and bright on the other side, repainted so the capture keeps
     // producing frames.
@@ -498,6 +568,70 @@ test.describe('measuring the subject', () => {
   });
 });
 
+test.describe('the lens', () => {
+  // Fine stripes, far (alpha 0) on the left half and near (alpha 1) on the
+  // right: the far half loses more of its detail than the near half, both
+  // lose some, and black and white average in LINEAR light — to the grey of
+  // half the light (~180), not to the sRGB midpoint (~128).
+  test('the far view is softer than the near wall, blurred in linear light', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const W = 400, H = 225;
+      const src = new Uint8Array(W * H * 4);
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const i = (y * W + x) * 4, v = x % 2 ? 255 : 0;
+          src[i] = src[i + 1] = src[i + 2] = v;
+          src[i + 3] = x < W / 2 ? 0 : 255;
+        }
+      }
+      const out = window.__focus(src, W, H);
+      let far = 0, n = 0;
+      for (let y = 20; y < H - 20; y++) for (let x = 20; x < 180; x++) { far += out[(y * W + x) * 4]; n++; }
+      return {
+        src: window.__detail(src, W, H, 20, 180),
+        far: window.__detail(out, W, H, 20, 180),
+        near: window.__detail(out, W, H, 220, 380),
+        farMean: far / n,
+        cfg: VideoScenes._focusConfig,
+      };
+    });
+    expect(seen.cfg.far).toBeGreaterThan(0);
+    expect(seen.near).toBeLessThan(seen.src * 0.9);
+    expect(seen.far).toBeLessThan(seen.near * 0.7);
+    expect(seen.farMean).toBeGreaterThan(165);
+    expect(seen.farMean).toBeLessThan(195);
+  });
+
+  // A near, sharper surface must not smear across the far, softer view beside
+  // it: a tap spreads by its own blur, never by the centre's. A white near wall
+  // against a black far view, through a deliberately strong lens so the effect
+  // is wide enough to measure — and the same picture with both halves far, as
+  // the control that shows the lens is otherwise strong enough to carry the
+  // white well into the black.
+  test('a near edge does not smear across the far view beside it', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const W = 400, H = 225;
+      const lens = VideoScenes.focusSource(0.03, 0.9);
+      const picture = (nearAlpha) => {
+        const src = new Uint8Array(W * H * 4);
+        for (let i = 0; i < W * H; i++) {
+          const right = (i % W) >= W / 2;
+          src[i * 4] = src[i * 4 + 1] = src[i * 4 + 2] = right ? 255 : 0;
+          src[i * 4 + 3] = right ? nearAlpha : 0;
+        }
+        return src;
+      };
+      const at = (px, dx) => px[((H >> 1) * W + (W / 2 + dx)) * 4];
+      const split = window.__focus(picture(255), W, H, lens);
+      const allFar = window.__focus(picture(0), W, H, lens);
+      return { splitFar: at(split, -4), splitNear: at(split, 4), controlFar: at(allFar, -4) };
+    });
+    expect(seen.controlFar).toBeGreaterThan(40);
+    expect(seen.splitFar).toBeLessThan(15);
+    expect(seen.splitNear).toBeGreaterThan(230);
+  });
+});
+
 test.describe('in the camera pipeline', () => {
   // Blur and images must not pay for scenes: no scene buffer until one is
   // picked — the same rule that makes "off" free.
@@ -505,14 +639,68 @@ test.describe('in the camera pipeline', () => {
     const seen = await page.evaluate(async () => {
       await VideoEffects.wrap(window.__mkLitCamera('#555', '#555'), 'blur');
       await window.__sleep(300);
-      const blur = { scene: !!VideoEffects.active().texScene, soft: !!VideoEffects.active().texSoftA };
+      const p = VideoEffects.active();
+      const blur = { scene: !!p.texScene, soft: !!p.texSoftA, focus: !!p.pFocus, tmp: !!p.texSceneTmp };
       await VideoEffects.setMode('preset:office');
       await window.__sleep(300);
-      return { blur, scene: !!VideoEffects.active().texScene, id: VideoEffects.active().sceneId };
+      return { blur, scene: !!p.texScene, focus: !!p.pFocus, tmp: !!p.texSceneTmp, id: p.sceneId };
     });
-    expect(seen.blur).toEqual({ scene: false, soft: false });
+    expect(seen.blur).toEqual({ scene: false, soft: false, focus: false, tmp: false });
     expect(seen.scene).toBe(true);
+    expect(seen.focus).toBe(true);
+    expect(seen.tmp).toBe(true);
     expect(seen.id).toBe('office');
+  });
+
+  // The scene the composite reads has been through the lens: the same frame
+  // (same clock, same look) holds less fine detail with it than without it.
+  // And the very first frame of a newly picked scene is a picture — the lens
+  // reads a buffer that has only just been allocated, and an incomplete
+  // mipmapped texture samples as black.
+  test('the scene is drawn through the lens, from its first frame', async ({ page }) => {
+    const seen = await page.evaluate(async () => {
+      await VideoEffects.wrap(window.__mkLitCamera('#555', '#999'), 'blur');
+      const p = VideoEffects.active();
+      await window.__sleep(300);
+      const gl = p.gl;
+      const read = () => {
+        const px = new Uint8Array(p.sceneW * p.sceneH * 4);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, p.fbScene);
+        gl.readPixels(0, 0, p.sceneW, p.sceneH, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        return px;
+      };
+      const mean = (px) => { let s = 0; for (let i = 0; i < px.length; i += 4) s += window.__luma(px, i); return s / (px.length / 4); };
+      // Synchronously, so no other frame can be drawn in between.
+      p.ensureScene('office');
+      const first = mean(read());
+      const T = performance.now();
+      p.lastScene = 0; p.drawScene(T);
+      const lens = window.__detail(read(), p.sceneW, p.sceneH);
+      const keep = p.pFocus;
+      p.pFocus = null;
+      p.lastScene = 0; p.drawScene(T);
+      const sharp = window.__detail(read(), p.sceneW, p.sceneH);
+      p.pFocus = keep;
+      return { first, lens, sharp };
+    });
+    expect(seen.first).toBeGreaterThan(25);
+    expect(seen.lens).toBeLessThan(seen.sharp * 0.9);
+  });
+
+  test('stopping the camera releases the lens with the scene', async ({ page }) => {
+    const seen = await page.evaluate(async () => {
+      await VideoEffects.wrap(window.__mkLitCamera('#555', '#999'), 'preset:cybercafe');
+      const p = VideoEffects.active();
+      await window.__sleep(300);
+      const before = { focus: !!p.pFocus, tmp: !!p.texSceneTmp };
+      VideoEffects.stop();
+      return { before, focus: p.pFocus, tmp: p.texSceneTmp, fb: p.fbSceneTmp };
+    });
+    expect(seen.before).toEqual({ focus: true, tmp: true });
+    expect(seen.focus).toBeUndefined();
+    expect(seen.tmp).toBeNull();
+    expect(seen.fb).toBeNull();
   });
 
   test('the subject\'s light is measured from the camera', async ({ page }) => {

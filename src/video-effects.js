@@ -1419,6 +1419,7 @@ var VideoEffects = (function () {
     this.sceneId = null;
     this.scene = null;
     this.sceneProgs = {};
+    this.pFocus = undefined;   // the lens: compiled with the first scene, null if it failed
     this.sceneHzSteps = SCENE_HZ.slice();
     this.sceneStep = 0;
     this.lastScene = 0;
@@ -1987,21 +1988,41 @@ var VideoEffects = (function () {
     var k = Math.min(1, SCENE_LONG * (want.res || 1) / Math.max(cw, ch));
     var nw = Math.max(2, Math.round(cw * k)), nh = Math.max(2, Math.round(ch * k));
     if (this.texScene && (nw !== this.sceneW || nh !== this.sceneH)) {
-      // Another scene, another size: the buffer follows it.
-      try { gl.deleteTexture(this.texScene); } catch (e) { /* ignore */ }
-      try { gl.deleteFramebuffer(this.fbScene); } catch (e) { /* ignore */ }
-      this.texScene = null;
+      // Another scene, another size: the buffers follow it.
+      [this.texScene, this.texSceneTmp].forEach(function (t) {
+        if (t) try { gl.deleteTexture(t); } catch (e) { /* ignore */ }
+      });
+      [this.fbScene, this.fbSceneTmp].forEach(function (f) {
+        if (f) try { gl.deleteFramebuffer(f); } catch (e) { /* ignore */ }
+      });
+      this.texScene = this.texSceneTmp = null;
+      this.fbScene = this.fbSceneTmp = null;
     }
     if (!this.texScene) {
       this.sceneW = nw;
       this.sceneH = nh;
       this.texScene = texture(gl, this.sceneW, this.sceneH, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
       // Mipmapped: the light wrap reads a coarse level as "the light around
-      // here", for the cost of one generateMipmap per scene frame.
+      // here", for the cost of one generateMipmap per scene frame. Generated
+      // once now as well, so the focus pass's first read of it is of a
+      // complete texture (an incomplete one samples as black).
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.generateMipmap(gl.TEXTURE_2D);
       this.fbScene = framebuffer(gl, this.texScene);
+      // The focus pass's halfway buffer (see focusScene()).
+      this.texSceneTmp = texture(gl, this.sceneW, this.sceneH, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+      this.fbSceneTmp = framebuffer(gl, this.texSceneTmp);
       if (!this.texSoftA) this.allocSoft(this.segW, this.segH);
       if (!this.sceneStart) this.sceneStart = performance.now();
+    }
+    // The lens is one small program for every scene. Without it the scene is
+    // still a scene, only sharper, so a failure here is not a reason to fall
+    // back to the blur.
+    if (this.pFocus === undefined) {
+      try { this.pFocus = program(gl, VideoScenes.FOCUS_FRAG); } catch (e) {
+        console.warn('[VideoEffects] scene focus unavailable: ' + (e && e.message ? e.message : e));
+        this.pFocus = null;
+      }
     }
     if (!this.sceneProgs[id]) this.sceneProgs[id] = VideoScenes.compileProgram(gl, id);
     this.sceneId = id;
@@ -2077,8 +2098,25 @@ var VideoEffects = (function () {
     var t = VideoScenes.THUMB_TIME + (now - this.sceneStart) / 1000;
     VideoScenes.setUniforms(gl, prog, this.sceneW, this.sceneH, t, this.look);
     this.drawQuad(this.fbScene, this.sceneW, this.sceneH);
+    if (this.pFocus && this.fbSceneTmp) this.focusScene();
     gl.bindTexture(gl.TEXTURE_2D, this.texScene);
     gl.generateMipmap(gl.TEXTURE_2D);
+  };
+
+  // The lens: the scene buffer, blurred by how far away each part of it is,
+  // across into the halfway buffer and back down into itself. Two draws on a
+  // buffer a few hundred pixels wide, once per scene frame — never per camera
+  // frame. See FOCUS_FRAG in video-scenes.js.
+  Processor.prototype.focusScene = function () {
+    var gl = this.gl, p = this.pFocus;
+    gl.useProgram(p);
+    gl.uniform2f(uloc(gl, p, 'uRes'), this.sceneW, this.sceneH);
+    this.bindTex(p, 'uSrc', 0, this.texScene);
+    gl.uniform2f(uloc(gl, p, 'uDir'), 1, 0);
+    this.drawQuad(this.fbSceneTmp, this.sceneW, this.sceneH);
+    this.bindTex(p, 'uSrc', 0, this.texSceneTmp);
+    gl.uniform2f(uloc(gl, p, 'uDir'), 0, 1);
+    this.drawQuad(this.fbScene, this.sceneW, this.sceneH);
   };
 
   // Measure how the subject is lit, from a 32-wide copy of the frame and the
@@ -2566,12 +2604,14 @@ var VideoEffects = (function () {
      this.pRef, this.pErode].forEach(function (p) {
       if (p) try { gl.deleteProgram(p); } catch (e) { /* ignore */ }
     });
-    [this.texScene, this.texSoftA, this.texSoftB].forEach(function (t) {
+    [this.texScene, this.texSceneTmp, this.texSoftA, this.texSoftB].forEach(function (t) {
       if (t) try { gl.deleteTexture(t); } catch (e) { /* ignore */ }
     });
-    [this.fbScene, this.fbSoftA, this.fbSoftB].forEach(function (f) {
+    [this.fbScene, this.fbSceneTmp, this.fbSoftA, this.fbSoftB].forEach(function (f) {
       if (f) try { gl.deleteFramebuffer(f); } catch (e) { /* ignore */ }
     });
+    if (this.pFocus) try { gl.deleteProgram(this.pFocus); } catch (e) { /* ignore */ }
+    this.pFocus = undefined;
     var progs = this.sceneProgs;
     Object.keys(progs).forEach(function (k) {
       try { gl.deleteProgram(progs[k].program); } catch (e) { /* ignore */ }
@@ -2581,8 +2621,8 @@ var VideoEffects = (function () {
     // lands, the blur shows rather than a scene with no program behind it.
     this.sceneId = null;
     this.scene = null;
-    this.texScene = this.texSoftA = this.texSoftB = null;
-    this.fbScene = this.fbSoftA = this.fbSoftB = null;
+    this.texScene = this.texSceneTmp = this.texSoftA = this.texSoftB = null;
+    this.fbScene = this.fbSceneTmp = this.fbSoftA = this.fbSoftB = null;
     if (this.quad) try { gl.deleteBuffer(this.quad); } catch (e) { /* ignore */ }
     if (this.vao) try { gl.deleteVertexArray(this.vao); } catch (e) { /* ignore */ }
     this.gl = null;
