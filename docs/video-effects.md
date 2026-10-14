@@ -512,15 +512,18 @@ A shader that draws a world can pass every test and still be ugly, so there is a
 way to look: `make scene-preview` loads `video-scenes.js` into a blank page,
 draws each scene with the real shader (software GL is fine) and writes a PNG per
 scene and a contact sheet to `scene-previews/` (gitignored), with the draw time.
-Options go through `ARGS`: a size (`--size 1024x576`, or `216x384` for an upright
-phone), a moment (`--time 80`), a look (`--look '{"exposure":0.25}'` for the
-evening, `'{"dirX":-0.8,"sideMix":0}'` for the mirror) and `--person`, which draws
-a stand-in head and shoulders over the middle of the frame — where a composition
-is actually judged. The pictures go through the lens (below) as a call's do;
-`--sharp` leaves it out, `--focus far,near` tries another one, and `--alpha`
-shows the nearness channel instead of the colour. `--bits` also says what each
-scene costs a video encoder (see *The lens*). See the header of
-`scripts/scene-preview.mjs`.
+Each picture is made the way a call makes it: the scene drawn into its small
+buffer, redrawn `--frames` (24) times at one moment and resolved at the camera's
+size (see *Sharp at the size it is shown*). Options go through `ARGS`: the
+camera's size (`--size 1280x720`, the default; `--size 640x360 --long 384` for a
+phone, `360x640` upright), a moment (`--time 80`), a look
+(`--look '{"exposure":0.25}'` for the evening, `'{"dirX":-0.8,"sideMix":0}'` for
+the mirror) and `--person`, which draws a stand-in head and shoulders over the
+middle of the frame — where a composition is actually judged. `--raw` shows one
+redraw stretched instead (the first frame of a pick), `--resolve '{...}'` tries
+other resolve settings, and `--alpha` shows the nearness channel instead of the
+colour. `--bits` also says what each scene costs a video encoder. See the header
+of `scripts/scene-preview.mjs`.
 
 ### The light is yours
 
@@ -601,73 +604,83 @@ pixel the video encoder spends bits on**, for everyone receiving you. So:
   mean change is under 3 levels of 255 and under 5% of pixels change by more
   than 12.
 
-### The lens
+### Sharp at the size it is shown
 
-A scene is drawn sharp everywhere, and a camera focused on a face does not see
-a room like that. So the finished scene goes through one more pair of passes
-before the composite reads it (`FOCUS_FRAG` in `video-scenes.js`, driven by
-`focusScene()` in `video-effects.js`): a Gaussian whose width follows the
-scene's alpha — the same nearness that decides where your shadow falls. The far
-distance (nearness 0: the sky, the hills, the street through the window) takes
-`FOCUS_FAR`, 0.4% of the buffer's height as a sigma; the wall a metre behind
-you (nearness 1) takes 60% of that (`FOCUS_NEAR` 0.4), which is the ratio a lens
-focused at 0.6 m has between a wall at 1.6 m and the horizon. It is gentle on
-purpose: books and bricks stay readable, the view through the window and the
-sea go soft.
+A scene is ray-marched into a small buffer (below), because each of its pixels
+is a whole march, and a call shows it two to four times bigger than that.
+Stretched, it was a soft room behind a sharp person, which is the first thing
+that gives a virtual background away. (An earlier version blurred it further
+on purpose, by distance, to save bits. It looked worse, and it is gone.)
 
-Three details make it work:
+So the buffer is never shown stretched. Each redraw looks through a slightly
+different point of every one of its pixels (`JITTER`, 256 points of a Halton
+sequence), and `resolveScene()` in `video-effects.js` adds what it saw to a
+picture kept at the camera's own size (`RESOLVE_FRAG` in `video-scenes.js`).
+Wherever the room holds still, which is nearly all of it nearly all the time,
+a pixel of that picture is soon made of many looks at many points inside it,
+and it holds detail the buffer never had: the marching cost of the small
+buffer, the detail of one the camera's size. The scene is told that size
+(`uDetail`), so the detail it draws is the picture's, not the buffer's.
 
-* **A tap spreads by its own blur, never by more than the centre's.** The
-  weight of each tap is its Gaussian in units of `min(its sigma, the centre's)`.
-  A near, sharper edge therefore does not smear across the far, softer view
-  beside it (`unit-video-scenes.spec.js` checks a white near wall against a
-  black far view, with a control).
-* **Linear light, including between texels.** Squared, blurred, square-rooted,
-  like the camera blur — so a lamp or the sun on water stays a glow. At these
-  radii most taps fall between two texels, and the hardware's bilinear filter
-  would average those in sRGB (fine black-and-white stripes came out at 149 of
-  255 instead of ~180). So each tap `texelFetch`es its two texels and squares
-  them before mixing.
-* **Dithered after each pass.** The averaging removes the scene's own dither,
-  and a sky quantised to 8 bits twice would band.
+* **How much a look counts** depends on how near it fell to the pixel's centre
+  (`RESOLVE.sigma`, 0.6 of the picture's own pixels) and on how settled the
+  picture is: the first looks count for a lot, so a new pick starts as the
+  redraw itself (soft, never black) and sharpens within a second or two; later
+  ones count for a steady share (`RESOLVE.gain`), so a settled picture stays
+  still. 256 points rather than 16: with few, a pixel is always looked at from
+  the same side and an edge comes out dotted.
+* **What moves is not added up.** The redraw and the picture so far are
+  compared through the same small blur, at the very points the redraw looked
+  at, so the detail only the picture has is not taken for movement. Where they
+  differ by more than the local contrast explains, the redraw wins, and that
+  part shows as the soft frame it is — the way a camera smears what moves. The
+  colour and the nearness are judged apart: nearness jumps at every edge that is
+  not a colour edge. `unit-video-scenes.spec.js` moves a bar and checks that
+  three redraws later nothing is left where it was, with a control that keeps
+  the ghost when the test is switched off.
+* **Once per redraw, never per camera frame**: one pass at the camera's size,
+  nine texel reads and nine filtered reads a pixel, ten to fifteen times a
+  second, into one of two buffers that take turns (`texSceneOut`). They are
+  allocated with the scene's, never for blur or an image. The light wrap still
+  reads a coarse mip of the small buffer (`uSceneEnv`), which is what it wants.
+  A resolve that will not compile leaves the scene stretched rather than
+  falling back to the blur.
 
-It runs on the scene buffer at the scene's own rate — two draws of a few hundred
-pixels across, ten to fifteen times a second, never per camera frame — and its
-one extra buffer (`texSceneTmp`) is allocated with the scene's, never for blur or
-an image. The buffer is mip-complete from the moment it is allocated, because
-the lens reads it on the very first frame and an incomplete mipmapped texture
-samples as black. A lens that will not compile leaves the scene sharp rather
-than falling back to the blur.
+Detail costs the encoder something, and it is worth knowing what. `make
+scene-preview ARGS='--bits --person'` encodes four seconds of each scene, as a
+1280 x 720 camera shows it, at its own redraw rate through VP9 at a fixed
+quantizer (32), so the bytes are the picture's difficulty and nothing else.
+Before is the stretched buffer through the old distance blur; after is the
+resolve:
 
-It is also the cheapest bitrate the scenes can give back. `make scene-preview
-ARGS='--bits --person'` encodes four seconds of each scene at its own redraw
-rate through VP9 at a fixed quantizer (32), so the bytes are the picture's
-difficulty and nothing else:
-
-| Scene | Keyframe, sharp → lens | Motion, sharp → lens |
+| Scene | Keyframe, before → after | Motion, before → after |
 |---|---|---|
-| Office | 6.9 → 5.3 KB | 33 → 13 kb/s |
-| Island | 12.3 → 6.5 KB | 184 → 32 kb/s |
-| Cyber café | 9.7 → 6.3 KB | 32 → 16 kb/s |
-| Mountain | 9.3 → 5.1 KB | 119 → 20 kb/s |
-| Countryside | 9.2 → 5.3 KB | 27 → 8 kb/s |
+| Office | 14.9 → 18.0 KB | 33 → 47 kb/s |
+| Island | 18.6 → 30.2 KB | 97 → 237 kb/s |
+| Cyber café | 18.6 → 28.8 KB | 40 → 143 kb/s |
+| Mountain | 14.0 → 20.4 KB | 76 → 117 kb/s |
+| Countryside | 15.5 → 23.4 KB | 28 → 46 kb/s |
 
-Measured on a software GPU at 512 x 288 with the stand-in subject (the encoder
-does not care which GPU drew the picture). Compare rows with each other, never
-with a call's bandwidth: a call's encoder works to `CAMERA_MAX_BITRATE`, so
-there the saving is bits the encoder can spend on the person instead — which
-no benchmark has measured yet. The island's sea and the mountain's lake were
-the dearest things any scene drew. What the lens itself costs to draw is small
-next to the scene: on a software GPU, about a fifth of the café's frame (the
-cheapest scene), and lost in the run-to-run noise of the mountain's.
+Measured on a software GPU with the stand-in subject (the encoder does not care
+which GPU drew the picture). Compare rows with each other, never with a call's
+bandwidth: a call's encoder works to `CAMERA_MAX_BITRATE`, so there the cost is
+bits the encoder cannot spend on the person — which no call has measured yet.
+Detail that holds still is paid for once, in a keyframe; what moves is paid for
+in every frame, and the island's sea and palm and the café's window and neon
+are most of it. If that ever shows on the person, calm what moves before
+blurring anything: the blur bought the bits back with the whole picture.
+
+The per-pixel offsets that break up a march's slices (the clouds, the office's
+sunbeam) change with each `JITTER` point too (`SEED`), so the added-up frames
+average them away. Fixed, as they are for a single frame, they came out as grain
+in the clouds once nothing blurred them.
 
 ### Cost, and the step-down
 
 The scene is drawn into a buffer of at most 512 on its long side (384 on mobile)
-and upscaled. That is cheaper, and it is also the look: a real camera focused on
-a face shows the room behind it soft. Each scene says how much of that it needs
-(`res` in the catalogue) and how often it should be redrawn (`hz`, with the rate
-it falls to under load):
+and resolved up to the camera's size (above). Each scene says how much of that
+buffer it needs (`res` in the catalogue) and how often it should be redrawn
+(`hz`, with the rate it falls to under load):
 
 | Scene | `res` | `hz` | Why |
 |---|---|---|---|
@@ -677,12 +690,14 @@ it falls to under load):
 | Mountain | 0.70 | 10 → 5 | two terrain marches (the view and the lake's mirror) |
 | Countryside | 0.80 | 10 → 5 | a terrain march, a tree, a farm, fields |
 
-The ray-marched scenes are the most expensive thing the page draws, and sixty to
-eighty per cent of the pixels of a backdrop nobody is looking at closely is plenty.
-The buffer is reallocated when a pick changes the size, and a new scene starts at
-the top of its own ladder. Its buffers — the scene, its mips, the soft mask — are
-allocated the first time a scene is picked and never for blur or an image, the
-same rule that makes **off** free.
+The ray-marched scenes are the most expensive thing the page draws; the resolve
+is what lets their buffers stay this small. The buffer is reallocated when a pick
+changes the size, and a new scene starts at the top of its own ladder and its
+picture starts over. Its buffers — the scene, its mips, the two pictures at the
+camera's size (about 7 MB at 1280 x 720, 2 MB at a phone's 640 x 360), the soft
+mask — are allocated the first time a scene is picked and never for blur or an
+image, the same rule that makes **off** free. Under load the scene is redrawn
+less often, and a still room takes that much longer to sharpen.
 
 Under load, the existing ladder runs first (segmentation steps down), then the
 scene drops to the lower rate of its own ladder, and only then does the effect

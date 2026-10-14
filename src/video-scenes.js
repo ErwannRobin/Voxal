@@ -54,13 +54,13 @@
 // of being sampled below its own wavelength: that is what turns water, grass
 // and brick into a soft, stable picture rather than a shimmer.
 //
-// The scene is rendered into a small buffer (a fraction of 512 on its long
-// side, per scene) and upscaled. That is cheaper, and it is also the look: a
-// real camera focused on a face shows the room behind it slightly soft. The
+// The scene is ray-marched into a small buffer (a fraction of 512 on its long
+// side, per scene), because each of its pixels is a whole march; the
 // ray-marched landscapes cost the most, so they are drawn smaller and less
-// often (`res`, `hz` in the catalogue). Then it goes through a lens (FOCUS_FRAG)
-// that softens what is far more than what is near — which is also what keeps
-// a moving sea from costing the encoder a fortune.
+// often (`res`, `hz` in the catalogue). It is not shown stretched: each redraw
+// looks through a different point of its pixels, and the redraws are added up
+// into a picture at the camera's own size (RESOLVE_FRAG), so a room that holds
+// still is as sharp as the person in front of it.
 
 var VideoScenes = (function () {
   'use strict';
@@ -310,9 +310,11 @@ uniform vec3  uTint;      // the room's white-balance cast, luminance 1
 uniform float uExposure;  // linear gain matching the subject
 uniform vec4  uSubject;   // centroid (uv, y up) and half extent (uv)
 uniform sampler2D uNoise; // 256 x 256 lattice, four corners to a texel (see noiseTexture)
+uniform vec2  uJitter;    // where in its pixel this frame looks, px from the centre (see RESOLVE_FRAG)
+uniform float uDetail;    // the height the frames are resolved to, px; 0 = uRes.y
 
 float T, KEY, ELEV, MOTION, NIGHT, PX, HX, FOCAL;
-vec2 SUBJ, SUBJR;
+vec2 SUBJ, SUBJR, SEED;
 
 const float PI = 3.14159265359;
 
@@ -572,8 +574,9 @@ vec4 cloudMarch(vec3 ro, vec3 rd, float camH) {
   float t1 = min((CL_TOP - ro.y) / rd.y, t0 + 14.0);
   float dt = (t1 - t0) / 14.0;
   // Start each ray a fraction of a step in, differently per pixel, so the
-  // slices are not visible as bands; the pattern is fixed, so it does not move.
-  float t = t0 + dt * hash12(gl_FragCoord.xy);
+  // slices are not visible as bands. The pattern changes only with the
+  // redraw's JITTER point, so the redraws that are added up average it away.
+  float t = t0 + dt * hash12(SEED);
   float trans = 1.0, tHit = 0.0;
   vec3 acc = vec3(0.0);
   float mu = dot(rd, SUN);
@@ -1069,7 +1072,7 @@ vec4 scene(vec2 p, out vec3 emit) {
     float acc = 0.0;
     float tEnd = min(t, 6.0);
     for (int i = 0; i < 12; i++) {
-      float ti = (float(i) + 0.5 + 0.6 * hash12(gl_FragCoord.xy + float(i))) / 12.0 * tEnd;
+      float ti = (float(i) + 0.5 + 0.6 * hash12(SEED + float(i))) / 12.0 * tEnd;
       vec3 q = rd * ti;
       float sv2 = sunVis(q);
       float dust = 0.55 + 0.9 * noise(q.xz * 5.0 + q.yy * 3.0 + vec2(T * 0.03, 0.0));
@@ -2914,9 +2917,14 @@ vec4 shade(vec2 p, float m, out vec3 e) {
   return scene(vec2(p.x * m, p.y), e);
 }
 void main() {
-  vec2 uv = vUv;
+  vec2 uv = vUv + uJitter / uRes;
+  // The per-pixel offsets that break up a march's slices: fixed for a frame
+  // shown on its own, new with each JITTER point when frames are added up.
+  SEED = gl_FragCoord.xy + uJitter * 97.0;
   HX = 0.5 * uRes.x / uRes.y;
-  PX = 1.0 / uRes.y;
+  // The detail a pixel may carry is the resolved picture's, not this buffer's:
+  // the jittered frames add up to it (see RESOLVE_FRAG).
+  PX = 1.0 / (uDetail > 0.0 ? uDetail : uRes.y);
   FOCAL = 1.072 * clamp(HX / 0.70, 0.66, 1.0);
   vec2 p = vec2((uv.x - 0.5) * 2.0 * HX, uv.y - 0.5);
   T = uTime;
@@ -2954,93 +2962,112 @@ void main() {
     return id ? HEADER + SOURCES[id] + MAIN : null;
   }
 
-  // --- focus ----------------------------------------------------------------
+  // --- resolve --------------------------------------------------------------
   //
-  // The lens. A scene is drawn sharp everywhere, and a camera focused on a face
-  // does not see a room like that: what is behind you is soft, and what is far
-  // away is softer. So the finished scene goes through one more pair of passes
-  // before it is composited — a Gaussian whose width follows the scene's own
-  // alpha, the same nearness that decides where your shadow falls. Nearness 0
-  // (the sky, the hills, the street through the window) takes the whole
-  // FOCUS_FAR; nearness 1 (the wall a metre behind you) takes 1 - FOCUS_NEAR of
-  // it. That ratio is the lens's: a camera focused at 0.6 m blurs a wall at
-  // 1.6 m about 0.6 as much as it blurs the horizon.
+  // Sharp at the size it is shown. A scene is ray-marched into a small buffer
+  // (SCENE_LONG in video-effects.js, a few hundred pixels wide), because each
+  // of its pixels costs a whole march, and a call shows it two to four times
+  // bigger than that. Stretched, it is a soft room behind a sharp person, which
+  // reads as a fake at once.
   //
-  // It is also the cheapest bitrate the scenes can give back. Books, brick,
-  // fronds and glitter on a lake are detail the encoder pays for in every
-  // keyframe and every moving pixel, for everyone receiving you, and none of it
-  // is what anybody is looking at.
+  // So each redraw looks through a slightly different point of every pixel (a
+  // Halton sequence, JITTER) and adds what it saw to a picture kept at the
+  // camera's own size. Wherever the room holds still, which is nearly all of
+  // it nearly all the time, a pixel of the picture is soon made of many looks
+  // at many points inside it, and it holds detail the buffer never had: the
+  // marching cost of the small buffer, the detail of one the camera's size.
+  // The scene is told that size (uDetail), so what it draws is detailed for it.
   //
-  // Separable, in two passes over the scene buffer (a few hundred pixels wide,
-  // at the scene's own redraw rate — never per camera frame). The taps are
-  // spaced by the centre's sigma, so the weights would not depend on it; what
-  // makes them depend on each tap is that a tap spreads by ITS OWN blur, never
-  // by more than the centre's. A near, sharper edge therefore does not smear
-  // across the far, softer view next to it, and the far view reaches into the
-  // near edge only as far as that edge's own blur.
+  // How much a look counts for a pixel depends on how near it fell to the
+  // pixel's centre (RESOLVE.sigma, in the picture's own pixels) and on how
+  // settled the picture already is: the first looks count for a lot, so a new
+  // scene sharpens within a second or two, and later ones for a steady share
+  // (RESOLVE.gain), so a settled picture stays still. A long sequence (256
+  // points, not 16): with few points, the same pixel is always looked at from
+  // the same side, and an edge comes out dotted.
   //
-  // Blurred in linear light (gamma 2: square, then sqrt), like the camera blur,
-  // so a lamp or the sun on water stays a glow rather than turning grey — and
-  // that includes the filtering BETWEEN texels: a tap falls between two, and
-  // the hardware's bilinear filter would average them in sRGB, which is most of
-  // the blur at these radii. So each tap fetches its two texels and squares
-  // them before it mixes them. Each pass dithers its own 8-bit output again:
-  // the averaging removes the scene's dither, and a sky quantised twice would
-  // band.
-  var FOCUS_FAR = 0.004;   // sigma on the far distance, as a fraction of the buffer's height
-  var FOCUS_NEAR = 0.4;    // how much less a surface at nearness 1 is blurred
-  var FOCUS_TAPS = 7;      // each side, per pass, 0.4 sigma apart: the kernel reaches 2.8 sigma
+  // What moves cannot be added up: the sea, a frond, a cloud's edge, a scene
+  // relit. To find it, the redraw and the picture so far are compared through
+  // the same small blur at the very points the redraw looked at, so the detail
+  // that only the picture has is not mistaken for movement. Where they differ
+  // by more than the local contrast explains (RESOLVE.tol, .tolRange), the
+  // redraw wins, and that part shows as the soft frame it is, the way a camera
+  // smears what moves. Colour and nearness are judged apart (nearness changes
+  // abruptly at every edge that is not a colour edge).
+  //
+  // Once per redraw, at the scene's own rate, never per camera frame: one
+  // pass at the camera's size, of nine texel reads and nine filtered reads a
+  // pixel, into one of two buffers that take turns.
+  //
+  //   uCur    the redraw, uCurRes px, looked at uJitter px off each pixel's centre
+  //   uHist   the picture so far, uOutRes px
+  //   uAge    redraws added up so far: 0 = there is no picture yet
+  var RESOLVE = { gain: 0.25, sigma: 0.6, tol: 0.015, tolRange: 0.25, moved: 0.6 };
+  var JITTER = (function () {
+    function halton(i, b) {
+      var f = 1, r = 0;
+      while (i > 0) { f /= b; r += f * (i % b); i = Math.floor(i / b); }
+      return r;
+    }
+    var out = [];
+    for (var i = 1; i <= 256; i++) out.push([halton(i, 2) - 0.5, halton(i, 3) - 0.5]);
+    return out;
+  })();
 
   function glf(v) { return (v === Math.round(v) ? v.toFixed(1) : String(v)); }
 
-  // The source is generated, so the preview script can try another lens
-  // (`--focus far,near`) without editing this file.
-  function focusSource(far, near) {
+  // The source is generated, so the preview script can try other settings
+  // (`--resolve '{"gain":0.4}'`) without editing this file.
+  function resolveSource(o) {
+    o = Object.assign({}, RESOLVE, o || {});
     return `#version 300 es
 precision highp float;
 out vec4 outColor;
-uniform sampler2D uSrc;
-uniform vec2 uRes;   // the scene buffer, px
-uniform vec2 uDir;   // (1, 0) for the first pass, (0, 1) for the second
-float sigma(float near) { return ${glf(far)} * uRes.y * (1.0 - ${glf(near)} * near); }
-float hash12(vec2 p) {
-  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z);
-}
-// One tap, off pixels from this one along the pass: the two texels either
-// side of it, squared, then mixed. Alpha (nearness) is mixed as it is.
-vec4 tap(float off) {
-  float f = floor(off);
-  ivec2 lim = ivec2(uRes) - 1, dir = ivec2(uDir);
-  ivec2 a = ivec2(gl_FragCoord.xy) + dir * int(f);
-  vec4 ta = texelFetch(uSrc, clamp(a, ivec2(0), lim), 0);
-  vec4 tb = texelFetch(uSrc, clamp(a + dir, ivec2(0), lim), 0);
-  float w = off - f;
-  return vec4(mix(ta.rgb * ta.rgb, tb.rgb * tb.rgb, w), mix(ta.a, tb.a, w));
-}
+uniform sampler2D uCur;
+uniform sampler2D uHist;
+uniform vec2 uCurRes;
+uniform vec2 uOutRes;
+uniform vec2 uJitter;
+uniform float uAge;
+float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 void main() {
-  vec4 c = texelFetch(uSrc, ivec2(gl_FragCoord.xy), 0);
-  float s0 = max(sigma(c.a), 1e-3);
-  vec3 acc = c.rgb * c.rgb;
-  float near = c.a, wsum = 1.0;
-  for (int k = 1; k <= ${FOCUS_TAPS}; k++) {
-    for (int side = -1; side <= 1; side += 2) {
-      vec4 t = tap(float(k * side) * 0.4 * s0);
-      // How far this tap is from the centre, in units of its own blur.
-      float d = float(k) * 0.4 * s0 / max(min(sigma(t.a), s0), 1e-3);
-      float w = exp(-0.5 * d * d);
-      acc += t.rgb * w;
-      near += t.a * w;
-      wsum += w;
-    }
+  vec2 uv = gl_FragCoord.xy / uOutRes;
+  // This pixel's centre among the redraw's looks: look q fell at q + 0.5 + uJitter.
+  vec2 p = uv * uCurRes - 0.5 - uJitter;
+  ivec2 n = ivec2(floor(p + 0.5));
+  ivec2 lim = ivec2(uCurRes) - 1;
+  vec4 cur = vec4(0.0), seen = vec4(0.0), lo = vec4(1e3), hi = vec4(-1e3), near = vec4(0.0);
+  float wsum = 0.0;
+  for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+    ivec2 q = n + ivec2(i, j);
+    vec4 c = texelFetch(uCur, clamp(q, ivec2(0), lim), 0);
+    vec2 d = vec2(q) - p;
+    float w = exp(-1.4 * dot(d, d));
+    cur += c * w;
+    seen += texture(uHist, (vec2(q) + 0.5 + uJitter) / uCurRes) * w;
+    wsum += w;
+    lo = min(lo, c); hi = max(hi, c);
+    if (i == 0 && j == 0) near = c;
   }
-  vec3 o = sqrt(acc / wsum) + (hash12(gl_FragCoord.xy + uDir * 37.0) - 0.5) / 255.0;
-  outColor = vec4(o, near / wsum);
-}
-`;
+  cur /= wsum; seen /= wsum;
+  if (uAge < 0.5) { outColor = cur; return; }
+  // The nearest look, measured in the picture's own pixels.
+  float s = uOutRes.y / uCurRes.y;
+  vec2 dn = (vec2(n) - p) * s;
+  float sure = exp(-dot(dn, dn) / ${glf(2 * o.sigma * o.sigma)});
+  float each = min(1.0, ${glf(6.2832 * o.sigma * o.sigma)} / (s * s));
+  float gain = max(${glf(o.gain)}, 1.0 / (1.0 + uAge * each));
+  vec4 hist = texture(uHist, uv);
+  float err = max(
+    abs(luma(cur.rgb) - luma(seen.rgb)) / (${glf(o.tol)} + ${glf(o.tolRange)} * (luma(hi.rgb) - luma(lo.rgb))),
+    abs(cur.a - seen.a) / (${glf(o.tol)} + ${glf(o.tolRange)} * (hi.a - lo.a)));
+  float moving = smoothstep(1.0, 2.0, err);
+  vec4 still = mix(hist, near, sure * gain);
+  vec4 moved = mix(clamp(hist, lo, hi), cur, ${glf(o.moved)});
+  outColor = mix(still, moved, moving);
+}`;
   }
-  var FOCUS_FRAG = focusSource(FOCUS_FAR, FOCUS_NEAR);
+  var RESOLVE_FRAG = resolveSource();
 
   // --- drawing --------------------------------------------------------------
   //
@@ -3085,7 +3112,7 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
       gl.deleteProgram(p);
       throw new Error('scene ' + job.id + ': ' + log);
     }
-    var names = ['uRes', 'uTime', 'uSideMix', 'uLook', 'uTint', 'uExposure', 'uSubject', 'uNoise'];
+    var names = ['uRes', 'uTime', 'uSideMix', 'uLook', 'uTint', 'uExposure', 'uSubject', 'uNoise', 'uJitter', 'uDetail'];
     var loc = {};
     names.forEach(function (n) { loc[n] = gl.getUniformLocation(p, n); });
     return { program: p, loc: loc, id: job.id };
@@ -3164,8 +3191,11 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
   }
 
   // Set a scene's uniforms. The caller has bound the target framebuffer and
-  // viewport, and draws the full-screen triangle afterwards.
-  function setUniforms(gl, prog, w, h, time, look) {
+  // viewport, and draws the full-screen triangle afterwards. `frame`, when the
+  // frames are resolved into a bigger picture (RESOLVE_FRAG), says where in its
+  // pixel this one looks ({ jitter: [x, y] }, px from the centre) and how tall
+  // that picture is ({ detail }, px); without it a frame is a plain picture.
+  function setUniforms(gl, prog, w, h, time, look, frame) {
     var L = prog.loc;
     gl.useProgram(prog.program);
     // The noise table lives on its own unit, so nothing the camera pipeline
@@ -3183,6 +3213,9 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     gl.uniform1f(L.uExposure, look.exposure);
     // y up, like the scene.
     gl.uniform4f(L.uSubject, look.cx, 1 - look.cy, look.sx, look.sy);
+    var j = frame && frame.jitter;
+    gl.uniform2f(L.uJitter, j ? j[0] : 0, j ? j[1] : 0);
+    gl.uniform1f(L.uDetail, (frame && frame.detail) || 0);
   }
 
   // --- thumbnails -----------------------------------------------------------
@@ -3301,9 +3334,10 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     byId: byId,
     resolveId: resolveId,
     fragmentSource: fragmentSource,
-    FOCUS_FRAG: FOCUS_FRAG,
-    focusSource: focusSource,
-    _focusConfig: { far: FOCUS_FAR, near: FOCUS_NEAR, taps: FOCUS_TAPS },
+    RESOLVE_FRAG: RESOLVE_FRAG,
+    resolveSource: resolveSource,
+    JITTER: JITTER,
+    _resolveConfig: RESOLVE,
     compileProgram: compileProgram,
     compileProgramAsync: compileProgramAsync,
     setUniforms: setUniforms,
