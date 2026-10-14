@@ -13976,23 +13976,210 @@ function renderVideoBackgroundProgress() {
 
 // --- Fixed camera: the empty-room reference -----------------------------------
 //
-// Experimental, behind Settings → Video → Fixed camera. The popover offers to
+// Settings → Video → Fixed camera, on unless switched off. The popover offers to
 // photograph the room without you in it; video-effects.js then checks the
-// cut-out's edge against that picture. The countdown lives here, not there: it
-// is the time to walk out of the picture, which is a UI concern — the pipeline
-// only needs to be told when the room is empty.
+// cut-out's edge against that picture. The guided capture lives here, not
+// there: walking out of the picture is a UI concern — the pipeline only needs
+// to be told when the room is empty.
+//
+// The guide (#video-ref-guide) takes the whole window and prints large, because
+// the person reading it is walking away from the screen. It goes:
+//   leave     — "step out of the picture", a countdown, a beep on 3, 2 and 1
+//   capturing — the pipeline averaging its frames (well under a second)
+//   done      — a flash and a shutter click, then "come back, but do not move
+//               the camera": a moved camera is a reference of another room
+//   failed    — still in the picture, or no picture to be had; try again
+// The flash comes only AFTER the capture: the screen lights the room, and a
+// white frame during the capture would be learnt as the room's colour.
 
-var VIDEO_REF_COUNTDOWN_S = 3;   // a var, not a const: the E2E suite shortens it
+var VIDEO_REF_COUNTDOWN_S = 5;   // a var, not a const: the E2E suite shortens it
+var VIDEO_REF_BEEP_FROM = 3;     // the last three seconds beep; the first are to start moving
 var _videoRefCountdown = 0;      // seconds left, 0 when no countdown is running
 var _videoRefTimer = null;
 var _videoRefLastState = null;
+var _videoRefRun = 0;            // bumped per capture, so a late result never lands on a newer one
 
 var VIDEO_REF_TEXT = {
   none: 'Fixed camera: capture the room without you in it to sharpen the cut-out.',
   capturing: 'Capturing the empty room…',
-  ready: 'Using your empty-room picture.',
+  ready: 'Using your empty-room picture. Keep the camera where it is.',
   stale: 'The room no longer matches — the camera moved or the light changed. Capture it again.'
 };
+
+var VIDEO_REF_GUIDE = {
+  leave: {
+    title: 'Step out of the picture',
+    text: 'Move out of the camera’s view and wait for the click. ' +
+          'Leave the camera and the computer exactly where they are.'
+  },
+  capturing: {
+    title: 'Hold on — capturing the room…',
+    text: 'Stay out of the picture for one more moment.'
+  },
+  done: {
+    title: 'Done — you can come back',
+    text: 'Don’t move the camera or the computer: the effect is matched to this ' +
+          'exact view. If it moves, capture the room again from the background menu.'
+  },
+  present: {
+    title: 'You were still in the picture',
+    text: 'Step fully out of the camera’s view before the countdown ends, then try again.'
+  },
+  failed: {
+    title: 'Could not capture the room',
+    text: 'The camera stopped sending pictures. Check it is still on, then try again.'
+  }
+};
+
+// --- the guide's sounds --------------------------------------------------------
+// Synthesised on the shared context, like every other cue in the app: no files.
+
+// One countdown beep. The last one is a fifth higher, so "1" is heard as the
+// end of the count without looking.
+function playCountdownBeep(last) {
+  const ctx = _audioCtx;
+  if (ctx.state === 'suspended') ctx.resume();
+  const osc  = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  const t   = ctx.currentTime;
+  const dur = last ? 0.32 : 0.16;
+  osc.frequency.setValueAtTime(last ? 1318.51 : 880, t);
+  gain.gain.setValueAtTime(0, t);
+  gain.gain.linearRampToValueAtTime(0.22, t + 0.008);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  osc.start(t);
+  osc.stop(t + dur);
+}
+
+// A camera shutter: two short bursts of band-passed noise — the blades opening
+// and closing — over a low thump of the mirror.
+function playShutterClick() {
+  const ctx = _audioCtx;
+  if (ctx.state === 'suspended') ctx.resume();
+  const t0 = ctx.currentTime;
+  const len = Math.floor(ctx.sampleRate * 0.06);
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+  [[0, 0.5, 3200], [0.075, 0.35, 2400]].forEach(function(b) {
+    const src  = ctx.createBufferSource();
+    const band = ctx.createBiquadFilter();
+    const gain = ctx.createGain();
+    src.buffer = buf;
+    band.type = 'bandpass';
+    band.frequency.value = b[2];
+    band.Q.value = 0.9;
+    src.connect(band);
+    band.connect(gain);
+    gain.connect(ctx.destination);
+    const t = t0 + b[0];
+    gain.gain.setValueAtTime(b[1], t);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+    src.start(t);
+    src.stop(t + 0.06);
+  });
+  const osc  = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(140, t0);
+  osc.frequency.exponentialRampToValueAtTime(60, t0 + 0.08);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  gain.gain.setValueAtTime(0.25, t0);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.09);
+  osc.start(t0);
+  osc.stop(t0 + 0.1);
+}
+
+// --- the guide -----------------------------------------------------------------
+
+function videoRefGuidePhase() {
+  var g = document.getElementById('video-ref-guide');
+  return (g && !g.classList.contains('hidden')) ? (g.dataset.phase || '') : '';
+}
+
+// phase: 'leave' | 'capturing' | 'done' | 'failed'. `kind` picks the copy
+// where one phase has several (failed: 'present' or 'failed').
+function showVideoRefGuide(phase, kind) {
+  var g = document.getElementById('video-ref-guide');
+  if (!g) return;
+  var copy = VIDEO_REF_GUIDE[kind || phase] || VIDEO_REF_GUIDE.failed;
+  g.dataset.phase = phase;
+  g.classList.remove('hidden');
+
+  var title = document.getElementById('video-ref-guide-title');
+  var text = document.getElementById('video-ref-guide-text');
+  if (title) title.textContent = copy.title;
+  if (text) text.textContent = copy.text;
+  renderVideoRefGuideCount();
+
+  // The live picture, so the user can see themselves leave it. The same
+  // stream the self-view shows, mirrored the same way.
+  var preview = document.getElementById('video-ref-guide-preview');
+  if (preview) {
+    if (preview.srcObject !== localVideoStream) preview.srcObject = localVideoStream || null;
+    preview.dataset.facing = _cameraFacing;
+    if (localVideoStream) { var p = preview.play(); if (p && p.catch) p.catch(function() {}); }
+  }
+
+  var retry = document.getElementById('btn-video-ref-retry');
+  var ok = document.getElementById('btn-video-ref-ok');
+  var cancel = document.getElementById('btn-video-ref-cancel');
+  if (retry) retry.classList.toggle('hidden', phase !== 'failed');
+  if (ok) ok.classList.toggle('hidden', phase !== 'done');
+  if (cancel) {
+    cancel.classList.toggle('hidden', phase === 'capturing' || phase === 'done');
+    cancel.textContent = phase === 'failed' ? 'Close' : 'Cancel';
+  }
+  // Focus follows the one thing to do next, so Enter answers it. While the
+  // user is leaving, the dialog itself holds focus, not Cancel: Space is
+  // push-to-talk, and on a focused button it would also be a click.
+  var focus = phase === 'done' ? ok : phase === 'failed' ? retry : g;
+  try { focus.focus(); } catch (e) { /* ignore */ }
+}
+
+function renderVideoRefGuideCount() {
+  var g = document.getElementById('video-ref-guide');
+  var el = g && g.querySelector('.video-ref-guide-count');
+  if (!el) return;
+  var n = (g.dataset.phase === 'leave' && _videoRefCountdown > 0) ? String(_videoRefCountdown) : '';
+  if (el.textContent === n) return;
+  el.textContent = n;
+  // Restart the "pop" on every new number.
+  el.classList.remove('tick');
+  void el.offsetWidth;
+  if (n) el.classList.add('tick');
+}
+
+function hideVideoRefGuide() {
+  var g = document.getElementById('video-ref-guide');
+  if (!g || g.classList.contains('hidden')) return;
+  g.classList.add('hidden');
+  g.classList.remove('flash');
+  g.dataset.phase = '';
+  var preview = document.getElementById('video-ref-guide-preview');
+  if (preview) preview.srcObject = null;
+}
+
+// The "photo taken" moment: a white flash over the window and the click.
+function flashVideoRefGuide() {
+  var g = document.getElementById('video-ref-guide');
+  if (!g) return;
+  g.classList.remove('flash');
+  void g.offsetWidth;
+  g.classList.add('flash');
+  try { playShutterClick(); } catch (e) { /* no audio is not a failed capture */ }
+}
+
+function cancelVideoReferenceCapture() {
+  _videoRefRun++;
+  stopVideoReferenceCountdown();
+  hideVideoRefGuide();
+  renderVideoBackgroundReference();
+}
 
 function renderVideoBackgroundReference() {
   var row = document.getElementById('video-bg-reference');
@@ -14027,27 +14214,62 @@ function stopVideoReferenceCountdown() {
 
 function startVideoReferenceCapture() {
   if (typeof VideoEffects === 'undefined' || _videoRefTimer) return;
-  _videoRefCountdown = VIDEO_REF_COUNTDOWN_S;
-  renderVideoBackgroundReference();
-  var tick = function() {
-    _videoRefCountdown--;
-    if (_videoRefCountdown > 0) { renderVideoBackgroundReference(); return; }
+  if (VideoEffects.referenceState() === 'capturing') return;
+  var run = ++_videoRefRun;
+  // The popover would sit on top of the picture the user is about to leave.
+  closeVideoBackgroundPopover();
+  // Started by a click, so this is the moment a suspended context may resume —
+  // the beeps come later, from a timer, where iOS would refuse it.
+  try { if (_audioCtx.state === 'suspended') _audioCtx.resume(); } catch (e) { /* ignore */ }
+
+  var beep = function() {
+    if (_videoRefCountdown > 0 && _videoRefCountdown <= VIDEO_REF_BEEP_FROM) {
+      try { playCountdownBeep(_videoRefCountdown === 1); } catch (e) { /* ignore */ }
+    }
+  };
+  var capture = function() {
     stopVideoReferenceCountdown();
+    showVideoRefGuide('capturing');
+    renderVideoBackgroundReference();
     VideoEffects.captureReference().then(function(res) {
+      if (run !== _videoRefRun) return;   // cancelled, or a newer capture
       renderVideoBackgroundReference();
-      if (res.ok) showCopyToast('Empty room captured');
-      else if (res.reason === 'present') showCopyToast('You are still in the picture — step out and try again');
-      else if (res.reason !== 'off') showCopyToast('Could not capture the room');
+      if (res.ok) {
+        showVideoRefGuide('done');
+        flashVideoRefGuide();
+      } else if (res.reason === 'off') {
+        hideVideoRefGuide();
+      } else {
+        showVideoRefGuide('failed', res.reason === 'present' ? 'present' : 'failed');
+        try { playBlip(false); } catch (e) { /* ignore */ }
+      }
     });
   };
-  if (_videoRefCountdown <= 0) { _videoRefCountdown = 1; tick(); return; }
-  _videoRefTimer = setInterval(tick, 1000);
+
+  _videoRefCountdown = VIDEO_REF_COUNTDOWN_S;
+  if (_videoRefCountdown <= 0) { capture(); return; }
+  showVideoRefGuide('leave');
+  renderVideoBackgroundReference();
+  beep();
+  _videoRefTimer = setInterval(function() {
+    _videoRefCountdown--;
+    if (_videoRefCountdown > 0) {
+      renderVideoRefGuideCount();
+      renderVideoBackgroundReference();
+      beep();
+      return;
+    }
+    capture();
+  }, 1000);
 }
 
 function onVideoReferenceState(st) {
-  // Losing the camera, or the setting, ends a countdown that has nothing left
-  // to capture.
-  if (st === 'off' || st === 'inactive') stopVideoReferenceCountdown();
+  // Losing the camera, or the setting, ends a capture that has nothing left
+  // to capture — and the guide that was waiting on it.
+  if (st === 'off' || st === 'inactive') {
+    var phase = videoRefGuidePhase();
+    if (_videoRefTimer || phase === 'leave' || phase === 'capturing') cancelVideoReferenceCapture();
+  }
   // Said once, on the way from working to set aside — the popover is usually
   // closed by then, and the picture just got slightly worse for no visible
   // reason.
@@ -14121,13 +14343,29 @@ function initVideoBackgroundUI() {
       VideoEffects.clearReference();
     });
   }
+  var guide = document.getElementById('video-ref-guide');
+  if (guide) {
+    guide.addEventListener('click', function(ev) { ev.stopPropagation(); });
+    guide.addEventListener('animationend', function(ev) {
+      if (ev.animationName === 'video-ref-flash') guide.classList.remove('flash');
+    });
+  }
+  var refRetry = document.getElementById('btn-video-ref-retry');
+  if (refRetry) refRetry.addEventListener('click', function() { startVideoReferenceCapture(); });
+  var refOk = document.getElementById('btn-video-ref-ok');
+  if (refOk) refOk.addEventListener('click', hideVideoRefGuide);
+  var refCancel = document.getElementById('btn-video-ref-cancel');
+  if (refCancel) refCancel.addEventListener('click', cancelVideoReferenceCapture);
   VideoEffects.onReferenceState(onVideoReferenceState);
 
   var pop = document.getElementById('video-bg-popover');
   if (pop) pop.addEventListener('click', function(ev) { ev.stopPropagation(); });
   document.addEventListener('click', closeVideoBackgroundPopover);
   document.addEventListener('keydown', function(ev) {
-    if (ev.key === 'Escape') closeVideoBackgroundPopover();
+    if (ev.key !== 'Escape') return;
+    var phase = videoRefGuidePhase();
+    if (phase && phase !== 'capturing') cancelVideoReferenceCapture();
+    closeVideoBackgroundPopover();
   });
   // An anchored popover has to follow its anchor, and the self-view badge moves
   // with the layout.
