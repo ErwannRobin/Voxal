@@ -312,7 +312,19 @@
                 <label id="settings-bg-label">Background</label>
               </div>
               <div id="settings-bg-picker" aria-labelledby="settings-bg-label"></div>
-              <p class="settings-hint">Blur what is behind you, or replace it. Applies to your camera only, and everything is computed on this device — no frame is ever sent anywhere to do it.</p>
+              <p class="settings-hint">Blur what is behind you, or replace it. Applies to your camera only, and you are picked out of the picture on this device — no frame is ever sent to a server to do it.</p>
+              <div class="settings-field settings-inline-toggle" style="margin-top:12px">
+                <label for="btn-subject-only" style="flex:1">Let others draw my scene</label>
+                <div id="settings-subject-only"></div>
+              </div>
+              <p class="settings-hint">
+                With an animated scene, sends just you and a thin edge of your room; the
+                people you call draw the same scene on their own device. Uses less upload
+                in calls that go peer to peer. They may see the scene slightly differently,
+                and it costs their device some work. Has no effect with blur or your own
+                image, or when video goes through the relay.
+              </p>
+              <p id="settings-subject-only-status" class="settings-hint settings-subject-only-status hidden" aria-live="polite"></p>
               <div class="settings-device-head" style="margin-top:12px">
                 <label id="settings-blur-strength-label">Blur strength</label>
               </div>
@@ -706,6 +718,9 @@
           <button type="button" id="btn-video-bg-cancel" class="btn btn-secondary btn-sm">Cancel</button>
         </div>
         <div id="video-bg-picker"></div>
+        <!-- "Let others draw my scene": whether it is doing anything in this
+             room. Shown only while the setting is on — see renderKeyedStatus(). -->
+        <p id="video-bg-subject-only" class="video-bg-subject-only hidden" aria-live="polite"></p>
         <!-- Fixed camera: the empty-room reference. Shown only while the
              setting is on and an effect is running — see
              renderVideoBackgroundReference(). -->
