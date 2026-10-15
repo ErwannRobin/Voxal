@@ -10,7 +10,7 @@ test.beforeEach(async ({ page }) => {
 test('helloMessage carries protocolVersion and appVersion', async ({ page }) => {
   const hello = await page.evaluate(() => helloMessage());
   expect(hello.type).toBe('hello');
-  expect(hello.protocolVersion).toBe(3);   // v3 added `chat-edit`
+  expect(hello.protocolVersion).toBe(4);   // v4 added the keyed camera (caps, video-keyed)
   expect(typeof hello.appVersion).toBe('string');
 });
 
