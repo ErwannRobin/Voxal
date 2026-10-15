@@ -520,10 +520,11 @@ phone, `360x640` upright), a moment (`--time 80`), a look
 (`--look '{"exposure":0.25}'` for the evening, `'{"dirX":-0.8,"sideMix":0}'` for
 the mirror) and `--person`, which draws a stand-in head and shoulders over the
 middle of the frame — where a composition is actually judged. `--raw` shows one
-redraw stretched instead (the first frame of a pick), `--resolve '{...}'` tries
-other resolve settings, and `--alpha` shows the nearness channel instead of the
-colour. `--bits` also says what each scene costs a video encoder. See the header
-of `scripts/scene-preview.mjs`.
+redraw stretched instead (what shows if the resolve cannot compile),
+`--resolve '{...}'` tries other resolve settings, and `--alpha` shows the
+nearness channel instead of the colour. `--bits` also says what each scene costs
+a video encoder, and `--still` holds the clock while it does, so what is left is
+what the redraws themselves change. See the header of `scripts/scene-preview.mjs`.
 
 ### The light is yours
 
@@ -602,7 +603,8 @@ pixel the video encoder spends bits on**, for everyone receiving you. So:
   glitter sparse, the rain is a few drops sliding down, the palm sways a hair;
 * `unit-video-scenes.spec.js` pins it: between two frames a second apart, the
   mean change is under 3 levels of 255 and under 5% of pixels change by more
-  than 12.
+  than 12. That is the scene's own motion; what the resolve adds to it, below,
+  is pinned apart (a settled room changes by about a level per redraw).
 
 ### Sharp at the size it is shown
 
@@ -626,20 +628,27 @@ buffer, the detail of one the camera's size. The scene is told that size
   (`RESOLVE.sigma`, 0.6 of the picture's own pixels) and on how settled the
   picture is: the first looks count for a lot, so a new pick starts as the
   redraw itself (soft, never black) and sharpens within a second or two; later
-  ones count for a steady share (`RESOLVE.gain`), so a settled picture stays
-  still. 256 points rather than 16: with few, a pixel is always looked at from
-  the same side and an edge comes out dotted.
+  ones count for a small steady share (`RESOLVE.gain`, a tenth), so a settled
+  picture changes by about a level with each redraw. At a quarter, a room frozen
+  in time cost up to three quarters as much as a moving one (below), and
+  `unit-video-scenes.spec.js` now holds a settled room to that level. 256
+  points rather than 16: with few, a pixel is always looked at from the same
+  side and an edge comes out dotted.
 * **What moves is not added up.** The redraw and the picture so far are
   compared through the same small blur, at the very points the redraw looked
   at, so the detail only the picture has is not taken for movement. Where they
   differ by more than the local contrast explains, the redraw wins, and that
-  part shows as the soft frame it is — the way a camera smears what moves. The
-  colour and the nearness are judged apart: nearness jumps at every edge that is
-  not a colour edge. `unit-video-scenes.spec.js` moves a bar and checks that
-  three redraws later nothing is left where it was, with a control that keeps
-  the ghost when the test is switched off.
+  part shows as the soft frame it is — the way a camera smears what moves.
+  Brightness, colour and nearness are judged apart: nearness jumps at every edge
+  that is not a colour edge, and a relight can warm the room without making it
+  brighter (`uTint` is luminance 1). Colour gets a wider tolerance
+  (`RESOLVE.tolColour`) than brightness, because a march's grain can sit in one
+  channel: judged channel by channel, a frozen room churned half as much again.
+  `unit-video-scenes.spec.js` moves a bar and checks that three redraws later
+  nothing is left where it was, and warms a wall and checks the picture follows
+  within two, each with a control that lags when its test is switched off.
 * **Once per redraw, never per camera frame**: one pass at the camera's size,
-  nine texel reads and nine filtered reads a pixel, ten to fifteen times a
+  nine texel reads and ten filtered reads a pixel, ten to fifteen times a
   second, into one of two buffers that take turns (`texSceneOut`). They are
   allocated with the scene's, never for blur or an image. The light wrap still
   reads a coarse mip of the small buffer (`uSceneEnv`), which is what it wants.
@@ -651,24 +660,33 @@ scene-preview ARGS='--bits --person'` encodes four seconds of each scene, as a
 1280 x 720 camera shows it, at its own redraw rate through VP9 at a fixed
 quantizer (32), so the bytes are the picture's difficulty and nothing else.
 Before is the stretched buffer through the old distance blur; after is the
-resolve:
+resolve. The last column holds the clock (`--still`): a room frozen in time,
+where all that is left to pay for is what the redraws themselves change:
 
-| Scene | Keyframe, before → after | Motion, before → after |
-|---|---|---|
-| Office | 14.9 → 18.0 KB | 33 → 47 kb/s |
-| Island | 18.6 → 30.2 KB | 97 → 237 kb/s |
-| Cyber café | 18.6 → 28.8 KB | 40 → 143 kb/s |
-| Mountain | 14.0 → 20.4 KB | 76 → 117 kb/s |
-| Countryside | 15.5 → 23.4 KB | 28 → 46 kb/s |
+| Scene | Keyframe, before → after | Motion, before → after | Frozen in time |
+|---|---|---|---|
+| Office | 14.9 → 17.8 KB | 33 → 39 kb/s | 14 kb/s |
+| Island | 18.6 → 29.5 KB | 97 → 167 kb/s | 72 kb/s |
+| Cyber café | 18.6 → 28.2 KB | 40 → 85 kb/s | 52 kb/s |
+| Mountain | 14.0 → 20.2 KB | 76 → 90 kb/s | 55 kb/s |
+| Countryside | 15.5 → 22.9 KB | 28 → 34 kb/s | 22 kb/s |
+
+The first version of the resolve, with a steady share of a quarter and
+brightness alone judged, cost 47 / 237 / 143 / 117 / 46 kb/s moving and
+20 / 148 / 109 / 79 / 31 frozen.
 
 Measured on a software GPU with the stand-in subject (the encoder does not care
 which GPU drew the picture). Compare rows with each other, never with a call's
 bandwidth: a call's encoder works to `CAMERA_MAX_BITRATE`, so there the cost is
 bits the encoder cannot spend on the person — which no call has measured yet.
 Detail that holds still is paid for once, in a keyframe; what moves is paid for
-in every frame, and the island's sea and palm and the café's window and neon
-are most of it. If that ever shows on the person, calm what moves before
-blurring anything: the blur bought the bits back with the whole picture.
+in every frame. So is what the redraws still change in a frozen room, which is
+a third to two thirds of each bill. That is probably the jitter's last trace on
+detail finer than the small buffer (one redraw catches a thin line, the next
+misses it, and the movement test takes that for movement) and the clouds' grain
+averaging out; the two have not been measured apart. If that ever shows on the
+person, calm what moves, or hold the scene still, before blurring anything: the
+blur bought the bits back with the whole picture.
 
 The per-pixel offsets that break up a march's slices (the clouds, the office's
 sunbeam) change with each `JITTER` point too (`SEED`), so the added-up frames

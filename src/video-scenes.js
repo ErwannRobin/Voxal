@@ -2981,28 +2981,32 @@ void main() {
   // How much a look counts for a pixel depends on how near it fell to the
   // pixel's centre (RESOLVE.sigma, in the picture's own pixels) and on how
   // settled the picture already is: the first looks count for a lot, so a new
-  // scene sharpens within a second or two, and later ones for a steady share
-  // (RESOLVE.gain), so a settled picture stays still. A long sequence (256
-  // points, not 16): with few points, the same pixel is always looked at from
-  // the same side, and an edge comes out dotted.
+  // scene sharpens within a second or two, and later ones for a small steady
+  // share (RESOLVE.gain), so a settled picture changes by a level or so with
+  // each redraw, not more: the encoder pays for every pixel that changes, in
+  // every frame, and with a share of a quarter a room frozen in time cost up
+  // to three quarters as much as a moving one. A long sequence (256 points,
+  // not 16): with few points, the same pixel is always looked at from the same
+  // side, and an edge comes out dotted.
   //
   // What moves cannot be added up: the sea, a frond, a cloud's edge, a scene
   // relit. To find it, the redraw and the picture so far are compared through
   // the same small blur at the very points the redraw looked at, so the detail
   // that only the picture has is not mistaken for movement. Where they differ
-  // by more than the local contrast explains (RESOLVE.tol, .tolRange), the
-  // redraw wins, and that part shows as the soft frame it is, the way a camera
-  // smears what moves. Colour and nearness are judged apart (nearness changes
-  // abruptly at every edge that is not a colour edge).
+  // by more than the local contrast explains (RESOLVE.tol, .tolColour,
+  // .tolRange), the redraw wins, and that part shows as the soft frame it is,
+  // the way a camera smears what moves. Brightness, colour and nearness are
+  // judged apart: nearness changes abruptly at every edge that is not a colour
+  // edge, and a relight can change the colour without the brightness.
   //
   // Once per redraw, at the scene's own rate, never per camera frame: one
-  // pass at the camera's size, of nine texel reads and nine filtered reads a
+  // pass at the camera's size, of nine texel reads and ten filtered reads a
   // pixel, into one of two buffers that take turns.
   //
   //   uCur    the redraw, uCurRes px, looked at uJitter px off each pixel's centre
   //   uHist   the picture so far, uOutRes px
   //   uAge    redraws added up so far: 0 = there is no picture yet
-  var RESOLVE = { gain: 0.25, sigma: 0.6, tol: 0.015, tolRange: 0.25, moved: 0.6 };
+  var RESOLVE = { gain: 0.1, sigma: 0.6, tol: 0.015, tolColour: 0.03, tolRange: 0.25, moved: 0.6 };
   var JITTER = (function () {
     function halton(i, b) {
       var f = 1, r = 0;
@@ -3029,7 +3033,6 @@ uniform vec2 uCurRes;
 uniform vec2 uOutRes;
 uniform vec2 uJitter;
 uniform float uAge;
-float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 void main() {
   vec2 uv = gl_FragCoord.xy / uOutRes;
   // This pixel's centre among the redraw's looks: look q fell at q + 0.5 + uJitter.
@@ -3058,8 +3061,17 @@ void main() {
   float each = min(1.0, ${glf(6.2832 * o.sigma * o.sigma)} / (s * s));
   float gain = max(${glf(o.gain)}, 1.0 / (1.0 + uAge * each));
   vec4 hist = texture(uHist, uv);
-  float err = max(
-    abs(luma(cur.rgb) - luma(seen.rgb)) / (${glf(o.tol)} + ${glf(o.tolRange)} * (luma(hi.rgb) - luma(lo.rgb))),
+  // Brightness, colour and nearness, each against its own local contrast.
+  // Colour has a test of its own because a relight can change it and not the
+  // brightness (uTint is luminance 1), and a wider tolerance than brightness:
+  // a march's grain can sit in one channel, and judged channel by channel it
+  // made a frozen room churn half as much again.
+  vec3 d = cur.rgb - seen.rgb, r = hi.rgb - lo.rgb;
+  float dy = abs(dot(d, vec3(0.25, 0.5, 0.25)));
+  float dc = max(abs(0.5 * (d.r - d.b)), abs(dot(d, vec3(-0.25, 0.5, -0.25))));
+  float err = max(max(
+    dy / (${glf(o.tol)} + ${glf(o.tolRange)} * dot(r, vec3(0.25, 0.5, 0.25))),
+    dc / (${glf(o.tolColour)} + ${glf(o.tolRange)} * max(r.r, max(r.g, r.b)))),
     abs(cur.a - seen.a) / (${glf(o.tol)} + ${glf(o.tolRange)} * (hi.a - lo.a)));
   float moving = smoothstep(1.0, 2.0, err);
   vec4 still = mix(hist, near, sure * gain);

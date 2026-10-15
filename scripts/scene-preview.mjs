@@ -11,8 +11,9 @@
 //   node scripts/scene-preview.mjs --look '{"dirX":-0.8,"sideMix":0}'      lit from the left
 //   node scripts/scene-preview.mjs --time 80 --person  a later moment, with a stand-in subject
 //   node scripts/scene-preview.mjs --alpha             the nearness channel instead (white = near)
-//   node scripts/scene-preview.mjs --raw               one redraw, stretched (the first frame of a pick)
+//   node scripts/scene-preview.mjs --raw               one redraw, stretched (what shows if the resolve cannot compile)
 //   node scripts/scene-preview.mjs --bits --person     and what each costs a video encoder
+//   node scripts/scene-preview.mjs --bits --still      what a room that does not move at all costs: the resolve's own churn
 //   node scripts/scene-preview.mjs --resolve '{"gain":0.4}'   other settings than RESOLVE's
 //
 // A picture is made the way a call makes it (video-effects.js drawScene() and
@@ -22,14 +23,17 @@
 // into a picture of --size, the camera's. --raw shows one redraw stretched
 // instead. --bits then encodes --seconds (4) of the scene at its own redraw
 // rate, after a warm-up, with VP9 at a fixed quantizer (--q, 32), and prints
-// the keyframe's size and the motion's bitrate. Compare runs against each
-// other, never against a call's bandwidth.
+// the keyframe's size and the motion's bitrate; --still holds the clock while
+// it does, so all that is left to pay for is what the redraws themselves
+// change. Compare runs against each other, never against a call's bandwidth.
 //
 // --person draws an oval head and shoulders over each picture: the middle of the
 // frame is covered in a call, and a composition should be judged with it covered.
-// Writes one PNG per scene plus sheet.png. Prints how long the first redraw (with
-// the compile) and a timed redraw (with its resolve) took: on a software GPU that
-// is the scene's relative cost; on a real one, divide by a large number.
+// Writes one PNG per scene plus sheet.png. Prints how long the first redraw took
+// (most drivers compile a shader for real only when it is first drawn with, so
+// that is mostly the compile) and a timed redraw (with its resolve, unless --raw):
+// on a software GPU that is the scene's relative cost; on a real one, divide by a
+// large number.
 //
 // The browser is Playwright's. In a container whose Chromium is not the revision
 // the installed Playwright expects, set CHROMIUM_PATH to the executable.
@@ -48,7 +52,7 @@ const ALL = ['office', 'island', 'cybercafe', 'mountain', 'countryside'];
 const args = process.argv.slice(2);
 const opt = {
   w: 1280, h: 720, long: 512, frames: 24, t: 37, look: '{}', person: false, alpha: false, raw: false,
-  bits: false, seconds: 4, q: 32, resolve: null, out: path.join(ROOT, 'scene-previews') };
+  bits: false, still: false, seconds: 4, q: 32, resolve: null, out: path.join(ROOT, 'scene-previews') };
 const ids = [];
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -62,6 +66,7 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--alpha') opt.alpha = true;
   else if (a === '--raw') opt.raw = true;
   else if (a === '--bits') opt.bits = true;
+  else if (a === '--still') opt.still = true;
   else if (a === '--seconds') opt.seconds = +args[++i];
   else if (a === '--q') opt.q = +args[++i];
   else if (a === '--resolve') opt.resolve = JSON.parse(args[++i] || '{}');
@@ -218,7 +223,8 @@ for (const id of list) {
     if (opt.bits) {
       const hz = VideoScenes.byId(id).hz[0];
       const n = Math.max(2, Math.round(opt.seconds * hz));
-      for (let i = 16; i > 0; i--) redraw(opt.t - i / hz);
+      const when = (i) => opt.t + (opt.still ? 0 : i / hz);
+      for (let i = 16; i > 0; i--) redraw(when(-i));
       const sizes = [];
       let failed = null;
       const enc = new VideoEncoder({
@@ -227,7 +233,7 @@ for (const id of list) {
       });
       enc.configure({ codec: 'vp09.00.10.08', width: W, height: H, bitrateMode: 'quantizer', framerate: hz });
       for (let i = 0; i < n; i++) {
-        redraw(opt.t + i / hz); show(); paint();
+        redraw(when(i)); show(); paint();
         const frame = new VideoFrame(out, { timestamp: Math.round(i * 1e6 / hz) });
         enc.encode(frame, { keyFrame: i === 0, vp9: { quantizer: opt.q } });
         frame.close();
