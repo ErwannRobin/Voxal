@@ -314,6 +314,57 @@ var VideoEffects = (function () {
   // the contact shadow that keeps a person from looking pasted on.
   var SHADOW_AO = 0.12;
 
+  // --- the keyed stream: "let others draw my scene" -------------------------
+  //
+  // With an animated scene picked and the setting on, a peer that can draw the
+  // scene itself is sent a picture of the person over a flat key colour
+  // instead of the finished composite, and cuts the person out again at its
+  // end. A flat field costs the encoder next to nothing, so the same quality
+  // takes fewer bits; the scene is generated from a few numbers, so nothing of
+  // it has to cross the network at all.
+  //
+  // The off position stores nothing — absent is OFF, the opposite polarity of
+  // light-adapt and bg-reference — because this one changes what other
+  // people's devices do, and nobody should find it on without having asked.
+  var SUBJECT_ONLY_KEY = 'send-subject-only';
+  // What a peer advertises when it can receive a keyed stream.
+  var KEYED_CAP = 'keyed-video-1';
+
+  // The frame format, which sender and receiver must agree on exactly.
+  //
+  // The key colour is pure green in ENCODED sRGB, the space the composite
+  // already mixes in, so `mix(K, camera, m)` here and `c + (bg - K)(1 - a)` at
+  // the receiver are the composite's own `mix(bg, camera, m)` taken apart and
+  // put back together.
+  var KEY_COLOR = [0, 255, 0];
+  // Two square zones at the top corners of the picture say "this frame is
+  // keyed": top-left all key, top-right a key ring around a BLACK patch. Black
+  // rather than a grey because it is luma contrast, which 4:2:0 keeps at full
+  // resolution and which survives a starved encoder long after a chroma
+  // difference has been averaged away. The side is a fraction of the SHORT
+  // side, so a portrait frame is not notched across a sixth of its width.
+  var KEY_MARKER = { zone: 0.10, patch: 0.6 };
+  // The faint tail of the matte. Below this the composite shows almost pure
+  // background anyway, and a keyed frame that carried it would carry a faint
+  // ghost of the real room — so it is cut to exact key instead, and the room
+  // never leaves the device.
+  var KEY_ALPHA_FLOOR = 0.06;
+
+  // The sender's own guards. Each one withholds keying — the keyed canvas
+  // then carries the plain composite with no markers, so a peer on the keyed
+  // track simply passes it through and nobody needs a track swap.
+  var KEY_COPY_SAMPLES = 30;   // copies timed before the copy is judged…
+  var KEY_COPY_BUDGET_MS = 4;  // …and the median it may take
+  var KEY_GREEN_E = 0.12;      // how much greener than red and blue counts as "green"…
+  var KEY_GREEN_ON = 0.04;     // …the share of the subject that withholds keying…
+  var KEY_GREEN_OFF = 0.02;    // …and the share it must stay under…
+  var KEY_GREEN_HOLD_MS = 5000; // …for this long before keying resumes
+  var KEY_CORNER_ON = 0.15;    // the share of a marker zone the subject may cover
+  var KEY_CORNER_OFF = 0.05;
+  var KEY_CORNER_HOLD_MS = 2000;
+  var KEY_STATE_MS = 2000;     // the look is re-announced at most this often
+  var KEY_EDGE_SMOOTH_S = 1.4; // edgeE is eased like the look (LOOK_SMOOTH_S)
+
   // --- mode: read, write, normalise ----------------------------------------
 
   function normalizeMode(mode) {
@@ -550,6 +601,34 @@ var VideoEffects = (function () {
       if (on) localStorage.removeItem(REFERENCE_KEY);
       else localStorage.setItem(REFERENCE_KEY, 'off');
     } catch (e) { /* private mode — it still applies for this session */ }
+    return on;
+  }
+
+  // --- the keyed stream: the preference -------------------------------------
+
+  function readSubjectOnly() {
+    try { return localStorage.getItem(SUBJECT_ONLY_KEY) === 'on'; }
+    catch (e) { return false; }
+  }
+
+  function writeSubjectOnly(on) {
+    on = !!on;
+    try {
+      if (on) localStorage.setItem(SUBJECT_ONLY_KEY, 'on');
+      else localStorage.removeItem(SUBJECT_ONLY_KEY);
+    } catch (e) { /* private mode — it still applies for this session */ }
+    return on;
+  }
+
+  // Single slot, like onOverload: main.js is the one consumer, and what it
+  // does with the change (offers, per-peer tracks) is entirely its business.
+  var _onSubjectOnly = null;
+
+  function onSubjectOnlyChange(fn) { _onSubjectOnly = fn; }
+
+  function setSubjectOnly(on) {
+    on = writeSubjectOnly(on);
+    if (_onSubjectOnly) { try { _onSubjectOnly(on); } catch (e) { /* ignore */ } }
     return on;
   }
 
@@ -930,6 +1009,13 @@ var VideoEffects = (function () {
             getAsUint8Array: function () { return new Uint8Array(w * h); } }] });
           return;
         }
+        // `{ full: true }` is somebody filling the whole picture — into both
+        // top corners, where the keyed stream's markers live.
+        if (s && s.full) {
+          cb({ confidenceMasks: [{ width: w, height: h,
+            getAsUint8Array: function () { return new Uint8Array(w * h).fill(255); } }] });
+          return;
+        }
         cb({ confidenceMasks: [maskFor(w, h)] });
       }
     });
@@ -1229,6 +1315,15 @@ var VideoEffects = (function () {
   // uScene itself is the scene resolved at the camera's size (see
   // resolveScene()). Both are rendered in GL orientation, so they are sampled
   // at vUv, not at the flipped coordinate the camera needs.
+  //
+  // uKeyOut turns the same program into the keyed stream's frame (see
+  // keyedTrack()): the person over the flat key colour, with the marker zones.
+  // The same program on purpose — the keyed alpha must be EXACTLY the
+  // composite's `m`, smoothstep and reference included, and a second program
+  // computing it would drift from this one the first time either was tuned.
+  // It takes the camera colour before the light wrap: the receiver wraps with
+  // its own scene's light, and a frame wrapped here would be wrapped twice.
+  // uZone is the marker zone's side in UV, (Z / width, Z / height).
   var FRAG_COMPOSITE = [
     '#version 300 es',
     'precision mediump float;',
@@ -1249,30 +1344,12 @@ var VideoEffects = (function () {
     'uniform vec2 uShadowOff;',
     'uniform vec2 uShadow;',
     'uniform float uWrap;',
+    'uniform float uKeyOut;',
+    'uniform vec2 uZone;',
     'out vec4 outColor;',
     'void main() {',
     '  vec2 flip = vec2(vUv.x, 1.0 - vUv.y);',
     '  vec3 sharp = texture(uSharp, flip).rgb;',
-    '  vec3 bg;',
-    '  float soft = 0.0;',
-    '  if (uBgMode > 1.5) {',
-    '    vec4 sc = texture(uScene, vUv);',
-    '    soft = texture(uSoft, flip).r;',
-    '    float thrown = texture(uSoft, flip + uShadowOff).r;',
-    '    float shade = clamp(thrown * uShadow.x + soft * uShadow.y, 0.0, 0.85);',
-    '    bg = sc.rgb * (1.0 - sc.a * shade);',
-    '  } else if (uBgMode > 0.5) {',
-    '    vec2 uv = clamp(flip * uBgXform.xy + uBgXform.zw, 0.0, 1.0);',
-    '    bg = texture(uImage, uv).rgb;',
-    '  } else {',
-    '    bg = texture(uBlur, flip).rgb;',
-    '  }',
-    '  if (uBgMode > 1.5 && uWrap > 0.0) {',
-    '    vec3 env = textureLod(uSceneEnv, vUv, 3.0).rgb;',
-    '    float rim = uWrap * (1.0 - smoothstep(0.4, 0.95, soft));',
-    '    vec3 s = sharp * sharp;',
-    '    sharp = sqrt(s + env * env * rim * (1.0 - s));',
-    '  }',
     // Wide, and biased low on purpose. Wide because a narrow window turns the
     // feather back into the hard cutout it was meant to soften — it maps almost
     // the whole gradient to 0 or 1 and keeps only a sliver as a transition.
@@ -1294,6 +1371,43 @@ var VideoEffects = (function () {
       ', texture(uCore, flip).r);',
     '    float d = texture(uRef, flip).r;',
     '    m = mix(m, m * max(d, core), uRefOn);',
+    '  }',
+    // The keyed frame. In flip space the top of the picture is y = 0, so the
+    // zones are the two top corners there. Nothing of the scene, the shadow
+    // or the wrap is drawn: the receiver draws all three itself.
+    '  if (uKeyOut > 0.5) {',
+    '    vec3 key = vec3(' + KEY_COLOR.map(function (c) { return (c / 255).toFixed(1); }).join(', ') + ');',
+    '    if (m < ' + KEY_ALPHA_FLOOR.toFixed(4) + ') m = 0.0;',
+    '    bool top = flip.y < uZone.y;',
+    '    bool tl = top && flip.x < uZone.x;',
+    '    bool tr = top && flip.x > 1.0 - uZone.x;',
+    '    vec3 o = (tl || tr) ? key : mix(key, sharp, m);',
+    '    if (tr) {',
+    '      vec2 q = vec2(flip.x - (1.0 - uZone.x), flip.y) / uZone - 0.5;',
+    '      if (max(abs(q.x), abs(q.y)) < ' + (KEY_MARKER.patch / 2).toFixed(4) + ') o = vec3(0.0);',
+    '    }',
+    '    outColor = vec4(o, 1.0);',
+    '    return;',
+    '  }',
+    '  vec3 bg;',
+    '  float soft = 0.0;',
+    '  if (uBgMode > 1.5) {',
+    '    vec4 sc = texture(uScene, vUv);',
+    '    soft = texture(uSoft, flip).r;',
+    '    float thrown = texture(uSoft, flip + uShadowOff).r;',
+    '    float shade = clamp(thrown * uShadow.x + soft * uShadow.y, 0.0, 0.85);',
+    '    bg = sc.rgb * (1.0 - sc.a * shade);',
+    '  } else if (uBgMode > 0.5) {',
+    '    vec2 uv = clamp(flip * uBgXform.xy + uBgXform.zw, 0.0, 1.0);',
+    '    bg = texture(uImage, uv).rgb;',
+    '  } else {',
+    '    bg = texture(uBlur, flip).rgb;',
+    '  }',
+    '  if (uBgMode > 1.5 && uWrap > 0.0) {',
+    '    vec3 env = textureLod(uSceneEnv, vUv, 3.0).rgb;',
+    '    float rim = uWrap * (1.0 - smoothstep(0.4, 0.95, soft));',
+    '    vec3 s = sharp * sharp;',
+    '    sharp = sqrt(s + env * env * rim * (1.0 - s));',
     '  }',
     '  outColor = vec4(mix(bg, sharp, m), 1.0);',
     '}'
@@ -1366,6 +1480,13 @@ var VideoEffects = (function () {
   // comparison buffer's size; `small` is the CPU probe's (0-1 floats, RGB).
   var _plate = null;
   var _onReference = null; // set by main.js; called with the new state
+
+  // The keyed stream's hooks and bookkeeping. Every keyed track ever made is
+  // remembered (weakly), so isKeyedTrack() still answers for a track whose
+  // processor has gone — main.js asks exactly then, to move a sender off it.
+  var _onKeyedState = null;   // fn(stream): a published stream's keyed state changed
+  var _onPressure = null;     // fn() -> true when load was shed elsewhere
+  var _keyedTracks = (typeof WeakSet === 'function') ? new WeakSet() : null;
 
   function Processor(rawStream, mode) {
     this.raw = rawStream;
@@ -1446,6 +1567,32 @@ var VideoEffects = (function () {
     this.lastLook = 0;
     this.lookPrev = null;
     this.lookCtx = null;
+
+    // The keyed output (see keyedTrack()). Nothing at all until main.js asks
+    // for it, so a camera whose owner never turned the setting on draws,
+    // copies and measures exactly what it did before the feature existed.
+    this.keyed = null;
+    this.sceneCompiling = false;
+    this.rebuilding = false;
+    this.keyGreen = false;
+    this.keyGreenClear = 0;
+    this.keyCorner = false;
+    this.keyCornerClear = 0;
+    this.edgeE = 0;
+    this.edgeEMeasured = false;
+    this.lastEdgeE = 0;
+
+    // A context the browser takes away — the GPU process restarting, or the
+    // page holding more contexts than it may — is a camera that would freeze
+    // for every peer on a track that still says "live". Better to give up
+    // out loud: main.js's overload handler turns the effect off and the peers
+    // get the plain camera. destroy() loses the context on purpose, after
+    // `stopped` is set, so that one never reaches giveUp().
+    var self = this;
+    this.canvas.addEventListener('webglcontextlost', function (ev) {
+      ev.preventDefault();
+      self.giveUp('context-lost');
+    });
   }
 
   Processor.prototype.targetFps = function () {
@@ -1513,12 +1660,16 @@ var VideoEffects = (function () {
     this.canvas.width = size.w;
     this.canvas.height = size.h;
 
+    // Not desynchronized: the canvas is never in the DOM, so the low-latency
+    // path has nothing to make faster, and the keyed copy (keyedTrack()) reads
+    // the back buffer in the same task — a path the flag could only make
+    // stranger on the platforms where it actually engages.
     var gl = this.canvas.getContext('webgl2', {
       alpha: false,
       antialias: false,
       depth: false,
       stencil: false,
-      desynchronized: true,
+      desynchronized: false,
       preserveDrawingBuffer: false
     });
     if (!gl) throw new Error('WebGL2 unavailable');
@@ -1947,6 +2098,9 @@ var VideoEffects = (function () {
       var gl = this.gl;
       this.bgReady = false;
       if (!gl) return Promise.resolve();
+      // Read by keyedReason(): with nothing drawn yet, the keyed stream says
+      // "compiling" rather than "not a scene".
+      this.sceneCompiling = true;
       var ready = this.sceneProgs[id] ? Promise.resolve(this.sceneProgs[id])
                                       : VideoScenes.compileProgramAsync(gl, id);
       return ready.then(function (prog) {
@@ -1959,8 +2113,11 @@ var VideoEffects = (function () {
         if (typeof console !== 'undefined' && console.warn) {
           console.warn('[VideoEffects] scene unavailable: ' + (e && e.message ? e.message : e));
         }
+      }).then(function () {
+        if (self.mode === want) self.sceneCompiling = false;
       });
     }
+    this.sceneCompiling = false;
     this.sceneId = null;
     this.scene = null;
     if (this.mode === 'blur' || this.mode === 'off') {
@@ -2166,7 +2323,79 @@ var VideoEffects = (function () {
       var stats = VideoScenes.measureSubject(rgba, pw, ph, grid, this.lookPrev);
       this.lookPrev = grid;
       this.lookTarget = VideoScenes.lookFromStats(stats, this.lookTarget);
+      if (this.keyed) this.keyedLook(rgba, grid, pw * ph, now);
     } catch (e) { /* a frame that cannot be read leaves the last look standing */ }
+  };
+
+  // Two things only a keyed stream needs, from the same probe and mask grid.
+  //
+  // GREEN: a subject that is itself green cannot be keyed against green. A
+  // green shirt never reaches full alpha at the receiver, so the receiver's
+  // scene would show through it — while the sender's own self-view looks
+  // perfect. So the share of the confident core that is clearly greener than
+  // red and blue withholds keying, and a hysteresis (under half that share,
+  // for five seconds) keeps a shirt at the threshold from flapping.
+  //
+  // edgeE: how green the subject's edge is, as the median e(camera) over the
+  // pixels the model is unsure about (<= 0, since only a greener-than-grey
+  // edge is ever a problem the other way). The receiver divides its raw alpha
+  // by (1 - edgeE) in the band, which is what keeps a face's outline from
+  // coming out lime. A slow number, eased like the look.
+  Processor.prototype.keyedLook = function (rgba, grid, n, now) {
+    var core = 0, green = 0, band = [];
+    for (var i = 0; i < n; i++) {
+      var r = rgba[i * 4] / 255, g = rgba[i * 4 + 1] / 255, b = rgba[i * 4 + 2] / 255;
+      var e = g - Math.max(r, b), m = grid[i] / 255;
+      if (m > 0.9) { core++; if (e > KEY_GREEN_E) green++; }
+      if (m >= 0.3 && m <= 0.98) band.push(e);
+    }
+    var share = core ? green / core : 0;
+    if (!this.keyGreen) {
+      if (share > KEY_GREEN_ON) { this.keyGreen = true; this.keyGreenClear = 0; }
+    } else if (share < KEY_GREEN_OFF) {
+      if (!this.keyGreenClear) this.keyGreenClear = now;
+      else if (now - this.keyGreenClear >= KEY_GREEN_HOLD_MS) { this.keyGreen = false; this.keyGreenClear = 0; }
+    } else {
+      this.keyGreenClear = 0;
+    }
+    if (band.length >= 3) {
+      band.sort(function (x, y) { return x - y; });
+      var target = Math.min(0, band[band.length >> 1]);
+      if (!this.edgeEMeasured) {
+        this.edgeE = target;
+        this.edgeEMeasured = true;
+      } else {
+        var dt = Math.min(2, Math.max(0, (now - this.lastEdgeE) / 1000));
+        this.edgeE += (target - this.edgeE) * (1 - Math.exp(-dt / KEY_EDGE_SMOOTH_S));
+      }
+      this.lastEdgeE = now;
+    }
+  };
+
+  // CORNER: a subject reaching into a marker zone is cut there — the zones
+  // are key whatever is in front of them — and the receiver would show a
+  // square notch of scene where a head or a hand was. So keying is withheld
+  // while the mask covers either zone, until it has stayed clear for a while.
+  // From the segmentation callback, on the mask itself.
+  Processor.prototype.keyedCorner = function (mask, mw, mh, now) {
+    var W = this.canvas.width || mw, H = this.canvas.height || mh;
+    var Z = KEY_MARKER.zone * Math.min(W, H);
+    var zw = Math.max(1, Math.min(mw, Math.round(Z / W * mw)));
+    var zh = Math.max(1, Math.min(mh, Math.round(Z / H * mh)));
+    var tl = 0, tr = 0;
+    for (var y = 0; y < zh; y++) {
+      var row = y * mw;
+      for (var x = 0; x < zw; x++) { tl += mask[row + x]; tr += mask[row + mw - 1 - x]; }
+    }
+    var cover = Math.max(tl, tr) / (255 * zw * zh);
+    if (!this.keyCorner) {
+      if (cover > KEY_CORNER_ON) { this.keyCorner = true; this.keyCornerClear = 0; }
+    } else if (cover < KEY_CORNER_OFF) {
+      if (!this.keyCornerClear) this.keyCornerClear = now;
+      else if (now - this.keyCornerClear >= KEY_CORNER_HOLD_MS) { this.keyCorner = false; this.keyCornerClear = 0; }
+    } else {
+      this.keyCornerClear = 0;
+    }
   };
 
   // Cover-fit: fill the frame, crop the overflow, never stretch.
@@ -2196,6 +2425,7 @@ var VideoEffects = (function () {
   Processor.prototype.onFrame = function () {
     if (this.stopped) return;
     this.pump();                                  // schedule the next one first
+    if (this.keyed) this.checkKeyedState(performance.now());
     if (this.paused || document.hidden ||
         !this.gl || this.video.readyState < 2 || !this.video.videoWidth) {
       // Restart the measurement window. Carrying it across a pause would
@@ -2216,6 +2446,7 @@ var VideoEffects = (function () {
     if (this.manualFrames && this.track && this.track.requestFrame) {
       try { this.track.requestFrame(); } catch (e) { /* track ended */ }
     }
+    this.requestKeyedFrame();
     this.measure(now);
   };
 
@@ -2249,6 +2480,7 @@ var VideoEffects = (function () {
           var data = mask.getAsUint8Array();
           if (self.refCapture) self.captureSawMask(data);
           self.uploadMask(data, mask.width, mask.height);
+          if (self.keyed) self.keyedCorner(data, mask.width, mask.height, now);
           // Read here and nowhere else: the mask's lifetime ends with this
           // callback.
           if (self.refLoaded) self.referenceStats(data, mask.width, mask.height, now);
@@ -2508,7 +2740,217 @@ var VideoEffects = (function () {
     gl.uniform2f(uloc(gl, this.pComp, 'uEdge'), this.edge.lo, this.edge.hi);
     var x = this.bgXform();
     gl.uniform4f(uloc(gl, this.pComp, 'uBgXform'), x[0], x[1], x[2], x[3]);
+    if (this.keyed && this.keyed.demand > 0) this.drawKeyed(w, h);
+    else this.drawQuad(null, w, h);
+  };
+
+  // --- the keyed output -----------------------------------------------------
+  //
+  // A second track from the same pipeline: the person over the key colour,
+  // for the peers who draw the scene themselves. It is a plain 2D canvas,
+  // filled by copying the GL canvas between two draws of the composite
+  // program in one task — keyed first, copied out, then the composite drawn
+  // over it, so the GL canvas (and every peer on the composite track) ends
+  // the frame exactly as it always did. With preserveDrawingBuffer off the
+  // back buffer only holds the keyed frame until the task ends, which is why
+  // the copy must happen right there.
+  //
+  // It lives as long as the processor and costs nothing until main.js says
+  // how many senders are on it (setKeyedDemand): no keyed draw, no copy, no
+  // capture while nobody is watching.
+  Processor.prototype.keyedOutput = function () {
+    if (this.keyed) return this.keyed.track;
+    if (this.stopped || !this.stream) return null;
+    var c = document.createElement('canvas');
+    c.width = this.canvas.width || 2;
+    c.height = this.canvas.height || 2;
+    var ctx = c.getContext('2d', { alpha: false });
+    if (!ctx || typeof c.captureStream !== 'function') return null;
+    var cs = c.captureStream(0);
+    var track = cs.getVideoTracks()[0];
+    var manual = true;
+    if (!track || typeof track.requestFrame !== 'function') {
+      // Safari, as in start(): no requestFrame, so the browser pulls frames.
+      try { cs.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* ignore */ }
+      cs = c.captureStream(this.targetFps());
+      track = cs.getVideoTracks()[0];
+      manual = false;
+    }
+    if (!track) return null;
+    // A camera suspended in the background has its tracks disabled; one made
+    // in the meantime must not be the exception.
+    track.enabled = !this.paused;
+    if (_keyedTracks) _keyedTracks.add(track);
+    track._voxalKeyed = true;
+    this.keyed = {
+      canvas: c, ctx: ctx, capture: cs, track: track, manual: manual,
+      demand: 0, pending: false,
+      checked: false, failed: false,
+      copyTimes: [], slow: false,
+      sent: null, sentAt: 0
+    };
+    // What main.js is about to read anyway, so the first frame does not
+    // announce it back.
+    this.keyed.sent = this.keyedSnapshot();
+    this.keyed.sentAt = performance.now();
+    return track;
+  };
+
+  // Why keying is withheld right now, or null when it is not. The keyed canvas
+  // still carries a frame while withheld — the composite, unmarked — so a
+  // peer on the keyed track passes it through and needs no swap.
+  Processor.prototype.keyedReason = function () {
+    var k = this.keyed;
+    if (k && k.failed) return 'self-check';
+    if (k && k.slow) return 'slow-copy';
+    if (this.mode.indexOf('preset:') !== 0) return 'mode';
+    if (!this.sceneId) return this.sceneCompiling ? 'compiling' : 'mode';
+    if (this.keyGreen) return 'green';
+    if (this.keyCorner) return 'corner';
+    return null;
+  };
+
+  function round3(v) { return Math.round(v * 1000) / 1000; }
+
+  Processor.prototype.keyedSnapshot = function () {
+    if (!this.keyed) return null;
+    var reason = this.keyedReason();
+    // The look as measured, not as eased: the receiver eases toward it on its
+    // own clock, as this end does.
+    var L = this.lookTarget;
+    return {
+      scene: reason ? null : this.sceneId,
+      reason: reason,
+      size: [this.canvas.width, this.canvas.height],
+      look: {
+        tint: L.tint.map(round3),
+        exposure: round3(L.exposure),
+        dirX: round3(L.dirX),
+        dirY: round3(L.dirY),
+        hard: round3(L.hard),
+        side: L.side < 0 ? -1 : 1
+      },
+      edgeE: round3(this.edgeE)
+    };
+  };
+
+  // Tell main.js when what it would put in an offer has changed. A new scene,
+  // a new reason, a new size or the light moving to the other side is news
+  // at once; the look drifting a little is news at most every KEY_STATE_MS,
+  // because every announcement is a message to every peer. Held back while
+  // setSource() rebuilds the context: the scene goes away for the length of a
+  // compile and comes back, and the peers need to hear about neither.
+  Processor.prototype.checkKeyedState = function (now) {
+    var k = this.keyed;
+    if (!k || this.rebuilding || this.stopped) return;
+    var s = this.keyedSnapshot(), last = k.sent;
+    var urgent = !last || last.scene !== s.scene || last.reason !== s.reason ||
+                 last.look.side !== s.look.side ||
+                 last.size[0] !== s.size[0] || last.size[1] !== s.size[1];
+    if (!urgent) {
+      if (now - k.sentAt < KEY_STATE_MS) return;
+      var a = last.look, b = s.look;
+      var moved = Math.abs(a.exposure - b.exposure) > 0.03 ||
+                  Math.abs(a.dirX - b.dirX) > 0.08 || Math.abs(a.dirY - b.dirY) > 0.08 ||
+                  Math.abs(a.hard - b.hard) > 0.08 || Math.abs(last.edgeE - s.edgeE) > 0.02 ||
+                  a.tint.some(function (t, i) { return Math.abs(t - b.tint[i]) > 0.02; });
+      if (!moved) return;
+    }
+    k.sent = s;
+    k.sentAt = now;
+    if (_onKeyedState && this.stream) {
+      try { _onKeyedState(this.stream); } catch (e) { /* ignore */ }
+    }
+  };
+
+  // The composite program's two passes, from draw(), with its uniforms set.
+  Processor.prototype.drawKeyed = function (w, h) {
+    var gl = this.gl, k = this.keyed;
+    var reason = this.keyedReason();
+    var Z = KEY_MARKER.zone * Math.min(w, h);
+    gl.uniform2f(uloc(gl, this.pComp, 'uZone'), Z / w, Z / h);
+    gl.uniform1f(uloc(gl, this.pComp, 'uKeyOut'), reason ? 0 : 1);
     this.drawQuad(null, w, h);
+    this.copyKeyed(w, h);
+    if (!reason && !k.checked) {
+      k.checked = true;
+      if (!this.keyedSelfCheck(w, h)) k.failed = true;
+    }
+    if (!reason) {
+      gl.uniform1f(uloc(gl, this.pComp, 'uKeyOut'), 0);
+      this.drawQuad(null, w, h);
+      // A keyed frame that failed its own check never goes out: the keyed
+      // canvas gets the composite instead, from now on.
+      if (k.failed) this.copyKeyed(w, h);
+    }
+    k.pending = true;
+  };
+
+  Processor.prototype.copyKeyed = function (w, h) {
+    var k = this.keyed;
+    if (k.canvas.width !== w || k.canvas.height !== h) {
+      k.canvas.width = w;
+      k.canvas.height = h;
+    }
+    var t0 = performance.now();
+    try { k.ctx.drawImage(this.canvas, 0, 0, w, h); } catch (e) { return; }
+    // Where the 2D canvas is not GPU-backed, this copy is a synchronous
+    // read-back of the whole frame, every frame — milliseconds that come
+    // straight out of the pipeline's own budget, on a device that may already
+    // be close to giving the effect up. If it is that dear, keying is not
+    // worth it here.
+    if (k.copyTimes) {
+      k.copyTimes.push(performance.now() - t0);
+      if (k.copyTimes.length >= KEY_COPY_SAMPLES) {
+        var sorted = k.copyTimes.slice().sort(function (a, b) { return a - b; });
+        if (sorted[sorted.length >> 1] > KEY_COPY_BUDGET_MS) k.slow = true;
+        k.copyTimes = null;
+      }
+    }
+  };
+
+  // Read back the first keyed frame at the two places a receiver looks first:
+  // the top-left zone must be the key, the top-right patch black. A browser
+  // whose canvas copy, colour management or capture path disagrees would send
+  // frames no receiver can detect — passed through, which is to say green —
+  // so keying is withheld for good rather than trusted.
+  Processor.prototype.keyedSelfCheck = function (w, h) {
+    var k = this.keyed;
+    var Z = KEY_MARKER.zone * Math.min(w, h);
+    var cy = Math.floor(Z / 2);
+    try {
+      var tl = k.ctx.getImageData(Math.floor(Z / 2), cy, 1, 1).data;
+      var tr = k.ctx.getImageData(Math.min(w - 1, Math.floor(w - Z / 2)), cy, 1, 1).data;
+      var near = function (px, want) {
+        return Math.abs(px[0] - want[0]) <= 8 && Math.abs(px[1] - want[1]) <= 8 && Math.abs(px[2] - want[2]) <= 8;
+      };
+      return near(tl, KEY_COLOR) && near(tr, [0, 0, 0]);
+    } catch (e) {
+      return false;
+    }
+  };
+
+  Processor.prototype.requestKeyedFrame = function () {
+    var k = this.keyed;
+    if (!k || !k.pending) return;
+    k.pending = false;
+    if (k.manual && k.track.requestFrame) {
+      try { k.track.requestFrame(); } catch (e) { /* track ended */ }
+    }
+  };
+
+  // Rising demand draws a keyed frame at once, so a sender switched onto the
+  // keyed track never starts on a canvas that has not been drawn.
+  Processor.prototype.setKeyedDemand = function (n) {
+    var k = this.keyed;
+    if (!k) return;
+    n = Math.max(0, Math.floor(Number(n) || 0));
+    var was = k.demand;
+    k.demand = n;
+    if (was || !n || this.stopped || !this.gl) return;
+    if (this.video.readyState < 2 || !this.video.videoWidth) return;
+    try { this.draw(performance.now()); } catch (e) { return; }
+    this.requestKeyedFrame();
   };
 
   // Where your shadow falls and how dark it is, from the measured light.
@@ -2549,6 +2991,17 @@ var VideoEffects = (function () {
 
     if (achieved >= this.targetFps() * 0.6) { this.slowWindows = 0; return; }
     this.slowWindows++;
+
+    // Before giving up anything of its own, ask whether the load can come off
+    // somewhere else. Drawing other people's scenes (key-in) shares this GPU
+    // and this main thread, and it is the user's OWN background that would be
+    // stepped down, and finally switched off, to pay for it. If main.js shed
+    // something, this window is not held against the pipeline.
+    if (_onPressure) {
+      var shed;
+      try { shed = !!_onPressure(); } catch (e) { shed = false; }
+      if (shed) return;
+    }
 
     if (this.segStep < this.segHzSteps.length - 1) {
       this.segStep++;
@@ -2600,14 +3053,24 @@ var VideoEffects = (function () {
       }
       // A different capture size needs new buffers; rebuilding the whole GL
       // state is simpler and rarer than resizing every attachment in place.
+      // The keyed state is held back meanwhile (checkKeyedState()), and the
+      // keyed canvas follows the new size on its next copy.
+      self.rebuilding = true;
       self.releaseGL();
       self.initGL();
-      self.applyBackground(self.mode);
+      self.applyBackground(self.mode).then(function () {
+        self.rebuilding = false;
+      }, function () {
+        self.rebuilding = false;
+      });
     });
   };
 
   Processor.prototype.setPaused = function (paused) {
     this.paused = !!paused;
+    if (this.keyed) {
+      try { this.keyed.track.enabled = !this.paused; } catch (e) { /* track ended */ }
+    }
   };
 
   Processor.prototype.releaseGL = function () {
@@ -2661,7 +3124,23 @@ var VideoEffects = (function () {
     }
     if (this._raf) cancelAnimationFrame(this._raf);
     if (this.segmenter) { try { this.segmenter.close(); } catch (e) { /* ignore */ } this.segmenter = null; }
+    if (this.keyed) {
+      try { this.keyed.capture.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* ignore */ }
+      this.keyed.canvas.width = 0;
+      this.keyed.canvas.height = 0;
+      this.keyed = null;
+    }
+    // Lose the context outright rather than leave it for the garbage
+    // collector. A page may hold only so many live WebGL contexts (16 in
+    // Chromium, fewer in WebKit) and the browser frees room by killing the
+    // OLDEST — which, after a few camera restarts or key-in receivers come
+    // and gone, is the camera pipeline that is running now.
+    var lose;
+    try { lose = this.gl && this.gl.getExtension('WEBGL_lose_context'); } catch (e) { lose = null; }
     this.releaseGL();
+    if (lose) { try { lose.loseContext(); } catch (e) { /* ignore */ } }
+    this.canvas.width = 0;
+    this.canvas.height = 0;
     try { this.video.pause(); } catch (e) { /* ignore */ }
     this.video.srcObject = null;
     if (this.stream) {
@@ -2794,6 +3273,48 @@ var VideoEffects = (function () {
   function active() { return _active; }
 
   function onOverload(fn) { _onOverload = fn; }
+
+  // --- the keyed stream: the public half ------------------------------------
+  //
+  // Sending. Every call names the stream: the published, processed stream
+  // (main.js's localVideoStream), never an implicit `_active` — so the
+  // settings preview, which also runs a Processor, can never grow a keyed
+  // output by accident.
+
+  function processorOf(stream) {
+    var p = stream && stream._effectsProcessor;
+    return (p && p instanceof Processor && !p.stopped) ? p : null;
+  }
+
+  // The keyed track, created on first ask, alive as long as the processor.
+  function keyedTrack(stream) {
+    var p = processorOf(stream);
+    return p ? p.keyedOutput() : null;
+  }
+
+  function isKeyedTrack(track) {
+    if (!track) return false;
+    return _keyedTracks ? _keyedTracks.has(track) : track._voxalKeyed === true;
+  }
+
+  // How many senders are on the keyed track right now. 0 stops the keyed
+  // pass and the copy entirely.
+  function setKeyedDemand(stream, n) {
+    var p = processorOf(stream);
+    if (p) p.setKeyedDemand(n);
+  }
+
+  // null while there is no keyed output; else { scene, reason, size, look,
+  // edgeE }. `scene` is non-null only while marked keyed frames are being
+  // produced, and `reason` says why not otherwise.
+  function keyedState(stream) {
+    var p = processorOf(stream);
+    return p ? p.keyedSnapshot() : null;
+  }
+
+  function onKeyedState(fn) { _onKeyedState = fn; }
+
+  function onPressure(fn) { _onPressure = fn; }
 
   // --- the picker -----------------------------------------------------------
   //
@@ -3166,6 +3687,20 @@ var VideoEffects = (function () {
     });
   }
 
+  // --- the keyed-stream toggle ----------------------------------------------
+
+  function renderSubjectOnly(el, opts) {
+    opts = opts || {};
+    return renderToggle(el, {
+      id: opts.id,
+      label: opts.label || 'Let others draw my scene',
+      title: opts.title,
+      read: readSubjectOnly,
+      onChange: opts.onChange,
+      apply: setSubjectOnly
+    });
+  }
+
   // An ON/OFF switch over one boolean preference. cfg: { id, label, title,
   // read(), apply(on), onChange(on) } — onChange, when given, replaces apply
   // (settings.html stores and lets the main window apply).
@@ -3295,6 +3830,24 @@ var VideoEffects = (function () {
       staleBelow: REF_STALE_BELOW, freshAbove: REF_FRESH_ABOVE,
       matchMax: REF_MATCH_MAX, scoreLo: REF_SCORE_LO, scoreHi: REF_SCORE_HI
     },
+    // The keyed stream ("let others draw my scene"): the setting and the
+    // sending half.
+    SUBJECT_ONLY_KEY: SUBJECT_ONLY_KEY,
+    readSubjectOnly: readSubjectOnly,
+    writeSubjectOnly: writeSubjectOnly,
+    onSubjectOnlyChange: onSubjectOnlyChange,
+    setSubjectOnly: setSubjectOnly,
+    renderSubjectOnly: renderSubjectOnly,
+    KEYED_CAP: KEYED_CAP,
+    keyedTrack: keyedTrack,
+    isKeyedTrack: isKeyedTrack,
+    setKeyedDemand: setKeyedDemand,
+    keyedState: keyedState,
+    onKeyedState: onKeyedState,
+    onPressure: onPressure,
+    KEY_COLOR: KEY_COLOR,
+    KEY_MARKER: KEY_MARKER,
+    KEY_ALPHA_FLOOR: KEY_ALPHA_FLOOR,
     cancelLoad: cancelLoad,
     isLoading: isLoading,
     isLoaded: isLoaded,
