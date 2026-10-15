@@ -213,12 +213,15 @@ export function videoQuality(page, kind = 'camera') {
  * report "blur costs nothing" for a run in which blur never happened.
  */
 export function effectsState(page) {
-  return page.evaluate(() => ({
-    mode: (typeof VideoEffects !== 'undefined' && VideoEffects.readMode)
+  return page.evaluate(() => {
+    const mode = (typeof VideoEffects !== 'undefined' && VideoEffects.readMode)
       ? VideoEffects.readMode()
-      : localStorage.getItem('video-background') || 'off',
-    engaged: !!(typeof localVideoStream !== 'undefined' && localVideoStream && localVideoStream._effectsProcessor),
-  }));
+      : localStorage.getItem('video-background') || 'off';
+    const p = typeof localVideoStream !== 'undefined' && localVideoStream && localVideoStream._effectsProcessor;
+    // A scene that will not compile falls back to the blur in silence, so a
+    // `preset:` run counts as engaged only while the scene is what is drawn.
+    return { mode, engaged: !!p && (!/^preset:/.test(mode) || !!p.sceneId) };
+  });
 }
 
 /**

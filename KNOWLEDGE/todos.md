@@ -56,10 +56,13 @@ Deliberately left for later:
   per-scene shadow/wrap strengths are reasoned and checked only on synthetic
   subjects. Try: a window to one side, an overhead office light, a desk lamp at
   night, a face lit only by the screen.
-- **Benchmark a scene.** `video-bench.spec.js` measures `off` and `blur`; an
-  animated scene adds GPU work and, more importantly, encoder bits. Add
-  `preset:office` (and the busiest scene) to the background sweep and compare
-  outgoing bitrate against `blur` at the same resolution. The 3D scenes make this
+- **Benchmark a scene on a real GPU.** `video-bench.spec.js` now sweeps
+  `preset:office` and `preset:island` beside `off` and `blur`, and
+  `make scene-preview ARGS='--bits --person'` measures each scene's encoder cost
+  offline (see *Sharp at the size it is shown* in `docs/video-effects.md`).
+  Neither has been run on real hardware: in the container the effect gives up
+  under SwiftShader. Run `make bench` on a laptop with a GPU and compare the
+  scene rows' "Picture sent" against `blur`. The 3D scenes make this
   more pressing: their `res` / `hz` budgets (see *Cost, and the step-down* in
   `docs/video-effects.md`) are measured only on a software GPU, where the mountain
   is the dearest. Time each on a real low-end Android and an integrated laptop GPU
@@ -78,6 +81,20 @@ Deliberately left for later:
 - **Relight the subject, not just the scene.** The light wrap only adds the
   scene's light at your edge. A full relight (shading the face toward the
   scene's key light) needs normals the selfie model does not give.
+- **Check the sharp scenes on a real call.** The resolve (`RESOLVE_FRAG`) makes
+  a still scene as sharp as the camera, and that detail costs the encoder: a
+  keyframe 1.2–1.6x the old blurred one, and 1.2–2.1x the motion bits, the
+  island (167 kb/s) and the mountain (90 kb/s) the dearest (offline VP9, fixed
+  quantizer; see *Sharp at the size it is shown*). A third to two thirds of
+  that is paid even when the scene is frozen in time (`--still`: 14–72 kb/s),
+  so the next lever is the resolve's own churn, not the scenes' motion: find
+  out how much is thin detail flickering into the movement test and how much
+  is cloud grain, before touching either. In a call the encoder
+  works to `CAMERA_MAX_BITRATE`, so the cost shows as a softer picture of the
+  person. Look at a capped call on a phone and a desktop. If the face suffers,
+  calm the motion (slower sea, less frond sway) before blurring anything.
+  Also time the resolve pass on a real low-end phone (one pass at the camera's
+  size per scene redraw).
 - **Optional switch for the interactions.** Shadow, light wrap and the motion
   response are always on with a scene. If anyone finds them distracting, a
   Settings → Video toggle is a uniform each — no track swap.

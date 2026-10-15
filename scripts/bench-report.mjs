@@ -485,8 +485,9 @@ if (m.videoBackground.length) {
   out.push('');
   out.push(
     'Segmentation runs locally — MediaPipe in WebAssembly plus a WebGL composite — so the ' +
-      'cost lands on **CPU and frame rate**, never on the wire. Same room size and the same ' +
-      'cameras in every row; only the background changes.'
+      'cost lands on **CPU and frame rate**. An animated scene (`preset:…`) also hands the ' +
+      'encoder moving pixels, which it pays for in bits up to the camera cap and in picture ' +
+      'beyond it. Same room size and the same cameras in every row; only the background changes.'
   );
   out.push('');
   out.push(

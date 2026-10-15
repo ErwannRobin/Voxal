@@ -48,6 +48,127 @@ test.beforeEach(async ({ page }) => {
     };
     window.__luma = (px, i) => 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
 
+    // Resolve a stand-in scene into a bigger picture through RESOLVE_FRAG, as
+    // video-effects.js resolveScene() does. `frag` draws from uv the way a
+    // scene does (uRes, uJitter; uX is the test's own), w x h small, and each
+    // entry of `steps` is one redraw ({ x }) added into the W x H picture.
+    // Hands back, as RGBA bytes bottom row first: the picture and the one
+    // before it, `frag` drawn straight at W x H (what a big buffer would show),
+    // and the last moment drawn small without jitter and stretched by the
+    // hardware's bilinear filter (what the small one shows).
+    window.__resolve = ({ frag, w, h, W, H, steps, opts }) => {
+      const c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      const gl = c.getContext('webgl2', { alpha: false, preserveDrawingBuffer: true });
+      const sh = (type, text) => {
+        const o = gl.createShader(type); gl.shaderSource(o, text); gl.compileShader(o);
+        if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o));
+        return o;
+      };
+      const mk = (fs) => {
+        const p = gl.createProgram();
+        gl.attachShader(p, sh(gl.VERTEX_SHADER, '#version 300 es\nin vec2 aPos;\nout vec2 vUv;\n' +
+          'void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }\n'));
+        gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
+        gl.bindAttribLocation(p, 0, 'aPos');
+        gl.linkProgram(p);
+        if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+        return p;
+      };
+      const scene = mk(frag);
+      const resolve = mk(opts ? VideoScenes.resolveSource(opts) : VideoScenes.RESOLVE_FRAG);
+      const blit = mk('#version 300 es\nprecision highp float;\nin vec2 vUv;\nout vec4 o;\n' +
+        'uniform sampler2D uT;\nvoid main() { o = texture(uT, vUv); }\n');
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      const target = (tw, th) => {
+        const t = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, tw, th, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        const f = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+        return { t, f, w: tw, h: th };
+      };
+      const small = target(w, h), big = target(W, H), stretched = target(W, H);
+      const pic = [target(W, H), target(W, H)];
+      const draw = (to) => { gl.bindFramebuffer(gl.FRAMEBUFFER, to.f); gl.viewport(0, 0, to.w, to.h); gl.drawArrays(gl.TRIANGLES, 0, 3); };
+      const bind = (p, name, unit, t) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform1i(gl.getUniformLocation(p, name), unit); };
+      const drawScene = (to, x, j) => {
+        gl.useProgram(scene);
+        gl.uniform2f(gl.getUniformLocation(scene, 'uRes'), to.w, to.h);
+        gl.uniform2f(gl.getUniformLocation(scene, 'uJitter'), j[0], j[1]);
+        gl.uniform1f(gl.getUniformLocation(scene, 'uX'), x || 0);
+        draw(to);
+      };
+      let from = 0;
+      steps.forEach((st, i) => {
+        const j = VideoScenes.JITTER[i % VideoScenes.JITTER.length];
+        drawScene(small, st.x, j);
+        gl.useProgram(resolve);
+        bind(resolve, 'uCur', 0, small.t);
+        bind(resolve, 'uHist', 1, pic[from].t);
+        gl.uniform2f(gl.getUniformLocation(resolve, 'uCurRes'), w, h);
+        gl.uniform2f(gl.getUniformLocation(resolve, 'uOutRes'), W, H);
+        gl.uniform2f(gl.getUniformLocation(resolve, 'uJitter'), j[0], j[1]);
+        gl.uniform1f(gl.getUniformLocation(resolve, 'uAge'), Math.min(i, 255));
+        draw(pic[1 - from]);
+        from = 1 - from;
+      });
+      const last = steps[steps.length - 1];
+      drawScene(big, last.x, [0, 0]);
+      // The stretched baseline is one redraw with no jitter, as a call draws
+      // the scene when the resolve is missing. The last step's buffer would be
+      // off by its own jitter, and the baseline worse than it really is.
+      drawScene(small, last.x, [0, 0]);
+      gl.useProgram(blit);
+      bind(blit, 'uT', 0, small.t);
+      draw(stretched);
+      const read = (t) => {
+        const px = new Uint8Array(W * H * 4);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, t.f);
+        gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        return Array.from(px);
+      };
+      // `prev` is the picture one redraw earlier.
+      const res = { out: read(pic[from]), prev: read(pic[1 - from]), big: read(big), stretched: read(stretched) };
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
+      return res;
+    };
+    // Root-mean-square difference of two pictures' luma (or alpha), inside a
+    // margin of `m` pixels.
+    window.__rms = (a, b, W, H, m = 4, alpha = false) => {
+      let se = 0, n = 0;
+      for (let y = m; y < H - m; y++) {
+        for (let x = m; x < W - m; x++) {
+          const i = (y * W + x) * 4;
+          const d = alpha ? a[i + 3] - b[i + 3] : window.__luma(a, i) - window.__luma(b, i);
+          se += d * d; n++;
+        }
+      }
+      return Math.sqrt(se / n);
+    };
+    // How much fine detail a picture holds: the mean luma step between
+    // horizontal neighbours, over the columns [x0, x1).
+    window.__detail = (px, W, H, x0 = 0, x1 = W) => {
+      let sum = 0, n = 0;
+      for (let y = 0; y < H; y++) {
+        for (let x = Math.max(1, x0); x < x1; x++) {
+          const i = (y * W + x) * 4;
+          sum += Math.abs(window.__luma(px, i) - window.__luma(px, i - 4));
+          n++;
+        }
+      }
+      return sum / n;
+    };
+
     // A camera whose picture is lit from one side: a horizontal ramp, dark on
     // `dark` and bright on the other side, repainted so the capture keeps
     // producing frames.
@@ -161,9 +282,10 @@ test.describe('every scene', () => {
       expect(d.bigShare).toBeLessThan(0.05);
     });
 
-    // A frame is a function of the clock and the look and nothing else: no
-    // per-frame random numbers, so a still room is a still picture (the
-    // encoder pays for every pixel that changes) and two renders agree.
+    // A frame is a function of the clock, the look and the jitter point, and
+    // nothing else: no random numbers of its own, so two renders agree. (A
+    // call changes the jitter point with every redraw and adds them up; what
+    // that costs a still room is pinned in 'sharp at the size it is shown'.)
     test(`${id} draws the same picture twice`, async ({ page }) => {
       const diff = await page.evaluate((id) => {
         const a = window.__renderScene(id, { times: [37] }).frames[0];
@@ -498,6 +620,140 @@ test.describe('measuring the subject', () => {
   });
 });
 
+test.describe('sharp at the size it is shown', () => {
+  // A stand-in scene: fine ripples, a third finer than the small buffer can
+  // hold once stretched three times, with nearness that ripples with them.
+  const RIPPLES = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 outColor;
+uniform vec2 uRes;
+uniform vec2 uJitter;
+uniform float uX;
+void main() {
+  vec2 uv = vUv + uJitter / uRes;
+  float v = 0.5 + 0.5 * sin(uv.x * 6.2832 * 40.0 + uv.y * 6.0);
+  outColor = vec4(vec3(v), v);
+}`;
+  // A bright bar on black at uX: what moves.
+  const BAR = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 outColor;
+uniform vec2 uRes;
+uniform vec2 uJitter;
+uniform float uX;
+void main() {
+  vec2 uv = vUv + uJitter / uRes;
+  float v = abs(uv.x - uX) < 0.06 ? 1.0 : 0.0;
+  outColor = vec4(vec3(v), 1.0);
+}`;
+
+  // A flat wall whose colour turns warmer at uX = 1 without getting brighter:
+  // what a relight does to the room (uTint is luminance 1).
+  const WARMER = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 outColor;
+uniform vec2 uRes;
+uniform vec2 uJitter;
+uniform float uX;
+void main() {
+  outColor = vec4(0.5 + 0.1 * uX, 0.5, 0.5 - 0.1 * uX, 1.0);
+}`;
+
+  // Redraws of a room that holds still add up to the detail of a buffer three
+  // times bigger: much nearer to it than the small buffer stretched, colour
+  // and nearness alike.
+  test('a still room comes out as detailed as a buffer three times bigger', async ({ page }) => {
+    const seen = await page.evaluate((frag) => {
+      const W = 320, H = 180;
+      const r = window.__resolve({ frag, w: 107, h: 60, W, H, steps: Array.from({ length: 32 }, () => ({})) });
+      return {
+        resolved: window.__rms(r.out, r.big, W, H),
+        stretched: window.__rms(r.stretched, r.big, W, H),
+        nearResolved: window.__rms(r.out, r.big, W, H, 4, true),
+        nearStretched: window.__rms(r.stretched, r.big, W, H, 4, true),
+        detail: window.__detail(r.out, W, H) / window.__detail(r.big, W, H),
+      };
+    }, RIPPLES);
+    expect(seen.resolved).toBeLessThan(seen.stretched * 0.5);
+    expect(seen.nearResolved).toBeLessThan(seen.nearStretched * 0.5);
+    expect(seen.detail).toBeGreaterThan(0.75);
+  });
+
+  // What moves is shown where it is, not where it was: three redraws after
+  // the bar jumps, nothing of it is left behind. The control resolves the
+  // same redraws with the movement test switched off, and keeps a ghost, so
+  // it is that test, not the redraws' own weight, that clears it.
+  test('what moves leaves no ghost behind', async ({ page }) => {
+    const seen = await page.evaluate((frag) => {
+      const W = 320, H = 180, y = H >> 1;
+      const steps = [...Array.from({ length: 24 }, () => ({ x: 0.3 })), ...Array.from({ length: 3 }, () => ({ x: 0.7 }))];
+      const at = (px, fx) => window.__luma(px, (y * W + Math.round(fx * W)) * 4);
+      const r = window.__resolve({ frag, w: 107, h: 60, W, H, steps });
+      const blind = window.__resolve({ frag, w: 107, h: 60, W, H, steps, opts: { tol: 100 } });
+      return { was: at(r.out, 0.3), is: at(r.out, 0.7), blindWas: at(blind.out, 0.3) };
+    }, BAR);
+    expect(seen.blindWas).toBeGreaterThan(80);
+    expect(seen.was).toBeLessThan(25);
+    expect(seen.is).toBeGreaterThan(200);
+  });
+
+  // A relight is movement even when it changes only the colour: the room
+  // takes its new colour within a redraw or two, as the light wrap on the
+  // person does. The control judges brightness alone and is still on its
+  // way there.
+  test('a room that turns warmer follows at once', async ({ page }) => {
+    const seen = await page.evaluate((frag) => {
+      const W = 320, H = 180;
+      const steps = [...Array.from({ length: 24 }, () => ({ x: 0 })), ...Array.from({ length: 2 }, () => ({ x: 1 }))];
+      const red = (px) => { let s = 0, n = 0; for (let i = 0; i < px.length; i += 4) { s += px[i]; n++; } return s / n; };
+      const r = window.__resolve({ frag, w: 107, h: 60, W, H, steps });
+      const blind = window.__resolve({ frag, w: 107, h: 60, W, H, steps, opts: { tolColour: 100 } });
+      return { red: red(r.out), blindRed: red(blind.out) };
+    }, WARMER);
+    // 0.5 is 128, 0.6 is 153.
+    expect(seen.red).toBeGreaterThan(150);
+    expect(seen.blindRed).toBeLessThan(145);
+  });
+
+  // A room that holds still is a picture that holds still: once it has
+  // settled, a redraw (another jitter point, so another look at every pixel)
+  // changes it by only a level or two, because the encoder pays for every
+  // pixel that changes, in every frame. The control adds each look in whole,
+  // with no steady share, and churns, so it is the share that keeps it still.
+  test('a settled room barely changes from one redraw to the next', async ({ page }) => {
+    const seen = await page.evaluate((frag) => {
+      const W = 320, H = 180, steps = Array.from({ length: 64 }, () => ({}));
+      const r = window.__resolve({ frag, w: 107, h: 60, W, H, steps });
+      const whole = window.__resolve({ frag, w: 107, h: 60, W, H, steps, opts: { gain: 1 } });
+      return {
+        churn: window.__rms(r.out, r.prev, W, H),
+        nearChurn: window.__rms(r.out, r.prev, W, H, 4, true),
+        wholeChurn: window.__rms(whole.out, whole.prev, W, H),
+      };
+    }, RIPPLES);
+    expect(seen.wholeChurn).toBeGreaterThan(6);
+    expect(seen.churn).toBeLessThan(1.5);
+    expect(seen.nearChurn).toBeLessThan(1.5);
+  });
+
+  // The very first redraw is already a whole picture (the redraw itself,
+  // smoothed), not a black frame waiting to fill.
+  test('the first redraw is a whole picture', async ({ page }) => {
+    const seen = await page.evaluate((frag) => {
+      const W = 320, H = 180;
+      const r = window.__resolve({ frag, w: 107, h: 60, W, H, steps: [{}] });
+      let s = 0;
+      for (let i = 0; i < r.out.length; i += 4) s += window.__luma(r.out, i);
+      return s / (r.out.length / 4);
+    }, RIPPLES);
+    expect(seen).toBeGreaterThan(100);
+    expect(seen).toBeLessThan(155);
+  });
+});
+
 test.describe('in the camera pipeline', () => {
   // Blur and images must not pay for scenes: no scene buffer until one is
   // picked — the same rule that makes "off" free.
@@ -505,14 +761,116 @@ test.describe('in the camera pipeline', () => {
     const seen = await page.evaluate(async () => {
       await VideoEffects.wrap(window.__mkLitCamera('#555', '#555'), 'blur');
       await window.__sleep(300);
-      const blur = { scene: !!VideoEffects.active().texScene, soft: !!VideoEffects.active().texSoftA };
+      const p = VideoEffects.active();
+      const blur = { scene: !!p.texScene, soft: !!p.texSoftA, resolve: !!p.pResolve, out: !!p.texSceneOut };
       await VideoEffects.setMode('preset:office');
       await window.__sleep(300);
-      return { blur, scene: !!VideoEffects.active().texScene, id: VideoEffects.active().sceneId };
+      return { blur, scene: !!p.texScene, resolve: !!p.pResolve, out: p.texSceneOut && p.texSceneOut.length, id: p.sceneId };
     });
-    expect(seen.blur).toEqual({ scene: false, soft: false });
+    expect(seen.blur).toEqual({ scene: false, soft: false, resolve: false, out: false });
     expect(seen.scene).toBe(true);
+    expect(seen.resolve).toBe(true);
+    expect(seen.out).toBe(2);
     expect(seen.id).toBe('office');
+  });
+
+  // The scene the composite reads is resolved at the camera's own size, from
+  // the very first frame of a pick (the redraw itself; an incomplete
+  // mipmapped texture would sample as black), and a room that holds still
+  // comes out nearer to the same scene drawn straight at that size than the
+  // small buffer it is drawn into, stretched, and then stays nearly still.
+  test('the scene is resolved at the camera\'s size, and sharpens as it holds still', async ({ page }) => {
+    test.setTimeout(90_000);
+    const seen = await page.evaluate(async () => {
+      // A camera bigger than the scene's buffer, so there is detail to gain.
+      const c = document.createElement('canvas');
+      c.width = 640; c.height = 360;
+      const ctx = c.getContext('2d');
+      const paint = () => { ctx.fillStyle = '#666'; ctx.fillRect(0, 0, 640, 360); };
+      paint();
+      const stream = c.captureStream(15);
+      const timer = setInterval(paint, 66);
+      stream.getVideoTracks()[0].addEventListener('ended', () => clearInterval(timer));
+      await VideoEffects.wrap(stream, 'blur');
+      const p = VideoEffects.active();
+      await window.__sleep(300);
+      const gl = p.gl, W = p.canvas.width, H = p.canvas.height;
+      const read = (fb, w, h) => {
+        const px = new Uint8Array(w * h * 4);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        return px;
+      };
+      const mean = (px) => { let s = 0; for (let i = 0; i < px.length; i += 4) s += window.__luma(px, i); return s / (px.length / 4); };
+      // Synchronously, so no other frame can be drawn in between.
+      p.ensureScene('office');
+      const first = mean(read(p.fbSceneOut[p.sceneOut], W, H));
+      // The same moment again and again: a room holding still.
+      const T = performance.now();
+      for (let i = 0; i < 12; i++) { p.lastScene = 0; p.drawScene(T); }
+      const settled = read(p.fbSceneOut[p.sceneOut], W, H);
+      // One whole camera frame more, with a redraw in it: the composite shows
+      // the picture that redraw was just added to, not the small buffer, and
+      // not the picture before it. And the room has barely changed.
+      const bindTex = p.bindTex;
+      let shown = null;
+      p.bindTex = function (prog, name, unit, tex) {
+        if (prog === this.pComp && name === 'uScene') shown = tex;
+        return bindTex.apply(this, arguments);
+      };
+      p.lastScene = 0;
+      p.draw(T);
+      p.bindTex = bindTex;
+      const showsResolved = shown === p.texSceneOut[p.sceneOut];
+      const churn = window.__rms(read(p.fbSceneOut[p.sceneOut], W, H), settled, W, H);
+      // The same moment drawn once with no jitter, as it is when the resolve
+      // is missing, and stretched to the same size.
+      const t = VideoScenes.THUMB_TIME + (T - p.sceneStart) / 1000;
+      VideoScenes.setUniforms(gl, p.sceneProgs.office, p.sceneW, p.sceneH, t, p.look, null);
+      p.drawQuad(p.fbScene, p.sceneW, p.sceneH);
+      const small = read(p.fbScene, p.sceneW, p.sceneH);
+      // Opaque: a 2D canvas would premultiply by the nearness otherwise.
+      for (let i = 3; i < small.length; i += 4) small[i] = 255;
+      const sc = document.createElement('canvas');
+      sc.width = p.sceneW; sc.height = p.sceneH;
+      const img = sc.getContext('2d').createImageData(p.sceneW, p.sceneH);
+      img.data.set(small);
+      sc.getContext('2d').putImageData(img, 0, 0);
+      const big = document.createElement('canvas');
+      big.width = W; big.height = H;
+      const bctx = big.getContext('2d');
+      bctx.imageSmoothingEnabled = true;
+      bctx.drawImage(sc, 0, 0, W, H);
+      const stretched = bctx.getImageData(0, 0, W, H).data;
+      // The same moment, in the same light, drawn straight at the camera's size.
+      const ref = window.__renderScene('office', { w: W, h: H, times: [t], look: p.look }).frames[0];
+      return {
+        size: [W, H], buffer: [p.sceneW, p.sceneH], first, age: p.sceneAge, showsResolved, churn,
+        settled: window.__rms(settled, ref, W, H), stretched: window.__rms(stretched, ref, W, H),
+      };
+    });
+    expect(seen.buffer[0]).toBeLessThan(seen.size[0]);
+    expect(seen.first).toBeGreaterThan(25);
+    expect(seen.age).toBe(14);
+    expect(seen.showsResolved).toBe(true);
+    expect(seen.churn).toBeLessThan(0.8);
+    expect(seen.settled).toBeLessThan(seen.stretched * 0.9);
+  });
+
+  test('stopping the camera releases the resolved scene with it', async ({ page }) => {
+    const seen = await page.evaluate(async () => {
+      await VideoEffects.wrap(window.__mkLitCamera('#555', '#999'), 'preset:cybercafe');
+      const p = VideoEffects.active();
+      await window.__sleep(300);
+      const before = { resolve: !!p.pResolve, out: !!p.texSceneOut };
+      VideoEffects.stop();
+      return { before, resolve: p.pResolve, out: p.texSceneOut, fb: p.fbSceneOut };
+    });
+    expect(seen.before).toEqual({ resolve: true, out: true });
+    expect(seen.resolve).toBeUndefined();
+    expect(seen.out).toBeNull();
+    expect(seen.fb).toBeNull();
   });
 
   test('the subject\'s light is measured from the camera', async ({ page }) => {

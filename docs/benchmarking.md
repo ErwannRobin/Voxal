@@ -86,7 +86,7 @@ four questions one layer up:
 | Scenario | Question |
 |---|---|
 | `video-scale` | What does a camera cost as the room grows — and what picture survives it? Also the one-presenter case, which is the shape most meetings have. |
-| `video-background` | What does blur cost, against the same room with no background at all? |
+| `video-background` | What do blur and two animated scenes (office, island) cost, against the same room with no background at all? |
 | `screen-share` | A screen is not a camera: 1.5 Mb/s rather than 600 kb/s, `maintain-resolution`, and no peer-count downscale. |
 | `video-join-latency` | Join a room that is already on camera: how long until you *see* it, as against hear it? |
 

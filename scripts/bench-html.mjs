@@ -529,7 +529,7 @@ export function renderHtml(m, history = { rows: [], incomparable: [] }, historyD
     sections.push(
       card(
         'What a camera background costs',
-        'Segmentation runs locally — MediaPipe in WebAssembly plus a WebGL composite — so it is paid in <strong>CPU and frame rate</strong>, never on the wire. <em>Still running</em> counts the sharing peers that still had the effect on at the end: the app turns a background off in silence both when the runtime cannot start and when the device cannot sustain it, so a <code>0</code> there means the row is not the cost of the effect.',
+        'Segmentation runs locally — MediaPipe in WebAssembly plus a WebGL composite — so it is paid in <strong>CPU and frame rate</strong>. An animated scene (<code>preset:…</code>) also hands the encoder moving pixels, paid in bits up to the camera cap and in picture beyond it. <em>Still running</em> counts the sharing peers that still had the effect on at the end: the app turns a background off in silence both when the runtime cannot start and when the device cannot sustain it, so a <code>0</code> there means the row is not the cost of the effect.',
         barChart({
           id: 'chart-video-bg',
           label: 'Room CPU',
