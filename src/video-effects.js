@@ -349,6 +349,16 @@ var VideoEffects = (function () {
   // ghost of the real room — so it is cut to exact key instead, and the room
   // never leaves the device.
   var KEY_ALPHA_FLOOR = 0.06;
+  // Where the detectors look inside a zone: pixel indices of a 20x20 grid laid
+  // over it, so the GPU taps and the CPU probe read exactly the same places.
+  // The ring taps sit in the middle of the ring (the patch spans 0.2-0.8 of
+  // the zone), the patch taps around its centre.
+  var KEY_TAP_GRID = 20;
+  var KEY_TAPS = {
+    tl: [[5, 5], [15, 5], [5, 15], [15, 15], [10, 10]],
+    ring: [[2, 2], [17, 2], [2, 17], [17, 17]],
+    patch: [[9, 9], [10, 9], [9, 10], [10, 10]]
+  };
 
   // The sender's own guards. Each one withholds keying — the keyed canvas
   // then carries the plain composite with no markers, so a peer on the keyed
@@ -364,6 +374,47 @@ var VideoEffects = (function () {
   var KEY_CORNER_HOLD_MS = 2000;
   var KEY_STATE_MS = 2000;     // the look is re-announced at most this often
   var KEY_EDGE_SMOOTH_S = 1.4; // edgeE is eased like the look (LOOK_SMOOTH_S)
+
+  // The receiving end. See KeyInProcessor.
+  var KEYIN_MAX_LONG = 1280;   // the output is never bigger than 1280x720…
+  var KEYIN_MAX_SHORT = 720;
+  var KEYIN_ASPECT_TOL = 0.02; // …and only resized for a new shape, never a new size
+  var KEYIN_PROBE_MS = 250;    // the CPU marker probe's period
+  var KEYIN_RECENT_MS = 500;   // how long a keyed frame keeps the relaxed detector on
+  var KEYIN_FRAME_WAIT_MS = 10000;
+  var KEYIN_WARM_FRAMES = 30;  // composited frames before the handle is handed out…
+  var KEYIN_WARM_MS = 6;       // …and the median draw they must stay under
+  var KEYIN_WARM_WAIT_MS = 15000;
+  var KEYIN_BUDGET_MS = 8;     // the rolling median, once running…
+  var KEYIN_BUDGET_WINDOW_MS = 5000; // …over this window
+  // The edge band: a pixel within this reach (a fraction of the frame's width,
+  // ~10 px at 1280, never under 3 px — the codec's 4:2:0 chroma alone smears
+  // the edge by 2) of anything the key calls mostly background is an edge
+  // pixel, and gets the edgeE correction; everything further in is the
+  // person, at full opacity. Wider buys the band nothing and costs the
+  // inside: at 15 px the band scored the same and the interior's p99 went
+  // from 2.5 to 5.7 levels, the correction reaching pixels that needed none.
+  var KEYIN_BAND_REACH = 0.008;
+  var KEYIN_BAND_MIN_PX = 3;
+  var KEYIN_BAND_A0 = 0.5;
+  // Above this the alpha is 1. Below KEY_ALPHA_FLOOR it is 0, exactly as the
+  // sender floored it; in between it is taken as it is. Measured on colour
+  // against the sender's composite (unit-video-keyin.spec.js), this beat a
+  // ramp re-stretched over 0.06-0.94: band p95 13 vs 17 levels with no codec,
+  // 27 vs 30 through VP8 at 450 kb/s — the stretch is exact at no point of
+  // the band, where the sender's floor is exact at all of them.
+  var KEYIN_SATURATE = 0.97;
+  // How hard the leftover key is taken out of a partly keyed pixel's colour.
+  // In exact arithmetic there is none to take: the band's corrected alpha
+  // leaves the subject estimate exactly as green as edgeE, which is <= 0. What
+  // it catches is green the codec put there — 4:2:0 chroma bleeding the key a
+  // pixel or two into the person. It only ever removes green ABOVE the larger
+  // of red and blue, so it cannot grey a face; on the test's skin-and-shirt
+  // edge 0, 4 and 8 scored the same.
+  var KEYIN_DESPILL = 4.0;
+  // What the background is while there is no scene to draw. Never the blur:
+  // blurring a keyed frame would smear the key into green mush.
+  var KEYIN_FLAT = [0.42, 0.42, 0.44];
 
   // --- mode: read, write, normalise ----------------------------------------
 
@@ -700,6 +751,56 @@ var VideoEffects = (function () {
       _supported = false;
     }
     return _supported;
+  }
+
+  // Can this device draw other people's scenes for them? A separate probe from
+  // isSupported(): receiving needs no WebAssembly (there is no segmentation at
+  // this end), but it does need a real GPU, because every keyed peer is a
+  // scene ray-marched on THIS device — on a software rasteriser that is
+  // seconds of main-thread compile per peer and then a frame budget nobody
+  // has. And for now it needs a Chromium engine: the receive path (an off-DOM
+  // remote <video> driving requestVideoFrameCallback, a captured GL canvas)
+  // is verified there and nowhere else yet.
+  //
+  // The facts are probed once; the two test overrides are read at every call,
+  // so a test can set them after the page has loaded.
+  var _keyInFacts = null;
+
+  function chromiumEngine() {
+    try {
+      var uad = navigator.userAgentData;
+      if (uad && uad.brands && uad.brands.some(function (b) { return /Chromium/i.test(b.brand); })) return true;
+      var ua = navigator.userAgent || '';
+      // Every browser on iOS is WebKit, whatever its name says.
+      if (/CriOS|EdgiOS|FxiOS|OPiOS/.test(ua)) return false;
+      return /Chrome\/|Chromium\//.test(ua) && !/Firefox\//.test(ua);
+    } catch (e) { return false; }
+  }
+
+  function keyInFacts() {
+    if (_keyInFacts) return _keyInFacts;
+    var f = { gl2: false, capture: false, software: false, chromium: chromiumEngine() };
+    try {
+      var c = document.createElement('canvas');
+      f.capture = typeof c.captureStream === 'function';
+      var gl = c.getContext('webgl2', { failIfMajorPerformanceCaveat: false });
+      if (gl) {
+        f.gl2 = true;
+        f.software = VideoScenes.isSoftwareGL(gl);
+        var lose = gl.getExtension('WEBGL_lose_context');
+        if (lose) lose.loseContext();
+      }
+    } catch (e) { /* no WebGL2 at all */ }
+    _keyInFacts = f;
+    return f;
+  }
+
+  function canKeyIn() {
+    var f = keyInFacts();
+    if (!f.gl2 || !f.capture) return false;
+    if (!f.chromium && !(typeof window !== 'undefined' && window.__voxalKeyInAnyEngine)) return false;
+    if (f.software && !(typeof window !== 'undefined' && window.__voxalKeyInOnSoftwareGL)) return false;
+    return true;
   }
 
   // --- custom background storage (IndexedDB) --------------------------------
@@ -1413,6 +1514,195 @@ var VideoEffects = (function () {
     '}'
   ].join('\n');
 
+  // --- the receiving end's shaders --------------------------------------------
+  //
+  // Is this frame keyed? Asked of every frame, by the shader itself, from a
+  // handful of taps in the two zones — so a peer that swaps back to the
+  // composite (or never left it) is passed through untouched on the very frame
+  // it arrives, and the tile's srcObject never has to change.
+  //
+  // Two strengths of the question. The STRICT one wants the whole pattern:
+  // the top-left zone key-like, the top-right ring key-like and its patch
+  // dark. That is what a receiver asks while it has no reason to expect keyed
+  // frames, so an ordinary picture with a green top-left corner is never cut
+  // up. The RELAXED one, asked while this receiver has acked keyed frames or
+  // has just seen one, wants only the top-left zone key-like and the patch
+  // not key-like: on a starved link the patch's chroma converges frames after
+  // the flat green does, and the strict test would pass those frames through
+  // — as a full-screen green flash.
+  //
+  // `kd` is the key colour as it decoded (limited-range YUV, a matrix mismatch
+  // and 4:2:0 all move it off pure green), averaged over the top-left taps.
+  // Everything is in image coordinates: x right, y DOWN, as the camera
+  // texture's rows are stored.
+  function keyDetectGlsl() {
+    function tap(side, p) {
+      var f = function (i) { return ((i + 0.5) / KEY_TAP_GRID).toFixed(4); };
+      return 'zoneTap(' + side + ', vec2(' + f(p[0]) + ', ' + f(p[1]) + '))';
+    }
+    var src = [
+      'float keyE(vec3 x) { return x.g - max(x.r, x.b); }',
+      'bool keyLike(vec3 x) { return x.g > 0.75 && x.r < 0.25 && x.b < 0.25; }',
+      'vec3 zoneTap(float side, vec2 f) {',
+      '  vec2 o = vec2(side > 0.5 ? 1.0 - uZone.x : 0.0, 0.0);',
+      '  return texture(uCam, o + f * uZone).rgb;',
+      '}',
+      'vec4 keyDetect() {',
+      '  vec3 kd = vec3(0.0);',
+      '  vec3 t;',
+      '  bool tl = true;'
+    ];
+    KEY_TAPS.tl.forEach(function (p) {
+      src.push('  t = ' + tap('0.0', p) + '; tl = tl && keyLike(t); kd += t;');
+    });
+    src.push('  kd /= ' + KEY_TAPS.tl.length.toFixed(1) + ';');
+    src.push('  vec3 p = (' + KEY_TAPS.patch.map(function (p) { return tap('1.0', p); }).join(' + ') +
+             ') / ' + KEY_TAPS.patch.length.toFixed(1) + ';');
+    src.push('  bool keyed;');
+    src.push('  if (uExpectKeyed > 0.5 || uKeyedRecently > 0.5) {');
+    src.push('    keyed = tl && keyE(p) < 0.35;');
+    src.push('  } else {');
+    src.push('    bool ring = true;');
+    KEY_TAPS.ring.forEach(function (p) {
+      src.push('    ring = ring && keyLike(' + tap('1.0', p) + ');');
+    });
+    src.push('    keyed = tl && ring && max(p.r, max(p.g, p.b)) < 0.25;');
+    src.push('  }');
+    src.push('  return vec4(kd, keyed ? 1.0 : 0.0);');
+    src.push('}');
+    // The raw key alpha: how far a pixel is from the key, as a share of how
+    // far the key is from grey. 1 - e(c)/e(K): the composite's own m times
+    // (1 - e(camera)), which is why a reddish face reaches 1 early and a
+    // greenish one never does.
+    src.push('float keyA0(vec3 c, vec3 kd) { return 1.0 - keyE(c) / max(keyE(kd), 0.3); }');
+    // The low end is the sender's own floor (and codec noise in the flat
+    // field), the top end the saturation; between them the alpha is taken as
+    // it is. See KEYIN_SATURATE.
+    src.push('float keyRamp(float a) { return a < ' + KEY_ALPHA_FLOOR.toFixed(4) + ' ? 0.0 : (a > ' +
+             KEYIN_SATURATE.toFixed(4) + ' ? 1.0 : a); }');
+    src.push('bool inZone(vec2 q) { return q.y < uZone.y && (q.x < uZone.x || q.x > 1.0 - uZone.x); }');
+    return src;
+  }
+
+  // The key-in's own matte, at the mask's working size, every frame. Two
+  // channels:
+  //   r: the key alpha, box-averaged over the destination texel — what the
+  //      soft mask (and so the shadow and the light wrap's rim) is built from,
+  //      exactly as the sender builds its soft mask from its finished mask;
+  //   g: the LOWEST raw alpha within KEYIN_BAND_REACH — "is there background
+  //      near here". The composite uses it to tell the edge band, where the
+  //      edgeE correction applies, from the inside of the person, where the
+  //      alpha is simply 1.
+  // Its rows stay in the camera's order (top first), so the composite samples
+  // it at `flip` like the sender's mask.
+  var FRAG_KEY_MASK = [
+    '#version 300 es',
+    'precision mediump float;',
+    'in vec2 vUv;',
+    'uniform sampler2D uCam;',
+    'uniform vec2 uZone;',
+    'uniform float uExpectKeyed;',
+    'uniform float uKeyedRecently;',
+    'uniform vec2 uOff;',
+    'uniform vec2 uReach;',
+    'out vec4 outColor;'
+  ].concat(keyDetectGlsl(), [
+    'void main() {',
+    '  vec4 det = keyDetect();',
+    '  if (det.a < 0.5) { outColor = vec4(0.0, 0.0, 0.0, 1.0); return; }',
+    '  vec2 q = vUv;',
+    '  vec3 kd = det.rgb;',
+    '  float a = keyRamp(clamp(keyA0(texture(uCam, q + vec2(-uOff.x, -uOff.y)).rgb, kd), 0.0, 1.0));',
+    '  a += keyRamp(clamp(keyA0(texture(uCam, q + vec2( uOff.x, -uOff.y)).rgb, kd), 0.0, 1.0));',
+    '  a += keyRamp(clamp(keyA0(texture(uCam, q + vec2(-uOff.x,  uOff.y)).rgb, kd), 0.0, 1.0));',
+    '  a += keyRamp(clamp(keyA0(texture(uCam, q + vec2( uOff.x,  uOff.y)).rgb, kd), 0.0, 1.0));',
+    '  a *= 0.25;',
+    '  float near = keyA0(texture(uCam, q).rgb, kd);',
+    '  for (int i = 0; i < 8; i++) {',
+    '    float ang = float(i) * 0.7853982;',
+    '    near = min(near, keyA0(texture(uCam, q + vec2(cos(ang), sin(ang)) * uReach).rgb, kd));',
+    '  }',
+    '  if (inZone(q)) { a = 0.0; near = 0.0; }',
+    '  outColor = vec4(a, clamp(near, 0.0, 1.0), 0.0, 1.0);',
+    '}'
+  ]).join('\n');
+
+  // The key-in composite: the incoming frame `c`, cut out and put over this
+  // device's own render of the sender's scene.
+  //
+  // a0 is the raw key alpha. In the edge band it is divided by (1 - edgeE),
+  // edgeE being the sender's own measure of how green its edge pixels are
+  // (the median e(camera) over its band, <= 0): a face is redder than green,
+  // so its a0 runs ahead of the true m by exactly that factor, and the
+  // correction brings it back. Inside the person the alpha is 1 — the frame's
+  // pixel, untouched.
+  //
+  // Then `c + (bg - kd)(1 - a)`, which is mix(bg, S, a) for the subject's own
+  // colour S without ever computing S as a clamped number: a pixel that is
+  // 70% person keeps the encoder's own rounding rather than having it
+  // amplified by a division. S is only computed for the two things that need
+  // it — taking the leftover key out of a partly keyed pixel (the despill,
+  // only where a0 < 1) and the light wrap, the scene's light on your outline,
+  // done as FRAG_COMPOSITE does it — and enters as a correction weighted by a.
+  //
+  // Passthrough, when the frame is not keyed, is the input unchanged. The
+  // scene is still sampled (and drawn) in passthrough: its history stays warm
+  // and what the receiver pays is what it will pay once keyed frames arrive.
+  var FRAG_KEYIN = [
+    '#version 300 es',
+    'precision mediump float;',
+    'in vec2 vUv;',
+    'uniform sampler2D uCam;',
+    'uniform sampler2D uMask;',
+    'uniform sampler2D uScene;',
+    'uniform sampler2D uSceneEnv;',
+    'uniform sampler2D uSoft;',
+    'uniform vec2 uZone;',
+    'uniform float uExpectKeyed;',
+    'uniform float uKeyedRecently;',
+    'uniform float uEdgeE;',
+    'uniform vec2 uShadowOff;',
+    'uniform vec2 uShadow;',
+    'uniform float uWrap;',
+    'uniform float uHasScene;',
+    'uniform vec3 uFlat;',
+    'out vec4 outColor;'
+  ].concat(keyDetectGlsl(), [
+    'void main() {',
+    '  vec2 flip = vec2(vUv.x, 1.0 - vUv.y);',
+    '  vec3 c = texture(uCam, flip).rgb;',
+    '  vec3 bg = uFlat;',
+    '  float soft = 0.0;',
+    '  if (uHasScene > 0.5) {',
+    '    vec4 sc = texture(uScene, vUv);',
+    '    soft = texture(uSoft, flip).r;',
+    '    float thrown = texture(uSoft, flip + uShadowOff).r;',
+    '    float shade = clamp(thrown * uShadow.x + soft * uShadow.y, 0.0, 0.85);',
+    '    bg = sc.rgb * (1.0 - sc.a * shade);',
+    '  }',
+    '  vec4 det = keyDetect();',
+    '  if (det.a < 0.5) { outColor = vec4(c, 1.0); return; }',
+    '  if (inZone(flip)) { outColor = vec4(bg, 1.0); return; }',
+    '  vec3 kd = det.rgb;',
+    '  float a0 = keyA0(c, kd);',
+    '  float near = texture(uMask, flip).g;',
+    '  float a = near < ' + KEYIN_BAND_A0.toFixed(4) + ' ? clamp(a0 / (1.0 - uEdgeE), 0.0, 1.0) : 1.0;',
+    '  a = keyRamp(a);',
+    '  vec3 S = (c - kd * (1.0 - a)) / max(a, 1.0 / 255.0);',
+    '  float spill = max(0.0, S.g - max(S.r, S.b)) * clamp((1.0 - a0) * ' + KEYIN_DESPILL.toFixed(2) + ', 0.0, 1.0);',
+    '  vec3 F = clamp(S - vec3(0.0, spill, 0.0), 0.0, 1.0);',
+    '  vec3 lit = F;',
+    '  if (uHasScene > 0.5 && uWrap > 0.0) {',
+    '    vec3 env = textureLod(uSceneEnv, vUv, 3.0).rgb;',
+    '    float rim = uWrap * (1.0 - smoothstep(0.4, 0.95, soft));',
+    '    vec3 s = F * F;',
+    '    lit = sqrt(s + env * env * rim * (1.0 - s));',
+    '  }',
+    '  vec3 o = c + (bg - kd) * (1.0 - a) + a * (lit - F - vec3(0.0, spill, 0.0));',
+    '  outColor = vec4(clamp(o, 0.0, 1.0), 1.0);',
+    '}'
+  ]).join('\n');
+
   function compile(gl, type, src) {
     var sh = gl.createShader(type);
     gl.shaderSource(sh, src);
@@ -1469,6 +1759,36 @@ var VideoEffects = (function () {
     return fb;
   }
 
+  // One triangle that covers the viewport, which every pass draws. Stored as
+  // `quad` and `vao` on whatever owns the context.
+  function fullScreenTriangle(gl, owner) {
+    owner.quad = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, owner.quad);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    owner.vao = gl.createVertexArray();
+    gl.bindVertexArray(owner.vao);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+  }
+
+  // An off-DOM <video> playing a stream, for a pipeline to read frames from.
+  function hiddenVideo(stream) {
+    var v = document.createElement('video');
+    v.muted = true;
+    v.playsInline = true;
+    v.autoplay = true;
+    v.setAttribute('playsinline', '');
+    v.srcObject = stream;
+    return v;
+  }
+
+  function median(values) {
+    if (!values.length) return 0;
+    var s = values.slice().sort(function (a, b) { return a - b; });
+    return s[s.length >> 1];
+  }
+
   // --- the processor --------------------------------------------------------
 
   var _active = null;      // at most one camera pipeline at a time
@@ -1487,6 +1807,7 @@ var VideoEffects = (function () {
   var _onKeyedState = null;   // fn(stream): a published stream's keyed state changed
   var _onPressure = null;     // fn() -> true when load was shed elsewhere
   var _keyedTracks = (typeof WeakSet === 'function') ? new WeakSet() : null;
+  var _keyIns = [];           // live KeyInProcessors
 
   function Processor(rawStream, mode) {
     this.raw = rawStream;
@@ -1674,16 +1995,7 @@ var VideoEffects = (function () {
     });
     if (!gl) throw new Error('WebGL2 unavailable');
     this.gl = gl;
-
-    this.quad = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-
-    this.vao = gl.createVertexArray();
-    gl.bindVertexArray(this.vao);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-    gl.bindVertexArray(null);
+    fullScreenTriangle(gl, this);
 
     this.pDown = program(gl, FRAG_DOWNSAMPLE);
     this.pBlur = program(gl, FRAG_BLUR);
@@ -3153,6 +3465,739 @@ var VideoEffects = (function () {
     }
   };
 
+  // --- the receiving end: key-in -------------------------------------------
+  //
+  // A peer that sends a keyed stream sends the person over the key colour and
+  // an offer: which scene, how it is lit, how green its edge is, how big its
+  // picture. Each such peer gets a KeyInProcessor here, which cuts the person
+  // out of every incoming frame and puts them over THIS device's render of
+  // the same scene, into a canvas whose capture is what the peer's tile shows.
+  //
+  // It is not a Processor, and must never be mistaken for one: it is never
+  // `_active` (wrap() would destroy the user's own camera pipeline), never
+  // reports through `_onOverload` (that switches the user's OWN background
+  // off) or `_onProgress` (the picker's download bar), never loads the
+  // segmentation runtime, and never sees `_plate` — the empty-room picture is
+  // of the user's room, and a remote track's empty deviceId would otherwise
+  // match it. It borrows the scene half of Processor (ensureScene, drawScene,
+  // resolveScene, buildSoft, the shadow) and nothing else.
+
+  // The CPU half of detection, a few times a second: the two zones of the
+  // newest frame drawn into a 40x20 canvas and read at exactly the taps the
+  // shader uses. It is what tells main.js, without a GPU read-back, when a
+  // peer's frames are keyed and when they stopped being — lastKeyed and
+  // lastUnkeyed are the performance.now() of the last frame seen each way.
+  function MarkerProbe(video) {
+    this.video = video;
+    this.canvas = document.createElement('canvas');
+    this.canvas.width = KEY_TAP_GRID * 2;
+    this.canvas.height = KEY_TAP_GRID;
+    this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
+    this.expect = false;
+    this.lastKeyed = 0;
+    this.lastUnkeyed = 0;
+    this.lastStrict = 0;
+    this.lastProbe = 0;
+  }
+
+  // "A keyed frame was seen lately" — what lets the relaxed detector stand in
+  // for a receiver that is not expecting keyed frames (it has withdrawn, and
+  // they are still arriving). Only a frame that passed the STRICT test counts:
+  // a relaxed pass renewing the very window that allows it would latch for as
+  // long as somebody's ordinary picture happened to have a green top-left
+  // corner.
+  MarkerProbe.prototype.recent = function (now) {
+    return !!this.lastStrict && now - this.lastStrict <= KEYIN_RECENT_MS;
+  };
+
+  function keyLikeRgb(c) { return c[1] > 0.75 && c[0] < 0.25 && c[2] < 0.25; }
+  function keyERgb(c) { return c[1] - Math.max(c[0], c[2]); }
+
+  // -> null when it is not time yet (or there is nothing to read), else
+  // { keyed, kd } with kd the decoded key colour, 0-1.
+  MarkerProbe.prototype.tick = function (now) {
+    if (now - this.lastProbe < KEYIN_PROBE_MS) return null;
+    var v = this.video, vw = v.videoWidth, vh = v.videoHeight;
+    if (!this.ctx || !vw || !vh || v.readyState < 2) return null;
+    this.lastProbe = now;
+    var G = KEY_TAP_GRID, Z = KEY_MARKER.zone * Math.min(vw, vh), d;
+    try {
+      this.ctx.drawImage(v, 0, 0, Z, Z, 0, 0, G, G);
+      this.ctx.drawImage(v, vw - Z, 0, Z, Z, G, 0, G, G);
+      d = this.ctx.getImageData(0, 0, 2 * G, G).data;
+    } catch (e) { return null; }
+    var px = function (side, p) {
+      var o = (p[1] * 2 * G + side * G + p[0]) * 4;
+      return [d[o] / 255, d[o + 1] / 255, d[o + 2] / 255];
+    };
+    var avg = function (side, taps) {
+      var s = [0, 0, 0];
+      taps.forEach(function (p) { var c = px(side, p); s[0] += c[0]; s[1] += c[1]; s[2] += c[2]; });
+      return s.map(function (x) { return x / taps.length; });
+    };
+    var tl = KEY_TAPS.tl.every(function (p) { return keyLikeRgb(px(0, p)); });
+    var kd = avg(0, KEY_TAPS.tl), patch = avg(1, KEY_TAPS.patch);
+    var strict = tl && KEY_TAPS.ring.every(function (p) { return keyLikeRgb(px(1, p)); }) &&
+                 Math.max(patch[0], patch[1], patch[2]) < 0.25;
+    var keyed = (this.expect || this.recent(now)) ? (tl && keyERgb(patch) < 0.35) : strict;
+    if (strict) this.lastStrict = now;
+    if (keyed) this.lastKeyed = now; else this.lastUnkeyed = now;
+    return { keyed: keyed, kd: kd };
+  };
+
+  function capKeyInSize(w, h) {
+    var wide = w >= h;
+    var maxW = wide ? KEYIN_MAX_LONG : KEYIN_MAX_SHORT, maxH = wide ? KEYIN_MAX_SHORT : KEYIN_MAX_LONG;
+    var s = Math.min(1, maxW / w, maxH / h);
+    return { w: Math.max(2, Math.round(w * s / 2) * 2), h: Math.max(2, Math.round(h * s / 2) * 2) };
+  }
+
+  function finiteIn(v, lo, hi, dflt) {
+    v = Number(v);
+    if (!isFinite(v)) return dflt;
+    return Math.min(hi, Math.max(lo, v));
+  }
+
+  function KeyInProcessor(remote, offer, onGiveUp) {
+    this.raw = remote;
+    this.onGiveUp = typeof onGiveUp === 'function' ? onGiveUp : null;
+    this.stopped = false;
+    this.dead = false;        // gave up: the probe keeps running, the GL does not
+    this.resolved = false;
+    this.paused = false;
+    this.expectKeyed = false;
+    this.video = hiddenVideo(remote);
+    this.canvas = document.createElement('canvas');
+    this.gl = null;
+    this.capture = null;
+    this.track = null;
+    this.manualFrames = false;
+    this.zone = [KEY_MARKER.zone, KEY_MARKER.zone];   // the marker zone in UV, (Z / width, Z / height)
+    this.srcW = 1280;                                   // the incoming frame's width
+    this.segW = 0;
+    this.segH = 0;
+    this.maskPrimed = false;
+    this.drawTimes = [];
+    this.lastBudget = 0;
+    this.warm = null;
+
+    // The scene, kept exactly as Processor keeps it: its methods are borrowed.
+    this.sceneId = null;
+    this.scene = null;
+    this.sceneProgs = {};
+    this.pResolve = undefined;
+    this.texSceneOut = null;
+    this.fbSceneOut = null;
+    this.sceneOut = 0;
+    this.sceneAge = 0;
+    this.sceneLook = 0;
+    this.sceneHzSteps = SCENE_HZ.slice();
+    this.sceneStep = 0;
+    this.lastScene = 0;
+    this.lastDraw = 0;
+    this.sceneStart = 0;
+    this.wantScene = null;
+    this.look = VideoScenes.defaultLook();
+    this.lookTarget = VideoScenes.defaultLook();
+    this.lookPrev = null;
+    this.lookCanvas = null;
+    this.lookCtx = null;
+
+    this.offer = { scene: null, edgeE: 0, size: null };
+    this.edgeE = 0;
+    this.applyOffer(offer);
+    this.probe = new MarkerProbe(this.video);
+
+    var self = this;
+    this.canvas.addEventListener('webglcontextlost', function (ev) {
+      ev.preventDefault();
+      self.giveUp('context-lost');
+    });
+    this.handle = {
+      stream: null,
+      processor: this,
+      setSource: function (s) { self.setSource(s); },
+      setOffer: function (o) { return self.setOffer(o); },
+      scene: function () { return self.sceneId; },
+      setExpectKeyed: function (on) { self.expectKeyed = !!on; },
+      setPaused: function (on) { self.paused = !!on; },
+      lastKeyedAt: function () { return self.probe.lastKeyed; },
+      lastUnkeyedAt: function () { return self.probe.lastUnkeyed; },
+      alive: function () { return !self.stopped && !self.dead; },
+      destroy: function () { self.destroy(); }
+    };
+  }
+
+  ['drawQuad', 'bindTex', 'ensureScene', 'allocSoft', 'buildSoft', 'drawScene',
+   'resolveScene', 'shadowPlan', 'pump'].forEach(function (name) {
+    KeyInProcessor.prototype[name] = Processor.prototype[name];
+  });
+
+  // The offer's numbers, taken defensively even though main.js has already
+  // sanitised them: a NaN in a uniform is a black tile.
+  KeyInProcessor.prototype.applyOffer = function (offer) {
+    offer = offer || {};
+    var o = this.offer;
+    o.scene = VideoScenes.resolveId(offer.scene) || null;
+    var sz = offer.size;
+    if (sz && sz.length === 2 && isFinite(sz[0]) && isFinite(sz[1]) && sz[0] > 0 && sz[1] > 0) {
+      o.size = [Math.round(finiteIn(sz[0], 16, 4096, 640)), Math.round(finiteIn(sz[1], 16, 4096, 360))];
+    }
+    if (offer.edgeE !== undefined && offer.edgeE !== null) o.edgeE = finiteIn(offer.edgeE, -1, 0, o.edgeE);
+    this.edgeE = o.edgeE;
+    if (offer.look) this.applyLook(offer.look);
+  };
+
+  // The look is the SENDER's: exposure, white balance and the light's
+  // direction can only be measured where the room still is, and a keyed
+  // frame has no room left in it. So they are taken whole from the offer
+  // (the first one is applied at once — easeLook takes a first measurement
+  // whole — and later ones are eased into), and only where the person is
+  // in the picture is measured here (sampleGeometry()).
+  KeyInProcessor.prototype.applyLook = function (look) {
+    var t = this.lookTarget, cfg = VideoScenes._lookConfig;
+    if (look.tint && look.tint.length === 3) {
+      t.tint = [0, 1, 2].map(function (i) { return finiteIn(look.tint[i], 0.5, 2, 1); });
+    }
+    t.exposure = finiteIn(look.exposure, cfg.expMin, cfg.expMax, t.exposure);
+    t.dirX = finiteIn(look.dirX, -1, 1, t.dirX);
+    t.dirY = finiteIn(look.dirY, -1, 1, t.dirY);
+    t.hard = finiteIn(look.hard, 0, 1, t.hard);
+    if (look.side === 1 || look.side === -1) t.side = look.side;
+    t.measured = true;
+  };
+
+  // The canvas: the sender's own size, capped at 1280x720 — not the size the
+  // frames happen to arrive at, which climbs through two or three steps in a
+  // call's first twenty seconds as the encoder finds its bitrate. The camera
+  // texture is sampled by UV, so it may be any size at all; only a new SHAPE
+  // (a phone turned) is worth a resize.
+  KeyInProcessor.prototype.sizeFor = function (vw, vh) {
+    var sz = this.offer.size;
+    var base = capKeyInSize(sz ? sz[0] : vw, sz ? sz[1] : vh);
+    var aspect = vw / vh;
+    if (Math.abs(aspect / (base.w / base.h) - 1) <= KEYIN_ASPECT_TOL) return base;
+    var long = Math.max(base.w, base.h);
+    return aspect >= 1 ? capKeyInSize(long, long / aspect) : capKeyInSize(long * aspect, long);
+  };
+
+  KeyInProcessor.prototype.initGL = function (w, h) {
+    this.canvas.width = w;
+    this.canvas.height = h;
+    var gl = this.canvas.getContext('webgl2', {
+      alpha: false,
+      antialias: false,
+      depth: false,
+      stencil: false,
+      desynchronized: false,
+      preserveDrawingBuffer: false
+    });
+    if (!gl) throw new Error('WebGL2 unavailable');
+    this.gl = gl;
+    fullScreenTriangle(gl, this);
+    this.pKeyMask = program(gl, FRAG_KEY_MASK);
+    this.pKeyComp = program(gl, FRAG_KEYIN);
+    this.pFeather = program(gl, FRAG_FEATHER);
+    this.texCam = texture(gl, 1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+    var seg = segSizeFor(w, h);
+    this.segW = seg.width;
+    this.segH = seg.height;
+    this.texMaskA = texture(gl, this.segW, this.segH, gl.RG8, gl.RG, gl.UNSIGNED_BYTE);
+    this.fbMaskA = framebuffer(gl, this.texMaskA);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.DEPTH_TEST);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  };
+
+  // The light resize: the canvas, the matte (if its shape changed) and the
+  // scene's buffers. The programs stay — a recompile is seconds of somebody's
+  // tile showing nothing — and so does the context.
+  KeyInProcessor.prototype.resize = function (w, h) {
+    var gl = this.gl;
+    this.canvas.width = w;
+    this.canvas.height = h;
+    var seg = segSizeFor(w, h);
+    if (seg.width !== this.segW || seg.height !== this.segH) {
+      this.segW = seg.width;
+      this.segH = seg.height;
+      gl.bindTexture(gl.TEXTURE_2D, this.texMaskA);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG8, this.segW, this.segH, 0, gl.RG, gl.UNSIGNED_BYTE, null);
+      this.maskPrimed = false;
+      if (this.texSoftA) this.allocSoft(this.segW, this.segH);
+    }
+    if (this.texSceneOut) {
+      this.texSceneOut.forEach(function (t) { gl.deleteTexture(t); });
+      this.fbSceneOut.forEach(function (f) { gl.deleteFramebuffer(f); });
+      this.texSceneOut = this.fbSceneOut = null;
+    }
+    if (this.sceneId) {
+      try { this.ensureScene(this.sceneId); } catch (e) { this.giveUp('scene'); }
+    }
+  };
+
+  KeyInProcessor.prototype.openOutput = function () {
+    var cs = this.canvas.captureStream(0);
+    var track = cs.getVideoTracks()[0];
+    if (!track || typeof track.requestFrame !== 'function') {
+      try { cs.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* ignore */ }
+      cs = this.canvas.captureStream(30);
+      track = cs.getVideoTracks()[0];
+      this.manualFrames = false;
+    } else {
+      this.manualFrames = true;
+    }
+    this.capture = cs;
+    this.track = track;
+    this.handle.stream = cs;
+  };
+
+  KeyInProcessor.prototype.check = function () {
+    if (this.stopped) throw new Error('key-in was destroyed');
+    if (this.dead) throw new Error('key-in gave up');
+  };
+
+  // Frames flowing means a real picture size. Unlike the camera's own
+  // waitForFrame(), no timeout is taken as "good enough": a stalled remote
+  // stream is a reason not to key, not a 1280x720 guess.
+  KeyInProcessor.prototype.waitForFrames = function () {
+    var self = this, v = this.video, t0 = performance.now();
+    return new Promise(function (resolve, reject) {
+      (function poll() {
+        if (self.stopped) { reject(new Error('key-in was destroyed')); return; }
+        if (v.readyState >= 2 && v.videoWidth && v.videoHeight) { resolve(); return; }
+        if (performance.now() - t0 > KEYIN_FRAME_WAIT_MS) { reject(new Error('no frames from the remote stream')); return; }
+        setTimeout(poll, 50);
+      })();
+    });
+  };
+
+  // Frames flow → the scene compiles → the self-test → the warm-up. Only
+  // then is the handle given out, and only then does main.js tell the
+  // sender it is ready: a receiver that cannot do the job says so by never
+  // saying yes, which leaves the peer on the composite.
+  KeyInProcessor.prototype.start = function () {
+    var self = this, id = this.offer.scene;
+    if (!id) return Promise.reject(new Error('key-in needs a scene'));
+    return this.video.play().catch(function () { /* muted autoplay */ })
+      .then(function () { return self.waitForFrames(); })
+      .then(function () {
+        self.check();
+        var s = self.sizeFor(self.video.videoWidth, self.video.videoHeight);
+        self.initGL(s.w, s.h);
+        return VideoScenes.compileProgramAsync(self.gl, id);
+      })
+      .then(function (prog) {
+        self.check();
+        self.sceneProgs[id] = prog;
+        self.wantScene = id;
+        self.ensureScene(id);
+        self.openOutput();
+        var why = self.selfTest();
+        if (why) throw new Error('key-in self-test failed: ' + why);
+        return self.warmUp();
+      })
+      .then(function () {
+        self.check();
+        self.resolved = true;
+        return self.handle;
+      });
+  };
+
+  KeyInProcessor.prototype.warmUp = function () {
+    var self = this;
+    return new Promise(function (resolve, reject) {
+      self.warm = {
+        times: [], resolve: resolve, reject: reject,
+        timer: setTimeout(function () {
+          var w = self.warm;
+          if (!w) return;
+          self.warm = null;
+          reject(new Error('key-in warm-up timed out (' + w.times.length + ' frames)'));
+        }, KEYIN_WARM_WAIT_MS)
+      };
+      self.pump();
+    });
+  };
+
+  // Check the whole path on this engine before anybody relies on it.
+  //
+  // First, that the GPU sees the incoming frame the way a 2D canvas does — a
+  // webview that uploads remote video flipped, black or not at all would key
+  // nonsense. Then two synthetic frames through the real passes: a keyed one,
+  // whose subject must come out as itself and whose background and zones must
+  // come out as anything but the key; and an unmarked one with a green
+  // top-left corner, which must come out untouched. Returns null when all is
+  // well, or what failed.
+  KeyInProcessor.prototype.selfTest = function () {
+    var gl = this.gl, v = this.video, vw = v.videoWidth, vh = v.videoHeight;
+    gl.bindTexture(gl.TEXTURE_2D, this.texCam);
+    try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, v); } catch (e) { return 'upload'; }
+    var pts = [[0.1, 0.1], [0.9, 0.1], [0.5, 0.5], [0.1, 0.9], [0.9, 0.9]].map(function (f) {
+      return [Math.min(vw - 1, Math.floor(f[0] * vw)), Math.min(vh - 1, Math.floor(f[1] * vh))];
+    });
+    var gpu = [], texel = new Uint8Array(4);
+    var fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.texCam, 0);
+    // Rows as stored: the camera texture keeps the picture's top row first,
+    // and so does a framebuffer's row 0.
+    pts.forEach(function (p) {
+      gl.readPixels(p[0], p[1], 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, texel);
+      gpu.push([texel[0], texel[1], texel[2]]);
+    });
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.deleteFramebuffer(fb);
+    var probe = document.createElement('canvas');
+    probe.width = pts.length; probe.height = 1;
+    var pc = probe.getContext('2d', { willReadFrequently: true });
+    var cpu;
+    try {
+      pts.forEach(function (p, i) { pc.drawImage(v, p[0], p[1], 1, 1, i, 0, 1, 1); });
+      cpu = pc.getImageData(0, 0, pts.length, 1).data;
+    } catch (e) { return 'probe'; }
+    // Generous: the two paths may convert YUV a little differently, and a
+    // moving picture may even have moved on by a frame. What this is for is a
+    // flipped, black or garbage upload, which misses by far more.
+    var agree = 0;
+    gpu.forEach(function (g, i) {
+      var d = Math.max(Math.abs(g[0] - cpu[i * 4]), Math.abs(g[1] - cpu[i * 4 + 1]), Math.abs(g[2] - cpu[i * 4 + 2]));
+      if (d <= 48) agree++;
+    });
+    if (agree < pts.length - 1) return 'texture';
+
+    var W = 160, H = 90, Z = KEY_MARKER.zone * Math.min(W, H), P = KEY_MARKER.patch * Z;
+    var syn = document.createElement('canvas');
+    syn.width = W; syn.height = H;
+    var sx = syn.getContext('2d', { alpha: false });
+    var C = [200, 120, 90];
+    var zoneUv = [Z / 2 / W, Z / 2 / H];
+    sx.fillStyle = 'rgb(0,255,0)';
+    sx.fillRect(0, 0, W, H);
+    sx.fillStyle = 'rgb(' + C.join(',') + ')';
+    sx.fillRect(W * 0.3, H * 0.3, W * 0.4, H * 0.7);
+    sx.fillStyle = '#000';
+    sx.fillRect(W - Z + (Z - P) / 2, (Z - P) / 2, P, P);
+    var keyed = this.synthPass(syn, [[0.5, 0.75], [0.12, 0.6], zoneUv]);
+    sx.fillStyle = 'rgb(128,128,128)';
+    sx.fillRect(0, 0, W, H);
+    sx.fillStyle = 'rgb(0,255,0)';
+    sx.fillRect(0, 0, Z, Z);
+    var plain = this.synthPass(syn, [[0.5, 0.75], zoneUv]);
+    if (!keyed || !plain) return 'synthetic';
+    var near = function (px, want, tol) {
+      return Math.abs(px[0] - want[0]) <= tol && Math.abs(px[1] - want[1]) <= tol && Math.abs(px[2] - want[2]) <= tol;
+    };
+    var notKey = function (px) { return !near(px, KEY_COLOR, 60); };
+    if (!near(keyed[0], C, 12)) return 'subject';
+    if (!notKey(keyed[1]) || !notKey(keyed[2])) return 'background';
+    if (!near(plain[0], [128, 128, 128], 8) || !near(plain[1], KEY_COLOR, 8)) return 'passthrough';
+    return null;
+  };
+
+  // One synthetic frame through the matte, the soft mask and the composite,
+  // read back at UV points (image coordinates) from the canvas in the same
+  // task — or, with no points, the whole canvas as RGBA bytes, top row first.
+  // Strict detection unless `expect` (the self-test never expects; the codec
+  // tests use both).
+  KeyInProcessor.prototype.synthPass = function (src, points, expect) {
+    var gl = this.gl;
+    if (!this.texSynth) this.texSynth = texture(gl, 1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+    gl.bindTexture(gl.TEXTURE_2D, this.texSynth);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+    var Z = KEY_MARKER.zone * Math.min(src.width, src.height);
+    this.zone = [Z / src.width, Z / src.height];
+    this.srcW = src.width;
+    this.keyMask(this.texSynth, !!expect, false);
+    this.buildSoft();
+    this.composite(this.texSynth, !!expect, false);
+    var cw = this.canvas.width, ch = this.canvas.height;
+    var probe = document.createElement('canvas');
+    if (!points) {
+      probe.width = cw; probe.height = ch;
+      var fc = probe.getContext('2d', { willReadFrequently: true });
+      try {
+        fc.drawImage(this.canvas, 0, 0);
+        return fc.getImageData(0, 0, cw, ch).data;
+      } catch (e) { return null; }
+    }
+    probe.width = points.length; probe.height = 1;
+    var pc = probe.getContext('2d', { willReadFrequently: true });
+    try {
+      var self = this;
+      points.forEach(function (p, i) {
+        var x = Math.min(cw - 1, Math.floor(p[0] * cw)), y = Math.min(ch - 1, Math.floor(p[1] * ch));
+        pc.drawImage(self.canvas, x, y, 1, 1, i, 0, 1, 1);
+      });
+      var d = pc.getImageData(0, 0, points.length, 1).data;
+      return points.map(function (p, i) { return [d[i * 4], d[i * 4 + 1], d[i * 4 + 2]]; });
+    } catch (e) {
+      return null;
+    }
+  };
+
+  KeyInProcessor.prototype.keyMask = function (tex, expect, recent) {
+    var gl = this.gl, p = this.pKeyMask;
+    gl.useProgram(p);
+    this.bindTex(p, 'uCam', 0, tex);
+    gl.uniform2f(uloc(gl, p, 'uZone'), this.zone[0], this.zone[1]);
+    gl.uniform1f(uloc(gl, p, 'uExpectKeyed'), expect ? 1 : 0);
+    gl.uniform1f(uloc(gl, p, 'uKeyedRecently'), recent ? 1 : 0);
+    gl.uniform2f(uloc(gl, p, 'uOff'), 0.25 / this.segW, 0.25 / this.segH);
+    // The same distance in pixels down the picture as across it: the zone is
+    // square in pixels, so zone.y / zone.x is the frame's width over height.
+    var aspect = this.zone[1] / this.zone[0];
+    var reach = Math.max(KEYIN_BAND_REACH, KEYIN_BAND_MIN_PX / this.srcW);
+    gl.uniform2f(uloc(gl, p, 'uReach'), reach, reach * aspect);
+    this.drawQuad(this.fbMaskA, this.segW, this.segH);
+    this.maskPrimed = true;
+  };
+
+  KeyInProcessor.prototype.composite = function (tex, expect, recent) {
+    var gl = this.gl, p = this.pKeyComp;
+    var hasScene = !!(this.sceneId && this.scene);
+    gl.useProgram(p);
+    this.bindTex(p, 'uCam', 0, tex);
+    this.bindTex(p, 'uMask', 3, this.texMaskA);
+    // Bound whether or not there is a scene: a sampler with nothing behind it
+    // is an error on some drivers even in a branch that never reads it.
+    this.bindTex(p, 'uScene', 6, (this.texSceneOut && this.texSceneOut[this.sceneOut]) || this.texScene || this.texCam);
+    this.bindTex(p, 'uSceneEnv', 9, this.texScene || this.texCam);
+    this.bindTex(p, 'uSoft', 7, this.texSoftA || this.texMaskA);
+    gl.uniform2f(uloc(gl, p, 'uZone'), this.zone[0], this.zone[1]);
+    gl.uniform1f(uloc(gl, p, 'uExpectKeyed'), expect ? 1 : 0);
+    gl.uniform1f(uloc(gl, p, 'uKeyedRecently'), recent ? 1 : 0);
+    gl.uniform1f(uloc(gl, p, 'uEdgeE'), this.edgeE);
+    var sh = this.shadowPlan();
+    gl.uniform2f(uloc(gl, p, 'uShadowOff'), sh.offX, sh.offY);
+    gl.uniform2f(uloc(gl, p, 'uShadow'), sh.cast, sh.contact);
+    gl.uniform1f(uloc(gl, p, 'uWrap'), hasScene ? this.scene.wrap : 0);
+    gl.uniform1f(uloc(gl, p, 'uHasScene'), hasScene ? 1 : 0);
+    gl.uniform3f(uloc(gl, p, 'uFlat'), KEYIN_FLAT[0], KEYIN_FLAT[1], KEYIN_FLAT[2]);
+    this.drawQuad(null, this.canvas.width, this.canvas.height);
+  };
+
+  KeyInProcessor.prototype.draw = function (now) {
+    var gl = this.gl, v = this.video;
+    var vw = v.videoWidth, vh = v.videoHeight;
+    if (!vw || !vh) return false;
+    var cw = this.canvas.width, ch = this.canvas.height;
+    if (Math.abs((vw / vh) / (cw / ch) - 1) > KEYIN_ASPECT_TOL) {
+      var s = this.sizeFor(vw, vh);
+      this.resize(s.w, s.h);
+      if (this.dead) return false;
+    }
+    gl.bindTexture(gl.TEXTURE_2D, this.texCam);
+    try {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, v);
+    } catch (e) {
+      return false;   // the source can vanish mid-teardown
+    }
+    var Z = KEY_MARKER.zone * Math.min(vw, vh);
+    this.zone = [Z / vw, Z / vh];
+    this.srcW = vw;
+    var recent = this.probe.recent(now);
+    this.keyMask(this.texCam, this.expectKeyed, recent);
+    // Drawn in passthrough too: its history stays warm, and what the
+    // receiver pays now is what it will pay once keyed frames arrive.
+    if (this.sceneId) this.drawScene(now);
+    this.buildSoft();
+    this.composite(this.texCam, this.expectKeyed, recent);
+    return true;
+  };
+
+  KeyInProcessor.prototype.onFrame = function () {
+    if (this.stopped) return;
+    this.pump();
+    var now = performance.now();
+    // The probe runs paused and even after a give-up: main.js still needs to
+    // know when this peer's frames stop being keyed.
+    this.probe.expect = this.expectKeyed;
+    var seen = this.probe.tick(now);
+    if (seen && seen.keyed && !this.dead) this.sampleGeometry(seen.kd);
+    if (this.dead || this.paused || !this.gl || this.video.readyState < 2 || !this.video.videoWidth) return;
+    var t0 = performance.now(), drew;
+    try { drew = this.draw(now); } catch (e) { drew = false; }
+    if (!drew) return;
+    var ms = performance.now() - t0;
+    if (this.manualFrames && this.track && this.track.requestFrame) {
+      try { this.track.requestFrame(); } catch (e) { /* track ended */ }
+    }
+    this.noteDraw(now, ms);
+  };
+
+  // The warm-up's 30 frames, then the running budget: a rolling median over
+  // five seconds. Over budget is a give-up ('budget'), which main.js answers
+  // by putting the peer back on the composite — never by touching the user's
+  // own camera pipeline.
+  KeyInProcessor.prototype.noteDraw = function (now, ms) {
+    var w = this.warm;
+    if (w) {
+      w.times.push(ms);
+      if (w.times.length < KEYIN_WARM_FRAMES) return;
+      this.warm = null;
+      clearTimeout(w.timer);
+      var m = median(w.times);
+      if (m < KEYIN_WARM_MS) w.resolve();
+      else w.reject(new Error('key-in over budget (' + m.toFixed(1) + ' ms a frame)'));
+      return;
+    }
+    var t = this.drawTimes;
+    t.push([now, ms]);
+    while (t.length && now - t[0][0] > KEYIN_BUDGET_WINDOW_MS) t.shift();
+    if (now - this.lastBudget < 1000) return;
+    this.lastBudget = now;
+    if (t.length < 10 || now - t[0][0] < KEYIN_BUDGET_WINDOW_MS * 0.9) return;
+    if (median(t.map(function (x) { return x[1]; })) > KEYIN_BUDGET_MS) this.giveUp('budget');
+  };
+
+  // Where the person is in the picture, from the key itself: the geometry
+  // the scene reacts to (the light's falloff around you, the dust you stir)
+  // and nothing else — see applyLook() for the rest.
+  KeyInProcessor.prototype.sampleGeometry = function (kd) {
+    var v = this.video, vw = v.videoWidth, vh = v.videoHeight;
+    if (!vw || !vh) return;
+    var pw = LOOK_PROBE_W, ph = Math.max(2, Math.round(pw * vh / vw));
+    if (!this.lookCtx || this.lookCanvas.height !== ph) {
+      this.lookCanvas = document.createElement('canvas');
+      this.lookCanvas.width = pw; this.lookCanvas.height = ph;
+      this.lookCtx = this.lookCanvas.getContext('2d', { willReadFrequently: true });
+      this.lookPrev = null;
+    }
+    try {
+      this.lookCtx.drawImage(v, 0, 0, pw, ph);
+      var rgba = this.lookCtx.getImageData(0, 0, pw, ph).data;
+      var eK = Math.max(keyERgb(kd), 0.3);
+      var Z = KEY_MARKER.zone * Math.min(vw, vh), zx = Z / vw * pw, zy = Z / vh * ph;
+      var grid = new Uint8Array(pw * ph);
+      for (var y = 0; y < ph; y++) {
+        for (var x = 0; x < pw; x++) {
+          var i = y * pw + x;
+          if (y + 0.5 < zy && (x + 0.5 < zx || x + 0.5 > pw - zx)) continue;
+          var e = rgba[i * 4 + 1] / 255 - Math.max(rgba[i * 4] / 255, rgba[i * 4 + 2] / 255);
+          var a0 = Math.min(1, Math.max(0, 1 - e / eK));
+          grid[i] = a0 < KEY_ALPHA_FLOOR ? 0 : a0 > KEYIN_SATURATE ? 255 : Math.round(a0 * 255);
+        }
+      }
+      var stats = VideoScenes.measureSubject(rgba, pw, ph, grid, this.lookPrev);
+      this.lookPrev = grid;
+      var t = this.lookTarget;
+      if (stats) {
+        t.cx = stats.cx; t.cy = stats.cy; t.sx = stats.sx; t.sy = stats.sy;
+        t.motion = Math.min(1, Math.max(0, (stats.motion - 0.03) * 4));
+      } else {
+        t.motion = 0;
+      }
+    } catch (e) { /* a frame that cannot be read leaves the last geometry standing */ }
+  };
+
+  // A new offer: the look and the edge at once, the scene once it compiles.
+  // The scene being drawn keeps drawing until then, and a compile that fails
+  // leaves it drawing and rejects — main.js decides what a scene this device
+  // cannot draw means for the peer.
+  KeyInProcessor.prototype.setOffer = function (offer) {
+    var self = this;
+    this.applyOffer(offer);
+    var id = this.offer.scene;
+    if (!id || id === this.sceneId) {
+      this.wantScene = this.sceneId;
+      return Promise.resolve(this.sceneId);
+    }
+    if (this.stopped || this.dead || !this.gl) return Promise.reject(new Error('key-in is not running'));
+    this.wantScene = id;
+    var gl = this.gl;
+    var ready = this.sceneProgs[id] ? Promise.resolve(this.sceneProgs[id]) : VideoScenes.compileProgramAsync(gl, id);
+    return ready.then(function (prog) {
+      if (self.stopped || self.gl !== gl) throw new Error('key-in went away');
+      self.sceneProgs[id] = prog;
+      if (self.wantScene !== id) return self.sceneId;   // a later offer won
+      self.ensureScene(id);
+      return self.sceneId;
+    });
+  };
+
+  // The peer's stream object changed (a re-call). The canvas, and so the
+  // track the tile shows, stays: no flash.
+  KeyInProcessor.prototype.setSource = function (remote) {
+    if (this.stopped || !remote) return;
+    this.raw = remote;
+    this.video.srcObject = remote;
+    this.video.play().catch(function () { /* muted autoplay */ });
+  };
+
+  KeyInProcessor.prototype.giveUp = function (why) {
+    if (this.stopped || this.dead) return;
+    this.dead = true;
+    if (this.warm) {
+      var w = this.warm;
+      this.warm = null;
+      clearTimeout(w.timer);
+      w.reject(new Error('key-in gave up: ' + why));
+    }
+    if (this.resolved && this.onGiveUp) {
+      try { this.onGiveUp(why); } catch (e) { /* ignore */ }
+    }
+  };
+
+  KeyInProcessor.prototype.releaseGL = function () {
+    var gl = this.gl;
+    if (!gl) return;
+    [this.texCam, this.texMaskA, this.texSynth, this.texScene, this.texSoftA, this.texSoftB]
+      .concat(this.texSceneOut || []).forEach(function (t) {
+        if (t) try { gl.deleteTexture(t); } catch (e) { /* ignore */ }
+      });
+    [this.fbMaskA, this.fbScene, this.fbSoftA, this.fbSoftB].concat(this.fbSceneOut || []).forEach(function (f) {
+      if (f) try { gl.deleteFramebuffer(f); } catch (e) { /* ignore */ }
+    });
+    [this.pKeyMask, this.pKeyComp, this.pFeather, this.pResolve].forEach(function (p) {
+      if (p) try { gl.deleteProgram(p); } catch (e) { /* ignore */ }
+    });
+    var progs = this.sceneProgs;
+    Object.keys(progs).forEach(function (k) {
+      try { gl.deleteProgram(progs[k].program); } catch (e) { /* ignore */ }
+    });
+    if (this.quad) try { gl.deleteBuffer(this.quad); } catch (e) { /* ignore */ }
+    if (this.vao) try { gl.deleteVertexArray(this.vao); } catch (e) { /* ignore */ }
+    this.sceneProgs = {};
+    this.pResolve = undefined;
+    this.sceneId = null;
+    this.scene = null;
+    this.texCam = this.texMaskA = this.texSynth = this.texScene = this.texSoftA = this.texSoftB = null;
+    this.fbMaskA = this.fbScene = this.fbSoftA = this.fbSoftB = null;
+    this.texSceneOut = this.fbSceneOut = null;
+    this.gl = null;
+  };
+
+  // Stops ITS OWN canvas tracks and nothing else: the remote tracks belong to
+  // the call. Loses the context at once — see Processor.destroy() for why a
+  // context left to the garbage collector is a threat to the user's camera.
+  KeyInProcessor.prototype.destroy = function () {
+    if (this.stopped) return;
+    this.stopped = true;
+    if (this._rvfc && this.video.cancelVideoFrameCallback) {
+      try { this.video.cancelVideoFrameCallback(this._rvfc); } catch (e) { /* ignore */ }
+    }
+    if (this._raf) cancelAnimationFrame(this._raf);
+    if (this.warm) {
+      var w = this.warm;
+      this.warm = null;
+      clearTimeout(w.timer);
+      w.reject(new Error('key-in was destroyed'));
+    }
+    if (this.capture) {
+      try { this.capture.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* ignore */ }
+    }
+    var lose;
+    try { lose = this.gl && this.gl.getExtension('WEBGL_lose_context'); } catch (e) { lose = null; }
+    this.releaseGL();
+    if (lose) { try { lose.loseContext(); } catch (e) { /* ignore */ } }
+    this.canvas.width = 0;
+    this.canvas.height = 0;
+    try { this.video.pause(); } catch (e) { /* ignore */ }
+    this.video.srcObject = null;
+    var i = _keyIns.indexOf(this);
+    if (i >= 0) _keyIns.splice(i, 1);
+  };
+
   // --- public surface -------------------------------------------------------
 
   // Wrap a raw camera stream. Resolves with the processed stream, which carries
@@ -3315,6 +4360,65 @@ var VideoEffects = (function () {
   function onKeyedState(fn) { _onKeyedState = fn; }
 
   function onPressure(fn) { _onPressure = fn; }
+
+  // Receiving. Resolves with a handle once the scene is compiled and the
+  // path has proved itself (see KeyInProcessor.start()); rejects otherwise,
+  // with the context already released.
+  function keyIn(remoteStream, offer, opts) {
+    opts = opts || {};
+    if (!remoteStream || typeof remoteStream.getVideoTracks !== 'function') {
+      return Promise.reject(new Error('key-in needs a stream'));
+    }
+    var p;
+    try { p = new KeyInProcessor(remoteStream, offer, opts.onGiveUp); } catch (e) { return Promise.reject(e); }
+    _keyIns.push(p);
+    return p.start().catch(function (err) {
+      p.destroy();
+      throw err;
+    });
+  }
+
+  function keyInCount() { return _keyIns.length; }
+
+  // Just the CPU half: is this peer's stream carrying keyed frames? For a
+  // peer with no live key-in handle, so main.js can show a placeholder rather
+  // than a green screen while keyed frames are still arriving. No GL at all.
+  function keyProbe(remoteStream) {
+    var video = hiddenVideo(remoteStream);
+    var probe = new MarkerProbe(video);
+    var stopped = false, rvfc = 0, timer = 0;
+    function schedule() {
+      if (stopped) return;
+      if (video.requestVideoFrameCallback) rvfc = video.requestVideoFrameCallback(onFrame);
+      else timer = setTimeout(onFrame, KEYIN_PROBE_MS);
+    }
+    function onFrame() {
+      if (stopped) return;
+      schedule();
+      probe.tick(performance.now());
+    }
+    video.play().catch(function () { /* muted autoplay */ });
+    schedule();
+    return {
+      lastKeyedAt: function () { return probe.lastKeyed; },
+      lastUnkeyedAt: function () { return probe.lastUnkeyed; },
+      setSource: function (remote) {
+        if (stopped || !remote) return;
+        video.srcObject = remote;
+        video.play().catch(function () { /* muted autoplay */ });
+      },
+      destroy: function () {
+        if (stopped) return;
+        stopped = true;
+        if (rvfc && video.cancelVideoFrameCallback) {
+          try { video.cancelVideoFrameCallback(rvfc); } catch (e) { /* ignore */ }
+        }
+        if (timer) clearTimeout(timer);
+        try { video.pause(); } catch (e) { /* ignore */ }
+        video.srcObject = null;
+      }
+    };
+  }
 
   // --- the picker -----------------------------------------------------------
   //
@@ -3830,8 +4934,8 @@ var VideoEffects = (function () {
       staleBelow: REF_STALE_BELOW, freshAbove: REF_FRESH_ABOVE,
       matchMax: REF_MATCH_MAX, scoreLo: REF_SCORE_LO, scoreHi: REF_SCORE_HI
     },
-    // The keyed stream ("let others draw my scene"): the setting and the
-    // sending half.
+    // The keyed stream ("let others draw my scene"): the setting, the
+    // capability, the sending half and the receiving half.
     SUBJECT_ONLY_KEY: SUBJECT_ONLY_KEY,
     readSubjectOnly: readSubjectOnly,
     writeSubjectOnly: writeSubjectOnly,
@@ -3839,12 +4943,16 @@ var VideoEffects = (function () {
     setSubjectOnly: setSubjectOnly,
     renderSubjectOnly: renderSubjectOnly,
     KEYED_CAP: KEYED_CAP,
+    canKeyIn: canKeyIn,
     keyedTrack: keyedTrack,
     isKeyedTrack: isKeyedTrack,
     setKeyedDemand: setKeyedDemand,
     keyedState: keyedState,
     onKeyedState: onKeyedState,
     onPressure: onPressure,
+    keyIn: keyIn,
+    keyProbe: keyProbe,
+    keyInCount: keyInCount,
     KEY_COLOR: KEY_COLOR,
     KEY_MARKER: KEY_MARKER,
     KEY_ALPHA_FLOOR: KEY_ALPHA_FLOOR,
