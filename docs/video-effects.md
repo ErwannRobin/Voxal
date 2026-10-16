@@ -916,8 +916,10 @@ a give-up. Every frame:
 Measured on a synthetic person (`unit-video-keyin.spec.js`), as colour error in
 the edge band against the sender's own composite: a mean of 6.9 levels and a
 p95 of 13.0 with no codec, 12.5 and 27.2 through VP8 at 450 kb/s and
-640 x 360. The first formula tried scored a p95 of 36 and 42 — and looked fine
-when only its alpha was scored, which is why the test scores colour. The markers
+640 x 360 (Chromium 141; Chromium 156's encoder gave a p95 of 32 on the same
+code, so only the no-codec number pins the formula). The first formula tried
+scored a p95 of 36 and 42 — and looked fine when only its alpha was scored,
+which is why the test scores colour. The markers
 were found in 50 of 50 frames through VP8 at 320 x 180 and 96 kb/s, and at
 160 x 90 and 38 kb/s; a switch from the composite to keyed at 60–112 kb/s
 showed no key-coloured frame.
