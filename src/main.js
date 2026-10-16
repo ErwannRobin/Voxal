@@ -27,7 +27,13 @@
  *                  caps: what this device can do for others, e.g. ['keyed-video-1']
  *                  = it can draw a sender's scene behind a keyed camera picture.
  *                  keyedOffer: { epoch, scene, look, edgeE, size } | null — what a
- *                  sender would key, if a receiver says it is ready for it.
+ *                  sender would key, if a receiver says it is ready for it. scene
+ *                  is null while the sender holds keying back (blur, an image, a
+ *                  green shirt): its keyed track then carries the plain composite.
+ *                  hello is authoritative (saying nothing = none); a peer-list is
+ *                  not: a missing caps keeps what was known, and a missing
+ *                  keyedOffer means none only from a host that has the capability,
+ *                  outside the post-migration settle.
  *   peer-joined  { peerId, pseudo }               host -> all existing peers
  *   peer-left    { peerId }                       host -> all
  *   talking      { peerId, active }               non-host -> host (relayed to all)
@@ -45,14 +51,17 @@
  *                  the remote track there is nothing for the SFU to forward.
  *   video-stop   { peerId }                     peer -> host (relayed) — peer stopped camera
  *   video-keyed  { peerId, offer }              peer -> host; host relays to all others
- *                  with peerId = the SOURCE connection (never the claimed one).
- *                  A sender's keyedOffer changed (null = it keys nobody). The
- *                  host passes at most 2 non-null offers per second per source.
+ *                  with peerId = the SOURCE connection (never the claimed one), and
+ *                  sends its own to everyone. A sender's keyedOffer changed (null =
+ *                  it keys nobody). The host stores it for the next peer-list and
+ *                  passes at most 2 non-null offers per second per source; a sender
+ *                  sends at most one a second, since a dropped one could be its last.
  *   video-keyed-ready { peerId, to, ok,         receiver -> host -> `to` only
  *                  call, epoch, scene }         "I can draw your scene on THIS call
  *                  (the mesh MediaConnection's connectionId), for THIS offer epoch,
  *                  with THIS scene compiled" — or ok:false, "stop keying me".
- *                  Re-sent every 10 s; a sender forgets one after 25 s.
+ *                  Re-sent every 10 s and to every new host; a sender forgets one
+ *                  after 25 s. Keyed is mesh-only: never offered for an SFU camera.
  *   audio-check-request  { peerId, from,        viewer -> host (relayed to target); dev only
  *                          durationMs }
  *   audio-check-response { peerId, report,       target -> host (relayed to requester); dev only

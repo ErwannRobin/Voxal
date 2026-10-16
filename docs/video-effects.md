@@ -7,13 +7,17 @@ device that cannot keep up. The scenes have [their own section](#animated-scenes
 
 The whole feature is `src/video-effects.js` plus a handful of integration points
 in `src/main.js`. It applies to **your camera only** — never to screen-share,
-and never to audio.
+and never to audio. With a scene picked, an opt-in setting lets the people you
+call draw it themselves, from a picture of just you
+([Keyed sending and receiving](#keyed-sending-and-receiving)).
 
 ## Everything happens on your device
 
 > **No frame is ever sent anywhere to compute a background.** Segmentation runs
-> locally, in WebAssembly, on your own GPU. The only thing that leaves your
-> machine is the finished video, exactly as it would without the effect.
+> locally, in WebAssembly, on your own GPU. What leaves your machine is the
+> finished video, exactly as it would without the effect — or, with **Let
+> others draw my scene** on, a picture of you cut out on your own device, for
+> the people who draw the scene behind you on theirs.
 
 This is worth stating plainly because it is the opposite of the trade-off
 described in [video routing](video-routing.md): an SFU genuinely can see the
@@ -22,10 +26,19 @@ it changes the picture *before* the picture is encoded. If you route video
 through the relay, the relay sees your blurred background; if you don't, nobody
 does.
 
+The keyed picture does not change that. It goes only to a peer on a direct
+connection, never through the relay (the relay is always sent the finished
+picture), and it carries you over flat green plus the thin edge of your room
+that the cut-out's soft outline lets through; anything fainter than that is cut
+to pure green before it leaves (`KEY_ALPHA_FLOOR`). What it adds on the wire is
+the scene's name and a few numbers about your light, so the far end can draw
+the same scene.
+
 The 12 MB MediaPipe runtime is fetched from Voxal's own origin (see
 [Where the assets come from](#where-the-assets-come-from)) the first time you
 turn an effect on, and cached. That fetch is the only network traffic the
-feature ever generates.
+effect itself generates; keying adds a few small messages over the room's own
+signalling.
 
 ## Off costs nothing
 
@@ -36,6 +49,17 @@ no frame is processed. Someone who never turns this on pays nothing for it.
 
 That is why the preference is stored as an *absence*: `off` removes
 `localStorage['video-background']` rather than writing a value to it.
+
+There is one exception, and it is on the receiving side. A device that can draw
+scenes says so to the room whatever its own background, and when somebody in
+the call offers it a keyed picture, it draws that person's scene: a WebGL
+context and a full scene render per keyed peer, capped at three on a desktop
+and one on a phone (none on a phone drawing its own scene or set to save
+battery). It pays that only while such an offer stands, and gives it up first
+when its own camera needs the room
+([Keyed sending and receiving](#keyed-sending-and-receiving)). Sending is free
+until the setting is on, and even then the keyed pass is drawn only while some
+peer is actually being sent it.
 
 ## The pipeline
 
@@ -760,6 +784,215 @@ strength are reasoned from how webcams light a face, and checked against
 synthetic subjects in `unit-video-scenes.spec.js`. Expect them to want tuning
 against a real webcam in a real room.
 
+## Keyed sending and receiving
+
+**Let others draw my scene** (`send-subject-only`, off unless chosen). A scene is
+generated from a handful of numbers, so it does not have to cross the network at
+all. With a scene picked and this setting on, a peer whose device can draw the
+scene is sent a picture of you over flat key green instead of the finished
+composite, cuts you out again, and puts you over its own render of the same
+scene. A flat field costs an encoder next to nothing.
+
+### What it saves, and what it does not
+
+Offline, through VP9 at a fixed quantizer at 1280 x 720, with a moving stand-in
+subject at 30 fps (so the bytes are the picture's difficulty and nothing else),
+the composite over the scenes cost 130–287 kb/s and the person over green
+96 kb/s: 26–67% fewer bits for the same quality.
+
+A call does not run at a fixed quantizer. Its encoder spends whatever cap it is
+given, so what a call actually saves is the **lower cap a keyed sender gets**
+(`keyedVideoBitrate()` in `main.js`): three quarters of the camera cap on the
+desktop and plain mobile tiers, set near libwebrtc's resolution steps so it
+buys bits rather than a smaller picture, and nothing taken from the frugal tier,
+which is already as low as a face survives. The flat field is what lets the
+person keep their quality under it. Neither half has been measured on a real
+call. And it is mesh-only, so on the default routing it applies in two-person
+rooms (see [video routing](video-routing.md#keyed-camera-is-mesh-only)).
+
+### The keyed frame
+
+The same composite program draws it, behind `uKeyOut`, because the keyed alpha
+must be **exactly** the composite's `m`, smoothstep and fixed-camera reference
+included; a second program would drift from the first the first time either was
+tuned.
+
+* **Key** — pure green, `(0, 255, 0)`, in encoded sRGB, the space the composite
+  already mixes in. `mix(K, camera, m)` here and `c + (bg − K)(1 − a)` at the far
+  end are the composite's own `mix(bg, camera, m)` taken apart and put back.
+* **Floor** — below `KEY_ALPHA_FLOOR` (0.06) the alpha is cut to pure key, so the
+  faint tail of the room never leaves the device.
+* **No wrap, no shadow, no scene** — the camera colour is taken before the light
+  wrap: the receiver wraps with its own scene's light, and a frame wrapped here
+  would be wrapped twice.
+* **Markers** — two squares at the top corners, a tenth of the *short* side
+  (`KEY_MARKER`, so a portrait frame is not notched across a sixth of its width).
+  Top-left all key; top-right a key ring around a **black** patch. Black because
+  luma contrast is what 4:2:0 keeps at full resolution, and what a starved
+  encoder keeps longest. The subject is cut in both.
+* **No alpha channel.** A band of the mask packed into the frame cost about
+  60 kb/s, so the receiver derives the alpha from the colour instead.
+
+### When the sender holds back
+
+The keyed output belongs to the published pipeline only: every call in the
+public API names the stream (`localVideoStream`), so the settings preview never
+grows one. It is a 2D canvas filled by copying the GL canvas **between two draws
+in the same task** — keyed first, copied out, then the composite drawn over it —
+so the GL canvas, and every peer on the composite, ends the frame exactly as it
+always did. With `preserveDrawingBuffer` off the back buffer only holds the
+keyed frame until the task ends, which is why the copy is right there. It is
+drawn only while `main.js` says some sender reads it (`setKeyedDemand()`), and
+rising demand draws one at once, so a sender switched onto it never meets an
+idle canvas.
+
+When keying is **withheld**, the keyed canvas carries the plain composite with
+no markers; every receiver passes that through, so nobody needs a track swap:
+
+| Reason | While |
+|---|---|
+| `mode`, `compiling` | no scene is drawn: blur, an image, or the scene still compiling |
+| `green` | more than 4% of your confident core is green, until under 2% for 5 s — green clothing would be cut through |
+| `corner` | you cover more than 15% of a marker zone, until under 5% for 2 s — a head there would come out with a square notch of scene in it |
+| `slow-copy` | the median of the first 30 copies is over 4 ms — where the 2D canvas is not GPU-backed the copy is a synchronous read-back, paid out of the pipeline's own budget |
+| `self-check` | the first keyed frame, read back, is not key at the top-left and black at the top-right — for the pipeline's life |
+
+`keyedState()` is what an offer is made of: the scene (null while withheld),
+the reason, the size, the look and `edgeE` (below). A new scene, reason, size
+or light side is news at once; the look drifting, at most every 2 s, since each
+announcement is a message to every peer; nothing while a camera flip rebuilds
+the context.
+
+### The receiving end
+
+A device advertises `keyed-video-1` when `canKeyIn()`: WebGL2, a capturable
+canvas, a Chromium engine (the receive path — an off-DOM remote `<video>`
+driving `requestVideoFrameCallback`, a captured GL canvas — is verified there
+and nowhere else yet), and a **hardware** GPU, since every keyed peer is a scene
+ray-marched on this device (`VideoScenes.isSoftwareGL()`, which also knows
+Windows' own rasteriser). Never in a tiny embed. It is a capability, not a
+preference: receiving costs nothing until somebody offers a keyed picture, so
+it does not wait on a setting the native apps do not even show.
+
+`keyIn()` gives each keyed sender a `KeyInProcessor`, handed out only once it
+has proved itself: frames flowing, the scene compiled, a self-test (the GPU's
+upload of a frame against a 2D probe of the same frame, then a keyed and an
+unmarked synthetic frame through the real passes) and 30 warm-up frames with a
+median draw under 6 ms. Running, a rolling median over 8 ms for five seconds is
+a give-up. Every frame:
+
+* **Is it keyed?** The shader asks, from a few taps in each zone, so an unkeyed
+  frame is passed through untouched on the very frame it arrives and the tile
+  never changes source. **Strict** (top-left key, top-right ring key, patch
+  dark) while this receiver has no reason to expect keyed frames, so an
+  ordinary picture with a green corner is never cut up; **relaxed** (top-left
+  key, patch not key) while it has acked the current offer, or saw a strict
+  frame in the last 500 ms. On a starved link the patch's chroma settles frames
+  after the flat green does, and the strict test alone passed those frames
+  through as a full-screen green flash.
+* **The key as it decoded.** Limited-range YUV, a matrix mismatch and 4:2:0 move
+  green off `(0, 255, 0)`, so the key `kd` is read from the top-left taps and
+  the alpha is how far a pixel is from it: `a0 = 1 − e(c) / e(kd)`, with
+  `e(x) = g − max(r, b)`.
+* **The edge.** A face is redder than green, so `a0 = m · (1 − e(camera))` runs
+  ahead of the true `m` at your outline. The sender measures how green its own
+  edge is (`edgeE`, the median `e(camera)` over its band, never above 0) and the
+  receiver divides it back out, but only within about 10 px of background
+  (`KEYIN_BAND_REACH`); further in, the alpha is 1 and the pixel is the frame's
+  own. Then `c + (bg − kd)(1 − a)`, with leftover green taken out of partly
+  keyed pixels and the scene's light wrapped onto the outline as the composite
+  does it.
+* **The scene and its light come from the offer**: the scene id, and the look
+  whole — exposure, white balance and the light's side can only be measured
+  where the room still is. Only where you are in the picture is measured here,
+  from the key. The scene is drawn in passthrough too, so its picture stays
+  settled and what the receiver pays then is what it pays keyed. A new scene
+  compiles while the old one keeps drawing; one that will not compile keeps the
+  old and stands down.
+* **The canvas is the sender's size** (from the offer, capped at 1280 x 720),
+  not the arriving frames', which climb through two or three sizes in a call's
+  first twenty seconds. Only a new shape resizes it, and never its context.
+
+Measured on a synthetic person (`unit-video-keyin.spec.js`), as colour error in
+the edge band against the sender's own composite: a mean of 6.9 levels and a
+p95 of 13.0 with no codec, 12.5 and 27.2 through VP8 at 450 kb/s and
+640 x 360. The first formula tried scored a p95 of 36 and 42 — and looked fine
+when only its alpha was scored, which is why the test scores colour. The markers
+were found in 50 of 50 frames through VP8 at 320 x 180 and 96 kb/s, and at
+160 x 90 and 38 kb/s; a switch from the composite to keyed at 60–112 kb/s
+showed no key-coloured frame.
+
+A `KeyInProcessor` is never mistaken for the user's own pipeline. It is never
+`_active`, never reports through the overload hook (that turns the user's OWN
+background off), never loads the segmentation runtime, and never sees the
+empty-room picture.
+
+### The handshake
+
+Who is sent what is `main.js`'s; the messages are in the table at the top of it
+(`PROTOCOL_VERSION` 4) and in [architecture](architecture.md#data-protocol-summary).
+
+1. Every peer says what it can do: `caps` in `hello`, relayed in `peer-list`.
+2. A sender whose offer is live — the setting on, the camera shared through a
+   running pipeline, over the mesh, and somebody here capable — broadcasts it:
+   `video-keyed { offer: { epoch, scene, look, edgeE, size } }`. It is computed
+   from live state every time, never cached.
+3. A receiver with a free slot starts a cut-out and, once it runs, answers
+   `video-keyed-ready { ok: true, call, epoch, scene }`, naming the mesh call
+   (its `connectionId`, which PeerJS gives both ends), the offer's epoch and the
+   scene it has compiled.
+4. The sender moves that one call onto the keyed track with `replaceTrack` (no
+   renegotiation), and keeps it there only while the ack names the call, epoch
+   and scene it has now.
+
+The rules that keep a green frame off everybody's screen, each pinned by
+`unit-video-keyed-wiring.spec.js`:
+
+* **Every new call starts on the composite**, and an ack names its call and
+  epoch, so nothing acked before a camera restart, a re-call or a migration can
+  key what comes after.
+* **Level-triggered.** Acks are repeated every 10 s and forgotten after 25 s,
+  `hello` carries the offer to every new host, and the offer is recomputed on
+  every roster tick, so a message lost in a migration heals instead of sticking.
+* **Back first, then say so.** A peer's sender goes back to the composite before
+  the offer it was keyed for changes or goes. A receiver that said `ok: false`
+  lets go of its cut-out only once it sees an unkeyed frame, never on a timeout;
+  keyed frames with no cut-out to take them show a placeholder
+  (`displayVideoStreamFor()`), never the raw picture.
+* **Scene → blur → scene costs nothing.** The offer's scene goes null, the keyed
+  track carries the plain composite, and the cut-out passes it through with its
+  scene still compiled: no `replaceTrack`, no tile flash, no recompile.
+* **One queue.** Every `replaceTrack` on a video sender (background swaps, a
+  flip, the keyed reconcile) runs through `queueVideoSenderMutation()`, and a
+  sender that cannot be moved off the keyed track is closed and called again on
+  the composite rather than left on a track about to end.
+
+Receiving is bounded. Slots are capped and sticky — three on a desktop, one on a
+phone, none on a phone drawing its own scene or set to save battery — and go to
+the focused tile, then the grid, then the ribbon. A hidden tile keeps its slot
+and stops drawing. A cut-out that gives up is never revived; the same scene on
+the same stream is tried again after 30 s, then 2 min, then not this session.
+And when the user's own pipeline falls behind, it asks first (`onPressure`):
+the newest cut-out gives way before its own detection rate steps down.
+
+**Every WebGL context is released** with `WEBGL_lose_context` when it is done
+with. Chromium force-loses the oldest context once a page holds more than 16,
+and after a few cut-outs have come and gone the oldest is the user's own camera
+pipeline: its captured track stays live and the picture freezes for every peer.
+The pipeline also listens for `webglcontextlost` and gives up out loud — the
+background goes off and the peers get the plain camera — rather than freeze.
+
+The switch alone says nothing about whether it is doing anything, and in a
+default room of three, or with blur picked, it is not. `keyedStatus()` decides,
+and two lines say it: under the switch in Settings and in the background
+popover ("In use for 1 of 2 people", "Not in use: video goes through the relay
+in this room").
+
+**Not verified**: receiving on WebKit (Safari, every iOS browser, the iOS app —
+`canKeyIn()` says no there), a sender encoding H.264 (Playwright's Chromium
+cannot), the bitrate share and the receiver's cost on a real call. See
+`KNOWLEDGE/todos.md`.
+
 ## Switching backgrounds does not touch the wire
 
 This is the property the design exists to protect.
@@ -774,6 +1007,13 @@ SFU publish connection) rather than a republish.
 
 Switching between scenes is the same non-event: a compile the first time, a
 different program after that, and the same canvas track throughout.
+
+Peers on the keyed track keep it too. A scene change is a new offer, which the
+far end compiles while it keeps drawing the old scene; blur or an image puts
+the plain composite on the keyed canvas, which the far end passes through. Only
+the off ↔ on crossing moves a keyed sender, and `swapLocalVideoTrack()` gives
+each sender its own track: the keyed one to a peer that still qualifies, the new
+picture to everyone else.
 
 The same property makes the front/back camera flip free: `flipCamera()` points
 the effect at the new camera via `VideoEffects.setSource()` and the far side
@@ -807,6 +1047,12 @@ render loop keeps spinning.
 it for free. Suspending is the same story: `setLocalCameraSuspended()` disables
 the raw track *and* pauses the render loop, not just the canvas track.
 
+The keyed track ends with its pipeline. A sender still on it when the pipeline
+stops would freeze on a track that says "ended", so `stopStreamTracks()` closes
+any such call first, and turning the effect off moves keyed senders to the raw
+camera before it stops anything. A receiver's cut-out stops only its own canvas
+tracks, never the remote ones, which belong to the call.
+
 ## When a device can't keep up
 
 Segmentation on a phone is real work, and a call that degrades into a slideshow
@@ -814,11 +1060,15 @@ is worse than no effect at all. The pipeline measures its achieved frame rate
 over rolling five-second windows and, when it falls below 60% of the camera's
 rate:
 
-1. steps segmentation down the ladder the `detection-quality` preference chose
+1. if this device is drawing other people's scenes for them, asks `main.js` to
+   stop the newest of those first (`onPressure`) and holds that window against
+   nothing of its own — the user's own background is the last thing to pay for
+   somebody else's; then
+2. steps segmentation down the ladder the `detection-quality` preference chose
    (by default 15 → 10 → 6 Hz on desktop, 10 → 6 Hz on mobile), since that is
    where nearly all the cost is; then
-2. with an animated scene, redraws the scene at 10 Hz instead of 20; then
-3. having run out of things to trade, gives up: the raw camera goes back on the
+3. with an animated scene, redraws the scene at 10 Hz instead of 20; then
+4. having run out of things to trade, gives up: the raw camera goes back on the
    wire, the preference is set to `off`, and the user is told once.
 
 Degradation happens quietly. Only giving up is announced, and it is announced
@@ -946,22 +1196,34 @@ padding the ring is sliced off along the top and bottom.
 
 The same row appears in Settings → Video, rendered by the same
 `VideoEffects.renderPicker()` so there is one definition rather than three
-drifting copies. Four controls sit beneath it in the same card and follow the
-same rule — `renderStrength()` and `renderSharpness()` (one slider builder,
-two sets of arithmetic), `renderQuality()`, `renderLightAdapt()` and `renderReference()` (the last two
-are one switch builder, `renderToggle()`). In the
-desktop preferences window (`settings.html`) all six are write-only: that
+drifting copies. Six controls sit beneath it in the same card and follow the
+same rule — `renderSubjectOnly()` (**Let others draw my scene**, right under the
+picker's hint), `renderStrength()` and `renderSharpness()` (one slider builder,
+two sets of arithmetic), `renderQuality()`, `renderLightAdapt()` and
+`renderReference()` (the three switches are one builder, `renderToggle()`). In
+the desktop preferences window (`settings.html`) all seven are write-only: that
 window has no module system and therefore no capture pipeline, so it writes the
 preference and the main window's `storage` listener applies it to the running
 processor — the same bridge the noise-suppression and microphone-device
-selectors use.
+selectors use. The keyed switch is the one exception to "applies it to the
+processor": what it changes is which track each peer is sent, so the main
+window answers it with `refreshKeyedSend()`, never `applyVideoBackground()`.
+Its live status line (`#settings-subject-only-status`, from `keyedStatus()`) is
+in the main window's settings only, with a matching line in the background
+popover (`#video-bg-subject-only`); the preferences window holds no call to
+report on. The Video card, this switch with it, is hidden in the native phone
+apps.
 
 ## Key files
 
 | File | What it holds |
 |---|---|
-| `src/video-effects.js` | The whole pipeline, the shaders (generated from `gaussianHalfKernel`), the mode/strength/sharpness/accuracy/low-light storage, the picker and the four controls under it |
+| `src/video-effects.js` | The whole pipeline, the shaders (generated from `gaussianHalfKernel`), the mode/strength/sharpness/accuracy/low-light/keyed storage, the picker and the controls under it; the keyed output (`keyedTrack()`, `setKeyedDemand()`, `keyedState()`) and the receiving end (`canKeyIn()`, `KeyInProcessor` behind `keyIn()`, the CPU-only `keyProbe()`) |
 | `src/video-scenes.js` | The five animated scenes (one shader each), measuring how you are lit (`measureSubject()` / `lookFromStats()` / `easeLook()`), the async compile and the chip thumbnails |
-| `src/main.js` | `maybeApplyVideoEffects()`, `applyVideoBackground()`, `swapLocalVideoTrack()`, the unwrap in `stopStreamTracks()`, the effects branches in `flipCamera()` and `setLocalCameraSuspended()`, the tile button in `_buildVideoTile()`, and `positionVideoBackgroundPopover()` / `renderVideoBackgroundProgress()` |
+| `src/main.js` | `maybeApplyVideoEffects()`, `applyVideoBackground()`, `swapLocalVideoTrack()`, the unwrap in `stopStreamTracks()`, the effects branches in `flipCamera()` and `setLocalCameraSuspended()`, the tile button in `_buildVideoTile()`, and `positionVideoBackgroundPopover()` / `renderVideoBackgroundProgress()`. The keyed camera: `localCaps()`, `currentOffer()`, `keyedFor()`, `refreshKeyedSend()` and the reconcile behind `queueVideoSenderMutation()`, the receivers (`reconcileKeyedReceivers()`, `displayVideoStreamFor()`), `keyedStatus()`, and `keyedVideoBitrate()` |
 | `tests/e2e/unit-video-effects.spec.js` | Coverage, with inference stubbed via `window.__voxalSegStub` |
 | `tests/e2e/unit-video-scenes.spec.js` | The scenes: every one renders, moves only a little, mirrors to the light; the measurement; shadow, light wrap and motion through the real pipeline |
+| `tests/e2e/unit-video-keyed.spec.js` | The keyed frame, pixel for pixel, and every guard that withholds it |
+| `tests/e2e/unit-video-keyin.spec.js` | The receiving end: the round trip, detection, staying out of the user's own pipeline, and the codec round trips through VP8 (band colour error, starved markers, the switch) |
+| `tests/e2e/unit-video-keyed-wiring.spec.js` | `main.js`: the protocol, which peer gets which track, the receiver's lifecycle, `keyedStatus()` |
+| `tests/e2e/mesh-keyed.spec.js` | `@mesh`: four real peers, a green watchdog on every receiver through keying on, scene changes, blur, the setting, the camera and the host leaving |

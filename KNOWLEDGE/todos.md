@@ -138,6 +138,56 @@ Deliberately left for later:
 
 ---
 
+## 🟩 Keyed camera ("Let others draw my scene") — follow-ups
+
+Shipped: with an animated scene and the setting on, each capable mesh peer that
+has acked is sent the person over flat key green and draws the scene itself
+(`docs/video-effects.md`, *Keyed sending and receiving*). Pinned by
+`unit-video-keyed.spec.js`, `unit-video-keyin.spec.js`,
+`unit-video-keyed-wiring.spec.js` and `mesh-keyed.spec.js` — all on Chromium,
+mostly on a software GPU, with a synthetic person. Left for later:
+
+- **Verify receiving on WebKit** (Safari, every iOS browser, the iOS app's
+  WKWebView). `canKeyIn()` refuses non-Chromium engines because the receive
+  path — an off-DOM remote `<video>` driving `requestVideoFrameCallback`, a
+  remote frame uploaded with `texImage2D`, a captured GL canvas — was only
+  verified in Chromium. `KeyInProcessor`'s self-test would catch a flipped or
+  black upload, so lifting the gate for a test build behind
+  `window.__voxalKeyInAnyEngine` is safe to try on a device. Check the WebKit
+  context limit too (lower than Chromium's 16).
+- **H.264 and Safari senders.** Every codec number (marker survival, band
+  colour error, the switch) is VP8 or VP9; Playwright's Chromium cannot encode
+  H.264, which Safari and iOS send. Check the black patch and the flat green
+  through H.264 at the frugal tier. A Safari sender also takes the
+  `captureStream(fps)` fallback for the keyed canvas (no `requestFrame`), which
+  nothing has exercised.
+- **A keyed option through the SFU.** Keyed is mesh-only, so on the default
+  routing it applies only in two-person rooms — exactly where bandwidth matters
+  least. Through the SFU it would need a second published track (or a simulcast
+  layer) and a per-subscriber choice of which to pull, plus a decision about
+  what the relay may be given (today it only ever gets the finished picture).
+- **A bench scenario to re-derive the bitrate share on a real call.**
+  `KEYED_BITRATE_SHARE` (0.75, not on the frugal tier) rests on fixed-quantizer
+  VP9 (26–67% fewer bits) and the resolution-step thresholds; under rate control
+  the real saving is that cap reduction, and whether the person holds up at it
+  has not been measured. Add a keyed row to `video-bench.spec.js` (picture sent,
+  resolution, `qualityLimitationReason` for composite vs keyed at the same
+  scene) and run it on a real GPU. Time the receiver too: a scene per keyed peer.
+- **One shared GL context for several receivers.** Each keyed peer is its own
+  WebGL context, its own scene compile and its own scene render, which is why a
+  desktop caps at three and a phone at one. One context could compile each scene
+  once for every sender drawn in it (the render stays per sender, since each has
+  its own look and its own resolve history), and would take the 16-context limit
+  out of the picture.
+- **Orphaned camera re-calls after migration (pre-existing).** A re-call after a
+  migration overwrites `conn.videoMediaOut` without closing the old call, which
+  keeps uploading. Keying never touches an orphan (only the latest call is ever
+  moved, and a new call starts on the composite), but `tuneVideoSenders()` and
+  the reconcile cannot see it either. Close the old call when a new one replaces
+  it.
+
+---
+
 ## 🧩 Revisit glib security update unblock
 
 **Goal:** Remove temporary Dependabot ignore for `glib` and upgrade to `glib >= 0.20` once upstream supports it.
