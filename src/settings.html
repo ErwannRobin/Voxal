@@ -291,7 +291,18 @@
             <label id="settings-bg-label">Background</label>
           </div>
           <div id="settings-bg-picker" aria-labelledby="settings-bg-label"></div>
-          <p class="settings-hint">Blur what is behind you, or replace it. Applies to your camera only, and everything is computed on this device — no frame is ever sent anywhere to do it.</p>
+          <p class="settings-hint">Blur what is behind you, or replace it. Applies to your camera only, and you are picked out of the picture on this device — no frame is ever sent to a server to do it.</p>
+          <div class="settings-field settings-inline-toggle" style="margin-top:12px">
+            <label for="btn-subject-only" style="flex:1">Let others draw my scene</label>
+            <div id="settings-subject-only"></div>
+          </div>
+          <p class="settings-hint">
+            With an animated scene, sends just you and a thin edge of your room; the
+            people you call draw the same scene on their own device. Uses less upload
+            in calls that go peer to peer. They may see the scene slightly differently,
+            and it costs their device some work. Has no effect with blur or your own
+            image, or when video goes through the relay.
+          </p>
           <div class="settings-device-head" style="margin-top:12px">
             <label id="settings-blur-strength-label">Blur strength</label>
           </div>
@@ -1491,6 +1502,16 @@
           title: 'Compare the cut-out with a picture of the empty room',
           onChange: function(on) { VideoEffects.writeReference(on); }
         });
+        // "Let others draw my scene": which track each peer is sent is decided
+        // by the main window, which holds the calls — this one only stores it.
+        var bgSubjectOnly = (typeof VideoEffects.renderSubjectOnly === 'function')
+          ? VideoEffects.renderSubjectOnly($id('settings-subject-only'), {
+              id: 'btn-subject-only',
+              label: 'Let others draw my scene',
+              title: 'With an animated scene, the people you call draw it on their own device',
+              onChange: function(on) { VideoEffects.writeSubjectOnly(on); }
+            })
+          : null;
         window.addEventListener('storage', function(e) {
           if (bgPicker && e.key === VideoEffects.STORAGE_KEY) bgPicker.sync();
           if (bgStrength && e.key === VideoEffects.STRENGTH_KEY) bgStrength.sync();
@@ -1498,6 +1519,7 @@
           if (bgQuality && e.key === VideoEffects.QUALITY_KEY) bgQuality.sync();
           if (bgLight && e.key === VideoEffects.LIGHT_ADAPT_KEY) bgLight.sync();
           if (bgReference && e.key === VideoEffects.REFERENCE_KEY) bgReference.sync();
+          if (bgSubjectOnly && e.key === VideoEffects.SUBJECT_ONLY_KEY) bgSubjectOnly.sync();
         });
       }
       $id('select-speaker-device').addEventListener('change', function(e) {

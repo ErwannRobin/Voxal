@@ -4657,6 +4657,16 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
 }
 .video-bg-progress .btn { align-self: flex-start; }
 
+/* "Let others draw my scene": one line under the chips saying whether it is in
+   use in this room. Only present while the setting is on. */
+.video-bg-subject-only {
+  margin: 10px 0 0;
+  max-width: 320px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.video-bg-subject-only.hidden { display: none; }
+
 /* Fixed camera: the empty-room reference, under the chips. Only present while
    the setting is on (the default) and an effect is running. */
 .video-bg-reference {

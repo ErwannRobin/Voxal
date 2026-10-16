@@ -27,6 +27,12 @@ never application state, and no Cloudflare DataChannel is used. See [Video
 routing](video-routing.md) for the full design, including the privacy
 distinction from TURN relaying and the backend authorization model.
 
+On the mesh, the camera's outgoing track can differ per peer: with **Let others
+draw my scene** on, a peer that can draw the sender's animated scene is sent a
+keyed picture of the person instead of the finished composite. That choice is
+mesh-only — the SFU is always sent the composite. See [Keyed sending and
+receiving](video-effects.md#keyed-sending-and-receiving).
+
 ### Diagrams
 
 [Topology diagrams](https://erwannrobin.github.io/Voxal/topology.html) draw the
@@ -61,9 +67,9 @@ For a detailed breakdown of election, retries, settle windows, and split-brain s
 
 | Message | Direction | Payload |
 |---|---|---|
-| `hello` | joiner → host | `{ pseudo, pseudoColor?, protocolVersion, appVersion }` |
+| `hello` | joiner → host (and to every new host) | `{ pseudo, pseudoColor?, protocolVersion, appVersion, caps, keyedOffer }` — authoritative for its sender: the host stores `caps` (what this device can do for others, e.g. `['keyed-video-1']` = it can draw a sender's scene behind a keyed camera picture) and `keyedOffer` as said, and an older app that says nothing has neither |
 | `pseudo-assigned` | host → peer | `{ pseudo, pseudoColor? }` |
-| `peer-list` | host → peer | `{ peers, hostId, deputyId, successorIds, protocolVersion, appVersion, ... }` |
+| `peer-list` | host → peer | `{ peers, hostId, deputyId, successorIds, hostCaps, hostKeyedOffer, protocolVersion, appVersion, ... }` — each entry of `peers` carries `caps` and `keyedOffer` only when the host knows them. A receiver never downgrades `caps` on silence, and reads a missing `keyedOffer` as "none" only from a host that advertises `keyed-video-1`, outside the settle window after a migration |
 | `peer-joined` | host → all | `{ peerId, pseudo, pseudoColor? }` |
 | `peer-left` | host → all | `{ peerId }` |
 | `peer-renamed` | host → all | `{ peerId, pseudo, pseudoColor? }` |
@@ -73,6 +79,8 @@ For a detailed breakdown of election, retries, settle windows, and split-brain s
 | `room-published` | host → all | `{ roomId, secret? }` |
 | `video-offer` | peer → host (relay) | `{ peerId, topology: 'p2p'\|'sfu', providerRef? }` — see [Video routing](video-routing.md) |
 | `video-stop` | peer → host (relay) | `{ peerId }` |
+| `video-keyed` | peer → host → all others (a host sends its own to all) | `{ peerId, offer }` — the sender's keyed-camera offer changed: `{ epoch, scene, look, edgeE, size }`, or `null` for "I key nobody". `scene` is `null` while the sender holds keying back (blur, an image, a green shirt); its keyed track then carries the plain composite. The host relays it with `peerId` set to the connection it came in on (never the claimed one), stores it for late joiners' `peer-list`, and passes at most 2 non-null offers a second per source. Host and receivers both sanitise it. See [Keyed sending and receiving](video-effects.md#keyed-sending-and-receiving) |
+| `video-keyed-ready` | receiver → host → `to` only | `{ peerId, to, ok, call, epoch, scene }` — "I can draw your scene on THIS call (the mesh `MediaConnection`'s `connectionId`, which PeerJS gives both ends), for THIS offer epoch, with THIS scene compiled", or `ok: false`, "stop keying me". `ok` counts only when it is literally `true`. Re-sent every 10 s and to every new host; a sender forgets one after 25 s |
 | `chat` | peer → host → **all, sender included** | in `{ id, text, replyTo }`; out `{ id, peerId, text, at, replyTo }` — the host stamps the sender and the time; the echo back to the sender is its ack. `replyTo` is the id of the message being answered, or `null`. A stored message also carries `editedAt` (see `chat-edit`) |
 | `chat-history` | host → joiner | `{ messages }` — the transcript so far, served from the host's own replica |
 | `chat-edit` | peer → host → **all, sender included** | in `{ msgId, text }`; out `{ msgId, text, peerId, editedAt }` — the author correcting their own line, up to `CHAT_EDIT_WINDOW_MS` (5 min) after sending. The host is the authority on both rules: it stamped `at`, so it owns the clock, and it takes the sender from the connection, so a peer can never rewrite somebody else's message. A request it refuses is dropped silently |
@@ -82,8 +90,9 @@ For a detailed breakdown of election, retries, settle windows, and split-brain s
 ## Protocol versioning & updates
 
 The `hello` and `peer-list` messages carry a `protocolVersion` (integer, bump on
-wire-protocol changes — currently `3`: `2` when chat was added, `3` when
-`chat-edit` was) and `appVersion` (display string). Peers record each other's
+wire-protocol changes — currently `4`: `2` when chat was added, `3` when
+`chat-edit` was, `4` when the keyed camera's `caps`/`keyedOffer` fields and its
+two messages were) and `appVersion` (display string). Peers record each other's
 versions and warn on skew; if any peer is on a *newer*
 protocol, the client shows a one-time "refresh to update" hint.
 

@@ -3243,11 +3243,14 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
   // of five chips that already show a gradient swatch — so the thumbnails are
   // skipped on such a machine, and the scenes themselves still work (the
   // pipeline's own governor decides whether the effect is affordable).
+  // VideoEffects.canKeyIn() asks too: drawing other people's scenes on such a
+  // machine is not offered at all. Windows' own rasteriser (WARP, the
+  // "Microsoft Basic Render Driver" of a VM or a remote desktop) is one too.
   function isSoftwareGL(gl) {
     try {
       var info = gl.getExtension('WEBGL_debug_renderer_info');
       var name = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : '';
-      return /swiftshader|llvmpipe|softpipe|software/i.test(name);
+      return /swiftshader|llvmpipe|softpipe|software|basic render|warp/i.test(name);
     } catch (e) { return false; }
   }
   var _thumbs = {};

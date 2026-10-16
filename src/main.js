@@ -11,17 +11,29 @@
  *
  * Data protocol:
  *   hello        { pseudo, protocolVersion,        joiner -> host on connect
- *                  appVersion }
+ *                  appVersion, caps, keyedOffer }  (and to every new host)
  *   peer-list    { peers:[{id,pseudo,              host -> joiner (reply to hello)
  *                  protocolVersion,appVersion,
  *                  videoActive?,screenActive?,
  *                  videoTopology?,screenTopology?,
- *                  videoProviderRef?,screenProviderRef?}],
+ *                  videoProviderRef?,screenProviderRef?,
+ *                  caps?,keyedOffer?}],            caps/keyedOffer only when known
  *                  hostId, hostPseudo, deputyId, successorIds,
  *                  hostVideoActive, hostScreenActive,
  *                  hostVideoTopology, hostScreenTopology,
  *                  hostVideoProviderRef, hostScreenProviderRef,
+ *                  hostCaps, hostKeyedOffer,
  *                  protocolVersion, appVersion }
+ *                  caps: what this device can do for others, e.g. ['keyed-video-1']
+ *                  = it can draw a sender's scene behind a keyed camera picture.
+ *                  keyedOffer: { epoch, scene, look, edgeE, size } | null — what a
+ *                  sender would key, if a receiver says it is ready for it. scene
+ *                  is null while the sender holds keying back (blur, an image, a
+ *                  green shirt): its keyed track then carries the plain composite.
+ *                  hello is authoritative (saying nothing = none); a peer-list is
+ *                  not: a missing caps keeps what was known, and a missing
+ *                  keyedOffer means none only from a host that has the capability,
+ *                  outside the post-migration settle.
  *   peer-joined  { peerId, pseudo }               host -> all existing peers
  *   peer-left    { peerId }                       host -> all
  *   talking      { peerId, active }               non-host -> host (relayed to all)
@@ -38,6 +50,18 @@
  *                  inside the SFU router functions. A subscriber MUST have it — without naming
  *                  the remote track there is nothing for the SFU to forward.
  *   video-stop   { peerId }                     peer -> host (relayed) — peer stopped camera
+ *   video-keyed  { peerId, offer }              peer -> host; host relays to all others
+ *                  with peerId = the SOURCE connection (never the claimed one), and
+ *                  sends its own to everyone. A sender's keyedOffer changed (null =
+ *                  it keys nobody). The host stores it for the next peer-list and
+ *                  passes at most 2 non-null offers per second per source; a sender
+ *                  sends at most one a second, since a dropped one could be its last.
+ *   video-keyed-ready { peerId, to, ok,         receiver -> host -> `to` only
+ *                  call, epoch, scene }         "I can draw your scene on THIS call
+ *                  (the mesh MediaConnection's connectionId), for THIS offer epoch,
+ *                  with THIS scene compiled" — or ok:false, "stop keying me".
+ *                  Re-sent every 10 s and to every new host; a sender forgets one
+ *                  after 25 s. Keyed is mesh-only: never offered for an SFU camera.
  *   audio-check-request  { peerId, from,        viewer -> host (relayed to target); dev only
  *                          durationMs }
  *   audio-check-response { peerId, report,       target -> host (relayed to requester); dev only
@@ -92,7 +116,11 @@
 // host drops the message it does not know and the correction simply does not
 // land, rather than anything breaking — but the sender is then editing into a
 // room that will not change, which is exactly the skew the hint exists for.
-const PROTOCOL_VERSION = 3;
+// v4 added `caps`/`keyedOffer` (hello, peer-list) and `video-keyed` /
+// `video-keyed-ready`: a receiver drawing the sender's scene. Additive the same
+// way — an older peer never advertises the capability, so nobody keys to it, and
+// an older host drops the two messages, so nothing is keyed through it.
+const PROTOCOL_VERSION = 4;
 
 const METERED_APP_STORE_KEY    = 'metered-app-name';
 const METERED_API_STORE_KEY    = 'metered-api-key';
@@ -6750,6 +6778,17 @@ function cameraMaxBitrate() {
   return CAMERA_MAX_BITRATE_MOBILE;
 }
 
+// The share of the camera cap a keyed sender gets. Set near libwebrtc's
+// resolution-step thresholds, so the lower cap buys bits rather than a smaller
+// picture: three quarters on the desktop and plain-mobile tiers, and nothing
+// taken from the frugal tier, which is already as low as a face survives.
+var KEYED_BITRATE_SHARE = 0.75;
+
+function keyedVideoBitrate(cameraCap) {
+  if (cameraCap <= CAMERA_MAX_BITRATE_FRUGAL) return cameraCap;
+  return Math.round(cameraCap * KEYED_BITRATE_SHARE);
+}
+
 function videoScaleForPeerCount(count) {
   if (count <= 2) return 1;
   if (count <= 4) return 1.5;
@@ -6771,14 +6810,18 @@ function tuneVideoSenders(pc, kind) {
     if (!sender.track || sender.track.kind !== 'video') return;
     try { sender.track.contentHint = isScreen ? 'detail' : 'motion'; } catch (_) {}
     if (typeof sender.getParameters !== 'function' || typeof sender.setParameters !== 'function') return;
+    // A keyed picture (you over flat green) costs far fewer bits for the same
+    // quality, but an encoder spends whatever cap it is given — so the saving
+    // only reaches the uplink as a lower cap. Per sender: the track decides.
+    var cap = (!isScreen && isKeyedVideoTrack(sender.track)) ? keyedVideoBitrate(maxBitrate) : maxBitrate;
     try {
       var params = sender.getParameters();
       if (!params.encodings || !params.encodings.length) params.encodings = [{}];
       var enc = params.encodings[0];
-      if (enc.maxBitrate === maxBitrate &&
+      if (enc.maxBitrate === cap &&
           enc.scaleResolutionDownBy === scale &&
           params.degradationPreference === degradation) return;  // already tuned
-      enc.maxBitrate = maxBitrate;
+      enc.maxBitrate = cap;
       if (scale > 1) enc.scaleResolutionDownBy = scale;
       else delete enc.scaleResolutionDownBy;
       params.degradationPreference = degradation;
@@ -9472,6 +9515,12 @@ function updatePeerList() {
   // from ever drifting. updateVideoStage() never calls back into this, and it
   // reconciles rather than rebuilds, so the frequent calls are cheap.
   updateVideoStage();
+  // The keyed camera is level-triggered off the same tick: what this client
+  // offers, and which peer is sent which track, is recomputed from live state
+  // here rather than hooked onto every path that can change it.
+  try { refreshKeyedSend(); } catch (e) {
+    devLog('[Video] keyed send refresh failed: ' + (e && e.message ? e.message : String(e)), 'warn');
+  }
 }
 
 // Voxal audio is a full WebRTC mesh, so connections grow ~O(n²) and a single
@@ -9703,6 +9752,13 @@ var VIDEO_LIGHT_ADAPT_KEY =
   (typeof VideoEffects === 'undefined') ? null : VideoEffects.LIGHT_ADAPT_KEY;
 var VIDEO_REFERENCE_KEY =
   (typeof VideoEffects === 'undefined') ? null : VideoEffects.REFERENCE_KEY;
+// "Let others draw my scene" — and the capability token a receiver advertises
+// for it. Both live in video-effects.js; null here means this build cannot key
+// at all, which every reader below treats as "never".
+var VIDEO_SUBJECT_ONLY_KEY =
+  (typeof VideoEffects === 'undefined') ? null : (VideoEffects.SUBJECT_ONLY_KEY || null);
+var KEYED_VIDEO_CAP =
+  (typeof VideoEffects === 'undefined' || !VideoEffects.KEYED_CAP) ? null : VideoEffects.KEYED_CAP;
 
 function videoBackgroundMode() {
   return (typeof VideoEffects === 'undefined') ? 'off' : VideoEffects.readMode();
@@ -11579,6 +11635,7 @@ function removePeer(peerId) {
   if (conn.videoTopology && conn.videoTopology.mode === 'sfu') sfuUnsubscribeTrack('video', peerId);
   if (conn.screenTopology && conn.screenTopology.mode === 'sfu') sfuUnsubscribeTrack('screen', peerId);
   connections.delete(peerId);
+  forgetKeyedPeer(peerId);
   detachAudio(peerId);
   updatePeerList();
 }
@@ -11688,7 +11745,9 @@ function videoStageTiles() {
     });
   }
 
-  // Then remote cameras.
+  // Then remote cameras. What a tile shows is not always the stream that
+  // arrived: a peer keying its camera for us is drawn through our own cut-out
+  // (displayVideoStreamFor), and conn.remoteVideoStream stays the raw stream.
   connections.forEach(function(conn, peerId) {
     if (!conn || !conn.videoActive) return;
     tiles.push({
@@ -11698,7 +11757,7 @@ function videoStageTiles() {
       self: false,
       label: conn.pseudo || shortId(peerId),
       color: conn.pseudoColor || null,
-      stream: conn.remoteVideoStream || null,
+      stream: displayVideoStreamFor(peerId, conn),
       talking: !!conn.talking,
       iceType: (conn.webrtcStats && conn.webrtcStats.iceType) || null,
       topology: (conn.videoTopology && conn.videoTopology.mode) || 'p2p',
@@ -12540,6 +12599,15 @@ function videoStageAvailable() {
 
 // Single entry point. Safe to call from anywhere video/screen state changes.
 function updateVideoStage() {
+  // Before anything can return early: the keyed receivers must follow the
+  // room even where no stage is drawn, and the tiles below read what it decides.
+  // An optional feature must never be what takes the stage down.
+  try {
+    reconcileKeyedReceivers();
+    syncVideoViewerStream();
+  } catch (e) {
+    devLog('[Video] keyed receive reconcile failed: ' + (e && e.message ? e.message : String(e)), 'warn');
+  }
   var stage = document.getElementById('video-stage');
   if (!stage) return;
   var mode = videoStageMode();
@@ -13748,6 +13816,9 @@ async function startVideoShare() {
 
 function stopVideoShare() {
   if (!localVideoActive && !localVideoStream) return;
+  // Synchronous, keyed camera or not: the calls close first, so no sender is
+  // left on a track that stopStreamTracks() is about to end, and nothing here
+  // needs a replaceTrack to wait for.
   unpublishLocalTrack('video'); // closes the outgoing mesh calls or the SFU session
   if (localVideoStream) {
     stopStreamTracks(localVideoStream);
@@ -13762,6 +13833,7 @@ function stopVideoShare() {
       if (hc && hc.data) hc.data.send(msg);
     }
   }
+  keyedSendStopped();
   localVideoActive = false;
   updateVideoModeUI();
 }
@@ -13786,22 +13858,27 @@ var _cameraFlipInFlight = false;
 var _cameraFlipSupported = false;
 
 function localVideoSenders() {
-  var pcs = [];
-  connections.forEach(function(conn) {
-    videoPeerConnections(conn).forEach(function(pc) { pcs.push(pc); });
+  return localVideoSenderTargets().map(function(t) { return t.sender; });
+}
+
+// Every live video sender, each with the peer it sends to — null for the relay,
+// which is one publish for everybody. Not every peer is sent the same track any
+// more (see the keyed camera below), so a swap has to know whose sender it is.
+function localVideoSenderTargets() {
+  var out = [];
+  function collect(pc, peerId) {
+    if (!pc || typeof pc.getSenders !== 'function') return;
+    pc.getSenders().forEach(function(sender) {
+      if (sender.track && sender.track.kind === 'video') out.push({ sender: sender, peerId: peerId });
+    });
+  }
+  connections.forEach(function(conn, peerId) {
+    videoPeerConnections(conn).forEach(function(pc) { collect(pc, peerId); });
   });
   // The relay path publishes through its own peer connection, not the mesh.
   var sfu = _sfuPublishSessions.video;
-  if (sfu && sfu.pc) pcs.push(sfu.pc);
-
-  var senders = [];
-  pcs.forEach(function(pc) {
-    if (!pc || typeof pc.getSenders !== 'function') return;
-    pc.getSenders().forEach(function(sender) {
-      if (sender.track && sender.track.kind === 'video') senders.push(sender);
-    });
-  });
-  return senders;
+  if (sfu && sfu.pc) collect(sfu.pc, null);
+  return out;
 }
 
 async function flipCamera() {
@@ -13873,15 +13950,17 @@ var _videoBgSharpness = null;
 var _videoBgQuality = null;
 var _videoBgLight = null;
 var _videoBgReference = null;
+var _videoBgSubjectOnly = null;
 
 function syncVideoBackgroundControls() {
   var mode = videoBackgroundMode();
   _videoBgPickers.forEach(function(p) { try { p.sync(mode); } catch (e) { /* ignore */ } });
   [_videoBgStrength, _videoBgSharpness, _videoBgQuality, _videoBgLight,
-   _videoBgReference].forEach(function(c) {
+   _videoBgReference, _videoBgSubjectOnly].forEach(function(c) {
     if (c) { try { c.sync(); } catch (e) { /* ignore */ } }
   });
   renderVideoBackgroundReference();
+  renderKeyedStatus();
   // The room control lives on the self-view tile; refreshing the stage is what
   // re-reads its state.
   if (inRoom) updatePeerList();
@@ -14328,6 +14407,26 @@ function initVideoBackgroundUI() {
     document.getElementById('settings-bg-reference'),
     { id: 'btn-bg-reference', label: 'Fixed camera',
       title: 'Compare the cut-out with a picture of the empty room' });
+  // "Let others draw my scene". Unlike the controls above it is not a uniform:
+  // it decides which track each peer is sent, which only this file can do, so
+  // the switch stores it (setSubjectOnly) and the hook below does the rest.
+  if (keyedApi('renderSubjectOnly')) {
+    _videoBgSubjectOnly = VideoEffects.renderSubjectOnly(
+      document.getElementById('settings-subject-only'),
+      { id: 'btn-subject-only', label: 'Let others draw my scene',
+        title: 'With an animated scene, the people you call draw it on their own device' });
+  }
+  if (keyedApi('onSubjectOnlyChange')) VideoEffects.onSubjectOnlyChange(onSubjectOnlyChanged);
+  // The published pipeline's keyed state (scene, look, why it is withheld)
+  // changed: that is a new offer. The settings preview never has one.
+  if (keyedApi('onKeyedState')) {
+    VideoEffects.onKeyedState(function(stream) {
+      if (stream && stream === localVideoStream) refreshKeyedSend();
+    });
+  }
+  // The local pipeline is struggling: drawing other people's scenes is the
+  // first thing to give up, before its own segmentation rate.
+  if (keyedApi('onPressure')) VideoEffects.onPressure(shedKeyedReceiverForPressure);
 
   var captureBtn = document.getElementById('btn-video-bg-capture');
   if (captureBtn) {
@@ -14448,6 +14547,9 @@ async function applyVideoBackground(mode) {
       if (!rawTrack) return;
       var processed = localVideoStream;
       localVideoStream = raw;
+      // Every sender moves to the camera — a peer on the keyed track included,
+      // since there is no offer without the pipeline — and one a failed swap
+      // left on the keyed track is closed, all BEFORE stop() ends that track.
       await swapLocalVideoTrack(rawTrack);
       processed._effectsOriginal = null;   // the camera lives on in localVideoStream
       VideoEffects.stop(processed);
@@ -14494,20 +14596,43 @@ async function applyVideoBackground(mode) {
 // Point every live sender — mesh and relay alike — at a new local video track,
 // then re-tune. A replaced track carries none of the old one's encoder
 // parameters, which is why the tuning pass is not optional.
-async function swapLocalVideoTrack(track) {
-  var swaps = localVideoSenders().map(function(sender) {
-    return Promise.resolve(sender.replaceTrack(track)).catch(function(e) {
+//
+// Per sender, evaluated after the caller has updated localVideoStream: a mesh
+// peer that is ready for the keyed picture keeps it (keyedFor), everyone else —
+// and the relay, always — gets `track`. Every sender is still replaced, so
+// with the keyed camera off this is exactly the swap it always was. It runs on
+// the one sender queue, so it can never interleave with a keyed reconcile.
+function swapLocalVideoTrack(track) {
+  return queueVideoSenderMutation(function() { return swapLocalVideoTrackNow(track); });
+}
+
+async function swapLocalVideoTrackNow(track) {
+  var offer = currentOffer();
+  var keyed = offer ? localKeyedTrack() : null;
+  var failed = [];
+  var swaps = localVideoSenderTargets().map(function(t) {
+    var next = track;
+    if (keyed && t.peerId && t.sender === meshVideoSender(t.peerId) && keyedFor(t.peerId, offer)) next = keyed;
+    return Promise.resolve().then(function() { return t.sender.replaceTrack(next); }).catch(function(e) {
       devLog('[Video] replaceTrack failed on background change: ' +
              (e && e.message ? e.message : String(e)), 'warn');
+      failed.push(t);
     });
   });
   await Promise.all(swaps);
+  // A sender a failed swap left on the keyed track would be stranded on a track
+  // that is about to end (the caller is usually on its way to stopping the
+  // pipeline): close that call rather than freeze that peer's picture.
+  failed.forEach(function(t) {
+    if (t.peerId && isKeyedVideoTrack(t.sender.track)) closeOutgoingCameraCall(t.peerId);
+  });
   connections.forEach(function(conn) {
     videoPeerConnections(conn).forEach(function(pc) { tuneVideoSenders(pc, 'video'); });
   });
   if (_sfuPublishSessions.video && _sfuPublishSessions.video.pc) {
     tuneVideoSenders(_sfuPublishSessions.video.pc, 'video');
   }
+  applyKeyedDemand();
 }
 
 // Release a camera or screen stream completely. The unwrap matters for the same
@@ -14518,6 +14643,10 @@ function stopStreamTracks(stream) {
   if (!stream) return;
   var raw = stream._effectsOriginal;
   if (stream._effectsProcessor && typeof VideoEffects !== 'undefined') {
+    // stop() ends the keyed track with the pipeline. Camera stop closes its
+    // calls first, so this finds nothing — but a sender still on that track
+    // would freeze on it, and there is no time here to swap it: close it.
+    closeCameraCallsOnKeyedTrack();
     try { VideoEffects.stop(stream); } catch (e) { /* ignore */ }
   }
   if (raw) {
@@ -14553,6 +14682,10 @@ function setLocalCameraSuspended(suspended) {
       s.getVideoTracks().forEach(function(t) { t.enabled = !suspended; });
     } catch (e) { /* track already ended */ }
   });
+  // The keyed picture is a third output of the same pipeline, and the peers on
+  // it must go dark with everyone else rather than keep a frozen frame.
+  var keyed = localKeyedTrack();
+  if (keyed) { try { keyed.enabled = !suspended; } catch (e) { /* ended */ } }
 }
 
 // Only worth offering where there is more than one camera to flip between, and
@@ -14764,11 +14897,16 @@ function announceLocalTrackTopology(kind, topology, providerRef) {
     var hc = connections.get(roomCode);
     if (hc && hc.data) hc.data.send(msg);
   }
+  // Every publish path ends here, AFTER it has set _localVideoTopology — the
+  // one moment the keyed offer can tell mesh from relay.
+  if (kind === 'video') refreshKeyedSend();
 }
 
 // Per-peer full-mesh publish — unchanged behavior, extracted verbatim from the
 // original startVideoShare()/startScreenShare() loops so P2P has zero
-// regression from this refactor.
+// regression from this refactor. A new call always starts on `stream` (the
+// composite): only reconcileKeyedSenders() ever moves one to the keyed track,
+// and only once that receiver has acked this very call.
 function p2pPublishVideo(peerId, c, stream) {
   if (!peer || peerId === peer.id) return;
   var videoCall = peer.call(peerId, stream, { metadata: { type: 'video' } });
@@ -14782,8 +14920,14 @@ function p2pPublishVideo(peerId, c, stream) {
     }
   });
   videoCall.on('close', function() {
-    // Only clean up outgoing ref; remote status is driven by video-stop messages
+    // Only clean up outgoing ref; remote status is driven by video-stop messages.
+    // Re-read the entry: the host copy-replaces it on every message it
+    // receives, so the `c` captured here goes stale within seconds, and a
+    // closed call left on the live entry would look like one still sending.
+    var live = connections.get(peerId);
+    if (live && live.videoMediaOut === videoCall) live.videoMediaOut = null;
     if (c.videoMediaOut === videoCall) c.videoMediaOut = null;
+    if (_keyedDemand > 0) scheduleKeyedReconcile();
   });
   c.videoMediaOut = videoCall;
 }
@@ -14819,6 +14963,1208 @@ function p2pUnpublishScreen(peerId, c) {
   if (!c || !c.screenMediaOut) return;
   try { c.screenMediaOut.close(); } catch (_) {}
   c.screenMediaOut = null;
+}
+
+// --- Keyed camera: the people you call draw your scene ------------------------
+//
+// With an animated scene picked and "Let others draw my scene" on, a mesh peer
+// that can do it is sent a picture of you over flat key green, and draws the
+// same scene behind you on its own device: far fewer bits for the same picture
+// (see docs/video-effects.md). The pixels, on both ends, are video-effects.js's.
+// This is the part only this file can do — which peer is sent which track, and
+// the handshake that decides it. It never applies to the relay, to a screen,
+// or to blur or your own image: those always send the plain composite.
+//
+// The rules, each pinned by a test (unit-video-keyed-wiring.spec.js):
+//
+//   * Nobody is ever shown a keyed frame raw. A call moves to the keyed track
+//     only after its receiver has acked THAT call (the MediaConnection's
+//     connectionId, which PeerJS gives both ends), THAT offer epoch and THAT
+//     scene, and every new call starts on the composite. A receiver lets go of
+//     its cut-out only on positive evidence that the frames stopped being keyed.
+//   * It is level-triggered. The offer is recomputed from live state on every
+//     roster tick, acks are repeated every 10 s and forgotten after 25 s, and
+//     hello carries the offer to every new host — so a message dropped in a
+//     migration heals instead of leaving the room stuck.
+//   * With the setting off nothing changes for anyone: no keyed track is
+//     allocated, no sender is touched, nothing extra goes on the wire.
+
+var KEYED_ACK_TTL_MS = 25000;        // a sender forgets an ack this old…
+var KEYED_ACK_REFRESH_MS = 10000;    // …so a ready receiver repeats it this often
+var KEYED_OFFER_MIN_GAP_MS = 1000;   // between two non-null offers we send
+var KEYED_OFFER_RATE_PER_S = 2;      // what a host relays per source (null exempt)
+var KEYED_SEND_TICK_MS = 5000;       // re-check acks for expiry while any exist
+
+var _keyedEpoch = 0;          // bumped when the offer appears or the keyed track changes
+var _keyedEpochTrack = null;  // the keyed track the current epoch was issued for
+var _keyedOfferLive = false;  // whether the last computed offer was non-null
+var _keyedSentOffer = null;   // the offer this client last put on the wire
+var _keyedSentAt = 0;         // …and when, if it was non-null
+var _keyedSendTimer = null;   // a throttled offer waiting for its slot
+var _keyedSendQueued = false; // an offer waiting behind the sender queue
+var _keyedSendTick = null;    // ack expiry, while there is anything to expire
+var _keyedAcks = new Map();   // receiver peerId -> { ok, call, epoch, scene, at }
+var _keyedDemand = 0;         // senders on the keyed track, as last told to VideoEffects
+var _keyedDemandStream = null;
+var _keyedOfferRate = new Map(); // host only: source peerId -> recent offer times
+
+function keyedApi(name) {
+  return typeof VideoEffects !== 'undefined' && !!VideoEffects &&
+    typeof VideoEffects[name] === 'function';
+}
+
+// What this device can do for others, advertised in hello and peer-list. A
+// capability, never a preference: receiving costs nothing until somebody keys,
+// so it does not depend on this user's own setting — which phones, the devices
+// that most need the saving, cannot even reach.
+function localCaps() {
+  if (IS_TINY_EMBED || !KEYED_VIDEO_CAP || !keyedApi('canKeyIn')) return [];
+  try { return VideoEffects.canKeyIn() ? [KEYED_VIDEO_CAP] : []; } catch (e) { return []; }
+}
+
+// Wire input. At most 16 short strings, or null when it is not a list at all —
+// which a peer-list reader takes as "not said" rather than "none".
+function sanitizeCaps(raw) {
+  if (!Array.isArray(raw)) return null;
+  var out = [];
+  for (var i = 0; i < raw.length && out.length < 16; i++) {
+    var s = raw[i];
+    if (typeof s === 'string' && s.length > 0 && s.length <= 32 && out.indexOf(s) === -1) out.push(s);
+  }
+  return out;
+}
+
+function peerSupports(peerId, cap) {
+  if (!cap || !peerId) return false;
+  var c = connections.get(peerId);
+  return !!(c && Array.isArray(c.caps) && c.caps.indexOf(cap) !== -1);
+}
+
+// Between two peers neither of which is the host, every keyed message goes
+// through the host — and an older one drops them, so it could relay neither an
+// offer nor the "stop" a receiver may need to say. Fail closed.
+function keyedRelayCapable(peerId) {
+  return isHost || peerId === roomCode || peerSupports(roomCode, KEYED_VIDEO_CAP);
+}
+
+function keyedClamp(v, lo, hi, fallback) {
+  v = Number(v);
+  if (!isFinite(v)) return fallback;
+  v = v < lo ? lo : v > hi ? hi : v;
+  return Math.round(v * 1000) / 1000;
+}
+
+function keyedSceneId(raw) {
+  if (raw == null || typeof VideoScenes === 'undefined' || typeof VideoScenes.resolveId !== 'function') return null;
+  try { return VideoScenes.resolveId(String(raw).slice(0, 64)) || null; } catch (e) { return null; }
+}
+
+// An offer as it may cross the wire. Sanitised by the host AND by every
+// receiver, because the host may be older, newer or hostile. A scene this build
+// does not know reads as no scene (the offer stands; nothing is keyed for it),
+// and the look is rebuilt field by field, each number clamped to its range.
+function sanitizeKeyedOffer(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  var epoch = raw.epoch;
+  if (typeof epoch !== 'number' || !Number.isSafeInteger(epoch) || epoch < 0) return null;
+  var look = (raw.look && typeof raw.look === 'object') ? raw.look : {};
+  var tint = (Array.isArray(look.tint) && look.tint.length === 3) ? look.tint : [1, 1, 1];
+  var size = null;
+  if (Array.isArray(raw.size) && raw.size.length === 2) {
+    var w = Math.round(Number(raw.size[0])), h = Math.round(Number(raw.size[1]));
+    if (isFinite(w) && isFinite(h)) {
+      size = [Math.min(4096, Math.max(16, w)), Math.min(4096, Math.max(16, h))];
+    }
+  }
+  return {
+    epoch: epoch,
+    scene: keyedSceneId(raw.scene),
+    look: {
+      tint: [keyedClamp(tint[0], 0.5, 2, 1), keyedClamp(tint[1], 0.5, 2, 1), keyedClamp(tint[2], 0.5, 2, 1)],
+      exposure: keyedClamp(look.exposure, 0.1, 2, 1),
+      dirX: keyedClamp(look.dirX, -1, 1, 0.35),
+      dirY: keyedClamp(look.dirY, -1, 1, 0.5),
+      hard: keyedClamp(look.hard, 0, 1, 0.45),
+      side: Number(look.side) < 0 ? -1 : 1
+    },
+    edgeE: keyedClamp(raw.edgeE, -1, 0, 0),
+    size: size
+  };
+}
+
+// `ok` is true only when it is literally true: a truthy string is a no.
+function sanitizeKeyedAck(msg) {
+  return {
+    ok: msg.ok === true,
+    call: (typeof msg.call === 'string' && msg.call.length > 0 && msg.call.length <= 64) ? msg.call : null,
+    epoch: (typeof msg.epoch === 'number' && Number.isSafeInteger(msg.epoch)) ? msg.epoch : null,
+    scene: keyedSceneId(msg.scene),
+    at: Date.now()
+  };
+}
+
+// Sanitised offers are built in a fixed key order, so this is a deep compare.
+function sameKeyedOffer(a, b) {
+  if (!a || !b) return !a && !b;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// --- Keyed camera: sending -----------------------------------------------------
+
+function keyedSubjectOnlyOn() {
+  if (!keyedApi('readSubjectOnly')) return false;
+  try { return !!VideoEffects.readSubjectOnly(); } catch (e) { return false; }
+}
+
+// The published pipeline's keyed track, WITHOUT creating it: keyedState() is
+// null until the keyed output exists, and keyedTrack() would allocate one.
+function localKeyedTrack() {
+  var s = localVideoStream;
+  if (!s || !s._effectsProcessor || !keyedApi('keyedState') || !keyedApi('keyedTrack')) return null;
+  try { return VideoEffects.keyedState(s) ? (VideoEffects.keyedTrack(s) || null) : null; } catch (e) { return null; }
+}
+
+function isKeyedVideoTrack(track) {
+  if (!track || !keyedApi('isKeyedTrack')) return false;
+  try { return !!VideoEffects.isKeyedTrack(track); } catch (e) { return false; }
+}
+
+function anyPeerSupportsKeyed() {
+  if (!KEYED_VIDEO_CAP) return false;
+  var self = peer && peer.id;
+  var found = false;
+  connections.forEach(function(c, id) {
+    if (!found && id !== self && peerSupports(id, KEYED_VIDEO_CAP)) found = true;
+  });
+  return found;
+}
+
+// The live offer: what this client would key right now. Computed from live
+// state every time and never cached — a cached one is how a stale offer
+// outlives a move to the relay. Non-null only while ALL of these hold: the
+// setting is on, the camera is shared through a running pipeline, it goes over
+// the mesh, and somebody here can receive it. The keyed track is asked for only
+// once everything else holds, because asking creates it.
+function currentOffer() {
+  var s = localVideoStream;
+  var t = _localVideoTopology.video;
+  var track = null, state = null;
+  if (keyedSubjectOnlyOn() && localVideoActive && s && s._effectsProcessor && t && t.mode === 'p2p' &&
+      keyedApi('keyedTrack') && keyedApi('keyedState') && anyPeerSupportsKeyed()) {
+    try { track = VideoEffects.keyedTrack(s) || null; } catch (e) { track = null; }
+    if (track) { try { state = VideoEffects.keyedState(s) || null; } catch (e) { state = null; } }
+  }
+  if (!track || !state) { _keyedOfferLive = false; return null; }
+  // Made while the app is backgrounded: it starts as dark as the rest.
+  if (_localCameraSuspended && track.enabled) { try { track.enabled = false; } catch (e) { /* ended */ } }
+  // A new epoch whenever the offer appears, or the keyed track is a different
+  // one: an ack names its epoch, so nothing acked before can key this.
+  if (!_keyedOfferLive || track !== _keyedEpochTrack) {
+    _keyedEpoch++;
+    _keyedEpochTrack = track;
+  }
+  _keyedOfferLive = true;
+  return sanitizeKeyedOffer({
+    epoch: _keyedEpoch, scene: state.scene, look: state.look, edgeE: state.edgeE, size: state.size
+  });
+}
+
+// A call that can still carry anything. PeerJS leaves `open` false on an
+// outgoing call until the answer lands — no receiver can have acked it yet.
+function keyedCallOpen(mc) {
+  if (!mc || mc.closed || mc.open === false) return false;
+  var pc = mc.peerConnection;
+  if (!pc) return false;
+  return pc.connectionState !== 'closed' && pc.signalingState !== 'closed';
+}
+
+// The video sender of the call carrying our camera to this peer — the latest
+// call only: an orphan left by an earlier re-call is never moved to keyed.
+function meshVideoSender(peerId) {
+  var conn = connections.get(peerId);
+  var mc = conn && conn.videoMediaOut;
+  if (!keyedCallOpen(mc) || typeof mc.peerConnection.getSenders !== 'function') return null;
+  var senders = mc.peerConnection.getSenders() || [];
+  for (var i = 0; i < senders.length; i++) {
+    if (senders[i] && senders[i].track && senders[i].track.kind === 'video') return senders[i];
+  }
+  return null;
+}
+
+// Whether this peer is sent the keyed picture now. Every clause is live state,
+// and the ack has to name the call we are on NOW, the offer epoch NOW and (when
+// the offer has a scene) the scene NOW: an ack for anything earlier, or one
+// older than 25 s, keys nothing.
+function keyedFor(peerId, offer) {
+  if (offer === undefined) offer = currentOffer();
+  if (!offer || !peer || !peerId || peerId === peer.id) return false;
+  if (!peerSupports(peerId, KEYED_VIDEO_CAP) || !keyedRelayCapable(peerId)) return false;
+  var conn = connections.get(peerId);
+  var mc = conn && conn.videoMediaOut;
+  if (!keyedCallOpen(mc) || !mc.connectionId) return false;
+  var ack = _keyedAcks.get(peerId);
+  if (!ack || !ack.ok || Date.now() - ack.at > KEYED_ACK_TTL_MS) return false;
+  if (ack.call !== String(mc.connectionId) || ack.epoch !== offer.epoch) return false;
+  return offer.scene === null || ack.scene === offer.scene;
+}
+
+// ONE queue for every change to what our video senders carry: the background
+// swaps, a flip's swap and the keyed reconcile all run through it, so none can
+// interleave with another and leave a peer on a track a step it raced with has
+// just ended.
+var _videoSenderQueue = Promise.resolve();
+
+function queueVideoSenderMutation(job) {
+  var run = _videoSenderQueue.then(job);
+  _videoSenderQueue = run.then(function() {}, function(e) {
+    devLog('[Video] sender update failed: ' + (e && e.message ? e.message : String(e)), 'warn');
+  });
+  return run;
+}
+
+// What this peer's sender should carry, or null to leave it alone. There are
+// only two moves: onto the keyed track when keyedFor() says so, and back to the
+// composite when it no longer does. A sender on anything else is never touched
+// — which is why, with the setting off, not one replaceTrack happens.
+function keyedSenderTarget(peerId, sender, offer) {
+  if (!localVideoActive || !localVideoStream || !sender) return null;
+  if (keyedFor(peerId, offer)) {
+    var kt = localKeyedTrack();
+    return (kt && sender.track !== kt) ? kt : null;
+  }
+  if (isKeyedVideoTrack(sender.track)) return localVideoStream.getVideoTracks()[0] || null;
+  return null;
+}
+
+function keyedSendersOutOfStep(offer) {
+  if (!localVideoActive || !localVideoStream) return false;
+  var out = false;
+  connections.forEach(function(conn, peerId) {
+    if (!out && keyedSenderTarget(peerId, meshVideoSender(peerId), offer)) out = true;
+  });
+  return out;
+}
+
+// Coalesced, and never dropped: a request while one waits or runs only marks it
+// dirty, and the one running loops until a whole pass changes nothing.
+var KEYED_RECONCILE_MAX_PASSES = 6;
+var _keyedReconcileDirty = false;
+var _keyedReconcileQueued = false;
+var _keyedReconcileRun = Promise.resolve();
+
+function scheduleKeyedReconcile() {
+  _keyedReconcileDirty = true;
+  if (_keyedReconcileQueued) return _keyedReconcileRun;
+  _keyedReconcileQueued = true;
+  _keyedReconcileRun = queueVideoSenderMutation(async function() {
+    var passes = 0;
+    try {
+      while (_keyedReconcileDirty) {
+        _keyedReconcileDirty = false;
+        if (++passes > KEYED_RECONCILE_MAX_PASSES) {
+          // Something keeps changing under it: come back in a moment, not spin.
+          setTimeout(scheduleKeyedReconcile, 1000);
+          break;
+        }
+        if (await reconcileKeyedSendersOnce()) _keyedReconcileDirty = true;
+      }
+    } finally {
+      _keyedReconcileQueued = false;
+    }
+    renderKeyedStatus();
+  });
+  return _keyedReconcileRun;
+}
+
+async function reconcileKeyedSendersOnce() {
+  if (!localVideoActive || !localVideoStream) { applyKeyedDemand(); return false; }
+  var offer = currentOffer();
+  var kt = offer ? localKeyedTrack() : null;
+  var plan = [];
+  var onKeyed = 0, toKeyed = 0;
+  connections.forEach(function(conn, peerId) {
+    var s = meshVideoSender(peerId);
+    if (!s) return;
+    if (kt && s.track === kt) onKeyed++;
+    if (!keyedSenderTarget(peerId, s, offer)) return;
+    plan.push(peerId);
+    if (keyedFor(peerId, offer)) toKeyed++;
+  });
+  if (!plan.length) { applyKeyedDemand(); return false; }
+  // The keyed pass must already be drawing when a sender moves onto its track,
+  // or that peer's first frame would be whatever the idle canvas last held.
+  if (toKeyed) setKeyedDemandTo(onKeyed + toKeyed);
+  var changed = false;
+  for (var i = 0; i < plan.length; i++) {
+    var peerId = plan[i];
+    // From live state, right before the swap: an earlier await may have moved
+    // anything.
+    var sender = meshVideoSender(peerId);
+    var target = keyedSenderTarget(peerId, sender, currentOffer());
+    if (!target) continue;
+    var wasKeyed = isKeyedVideoTrack(sender.track);
+    try {
+      await sender.replaceTrack(target);
+      changed = true;
+    } catch (e) {
+      devLog('[Video] keyed replaceTrack failed for ' + shortId(peerId) + ': ' +
+             (e && e.message ? e.message : String(e)), 'warn');
+      // It could not be moved OFF the keyed track: never leave it there.
+      if (wasKeyed && isKeyedVideoTrack(sender.track)) closeOutgoingCameraCall(peerId);
+      continue;
+    }
+    var c = connections.get(peerId);
+    if (c && c.videoMediaOut && c.videoMediaOut.peerConnection) {
+      tuneVideoSenders(c.videoMediaOut.peerConnection, 'video');
+    }
+    // And again after it: if the answer moved meanwhile, go round once more.
+    var after = meshVideoSender(peerId);
+    if (after && keyedSenderTarget(peerId, after, currentOffer())) _keyedReconcileDirty = true;
+  }
+  applyKeyedDemand();
+  return changed;
+}
+
+// The pipeline draws its keyed pass only while some sender reads it.
+function keyedSendersOnTrack() {
+  var kt = localKeyedTrack();
+  if (!kt) return 0;
+  var n = 0;
+  connections.forEach(function(conn, peerId) {
+    var s = meshVideoSender(peerId);
+    if (s && s.track === kt) n++;
+  });
+  return n;
+}
+
+function setKeyedDemandTo(n) {
+  var s = localVideoStream;
+  if (n === _keyedDemand && s === _keyedDemandStream) return;
+  var never = _keyedDemand === 0;
+  _keyedDemand = n;
+  _keyedDemandStream = s;
+  // A pipeline nobody ever asked for a keyed frame is told nothing at all.
+  if (!n && never) return;
+  if (s && s._effectsProcessor && keyedApi('setKeyedDemand')) {
+    try { VideoEffects.setKeyedDemand(s, n); } catch (e) { /* ignore */ }
+  }
+}
+
+function applyKeyedDemand() {
+  setKeyedDemandTo(keyedSendersOnTrack());
+}
+
+// The call carrying our camera to this peer could not be moved off the keyed
+// track. Close it rather than let it freeze on a track that is about to end —
+// and, while we still share over the mesh, call again: a new call starts on
+// the composite like every other.
+function closeOutgoingCameraCall(peerId) {
+  var c = connections.get(peerId);
+  if (!c || !c.videoMediaOut) return;
+  var mc = c.videoMediaOut;
+  c.videoMediaOut = null;
+  try { mc.close(); } catch (_) {}
+  var t = _localVideoTopology.video;
+  if (localVideoActive && localVideoStream && t && t.mode === 'p2p' && peer && !peer.destroyed) {
+    p2pPublishVideo(peerId, c, localVideoStream);
+  }
+}
+
+// Synchronous last resort before the pipeline is stopped: anything still on
+// its keyed track is closed, with no time to swap it.
+function closeCameraCallsOnKeyedTrack() {
+  connections.forEach(function(c, peerId) {
+    var s = meshVideoSender(peerId);
+    if (!s || !isKeyedVideoTrack(s.track)) return;
+    var mc = c.videoMediaOut;
+    c.videoMediaOut = null;
+    try { mc.close(); } catch (_) {}
+  });
+}
+
+// The one entry point on the sending side. Level-triggered and idempotent:
+// recompute the offer, put it on the wire if it changed, and have the senders
+// follow. Called from the tail of updatePeerList(), after every publish, and
+// from the setting, the pipeline's state and every ack — cheap when nothing
+// changed, and free with the setting off.
+function refreshKeyedSend() {
+  if (!inRoom && !_keyedSentOffer && !_keyedAcks.size) return;
+  pruneKeyedAcks();
+  var offer = currentOffer();
+  // Senders first: a peer is moved back to the composite BEFORE it is told the
+  // offer it was keyed for has changed or gone.
+  if (keyedSendersOutOfStep(offer)) scheduleKeyedReconcile();
+  else if (_keyedDemand > 0) applyKeyedDemand();
+  if (!sameKeyedOffer(offer, _keyedSentOffer)) {
+    // An offer appearing goes out at once — nobody can be keyed before the
+    // receivers have it. Anything else waits behind the senders' queue.
+    if (offer && !_keyedSentOffer) sendKeyedOffer(offer);
+    else queueKeyedOfferSend();
+  }
+  armKeyedSendTick();
+  renderKeyedStatus();
+}
+
+function queueKeyedOfferSend() {
+  if (_keyedSendQueued) return;
+  _keyedSendQueued = true;
+  queueVideoSenderMutation(function() {
+    _keyedSendQueued = false;
+    flushKeyedOffer();
+  });
+}
+
+function flushKeyedOffer() {
+  var offer = currentOffer();
+  if (sameKeyedOffer(offer, _keyedSentOffer)) return;
+  // At most one non-null offer a second. A host relays two a second per source
+  // and drops the rest — and the one dropped could be the last one.
+  if (offer && _keyedSentOffer) {
+    var wait = KEYED_OFFER_MIN_GAP_MS - (Date.now() - _keyedSentAt);
+    if (wait > 0) {
+      if (!_keyedSendTimer) {
+        _keyedSendTimer = setTimeout(function() { _keyedSendTimer = null; refreshKeyedSend(); }, wait);
+      }
+      return;
+    }
+  }
+  sendKeyedOffer(offer);
+}
+
+function sendKeyedOffer(offer) {
+  if (_keyedSendTimer) { clearTimeout(_keyedSendTimer); _keyedSendTimer = null; }
+  _keyedSentOffer = offer || null;
+  if (offer) _keyedSentAt = Date.now();
+  if (!peer || !inRoom) return;
+  var msg = { type: 'video-keyed', peerId: peer.id, offer: offer || null };
+  if (isHost) {
+    connections.forEach(function(c) { if (c.data) sendDataIfOpen(c.data, msg); });
+  } else {
+    var hc = connections.get(roomCode);
+    if (hc && hc.data) sendDataIfOpen(hc.data, msg);
+  }
+}
+
+function pruneKeyedAcks() {
+  if (!_keyedAcks.size) return;
+  var now = Date.now();
+  _keyedAcks.forEach(function(ack, id) {
+    if (!connections.has(id) || now - ack.at > KEYED_ACK_TTL_MS) _keyedAcks.delete(id);
+  });
+}
+
+// An ack expires even in a room where nothing else happens.
+function armKeyedSendTick() {
+  var want = _keyedAcks.size > 0 || _keyedDemand > 0;
+  if (want && !_keyedSendTick) {
+    _keyedSendTick = setInterval(refreshKeyedSend, KEYED_SEND_TICK_MS);
+  } else if (!want && _keyedSendTick) {
+    clearInterval(_keyedSendTick);
+    _keyedSendTick = null;
+  }
+}
+
+// Camera stop. Synchronous on purpose (see stopVideoShare): every call is
+// already closed, so nobody needs moving — only state to forget. And a new
+// epoch, so no ack from this share can ever key the next one.
+function keyedSendStopped() {
+  _keyedAcks.clear();
+  _keyedEpoch++;
+  _keyedOfferLive = false;
+  _keyedEpochTrack = null;
+  _keyedDemand = 0;
+  _keyedDemandStream = null;
+  if (_keyedSentOffer) sendKeyedOffer(null);
+  if (_keyedSendTimer) { clearTimeout(_keyedSendTimer); _keyedSendTimer = null; }
+  armKeyedSendTick();
+}
+
+// --- Keyed camera: signalling --------------------------------------------------
+
+// An ack reaching the sender: from the host, or straight from a joiner when we
+// are the host. Recorded as it comes, ok:false included — keyedFor() decides.
+function noteKeyedAck(sourceId, msg) {
+  if (!sourceId || !peer || sourceId === peer.id || !connections.has(sourceId)) return;
+  if (!msg || typeof msg !== 'object') return;
+  _keyedAcks.set(sourceId, sanitizeKeyedAck(msg));
+  refreshKeyedSend();
+}
+
+// A sender's offer reaching a receiver — relayed by the host, or the host's own.
+// Never creates a connections entry.
+function noteKeyedOffer(sourceId, raw) {
+  if (!sourceId || !peer || sourceId === peer.id) return;
+  var conn = connections.get(sourceId);
+  if (!conn) return;
+  conn.keyedOffer = sanitizeKeyedOffer(raw);
+  scheduleStageRelayout();
+}
+
+function keyedOfferRateOk(sourceId) {
+  var now = Date.now();
+  var times = (_keyedOfferRate.get(sourceId) || []).filter(function(t) { return now - t < 1000; });
+  var ok = times.length < KEYED_OFFER_RATE_PER_S;
+  if (ok) times.push(now);
+  _keyedOfferRate.set(sourceId, times);
+  return ok;
+}
+
+// Host: a joiner's offer. Stored on its entry (the next peer-list carries it to
+// late joiners) and relayed to everyone else, stamped with the connection it
+// actually came in on — a peer can only ever speak for itself. Scene-change
+// spam costs every receiver a compile, so non-null offers are rate-limited; a
+// null one ("stop") always goes through.
+function handleKeyedOfferAtHost(sourceId, raw) {
+  var conn = connections.get(sourceId);
+  if (!conn) return;
+  var offer = sanitizeKeyedOffer(raw);
+  if (offer && !keyedOfferRateOk(sourceId)) return;
+  conn.keyedOffer = offer;
+  connections.forEach(function(c, id) {
+    if (id !== sourceId && c.data) sendDataIfOpen(c.data, { type: 'video-keyed', peerId: sourceId, offer: offer });
+  });
+  // The host receives too.
+  scheduleStageRelayout();
+}
+
+// Host: an ack, from the receiver that sent it (sourceId) to `to` only. Ours to
+// consume when `to` is us; relayed only to a connected peer other than its
+// source; dropped otherwise.
+function handleKeyedAckAtHost(sourceId, msg) {
+  if (!msg || typeof msg !== 'object' || typeof msg.to !== 'string') return;
+  if (peer && msg.to === peer.id) { noteKeyedAck(sourceId, msg); return; }
+  if (msg.to === sourceId) return;
+  var target = connections.get(msg.to);
+  if (!target || !target.data) return;
+  var ack = sanitizeKeyedAck(msg);
+  sendDataIfOpen(target.data, {
+    type: 'video-keyed-ready', peerId: sourceId, to: msg.to,
+    ok: ack.ok, call: ack.call, epoch: ack.epoch, scene: ack.scene
+  });
+}
+
+// --- Keyed camera: receiving ---------------------------------------------------
+//
+// A sender that keys for us sends a picture of itself over flat green; we cut
+// it out and draw its scene ourselves (VideoEffects.keyIn). One entry per such
+// sender, kept here and never on conn (those are copy-replaced all the time):
+//
+//   starting  keyIn() in flight. The tile shows the raw stream, which is the
+//             composite: nothing has been acked for this call yet.
+//   ready     the handle draws and the tile shows handle.stream — switched to
+//             ONCE; a new call or a new offer is fed to the same handle, so the
+//             tile never flashes. Our ok:true names the call, the epoch and the
+//             scene the handle has compiled.
+//   closing   we said ok:false. The tile keeps the handle until its frames are
+//             seen UNkeyed (or the stream is gone). Never on a timeout: a lost
+//             ok:false would otherwise end in a green tile.
+
+var KEYED_RECEIVERS_MAX_DESKTOP = 3;
+var KEYED_RECEIVERS_MAX_MOBILE = 1;
+var KEYED_PLACEHOLDER_MS = 1500;    // keyed frames this recent and no cut-out: show no picture
+var KEYED_CLOSING_TICK_MS = 500;
+var KEYED_OK_FALSE_RESEND_MS = 2000;
+var KEYED_RETRY_BACKOFF_MS = [30000, 120000];   // then never again this session
+var KEYED_SHED_BACKOFF_MS = 60000;
+var KEYED_RECEIVE_TICK_MS = 5000;
+
+var _keyedReceivers = new Map();   // sender peerId -> entry
+var _keyedProbes = new Map();      // sender peerId -> { probe, raw }
+var _keyedFailures = new Map();    // sender peerId -> Map('scene|streamId' -> { count, until })
+var _keyedTokenSeq = 0;
+var _keyedReceiveTimer = null;
+var _keyedReceiveTimerDue = 0;
+var _keyedHostChangedAt = 0;       // when the last new host's first peer-list came in
+
+function keyedHandleAlive(h) {
+  if (!h) return false;
+  try { return typeof h.alive === 'function' ? !!h.alive() : true; } catch (e) { return false; }
+}
+
+function keyedStamp(o, name) {
+  try {
+    var v = (o && typeof o[name] === 'function') ? Number(o[name]()) : 0;
+    return isFinite(v) ? v : 0;
+  } catch (e) { return 0; }
+}
+
+function keyedOfferLookKey(offer) {
+  return offer ? JSON.stringify([offer.scene, offer.look, offer.edgeE, offer.size]) : '';
+}
+
+// Each keyed sender costs a WebGL context and a full scene render. A phone has
+// room for one — and none at all while it draws a scene for its own camera, or
+// was asked to save battery.
+function keyedReceiversMax() {
+  if (!IS_MOBILE_DEVICE) return KEYED_RECEIVERS_MAX_DESKTOP;
+  if (localVideoActive && localVideoStream && localVideoStream._effectsProcessor &&
+      videoBackgroundMode().indexOf('preset:') === 0) return 0;
+  if (keyedApi('readQuality')) {
+    try { if (VideoEffects.readQuality() === 'battery') return 0; } catch (e) { /* ignore */ }
+  }
+  return KEYED_RECEIVERS_MAX_MOBILE;
+}
+
+// When several senders want a slot: the focused tile, then the grid, then the
+// ribbon.
+function keyedTilePriority(peerId) {
+  var key = 'camera:' + peerId;
+  if (_stagePinnedKey === key) return 0;
+  return _stageRibbonKeys.indexOf(key) !== -1 ? 2 : 1;
+}
+
+// Failures are remembered per (scene, remote stream) — never per look, which
+// changes every few seconds and would make a device that cannot do it retry
+// forever with a fresh WebGL context each time.
+function keyedFailureKey(scene, raw) {
+  return String(scene || '') + '|' + String((raw && raw.id) || '');
+}
+
+function keyedBlocked(peerId, scene, raw) {
+  var map = _keyedFailures.get(peerId);
+  var rec = map && map.get(keyedFailureKey(scene, raw));
+  return !!(rec && rec.until > Date.now());
+}
+
+// holdMs: a pause that is not a failure (pressure). Otherwise a failure, backed
+// off 30 s, then 2 min, then for the rest of the session.
+function noteKeyedFailure(peerId, scene, raw, holdMs) {
+  var map = _keyedFailures.get(peerId);
+  if (!map) { map = new Map(); _keyedFailures.set(peerId, map); }
+  var key = keyedFailureKey(scene, raw);
+  var rec = map.get(key) || { count: 0, until: 0 };
+  if (holdMs) {
+    rec.until = Math.max(rec.until, Date.now() + holdMs);
+  } else {
+    rec.count++;
+    rec.until = rec.count > KEYED_RETRY_BACKOFF_MS.length
+      ? Infinity : Date.now() + KEYED_RETRY_BACKOFF_MS[rec.count - 1];
+  }
+  map.set(key, rec);
+}
+
+// Whether we want to draw this sender's scene (slots and a scene to start with
+// are checked where a new handle is made).
+function keyedReceiveEligible(peerId, conn) {
+  if (!inRoom || !conn || !peer || peerId === peer.id) return false;
+  if (!conn.videoActive || !conn.remoteVideoStream || !conn.keyedOffer) return false;
+  if (conn.videoTopology && conn.videoTopology.mode === 'sfu') return false;
+  if (!keyedRelayCapable(peerId)) return false;
+  // An ack names the call, so a stream without one cannot be keyed honestly.
+  if (!conn.videoMedia || !conn.videoMedia.connectionId) return false;
+  return !keyedBlocked(peerId, conn.keyedOffer.scene, conn.remoteVideoStream);
+}
+
+// The ack this entry can honestly give now, or null: the handle must have the
+// offer's scene compiled (any scene, while the offer has none).
+function keyedAckFor(entry, conn) {
+  var offer = conn && conn.keyedOffer;
+  var h = entry.handle;
+  if (!offer || !h) return null;
+  var scene;
+  try { scene = h.scene() || null; } catch (e) { scene = null; }
+  if (!scene || (offer.scene && offer.scene !== scene)) return null;
+  var mc = conn.videoMedia;
+  if (!mc || !mc.connectionId) return null;
+  return { call: String(mc.connectionId), epoch: offer.epoch, scene: scene };
+}
+
+function sameKeyedAck(a, b) {
+  return !!(a && b && a.call === b.call && a.epoch === b.epoch && a.scene === b.scene);
+}
+
+// Receiver -> host -> sender, or straight to the sender when we are the host.
+function sendKeyedAck(senderId, ok, ack) {
+  if (!peer || !inRoom || !senderId) return false;
+  var msg = {
+    type: 'video-keyed-ready', peerId: peer.id, to: senderId, ok: !!ok,
+    call: ack ? ack.call : null, epoch: ack ? ack.epoch : null, scene: ack ? ack.scene : null
+  };
+  var via = isHost ? connections.get(senderId) : connections.get(roomCode);
+  return !!(via && sendDataIfOpen(via.data, msg));
+}
+
+// After a new host's first peer-list: whatever we last said went to a host
+// that is gone, so say it again.
+function resendKeyedAcks() {
+  _keyedReceivers.forEach(function(entry, peerId) {
+    if (entry.state === 'ready' && entry.ack) {
+      if (sendKeyedAck(peerId, true, entry.ack)) entry.ackSentAt = Date.now();
+    } else if (entry.state === 'closing') {
+      sendKeyedAck(peerId, false, null);
+      entry.okFalseAt = performance.now();
+    }
+  });
+}
+
+function destroyKeyedHandle(h) {
+  if (!h) return;
+  try { h.destroy(); } catch (e) { /* ignore */ }
+}
+
+function startKeyedReceiver(peerId, conn) {
+  var token = ++_keyedTokenSeq;
+  var offer = conn.keyedOffer;
+  var raw = conn.remoteVideoStream;
+  var entry = {
+    token: token, handle: null, raw: raw, offer: offer, offerKey: keyedOfferLookKey(offer),
+    state: 'starting', ack: null, ackSentAt: 0, closingSince: 0, okFalseAt: 0,
+    gaveUp: null, shed: false, timer: null
+  };
+  _keyedReceivers.set(peerId, entry);
+  var started;
+  try {
+    started = VideoEffects.keyIn(raw, offer, {
+      onGiveUp: function(why) { onKeyedReceiverGaveUp(peerId, token, why); }
+    });
+  } catch (e) {
+    started = Promise.reject(e);
+  }
+  Promise.resolve(started).then(function(handle) {
+    // Dropped meanwhile (left, ineligible, a newer entry): this handle has no
+    // home, and nobody keys at it.
+    if (_keyedReceivers.get(peerId) !== entry || entry.gaveUp || !handle) {
+      destroyKeyedHandle(handle);
+      if (_keyedReceivers.get(peerId) === entry) _keyedReceivers.delete(peerId);
+      scheduleStageRelayout();
+      return;
+    }
+    entry.handle = handle;
+    var c = connections.get(peerId);
+    if (!c || !keyedReceiveEligible(peerId, c)) {
+      // Never acked, so never keyed at: it can go at once.
+      dropKeyedReceiver(peerId);
+      scheduleStageRelayout();
+      return;
+    }
+    // Catch up with what changed while it started, BEFORE saying ready.
+    if (c.remoteVideoStream !== entry.raw) {
+      try { handle.setSource(c.remoteVideoStream); } catch (e) { /* ignore */ }
+      entry.raw = c.remoteVideoStream;
+    }
+    feedKeyedOffer(peerId, entry, c.keyedOffer);
+    entry.state = 'ready';
+    reconcileReadyKeyedReceiver(peerId, entry, c, true);
+    scheduleStageRelayout();
+  }, function(err) {
+    devLog('[Video] could not draw ' + shortId(peerId) + '\'s scene: ' +
+           (err && err.message ? err.message : String(err)), 'warn');
+    noteKeyedFailure(peerId, offer && offer.scene, raw);
+    if (_keyedReceivers.get(peerId) === entry) _keyedReceivers.delete(peerId);
+    scheduleStageRelayout();
+  });
+}
+
+// A handle that gave up (context lost, cannot keep up, a scene that will not
+// compile) is never revived: it stands down, and the same scene on the same
+// stream is not tried again until its backoff has passed.
+function onKeyedReceiverGaveUp(peerId, token, why) {
+  var entry = _keyedReceivers.get(peerId);
+  if (!entry || entry.token !== token || entry.gaveUp) return;
+  entry.gaveUp = why || 'gave-up';
+  var scene;
+  try { scene = entry.handle ? entry.handle.scene() : null; } catch (e) { scene = null; }
+  noteKeyedFailure(peerId, scene || (entry.offer && entry.offer.scene), entry.raw);
+  if (entry.state === 'ready') closeKeyedReceiver(peerId, entry, entry.gaveUp);
+  scheduleStageRelayout();
+}
+
+// Hand the handle an offer that changed. An offer with no scene (the sender
+// picked blur, or its scene is still compiling) is not handed over at all: the
+// sender then sends its plain composite, which the handle passes through, and
+// the handle keeps its scene compiled — so scene → blur → scene costs nobody a
+// track swap, a tile flash or a recompile.
+function feedKeyedOffer(peerId, entry, offer) {
+  entry.offer = offer;
+  if (!offer || !offer.scene) return;
+  var key = keyedOfferLookKey(offer);
+  if (key === entry.offerKey) return;
+  entry.offerKey = key;
+  applyKeyedOfferToHandle(peerId, entry, offer);
+}
+
+// A new scene, look or size. The handle keeps drawing the old scene until the
+// new one has compiled; we ack again once it has (see keyedAckFor). A scene
+// that will not compile can never be acked honestly, so it stands down.
+function applyKeyedOfferToHandle(peerId, entry, offer) {
+  var p;
+  try { p = entry.handle.setOffer(offer); } catch (e) { p = Promise.reject(e); }
+  Promise.resolve(p).then(function() {
+    if (_keyedReceivers.get(peerId) === entry) scheduleStageRelayout();
+  }, function() {
+    if (_keyedReceivers.get(peerId) !== entry || entry.gaveUp) return;
+    entry.gaveUp = 'scene';
+    noteKeyedFailure(peerId, offer && offer.scene, entry.raw);
+    if (entry.state === 'ready') closeKeyedReceiver(peerId, entry, 'scene');
+    scheduleStageRelayout();
+  });
+}
+
+function reconcileReadyKeyedReceiver(peerId, entry, conn, eligible) {
+  var h = entry.handle;
+  if (!keyedHandleAlive(h)) {
+    if (!entry.gaveUp) {
+      entry.gaveUp = 'dead';
+      noteKeyedFailure(peerId, entry.offer && entry.offer.scene, entry.raw);
+    }
+    closeKeyedReceiver(peerId, entry, entry.gaveUp);
+    return;
+  }
+  if (!eligible) { closeKeyedReceiver(peerId, entry, 'ineligible'); return; }
+  if (conn.remoteVideoStream !== entry.raw) {
+    // A new call from the same sender: same canvas (no tile flash), and an
+    // ack for the new call — the old one keys nothing now.
+    try { h.setSource(conn.remoteVideoStream); } catch (e) { /* ignore */ }
+    entry.raw = conn.remoteVideoStream;
+  }
+  feedKeyedOffer(peerId, entry, conn.keyedOffer);
+  // A tile the user hid keeps its slot, and stops drawing.
+  try { h.setPaused(_hiddenStageKeys.has('camera:' + peerId)); } catch (e) { /* ignore */ }
+  var want = keyedAckFor(entry, conn);
+  if (want && (!sameKeyedAck(want, entry.ack) || Date.now() - entry.ackSentAt >= KEYED_ACK_REFRESH_MS)) {
+    if (sendKeyedAck(peerId, true, want)) {
+      entry.ack = want;
+      entry.ackSentAt = Date.now();
+    }
+  }
+  // Expect keyed frames only for what we acked — and not while the sender has
+  // no scene, when it sends the plain composite on the keyed track.
+  var expect = !!want && sameKeyedAck(want, entry.ack) && !!conn.keyedOffer.scene;
+  try { h.setExpectKeyed(expect); } catch (e) { /* ignore */ }
+}
+
+function closeKeyedReceiver(peerId, entry, why) {
+  if (entry.state === 'closing') return;
+  if (entry.state === 'starting') { dropKeyedReceiver(peerId); return; }
+  entry.state = 'closing';
+  entry.why = why || null;
+  entry.closingSince = performance.now();
+  try {
+    if (entry.handle) {
+      entry.handle.setExpectKeyed(false);
+      // A hidden tile's handle was paused; closing needs it to keep looking at
+      // the frames, since an unkeyed one is the only way out of this state.
+      entry.handle.setPaused(false);
+    }
+  } catch (e) { /* ignore */ }
+  sendKeyedAck(peerId, false, entry.ack);
+  entry.okFalseAt = performance.now();
+  entry.ack = null;
+  // Its own timer: nothing else is guaranteed to re-run the reconcile in a
+  // quiet room, and only the reconcile can finish closing.
+  if (entry.timer) clearTimeout(entry.timer);
+  entry.timer = setTimeout(function tick() {
+    entry.timer = null;
+    if (_keyedReceivers.get(peerId) !== entry || entry.state !== 'closing') return;
+    scheduleStageRelayout();
+    entry.timer = setTimeout(tick, KEYED_CLOSING_TICK_MS);
+  }, KEYED_CLOSING_TICK_MS);
+}
+
+function reconcileClosingKeyedReceiver(peerId, entry, conn, eligible) {
+  var raw = conn.remoteVideoStream;
+  // The stream it was cutting out is gone — the share ended, or a new call came
+  // in, which starts on the composite: nothing keyed can reach the tile now.
+  if (!raw || raw !== entry.raw || !conn.videoActive) { dropKeyedReceiver(peerId); return; }
+  var h = entry.handle;
+  var alive = keyedHandleAlive(h);
+  if (alive && !entry.gaveUp && !entry.shed && eligible) {
+    // Wanted again (the offer came back): a live handle goes straight back to work.
+    if (entry.timer) { clearTimeout(entry.timer); entry.timer = null; }
+    entry.state = 'ready';
+    entry.closingSince = 0;
+    reconcileReadyKeyedReceiver(peerId, entry, conn, true);
+    return;
+  }
+  var probe = _keyedProbes.get(peerId);
+  var ev = alive ? h : (probe ? probe.probe : null);
+  if (!ev) return;
+  var lastUnkeyed = keyedStamp(ev, 'lastUnkeyedAt');
+  var lastKeyed = keyedStamp(ev, 'lastKeyedAt');
+  // Positive evidence: an unkeyed frame since we said stop, and no keyed one since.
+  if (lastUnkeyed > entry.closingSince && lastKeyed < lastUnkeyed) { dropKeyedReceiver(peerId); return; }
+  var now = performance.now();
+  if (lastKeyed > entry.okFalseAt && now - entry.okFalseAt >= KEYED_OK_FALSE_RESEND_MS) {
+    sendKeyedAck(peerId, false, null);
+    entry.okFalseAt = now;
+  }
+}
+
+function dropKeyedReceiver(peerId) {
+  var entry = _keyedReceivers.get(peerId);
+  if (!entry) return;
+  _keyedReceivers.delete(peerId);
+  if (entry.timer) { clearTimeout(entry.timer); entry.timer = null; }
+  destroyKeyedHandle(entry.handle);
+  entry.handle = null;
+}
+
+// A CPU-only probe of a stream we have no live cut-out for: the evidence that
+// lets a dead handle finish closing, and what keeps a keyed frame that arrives
+// without a cut-out off the screen (displayVideoStreamFor).
+function syncKeyedProbe(peerId, conn) {
+  var entry = _keyedReceivers.get(peerId);
+  var raw = conn ? conn.remoteVideoStream : null;
+  var want = !!raw && keyedApi('keyProbe') &&
+    (!!conn.keyedOffer || !!(entry && entry.state === 'closing')) &&
+    !(entry && keyedHandleAlive(entry.handle));
+  var cur = _keyedProbes.get(peerId);
+  if (!want) {
+    if (cur) { try { cur.probe.destroy(); } catch (e) { /* ignore */ } _keyedProbes.delete(peerId); }
+    return;
+  }
+  if (cur) {
+    if (cur.raw !== raw) {
+      try { cur.probe.setSource(raw); } catch (e) { /* ignore */ }
+      cur.raw = raw;
+    }
+    return;
+  }
+  var probe;
+  try { probe = VideoEffects.keyProbe(raw); } catch (e) { probe = null; }
+  if (probe) _keyedProbes.set(peerId, { probe: probe, raw: raw });
+}
+
+function dropKeyedProbe(peerId) {
+  var cur = _keyedProbes.get(peerId);
+  if (!cur) return;
+  try { cur.probe.destroy(); } catch (e) { /* ignore */ }
+  _keyedProbes.delete(peerId);
+}
+
+// Run at the head of every updateVideoStage(), so it follows the room even
+// where nothing is drawn. O(peers) and Map-only, and it never calls back into
+// updatePeerList()/updateVideoStage(): what finishes later (a keyIn, a give-up,
+// a closing timer) asks for one coalesced stage refresh instead.
+function reconcileKeyedReceivers() {
+  if (!inRoom) {
+    if (_keyedReceivers.size || _keyedProbes.size) resetKeyedReceivers();
+    return;
+  }
+  if (!_keyedReceivers.size && !_keyedProbes.size) {
+    var anyOffer = false;
+    connections.forEach(function(c) { if (!anyOffer && c && c.keyedOffer) anyOffer = true; });
+    if (!anyOffer) return;
+  }
+  if (!localCaps().length) return;
+
+  _keyedReceivers.forEach(function(entry, peerId) {
+    if (!connections.has(peerId)) dropKeyedReceiver(peerId);
+  });
+  _keyedProbes.forEach(function(p, peerId) {
+    if (!connections.has(peerId)) dropKeyedProbe(peerId);
+  });
+
+  var wanting = [];
+  connections.forEach(function(conn, peerId) {
+    var entry = _keyedReceivers.get(peerId);
+    var eligible = keyedReceiveEligible(peerId, conn);
+    if (!entry) {
+      if (eligible && conn.keyedOffer.scene && !_hiddenStageKeys.has('camera:' + peerId)) wanting.push(peerId);
+    } else if (entry.state === 'starting') {
+      if (!eligible) dropKeyedReceiver(peerId);
+    } else if (entry.state === 'ready') {
+      reconcileReadyKeyedReceiver(peerId, entry, conn, eligible);
+    } else {
+      reconcileClosingKeyedReceiver(peerId, entry, conn, eligible);
+    }
+  });
+
+  // New handles only into free slots, and slots are sticky: nothing that holds
+  // one is ever evicted for somebody else.
+  if (wanting.length && keyedApi('keyIn')) {
+    var free = keyedReceiversMax() - _keyedReceivers.size;
+    wanting.sort(function(a, b) { return keyedTilePriority(a) - keyedTilePriority(b); });
+    wanting.slice(0, Math.max(0, free)).forEach(function(peerId) {
+      startKeyedReceiver(peerId, connections.get(peerId));
+    });
+  }
+
+  var placeholder = false, ready = false;
+  connections.forEach(function(conn, peerId) {
+    syncKeyedProbe(peerId, conn);
+    var entry = _keyedReceivers.get(peerId);
+    if (entry && entry.state === 'ready') ready = true;
+    if (!(entry && keyedHandleAlive(entry.handle)) && keyedFrameSeenRecently(peerId)) placeholder = true;
+  });
+  // A placeholder has to give way within its 1.5 s, and acks have to be
+  // repeated, in a room where nothing else re-runs this.
+  armKeyedReceiveTick(placeholder ? KEYED_CLOSING_TICK_MS : ready ? KEYED_RECEIVE_TICK_MS : 0);
+}
+
+function armKeyedReceiveTick(delay) {
+  if (!delay) return;
+  var due = performance.now() + delay;
+  if (_keyedReceiveTimer && _keyedReceiveTimerDue <= due) return;
+  if (_keyedReceiveTimer) clearTimeout(_keyedReceiveTimer);
+  _keyedReceiveTimerDue = due;
+  _keyedReceiveTimer = setTimeout(function() {
+    _keyedReceiveTimer = null;
+    scheduleStageRelayout();
+  }, delay);
+}
+
+function keyedFrameSeenRecently(peerId) {
+  var last = 0;
+  var entry = _keyedReceivers.get(peerId);
+  if (entry && entry.handle) last = Math.max(last, keyedStamp(entry.handle, 'lastKeyedAt'));
+  var probe = _keyedProbes.get(peerId);
+  if (probe) last = Math.max(last, keyedStamp(probe.probe, 'lastKeyedAt'));
+  return last > 0 && performance.now() - last < KEYED_PLACEHOLDER_MS;
+}
+
+// What a remote camera tile (and the camera viewer) shows. A live cut-out once
+// it is ready, and while it is closing; no picture at all while keyed frames
+// are arriving with nothing to cut them out (a frame of green is the one thing
+// never to show); otherwise the stream as it arrived.
+function displayVideoStreamFor(peerId, conn) {
+  var raw = (conn && conn.remoteVideoStream) || null;
+  var entry = _keyedReceivers.get(peerId);
+  if (entry && (entry.state === 'ready' || entry.state === 'closing') && keyedHandleAlive(entry.handle) &&
+      entry.handle.stream) {
+    return entry.handle.stream;
+  }
+  if (keyedFrameSeenRecently(peerId)) return null;
+  return raw;
+}
+
+// The fallback viewer follows the tile's choice as a cut-out comes and goes.
+function syncVideoViewerStream() {
+  if (!_videoViewerPeerId || IS_TAURI_DESKTOP) return;
+  var panel = document.getElementById('video-viewer-panel');
+  var vid = document.getElementById('video-viewer-element');
+  if (!panel || !vid || panel.classList.contains('hidden')) return;
+  var conn = connections.get(_videoViewerPeerId);
+  if (!conn || !conn.remoteVideoStream) return;
+  var s = displayVideoStreamFor(_videoViewerPeerId, conn);
+  if (vid.srcObject !== s) vid.srcObject = s;
+}
+
+// The local pipeline is struggling. Other people's scenes give way first, the
+// newest one, before the pipeline steps its own segmentation rate down.
+function shedKeyedReceiverForPressure() {
+  var newestId = null, newest = null;
+  _keyedReceivers.forEach(function(entry, peerId) {
+    if (entry.state === 'closing') return;
+    if (!newest || entry.token > newest.token) { newest = entry; newestId = peerId; }
+  });
+  if (!newest) return false;
+  newest.shed = true;
+  noteKeyedFailure(newestId, newest.offer && newest.offer.scene, newest.raw, KEYED_SHED_BACKOFF_MS);
+  closeKeyedReceiver(newestId, newest, 'pressure');
+  scheduleStageRelayout();
+  return true;
+}
+
+function resetKeyedReceivers() {
+  Array.from(_keyedReceivers.keys()).forEach(dropKeyedReceiver);
+  Array.from(_keyedProbes.keys()).forEach(dropKeyedProbe);
+  if (_keyedReceiveTimer) { clearTimeout(_keyedReceiveTimer); _keyedReceiveTimer = null; }
+}
+
+// A peer left: its cut-out, its probe and anything it acked go with it. Its
+// failures stay — "never again this session" means the session.
+function forgetKeyedPeer(peerId) {
+  dropKeyedReceiver(peerId);
+  dropKeyedProbe(peerId);
+  _keyedAcks.delete(peerId);
+  _keyedOfferRate.delete(peerId);
+}
+
+// Leaving the room.
+function resetKeyedState() {
+  resetKeyedReceivers();
+  _keyedFailures.clear();
+  _keyedAcks.clear();
+  _keyedOfferRate.clear();
+  if (_keyedSendTimer) { clearTimeout(_keyedSendTimer); _keyedSendTimer = null; }
+  _keyedSentOffer = null;
+  _keyedSentAt = 0;
+  _keyedEpoch++;
+  _keyedOfferLive = false;
+  _keyedEpochTrack = null;
+  _keyedDemand = 0;
+  _keyedDemandStream = null;
+  _keyedHostChangedAt = 0;
+  armKeyedSendTick();
+}
+
+// --- Keyed camera: what the user is told ---------------------------------------
+//
+// The switch alone says nothing about whether it is doing anything — and in a
+// room of three on the default routing, or with blur picked, it is not. One
+// pure function decides, and two lines say it: under the switch in Settings, and
+// in the background popover on your own tile.
+
+var KEYED_STATUS_TEXT = {
+  'not-sharing': 'Not in use: your camera is off',
+  'no-scene': 'Not in use: pick an animated scene',
+  'relay': 'Not in use: video goes through the relay in this room',
+  'no-capable-peer': 'Not in use: nobody here can draw the scene',
+  'paused': 'Paused for now: everyone gets your usual picture'
+};
+
+function keyedStatus() {
+  if (!keyedSubjectOnlyOn()) return { state: 'off' };
+  if (!localVideoActive || !localVideoStream) return { state: 'inactive', reason: 'not-sharing' };
+  if (videoBackgroundMode().indexOf('preset:') !== 0 || !localVideoStream._effectsProcessor) {
+    return { state: 'inactive', reason: 'no-scene' };
+  }
+  var t = _localVideoTopology.video;
+  if (t && t.mode === 'sfu') return { state: 'inactive', reason: 'relay' };
+  var st = null;
+  if (keyedApi('keyedState')) {
+    try { st = VideoEffects.keyedState(localVideoStream); } catch (e) { st = null; }
+  }
+  // The pipeline is holding keying back (green clothing, a covered corner…).
+  if (st && !st.scene && st.reason) return { state: 'inactive', reason: 'paused' };
+  var kt = localKeyedTrack();
+  var self = peer && peer.id;
+  var of = 0, on = 0, capable = 0;
+  connections.forEach(function(c, peerId) {
+    if (peerId === self) return;
+    if (peerSupports(peerId, KEYED_VIDEO_CAP) && keyedRelayCapable(peerId)) capable++;
+    var s = meshVideoSender(peerId);
+    if (!s) return;
+    of++;
+    if (kt && s.track === kt) on++;
+  });
+  if (!capable) return { state: 'inactive', reason: 'no-capable-peer' };
+  return { state: 'active', peers: on, of: of };
+}
+
+function keyedStatusText(st) {
+  if (!st || st.state === 'off') return '';
+  if (st.state === 'active') {
+    if (!st.peers) return 'Starting: waiting for the others’ devices';
+    return 'In use for ' + st.peers + ' of ' + st.of + (st.of === 1 ? ' person' : ' people');
+  }
+  return KEYED_STATUS_TEXT[st.reason] || '';
+}
+
+function renderKeyedStatus() {
+  var text = keyedStatusText(keyedStatus());
+  var line = document.getElementById('settings-subject-only-status');
+  if (line) {
+    line.classList.toggle('hidden', !text);
+    if (line.textContent !== text) line.textContent = text;
+  }
+  var pop = document.getElementById('video-bg-subject-only');
+  if (pop) {
+    var shown = !pop.classList.contains('hidden');
+    pop.classList.toggle('hidden', !text);
+    if (pop.textContent !== text) pop.textContent = text;
+    if (shown !== !!text) positionVideoBackgroundPopover();
+  }
+}
+
+// The switch was flipped here (renderSubjectOnly → setSubjectOnly → this
+// hook). Turning it off moves every keyed peer back to the composite first and
+// only then withdraws the offer — refreshKeyedSend()'s order.
+function onSubjectOnlyChanged() {
+  if (_videoBgSubjectOnly) { try { _videoBgSubjectOnly.sync(); } catch (e) { /* ignore */ } }
+  refreshKeyedSend();
+  renderKeyedStatus();
 }
 
 // --- Cloudflare SFU router (video/screen only) --------------------------------
@@ -15483,7 +16829,8 @@ function openVideoViewer(peerId) {
   var panel = document.getElementById('video-viewer-panel');
   var vid   = document.getElementById('video-viewer-element');
   if (!panel || !vid) return;
-  vid.srcObject = conn.remoteVideoStream;
+  // What the tile would show: a keyed sender is drawn through our own cut-out.
+  vid.srcObject = displayVideoStreamFor(peerId, conn);
   var title = document.getElementById('video-viewer-title');
   if (title) title.textContent = '📹 ' + (conn.pseudo || 'Camera');
   panel.classList.remove('hidden', 'pip-active');
@@ -15559,8 +16906,14 @@ function popOutVideoViewer() {
   tauriEvent.listen('video-popup-signal', async function(ev) {
     var msg = ev.payload;
     if (msg.type === 'ready') {
+      // Re-resolved now, like the screen pop-out: by the time the window is up,
+      // a keyed sender's cut-out may have become (or stopped being) the picture.
+      // Nothing to show (keyed frames and no cut-out) means relaying nothing.
+      var freshConn = connections.get(_videoViewerPeerId);
+      var shown = freshConn ? displayVideoStreamFor(_videoViewerPeerId, freshConn) : null;
+      if (!shown) return;
       _videoLoopbackPC = new RTCPeerConnection();
-      stream.getTracks().forEach(function(t) { _videoLoopbackPC.addTrack(t, stream); });
+      shown.getTracks().forEach(function(t) { _videoLoopbackPC.addTrack(t, shown); });
       var offer = await _videoLoopbackPC.createOffer();
       await _videoLoopbackPC.setLocalDescription(offer);
       await new Promise(function(resolve) {
@@ -15817,6 +17170,9 @@ function resetVideoState() {
     c.remoteScreenStream = null;
     c.screenActive = false;
   });
+  // Every cut-out we draw for others, and everything we said or were told
+  // about keyed video, belongs to this call.
+  resetKeyedState();
   closeVideoViewer();
   closeScreenViewer();
   updateVideoStage();
@@ -16108,13 +17464,18 @@ function becomeHost() {
 // --- Protocol version / skew detection ---------------------------------------
 
 // The `hello` a joiner sends to a host (and re-sends to a new host on migration).
+// It is authoritative for its sender, which is why the keyed-camera capability
+// and the live offer ride in it: every new host learns both on each reconnect,
+// whatever was lost on the way.
 function helloMessage() {
   return {
     type: 'hello',
     pseudo: pseudoForPeer(),
     pseudoColor: pseudoColorForSelf(),
     protocolVersion: PROTOCOL_VERSION,
-    appVersion: VOXAL_VERSION
+    appVersion: VOXAL_VERSION,
+    caps: localCaps(),
+    keyedOffer: currentOffer()
   };
 }
 
@@ -16180,6 +17541,10 @@ function buildHostPeerList(excludedPeerId) {
       }
       if (conn && conn.protocolVersion != null) entry.protocolVersion = conn.protocolVersion;
       if (conn && conn.appVersion) entry.appVersion = conn.appVersion;
+      // Only when known: a migration placeholder knows neither, and saying
+      // nothing is what stops a receiver from forgetting what it was told.
+      if (conn && Array.isArray(conn.caps)) entry.caps = conn.caps;
+      if (conn && conn.keyedOffer !== undefined) entry.keyedOffer = conn.keyedOffer;
       return entry;
     });
 }
@@ -16275,7 +17640,12 @@ function _attemptHostConnection(targetHostId, retriesLeft) {
       // and anything the old host never echoed back has to go out again.
       saveChatLog();
       resendPendingChat();
+      // A new host lists peers it has not heard from yet: for its settle window
+      // their silence about a keyed offer means "not known", not "none".
+      _keyedHostChangedAt = Date.now();
       safeHandleHostMessage(msg);
+      // Whatever we said about keyed video went to a host that is gone.
+      resendKeyedAcks();
       return;
     }
 
@@ -16490,6 +17860,10 @@ function sendHostPeerList(dataConn, excludedPeerId) {
     hostScreenTopology: (_localVideoTopology.screen && _localVideoTopology.screen.mode === 'sfu') ? 'sfu' : 'p2p',
     hostVideoProviderRef: _rememberedProviderRef(peer.id, 'video') || undefined,
     hostScreenProviderRef: _rememberedProviderRef(peer.id, 'screen') || undefined,
+    // The offer as last put on the wire, so a peer-list never overtakes a
+    // video-keyed still waiting behind the sender queue.
+    hostCaps: localCaps(),
+    hostKeyedOffer: _keyedSentOffer || null,
     videoModeEnabled: videoModeEnabled,
     debugMode: isDevModeEnabled(),
     jitterMs: hostJitterBroadcastMs(),
@@ -16556,7 +17930,11 @@ function handleJoinerDataConnection(dataConn) {
       const existing = connections.get(joinerId) || { data: dataConn, media: null, pseudoColor: null, talking: false };
       connections.set(joinerId, Object.assign({}, existing, {
         pseudo: pseudo,
-        pseudoColor: canonical.pseudoColor
+        pseudoColor: canonical.pseudoColor,
+        // Authoritative for its sender: an older app that says nothing has
+        // no capability and no offer, rather than whatever we last heard.
+        caps: sanitizeCaps(msg.caps) || [],
+        keyedOffer: sanitizeKeyedOffer(msg.keyedOffer)
       }));
       noteRemoteVersion('joiner ' + shortId(joinerId), msg.protocolVersion, msg.appVersion, joinerId);
 
@@ -16714,6 +18092,11 @@ function handleJoinerDataConnection(dataConn) {
       connections.forEach(function(c, id) {
         if (id !== joinerId && c.data) sendDataIfOpen(c.data, { type: 'video-stop', peerId: joinerId });
       });
+    } else if (msg.type === 'video-keyed') {
+      // `joinerId`, never msg.peerId: a peer only ever offers for itself.
+      handleKeyedOfferAtHost(joinerId, msg.offer);
+    } else if (msg.type === 'video-keyed-ready') {
+      handleKeyedAckAtHost(joinerId, msg);
     } else if (msg.type === 'screen-offer') {
       markPeerScreenActive(joinerId, true);
       var soTopology = applyRemoteTrackTopology(joinerId, 'screen', msg.topology, msg.providerRef);
@@ -17025,7 +18408,7 @@ function handleHostMessage(msg) {
       }
     });
 
-    const authoritativePeers = (msg.peers || []).concat([{
+    var hostEntry = {
       id: roomCode,
       pseudo: msg.hostPseudo || shortId(roomCode),
       pseudoColor: msg.hostPseudoColor || null,
@@ -17037,7 +18420,25 @@ function handleHostMessage(msg) {
       screenProviderRef: msg.hostScreenProviderRef,
       protocolVersion: msg.protocolVersion,
       appVersion: msg.appVersion
-    }]);
+    };
+    // Carried over only when the host said them, so the per-entry rules below
+    // read "absent" exactly as they do for everyone else.
+    if (Object.prototype.hasOwnProperty.call(msg, 'hostCaps')) hostEntry.caps = msg.hostCaps;
+    if (Object.prototype.hasOwnProperty.call(msg, 'hostKeyedOffer')) hostEntry.keyedOffer = msg.hostKeyedOffer;
+    const authoritativePeers = (msg.peers || []).concat([hostEntry]);
+    // Keyed camera, absence rules. Capabilities are only ever overwritten by
+    // what is said, never downgraded by silence: a placeholder or an older host
+    // must not erase them, and a peer id is one app session anyway. A missing
+    // offer means "none" only from a host that would have relayed one, outside
+    // the settle window after a migration, while placeholders (which know
+    // nothing) are still listed.
+    var hostCapsNow = sanitizeCaps(msg.hostCaps);
+    if (!hostCapsNow) {
+      var hostConnNow = connections.get(roomCode);
+      hostCapsNow = (hostConnNow && Array.isArray(hostConnNow.caps)) ? hostConnNow.caps : null;
+    }
+    var keyedSilenceIsNone = !!(KEYED_VIDEO_CAP && hostCapsNow && hostCapsNow.indexOf(KEYED_VIDEO_CAP) !== -1) &&
+      !isMigrationSettling() && Date.now() - _keyedHostChangedAt >= MIGRATION_SETTLE_MS;
     // Peers whose already-active video/screen is SFU-routed: this client won't
     // receive a mesh MediaConnection for them (no "call the newcomer" nudge is
     // sent for SFU sharers, see the host-side peer-joined handler), so it must
@@ -17066,6 +18467,12 @@ function handleHostMessage(msg) {
         if (p.screenTopology === 'sfu' && peerId !== peer.id) {
           toSubscribeScreen.push({ peerId: peerId, ref: p.screenProviderRef });
         }
+      }
+      if (peerId !== peer.id) {
+        var caps = sanitizeCaps(p.caps);
+        if (caps) update.caps = caps;
+        if (Object.prototype.hasOwnProperty.call(p, 'keyedOffer')) update.keyedOffer = sanitizeKeyedOffer(p.keyedOffer);
+        else if (keyedSilenceIsNone) update.keyedOffer = null;
       }
       // Mutated in place rather than replaced. An in-flight sfuSubscribeTrack
       // holds a reference to this object across its awaits; swapping in a copy
@@ -17143,6 +18550,12 @@ function handleHostMessage(msg) {
     var vsMsgConn = connections.get(msg.peerId);
     if (vsMsgConn && vsMsgConn.videoTopology && vsMsgConn.videoTopology.mode === 'sfu') sfuUnsubscribeTrack('video', msg.peerId);
     detachRemoteVideo(msg.peerId);
+  } else if (msg.type === 'video-keyed') {
+    // A sender's offer — the host's own, or one it relayed under its source.
+    noteKeyedOffer(msg.peerId, msg.offer);
+  } else if (msg.type === 'video-keyed-ready') {
+    // An ack for us as a sender. One addressed to anybody else is not ours.
+    if (peer && msg.to === peer.id) noteKeyedAck(msg.peerId, msg);
   } else if (msg.type === 'video-call-peer') {
     // Host is telling us to call a newcomer with our video
     if (localVideoActive && localVideoStream && msg.peerId) {
@@ -18770,8 +20183,17 @@ window.addEventListener('DOMContentLoaded', function() {
                           NETWORK_USAGE_REQUEST_KEY, VIDEO_BACKGROUND_STORAGE_KEY,
                           VIDEO_BLUR_STRENGTH_KEY, VIDEO_EDGE_SHARPNESS_KEY,
                           VIDEO_DETECTION_QUALITY_KEY, VIDEO_LIGHT_ADAPT_KEY,
-                          VIDEO_REFERENCE_KEY];
+                          VIDEO_REFERENCE_KEY, VIDEO_SUBJECT_ONLY_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
+    if (e.key === VIDEO_SUBJECT_ONLY_KEY) {
+      // "Let others draw my scene", flipped in the preferences window, which
+      // holds no calls. Which peer is sent which track is decided here — per
+      // sender, with replaceTrack, never through applyVideoBackground().
+      if (_videoBgSubjectOnly) { try { _videoBgSubjectOnly.sync(); } catch (err) { /* ignore */ } }
+      refreshKeyedSend();
+      renderKeyedStatus();
+      return;
+    }
     if (e.key === VIDEO_BLUR_STRENGTH_KEY) {
       // Changed from the desktop preferences window, which stores but cannot
       // apply — it has no capture pipeline. Re-deriving the strides is the

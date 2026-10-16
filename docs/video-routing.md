@@ -350,6 +350,31 @@ over Voxal's existing PeerJS star signaling, extended with an optional
 messages (see the protocol table at the top of `src/main.js`). Cloudflare's
 DataChannels are never used for this.
 
+## Keyed camera is mesh-only
+
+With **Let others draw my scene** on (see [Keyed sending and
+receiving](video-effects.md#keyed-sending-and-receiving)), a camera sender can
+carry a picture of the person over flat key green to a peer that draws the
+scene itself, chosen peer by peer. That exists **only on the mesh**:
+
+- the sender's offer is null unless its camera's topology is `p2p`
+  (`currentOffer()`), and the SFU publish sender always gets the finished
+  composite (`swapLocalVideoTrack()` keys mesh senders only);
+- a receiver never starts a cut-out for a peer whose camera reaches it through
+  the SFU (`keyedReceiveEligible()`).
+
+Two reasons. An SFU forwards one published track to every subscriber, so a
+per-viewer choice would need a second published track and a second
+subscription per viewer. And a move to the relay must not change what the relay
+is given: it is only ever the picture everybody else sees.
+
+When the room moves to the relay, the mesh calls that carried keyed pictures
+close with the move (`unpublishLocalTrack()`), the offer is withdrawn, and the
+setting's status line says "Not in use: video goes through the relay in this
+room". Under the default `allow-sfu` that means keying applies in two-person
+rooms (and in bigger ones only while the relay is unavailable); `prefer-p2p`
+and `p2p-only` keep it at any size.
+
 ## Reconnection
 
 SFU video/screen sessions get their own lightweight state machine
