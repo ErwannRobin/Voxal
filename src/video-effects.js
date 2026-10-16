@@ -1783,6 +1783,38 @@ var VideoEffects = (function () {
     return v;
   }
 
+  // Point such a <video> at another stream. Never a bare srcObject switch,
+  // because of a Chromium crash (seen in 141): while a frame callback runs,
+  // asking for the next one has Chromium look for that frame at the next
+  // rendering step — and if the source was switched in the same task, it
+  // looks at the NEW player. A player that has not shown its first frame has
+  // none to describe; with a callback registered it dereferences null and the
+  // whole tab dies. Whether that callback was asked for before the switch or
+  // just after makes no difference, only that one is registered before the
+  // new stream's first frame. Here one is registered nearly always
+  // (onFrame() asks for the next one first), and that task is exactly where
+  // main.js swaps a source: in the promise a frame callback has just
+  // resolved, which is where a key-in handle is first given its stream.
+  // So `cancel` takes the pending callback away before the switch and must
+  // also hold the loop off — nothing may ask for a frame meanwhile, not even
+  // the frame loop's own pump() — and `rearm` lets it go only once the new
+  // stream has put up a picture: videoWidth is read from the player's current
+  // frame, so a non-zero one means the frame the callback needs is there.
+  // `current` lets a newer switch, or a teardown, call the wait off; it is a
+  // poll, not a frame event, because asking for a frame event is the very
+  // thing that crashes. Resolves with play(), as the bare switch did.
+  function repointVideo(video, stream, cancel, rearm, current) {
+    cancel();
+    video.srcObject = stream;
+    var played = video.play().catch(function () { /* muted autoplay */ });
+    (function wait() {
+      if (!current()) return;
+      if (video.videoWidth && video.readyState >= 2) { rearm(); return; }
+      setTimeout(wait, 40);
+    })();
+    return played;
+  }
+
   function median(values) {
     if (!values.length) return 0;
     var s = values.slice().sort(function (a, b) { return a - b; });
@@ -2724,14 +2756,37 @@ var VideoEffects = (function () {
 
   // --- per-frame work -------------------------------------------------------
 
+  // One frame callback in flight at a time: onFrame() asks for the next one
+  // before anything else, and a re-arm after a new source (repoint()) must
+  // never start a second loop beside it. None at all while `_held`: a new
+  // source has no frame yet (see repointVideo()).
   Processor.prototype.pump = function () {
-    if (this.stopped) return;
+    if (this.stopped || this._held || this._rvfc || this._raf) return;
     var self = this;
     if (this.video.requestVideoFrameCallback) {
-      this._rvfc = this.video.requestVideoFrameCallback(function () { self.onFrame(); });
+      this._rvfc = this.video.requestVideoFrameCallback(function () { self._rvfc = 0; self.onFrame(); });
     } else {
-      this._raf = requestAnimationFrame(function () { self.onFrame(); });
+      this._raf = requestAnimationFrame(function () { self._raf = 0; self.onFrame(); });
     }
+  };
+
+  Processor.prototype.unpump = function () {
+    if (this._rvfc && this.video.cancelVideoFrameCallback) {
+      try { this.video.cancelVideoFrameCallback(this._rvfc); } catch (e) { /* ignore */ }
+    }
+    if (this._raf) cancelAnimationFrame(this._raf);
+    this._rvfc = 0;
+    this._raf = 0;
+  };
+
+  // A new stream behind the hidden <video>, with the frame loop held off
+  // until it has a picture — see repointVideo() for the crash this avoids.
+  Processor.prototype.repoint = function (stream) {
+    var self = this, gen = this._srcGen = (this._srcGen || 0) + 1;
+    return repointVideo(this.video, stream,
+      function () { self._held = true; self.unpump(); },
+      function () { self._held = false; self.pump(); },
+      function () { return !self.stopped && self._srcGen === gen; });
   };
 
   Processor.prototype.onFrame = function () {
@@ -3198,6 +3253,16 @@ var VideoEffects = (function () {
     k.pending = true;
   };
 
+  // The copy's budget. A test may raise it with `window.__voxalKeyCopyBudgetMs`,
+  // read at every call like the canKeyIn() overrides: the real-peer mesh test
+  // renders in software, where this copy is a read-back queued behind every
+  // other peer's scene in one shared GPU process, and would always be judged
+  // too slow to key at all.
+  function keyCopyBudget() {
+    var o = (typeof window !== 'undefined') ? Number(window.__voxalKeyCopyBudgetMs) : NaN;
+    return o > 0 ? o : KEY_COPY_BUDGET_MS;
+  }
+
   Processor.prototype.copyKeyed = function (w, h) {
     var k = this.keyed;
     if (k.canvas.width !== w || k.canvas.height !== h) {
@@ -3215,7 +3280,7 @@ var VideoEffects = (function () {
       k.copyTimes.push(performance.now() - t0);
       if (k.copyTimes.length >= KEY_COPY_SAMPLES) {
         var sorted = k.copyTimes.slice().sort(function (a, b) { return a - b; });
-        if (sorted[sorted.length >> 1] > KEY_COPY_BUDGET_MS) k.slow = true;
+        if (sorted[sorted.length >> 1] > keyCopyBudget()) k.slow = true;
         k.copyTimes = null;
       }
     }
@@ -3351,10 +3416,9 @@ var VideoEffects = (function () {
   // to renegotiate: the far side never sees the swap at all.
   Processor.prototype.setSource = function (rawStream) {
     this.raw = rawStream;
-    this.video.srcObject = rawStream;
     if (this.stream) this.stream._effectsOriginal = rawStream;
     var self = this;
-    return this.video.play().catch(function () { /* ignore */ }).then(function () {
+    return this.repoint(rawStream).then(function () {
       var size = self.sizeFromTrack();
       // Another camera is another room: a reference taken by the front camera
       // must not be compared with the back one. initGL() re-checks on its own.
@@ -3431,10 +3495,7 @@ var VideoEffects = (function () {
     if (this.stopped) return;
     this.stopped = true;
     if (this.refCapture) this.finishCapture({ ok: false, reason: 'unavailable' });
-    if (this._rvfc && this.video.cancelVideoFrameCallback) {
-      try { this.video.cancelVideoFrameCallback(this._rvfc); } catch (e) { /* ignore */ }
-    }
-    if (this._raf) cancelAnimationFrame(this._raf);
+    this.unpump();
     if (this.segmenter) { try { this.segmenter.close(); } catch (e) { /* ignore */ } this.segmenter = null; }
     if (this.keyed) {
       try { this.keyed.capture.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* ignore */ }
@@ -3629,7 +3690,7 @@ var VideoEffects = (function () {
   }
 
   ['drawQuad', 'bindTex', 'ensureScene', 'allocSoft', 'buildSoft', 'drawScene',
-   'resolveScene', 'shadowPlan', 'pump'].forEach(function (name) {
+   'resolveScene', 'shadowPlan', 'pump', 'unpump', 'repoint'].forEach(function (name) {
     KeyInProcessor.prototype[name] = Processor.prototype[name];
   });
 
@@ -3803,6 +3864,17 @@ var VideoEffects = (function () {
       });
   };
 
+  // How long the warm-up may wait for its frames. A test may lengthen it with
+  // `window.__voxalKeyInWarmWaitMs`, read at every start like the canKeyIn()
+  // overrides: the unit suite runs receivers on a software GPU that canKeyIn()
+  // refuses, several browsers to a machine, where frames arrive at a rate no
+  // receiver this wait is meant for would ever see — a wait that measured
+  // the machine and not the code under test.
+  function keyInWarmWait() {
+    var o = (typeof window !== 'undefined') ? Number(window.__voxalKeyInWarmWaitMs) : NaN;
+    return o > 0 ? o : KEYIN_WARM_WAIT_MS;
+  }
+
   KeyInProcessor.prototype.warmUp = function () {
     var self = this;
     return new Promise(function (resolve, reject) {
@@ -3813,7 +3885,7 @@ var VideoEffects = (function () {
           if (!w) return;
           self.warm = null;
           reject(new Error('key-in warm-up timed out (' + w.times.length + ' frames)'));
-        }, KEYIN_WARM_WAIT_MS)
+        }, keyInWarmWait())
       };
       self.pump();
     });
@@ -4025,6 +4097,16 @@ var VideoEffects = (function () {
     this.noteDraw(now, ms);
   };
 
+  // The frame budget, warm-up and running alike. A test may raise it with
+  // `window.__voxalKeyInFrameBudgetMs`, read at every call like the canKeyIn()
+  // overrides: the real-peer mesh test renders in software, where one scene
+  // redraw is tens of milliseconds and every peer shares one GPU process, so
+  // no receiver there could ever pass the budget a real GPU is held to.
+  function keyInFrameBudget(ms) {
+    var o = (typeof window !== 'undefined') ? Number(window.__voxalKeyInFrameBudgetMs) : NaN;
+    return o > 0 ? o : ms;
+  }
+
   // The warm-up's 30 frames, then the running budget: a rolling median over
   // five seconds. Over budget is a give-up ('budget'), which main.js answers
   // by putting the peer back on the composite — never by touching the user's
@@ -4037,7 +4119,7 @@ var VideoEffects = (function () {
       this.warm = null;
       clearTimeout(w.timer);
       var m = median(w.times);
-      if (m < KEYIN_WARM_MS) w.resolve();
+      if (m < keyInFrameBudget(KEYIN_WARM_MS)) w.resolve();
       else w.reject(new Error('key-in over budget (' + m.toFixed(1) + ' ms a frame)'));
       return;
     }
@@ -4047,7 +4129,7 @@ var VideoEffects = (function () {
     if (now - this.lastBudget < 1000) return;
     this.lastBudget = now;
     if (t.length < 10 || now - t[0][0] < KEYIN_BUDGET_WINDOW_MS * 0.9) return;
-    if (median(t.map(function (x) { return x[1]; })) > KEYIN_BUDGET_MS) this.giveUp('budget');
+    if (median(t.map(function (x) { return x[1]; })) > keyInFrameBudget(KEYIN_BUDGET_MS)) this.giveUp('budget');
   };
 
   // Where the person is in the picture, from the key itself: the geometry
@@ -4120,8 +4202,7 @@ var VideoEffects = (function () {
   KeyInProcessor.prototype.setSource = function (remote) {
     if (this.stopped || !remote) return;
     this.raw = remote;
-    this.video.srcObject = remote;
-    this.video.play().catch(function () { /* muted autoplay */ });
+    this.repoint(remote);
   };
 
   KeyInProcessor.prototype.giveUp = function (why) {
@@ -4173,10 +4254,7 @@ var VideoEffects = (function () {
   KeyInProcessor.prototype.destroy = function () {
     if (this.stopped) return;
     this.stopped = true;
-    if (this._rvfc && this.video.cancelVideoFrameCallback) {
-      try { this.video.cancelVideoFrameCallback(this._rvfc); } catch (e) { /* ignore */ }
-    }
-    if (this._raf) cancelAnimationFrame(this._raf);
+    this.unpump();
     if (this.warm) {
       var w = this.warm;
       this.warm = null;
@@ -4386,13 +4464,30 @@ var VideoEffects = (function () {
   function keyProbe(remoteStream) {
     var video = hiddenVideo(remoteStream);
     var probe = new MarkerProbe(video);
-    var stopped = false, rvfc = 0, timer = 0;
+    var stopped = false, held = false, rvfc = 0, timer = 0, gen = 0;
+    // One callback in flight, and none while held, as Processor.pump() keeps it.
     function schedule() {
-      if (stopped) return;
+      if (stopped || held || rvfc || timer) return;
       if (video.requestVideoFrameCallback) rvfc = video.requestVideoFrameCallback(onFrame);
       else timer = setTimeout(onFrame, KEYIN_PROBE_MS);
     }
+    function hold() {
+      held = true;
+      cancel();
+    }
+    function rearm() {
+      held = false;
+      schedule();
+    }
+    function cancel() {
+      if (rvfc && video.cancelVideoFrameCallback) {
+        try { video.cancelVideoFrameCallback(rvfc); } catch (e) { /* ignore */ }
+      }
+      if (timer) clearTimeout(timer);
+      rvfc = timer = 0;
+    }
     function onFrame() {
+      rvfc = timer = 0;
       if (stopped) return;
       schedule();
       probe.tick(performance.now());
@@ -4404,16 +4499,13 @@ var VideoEffects = (function () {
       lastUnkeyedAt: function () { return probe.lastUnkeyed; },
       setSource: function (remote) {
         if (stopped || !remote) return;
-        video.srcObject = remote;
-        video.play().catch(function () { /* muted autoplay */ });
+        var mine = ++gen;
+        repointVideo(video, remote, hold, rearm, function () { return !stopped && gen === mine; });
       },
       destroy: function () {
         if (stopped) return;
         stopped = true;
-        if (rvfc && video.cancelVideoFrameCallback) {
-          try { video.cancelVideoFrameCallback(rvfc); } catch (e) { /* ignore */ }
-        }
-        if (timer) clearTimeout(timer);
+        cancel();
         try { video.pause(); } catch (e) { /* ignore */ }
         video.srcObject = null;
       }

@@ -21,7 +21,13 @@ import { test, expect } from './fixtures.js';
 const C = [200, 150, 120];
 
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => { window.__voxalSegStub = true; });
+  await page.addInitScript(() => {
+    window.__voxalSegStub = true;
+    // The warm-up's 30 frames come slowly here, several software-GL browsers
+    // to a machine: a 15 s wait timed out under a busy parallel run, which
+    // measured the machine and not the receiver.
+    window.__voxalKeyInWarmWaitMs = 45_000;
+  });
   await page.goto('/');
   await page.evaluate(() => {
     window.__sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -79,6 +85,46 @@ test.beforeEach(async ({ page }) => {
       stream.getVideoTracks()[0].addEventListener('ended', () => clearInterval(timer));
       return stream;
     };
+
+    // A stream with no frame yet, until `wake()`: a remote track before its
+    // first decoded frame. Nothing may be painted before the capture is
+    // taken — a canvas that already holds a picture hands it over at once,
+    // rate 0 or not.
+    window.__mkQuiet = (W = 160, H = 120) => {
+      const c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      const ctx = c.getContext('2d', { alpha: false });
+      const stream = c.captureStream(0);
+      const track = stream.getVideoTracks()[0];
+      let n = 0, timer = 0;
+      stream.wake = () => {
+        timer = setInterval(() => {
+          ctx.fillStyle = '#777';
+          ctx.fillRect(0, 0, W, H);
+          ctx.fillStyle = '#333';
+          ctx.fillRect((n++ * 3) % W, H - 1, 1, 1);
+          track.requestFrame();
+        }, 40);
+      };
+      track.addEventListener('ended', () => clearInterval(timer));
+      return stream;
+    };
+
+    // Run `fn` inside the next frame callback asked of any <video>: with
+    // `first` before the pipeline's own callback, so the pipeline asks for its
+    // next frame after `fn` has run; without, after it, which has asked already.
+    window.__inFrameCallback = (fn, first) => new Promise((resolve) => {
+      const proto = HTMLVideoElement.prototype, real = proto.requestVideoFrameCallback;
+      proto.requestVideoFrameCallback = function (cb) {
+        proto.requestVideoFrameCallback = real;
+        return real.call(this, (now, meta) => {
+          if (first) fn();
+          cb(now, meta);
+          if (!first) fn();
+          resolve();
+        });
+      };
+    });
 
     window.__offer = (extra) => Object.assign({
       scene: 'office', size: [160, 120], edgeE: 0,
@@ -496,6 +542,42 @@ test.describe('a running receiver', () => {
     expect(seen.alive).toBe(true);
   });
 
+  // Chromium (141) takes the whole tab down when a <video> is pointed at a
+  // stream with no frame yet in the same task as one of its frame callbacks,
+  // while a callback is registered. main.js hands a fresh handle its catch-up
+  // stream in exactly that task — the promise the warm-up's last frame
+  // callback resolved — and a peer's new call often has no frame yet.
+  test('a stream handed over in the turn the handle resolves, before its first frame, crashes nothing and is drawn once it has one', async ({ page }) => {
+    test.setTimeout(90_000);
+    const seen = await page.evaluate(async () => {
+      const quiet = window.__mkQuiet();
+      const h = await window.__start();
+      h.setSource(quiet);
+      const p = window.__p;
+      await window.__sleep(600);
+      // Nothing asked of the element while there is no frame: that is the fix.
+      const waiting = { held: p._held, rvfc: p._rvfc, raf: p._raf, alive: h.alive() };
+      let t = p.lastDraw;
+      quiet.wake();
+      const drew = await window.__waitFor(() => p.lastDraw > t, 5000);
+      // The same stream again, from inside a frame callback: a reload all the
+      // same, and the loop must come back from it on its own.
+      await window.__inFrameCallback(() => h.setSource(quiet), true);
+      await window.__sleep(300);
+      t = p.lastDraw;
+      const again = await window.__waitFor(() => p.lastDraw > t, 5000);
+      const out = { waiting, drew, again, held: p._held, src: p.video.srcObject === quiet, alive: h.alive() };
+      quiet.getTracks().forEach((tr) => tr.stop());
+      return out;
+    });
+    expect(seen.waiting).toEqual({ held: true, rvfc: 0, raf: 0, alive: true });
+    expect(seen.drew).toBe(true);
+    expect(seen.again).toBe(true);
+    expect(seen.held).toBe(false);
+    expect(seen.src).toBe(true);
+    expect(seen.alive).toBe(true);
+  });
+
   test('over budget it gives up, the probe keeps watching, and a lost context gives up too', async ({ page }) => {
     test.setTimeout(120_000);
     const seen = await page.evaluate(async () => {
@@ -575,6 +657,31 @@ test.describe('the CPU probe on its own', () => {
     expect(seen.contexts).toBe(0);
     expect(seen.count).toBe(0);
     expect(seen.live).toBe('live');
+  });
+
+  // The crash the receiver test above guards against, for the probe: its
+  // own frame callback has already asked for the next frame when the switch
+  // lands in the same task.
+  test('switched inside its own frame callback to a stream with no frame yet, it crashes nothing and watches again once frames come', async ({ page }) => {
+    test.setTimeout(30_000);
+    const seen = await page.evaluate(async () => {
+      const src = window.__mkSource();
+      window.__src = src;
+      const probe = VideoEffects.keyProbe(src);
+      const tick = () => Math.max(probe.lastKeyedAt(), probe.lastUnkeyedAt());
+      await window.__waitFor(() => tick() > 0, 3000);
+      await window.__sleep(800);
+      const quiet = window.__mkQuiet();
+      await window.__inFrameCallback(() => probe.setSource(quiet));
+      await window.__sleep(600);
+      const t = tick();
+      quiet.wake();
+      const watched = await window.__waitFor(() => tick() > t, 3000);
+      probe.destroy();
+      quiet.getTracks().forEach((tr) => tr.stop());
+      return { watched };
+    });
+    expect(seen.watched).toBe(true);
   });
 });
 

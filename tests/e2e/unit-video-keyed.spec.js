@@ -595,4 +595,56 @@ test.describe('the pipeline\'s own hygiene', () => {
     expect(seen.afterShed).toBe(seen.step0);
     expect(seen.afterNoShed).toBe(seen.step0 + 1);
   });
+
+  // Chromium (141) takes the whole tab down when a <video> is pointed at a
+  // stream with no frame yet in the same task as one of its frame callbacks,
+  // while a callback is registered — and it makes no difference whether that
+  // callback was asked for before the switch or after it. So the switch lands
+  // at the start of a frame callback here, and the pipeline's own onFrame()
+  // then asks for its next frame: the loop must be held, not merely cancelled.
+  test('a camera swapped inside a frame callback, before it has a frame, crashes nothing and is drawn once it has one', async ({ page }) => {
+    test.setTimeout(60_000);
+    const seen = await page.evaluate(async () => {
+      const p = await window.__start('preset:office');
+      // A camera still opening: nothing painted before the capture is taken,
+      // or the canvas hands over its picture at once.
+      const c = document.createElement('canvas');
+      c.width = 320; c.height = 240;
+      const ctx = c.getContext('2d');
+      const quiet = c.captureStream(0);
+      let flipped = null;
+      await new Promise((resolve) => {
+        const proto = HTMLVideoElement.prototype, real = proto.requestVideoFrameCallback;
+        proto.requestVideoFrameCallback = function (cb) {
+          proto.requestVideoFrameCallback = real;
+          return real.call(this, (now, meta) => {
+            flipped = VideoEffects.setSource(quiet);
+            cb(now, meta);
+            resolve();
+          });
+        };
+      });
+      await window.__sleep(600);
+      const waiting = { held: p._held, rvfc: p._rvfc, raf: p._raf };
+      const t = p.lastDraw;
+      let n = 0;
+      const timer = setInterval(() => {
+        ctx.fillStyle = window.__camColor;
+        ctx.fillRect(0, 0, 320, 240);
+        ctx.fillStyle = '#334';
+        ctx.fillRect(40 + (n++ * 3) % 240, 237, 2, 2);
+        quiet.getVideoTracks()[0].requestFrame();
+      }, 40);
+      await flipped;
+      const drew = await window.__waitFor(() => p.lastDraw > t, 5000);
+      const out = { waiting, drew, held: p._held, original: window.__stream._effectsOriginal === quiet };
+      clearInterval(timer);
+      quiet.getTracks().forEach((tr) => tr.stop());
+      return out;
+    });
+    expect(seen.waiting).toEqual({ held: true, rvfc: 0, raf: 0 });
+    expect(seen.drew).toBe(true);
+    expect(seen.held).toBe(false);
+    expect(seen.original).toBe(true);
+  });
 });
