@@ -1781,10 +1781,15 @@ var VideoEffects = (function () {
     'uniform float uWrap;',
     'uniform float uHasScene;',
     'uniform vec3 uFlat;',
+    'uniform vec2 uFit;',
     'out vec4 outColor;'
   ].concat(keyDetectGlsl(), [
     'void main() {',
-    '  vec2 flip = vec2(vUv.x, 1.0 - vUv.y);',
+    // The output may be bigger than the picture (see setStageAspect): the
+    // picture sits whole in the middle and the scene fills what is left.
+    '  vec2 pq = (vUv - 0.5) * uFit + 0.5;',
+    '  bool outside = pq.x < 0.0 || pq.x > 1.0 || pq.y < 0.0 || pq.y > 1.0;',
+    '  vec2 flip = vec2(clamp(pq.x, 0.0, 1.0), 1.0 - clamp(pq.y, 0.0, 1.0));',
     '  vec3 c = texture(uCam, flip).rgb;',
     '  vec3 bg = uFlat;',
     '  float soft = 0.0;',
@@ -1795,6 +1800,7 @@ var VideoEffects = (function () {
     '    float shade = clamp(thrown * uShadow.x + soft * uShadow.y, 0.0, 0.85);',
     '    bg = sc.rgb * (1.0 - sc.a * shade);',
     '  }',
+    '  if (outside) { outColor = vec4(bg, 1.0); return; }',
     '  vec4 det = keyDetect();',
     '  if (det.a < 0.5) { outColor = vec4(c, 1.0); return; }',
     '  if (inZone(flip)) { outColor = vec4(bg, 1.0); return; }',
@@ -3800,6 +3806,9 @@ var VideoEffects = (function () {
     this.srcW = 1280;                                   // the incoming frame's width
     this.segW = 0;
     this.segH = 0;
+    this.picW = 0;            // the incoming picture's shape; the canvas may be wider or taller
+    this.picH = 0;
+    this.stageAspect = 0;     // the tile's width / height, or 0 for "the picture's own"
     this.maskPrimed = false;
     this.drawTimes = [];
     this.lastBudget = 0;
@@ -3844,6 +3853,8 @@ var VideoEffects = (function () {
       setOffer: function (o) { return self.setOffer(o); },
       scene: function () { return self.sceneId; },
       setExpectKeyed: function (on) { self.expectKeyed = !!on; },
+      setStageAspect: function (a) { self.setStageAspect(a); },
+      pictureAspect: function () { return self.pictureAspect(); },
       setPaused: function (on) { self.paused = !!on; },
       lastKeyedAt: function () { return self.probe.lastKeyed; },
       lastUnkeyedAt: function () { return self.probe.lastUnkeyed; },
@@ -3947,9 +3958,22 @@ var VideoEffects = (function () {
     return aspect >= 1 ? capKeyInSize(long, long / aspect) : capKeyInSize(long * aspect, long);
   };
 
+  // The canvas for a picture of this size. Normally the picture's own shape.
+  // When the tile showing it is a different shape (setStageAspect), the canvas
+  // takes the TILE's: the picture stays whole and the scene — drawn here, so it
+  // has no edge — continues past it, where the tile would otherwise show bars.
+  KeyInProcessor.prototype.outputSize = function (pw, ph) {
+    var A = this.resolved ? this.stageAspect : 0, pa = pw / ph;
+    if (!(A > 0) || Math.abs(A / pa - 1) <= KEYIN_ASPECT_TOL) return { w: pw, h: ph };
+    return A > pa ? capKeyInSize(ph * A, ph) : capKeyInSize(pw, pw / A);
+  };
+
   KeyInProcessor.prototype.initGL = function (w, h) {
-    this.canvas.width = w;
-    this.canvas.height = h;
+    this.picW = w;
+    this.picH = h;
+    var out = this.outputSize(w, h);
+    this.canvas.width = out.w;
+    this.canvas.height = out.h;
     var gl = this.canvas.getContext('webgl2', {
       alpha: false,
       antialias: false,
@@ -3980,8 +4004,11 @@ var VideoEffects = (function () {
   // tile showing nothing — and so does the context.
   KeyInProcessor.prototype.resize = function (w, h) {
     var gl = this.gl;
-    this.canvas.width = w;
-    this.canvas.height = h;
+    this.picW = w;
+    this.picH = h;
+    var out = this.outputSize(w, h);
+    this.canvas.width = out.w;
+    this.canvas.height = out.h;
     var seg = segSizeFor(w, h);
     if (seg.width !== this.segW || seg.height !== this.segH) {
       this.segW = seg.width;
@@ -4065,6 +4092,8 @@ var VideoEffects = (function () {
       .then(function () {
         self.check();
         self.resolved = true;
+        // A tile shape told to us while starting is applied now.
+        if (self.stageAspect) self.resize(self.picW, self.picH);
         return self.handle;
       });
   };
@@ -4252,15 +4281,41 @@ var VideoEffects = (function () {
     gl.uniform1f(uloc(gl, p, 'uWrap'), hasScene ? this.scene.wrap : 0);
     gl.uniform1f(uloc(gl, p, 'uHasScene'), hasScene ? 1 : 0);
     gl.uniform3f(uloc(gl, p, 'uFlat'), KEYIN_FLAT[0], KEYIN_FLAT[1], KEYIN_FLAT[2]);
+    var f = this.fit();
+    gl.uniform2f(uloc(gl, p, 'uFit'), f[0], f[1]);
     this.drawQuad(null, this.canvas.width, this.canvas.height);
+  };
+
+  // How much bigger than the picture the output is, per axis (>= 1): the
+  // factor that maps an output coordinate onto the picture's.
+  KeyInProcessor.prototype.fit = function () {
+    var oa = this.canvas.width / this.canvas.height, pa = this.picW && this.picH ? this.picW / this.picH : oa;
+    return [Math.max(1, oa / pa), Math.max(1, pa / oa)];
+  };
+
+  // Tell the receiver what shape its tile is. 0 (or anything unusable) means
+  // the picture's own shape. Cheap to repeat; a real change re-sizes the canvas
+  // and so is the caller's to debounce. Held until the handle is out, so the
+  // self-test's synthetic frames are read off a canvas of the picture's shape.
+  KeyInProcessor.prototype.setStageAspect = function (a) {
+    a = Number(a);
+    a = (isFinite(a) && a > 0) ? Math.min(4, Math.max(0.25, a)) : 0;
+    var was = this.stageAspect;
+    if (was === a || (was && a && Math.abs(a / was - 1) < 0.03)) return;
+    this.stageAspect = a;
+    if (!this.resolved || this.stopped || this.dead || !this.gl || !this.picW) return;
+    this.resize(this.picW, this.picH);
+  };
+
+  KeyInProcessor.prototype.pictureAspect = function () {
+    return this.picW && this.picH ? this.picW / this.picH : 0;
   };
 
   KeyInProcessor.prototype.draw = function (now) {
     var gl = this.gl, v = this.video;
     var vw = v.videoWidth, vh = v.videoHeight;
     if (!vw || !vh) return false;
-    var cw = this.canvas.width, ch = this.canvas.height;
-    if (Math.abs((vw / vh) / (cw / ch) - 1) > KEYIN_ASPECT_TOL) {
+    if (Math.abs((vw / vh) / (this.picW / this.picH) - 1) > KEYIN_ASPECT_TOL) {
       var s = this.sizeFor(vw, vh);
       this.resize(s.w, s.h);
       if (this.dead) return false;
@@ -4375,7 +4430,10 @@ var VideoEffects = (function () {
       this.lookPrev = grid;
       var t = this.lookTarget;
       if (stats) {
-        t.cx = stats.cx; t.cy = stats.cy; t.sx = stats.sx; t.sy = stats.sy;
+        // Measured in the picture; the scene is drawn in the (maybe larger) output.
+        var f = this.fit();
+        t.cx = (stats.cx - 0.5) / f[0] + 0.5; t.cy = (stats.cy - 0.5) / f[1] + 0.5;
+        t.sx = stats.sx / f[0]; t.sy = stats.sy / f[1];
         t.motion = Math.min(1, Math.max(0, (stats.motion - 0.03) * 4));
       } else {
         t.motion = 0;

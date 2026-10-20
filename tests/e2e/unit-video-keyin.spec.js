@@ -504,6 +504,39 @@ test.describe('a running receiver', () => {
     expect(seen.alive).toBe(true);
   });
 
+  test('a tile of another shape widens the canvas past the picture, and 0 puts it back', async ({ page }) => {
+    test.setTimeout(120_000);
+    const seen = await page.evaluate(async () => {
+      const h = await window.__start();
+      const p = window.__p;
+      const own = [p.canvas.width, p.canvas.height];
+      const aspect = h.pictureAspect();
+      h.setStageAspect(own[0] / own[1] * 2);
+      const wide = [p.canvas.width, p.canvas.height];
+      const fit = p.fit();
+      const pic = [p.picW, p.picH];
+      // Within 3% of what it already is: not worth a reallocation.
+      h.setStageAspect(own[0] / own[1] * 2 * 1.01);
+      const same = [p.canvas.width, p.canvas.height];
+      h.setStageAspect(own[0] / own[1] / 2);
+      const tall = [p.canvas.width, p.canvas.height];
+      h.setStageAspect(0);
+      const back = [p.canvas.width, p.canvas.height];
+      return { own, aspect, wide, fit, pic, same, tall, back, alive: h.alive() };
+    });
+    expect(seen.aspect).toBeCloseTo(seen.own[0] / seen.own[1], 5);
+    expect(seen.wide[1]).toBe(seen.own[1]);
+    expect(seen.wide[0]).toBeGreaterThan(seen.own[0] * 1.9);
+    expect(seen.fit[0]).toBeGreaterThan(1.9);
+    expect(seen.fit[1]).toBe(1);
+    expect(seen.pic).toEqual(seen.own);
+    expect(seen.same).toEqual(seen.wide);
+    expect(seen.tall[0]).toBe(seen.own[0]);
+    expect(seen.tall[1]).toBeGreaterThan(seen.own[1] * 1.9);
+    expect(seen.back).toEqual(seen.own);
+    expect(seen.alive).toBe(true);
+  });
+
   test('sized from the offer, resized only for a new shape, and never past 1280x720', async ({ page }) => {
     test.setTimeout(120_000);
     const seen = await page.evaluate(async () => {

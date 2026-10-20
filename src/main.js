@@ -11889,7 +11889,49 @@ function applyStageVideoFit() {
       box.width / box.height,
       tile.classList.contains('video-tile-screen') ? 'screen' : 'camera');
     if (vid.style.objectFit !== fit) vid.style.objectFit = fit;
+    if (tile.dataset.peerId && !tile.classList.contains('video-tile-screen')) {
+      syncKeyedStageShape(tile.dataset.peerId, box.width / box.height);
+    }
   }
+}
+
+// A peer drawn through our own cut-out has no edge of its own: the scene is
+// ours to draw, so where the tile is a different shape from the picture the
+// canvas takes the TILE's shape and the scene fills it, instead of the picture
+// being shown whole between black bars (or cropped through the head). The
+// shape is measured from the picture's own aspect (never the video element's,
+// which follows the canvas), and debounced: each change reallocates buffers.
+var KEYED_STAGE_SHAPE_MS = 250;
+var _keyedStageShape = new Map();   // peerId -> { want, timer }
+
+function keyedStageShapeFor(handle, boxAspect) {
+  var pa = handle.pictureAspect ? handle.pictureAspect() : 0;
+  if (!(pa > 0) || !(boxAspect > 0)) return 0;
+  if (boxAspect > pa * 1.03) return boxAspect;
+  if (boxAspect < pa && stageVideoFit(pa, boxAspect, 'camera') === 'contain') return boxAspect;
+  return 0;
+}
+
+function syncKeyedStageShape(peerId, boxAspect) {
+  var entry = _keyedReceivers.get(peerId);
+  if (!entry || entry.state !== 'ready' || !keyedHandleAlive(entry.handle) || !entry.handle.setStageAspect) return;
+  var want = keyedStageShapeFor(entry.handle, boxAspect);
+  var st = _keyedStageShape.get(peerId);
+  // A new handle starts on the picture's own shape, whatever was asked of the last.
+  if (!st || st.handle !== entry.handle) {
+    if (st) clearTimeout(st.timer);
+    st = { want: 0, timer: 0, handle: entry.handle };
+    _keyedStageShape.set(peerId, st);
+  }
+  if (st.want === want) return;
+  st.want = want;
+  clearTimeout(st.timer);
+  st.timer = setTimeout(function() {
+    st.timer = 0;
+    var e = _keyedReceivers.get(peerId);
+    if (!e || !keyedHandleAlive(e.handle)) return;
+    try { e.handle.setStageAspect(st.want); } catch (err) { /* handle went away */ }
+  }, KEYED_STAGE_SHAPE_MS);
 }
 
 function _buildVideoTile(tile) {

@@ -995,6 +995,19 @@ in this room").
 cannot), the bitrate share and the receiver's cost on a real call. See
 `KNOWLEDGE/todos.md`.
 
+### Filling the tile
+
+A keyed picture is drawn on the receiver, so it has no edge of its own. When the
+tile showing it is a different shape from the picture (a landscape tile for a
+portrait phone, say), `main.js` tells the receiver the tile's shape
+(`syncKeyedStageShape()` → `handle.setStageAspect()`, debounced) and the output
+canvas takes that shape: the person stays whole in the middle
+(`KeyInProcessor.fit()` / `uFit` in `FRAG_KEYIN`) and the scene continues past
+the picture where the tile would otherwise show black bars. The matte, soft mask
+and subject geometry stay in the picture's own shape; only the scene and the
+output are the tile's. It is applied only once the handle is out, so the
+self-test reads a canvas of the picture's shape.
+
 ## The room turns with the phone
 
 On a phone, an animated scene is a room that stays where it was while the
