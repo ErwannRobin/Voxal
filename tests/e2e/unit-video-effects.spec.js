@@ -1678,3 +1678,100 @@ test.describe('the empty-room reference', () => {
       .toEqual([0, 'none']);
   });
 });
+
+// Edge colour decontamination: a pixel in the matte's band is part person, part
+// the old room, and over a new background the room's share shows as a halo.
+// The camera here is a red wall with a grey person slightly wider than the
+// stub's oval, so the band (just outside the oval, where the matte is partial)
+// is grey; the wall is red again a few pixels further out. `p.decon = 0` is
+// the control: the same frame with the pass switched off.
+test.describe('edge decontamination', () => {
+  async function installRoom(page, personMargin) {
+    await page.evaluate((margin) => {
+      window.__mkVideoStream = function () {
+        const c = document.createElement('canvas');
+        c.width = 320; c.height = 240;
+        const ctx = c.getContext('2d');
+        let n = 0;
+        const paint = () => {
+          ctx.fillStyle = '#c02020';
+          ctx.fillRect(0, 0, 320, 240);
+          if (margin !== null) {
+            // The stub's oval is centred (160, 144) with semi-axes 70.4 x 108.
+            // Blurred, so the edge is what a real one is: pixels that are
+            // part wall, part person.
+            ctx.filter = 'blur(3px)';
+            ctx.fillStyle = '#909090';
+            ctx.beginPath();
+            ctx.ellipse(160, 144, 70.4 + margin, 108 + margin, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.filter = 'none';
+          }
+          ctx.fillStyle = '#fff';
+          ctx.fillRect((n++ * 7) % 320, 0, 2, 1);
+        };
+        paint();
+        const stream = c.captureStream(15);
+        const timer = setInterval(paint, 40);
+        stream.getVideoTracks()[0].addEventListener('ended', () => clearInterval(timer));
+        return stream;
+      };
+      window.__row = function (y, x0, x1) {
+        const src = VideoEffects.active().canvas;
+        const probe = document.createElement('canvas');
+        probe.width = src.width; probe.height = src.height;
+        const ctx = probe.getContext('2d');
+        ctx.drawImage(src, 0, 0);
+        const out = [];
+        for (let x = x0; x < x1; x++) out.push(Array.from(ctx.getImageData(x, y, 1, 1).data).slice(0, 3));
+        return out;
+      };
+      window.__sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    }, personMargin);
+  }
+
+  async function measure(page) {
+    return page.evaluate(async () => {
+      VideoEffects.writeMode('preset:office');
+      await startVideoShare();
+      const p = VideoEffects.active();
+      await __sleep(1500);
+      const x0 = 60, x1 = 130;
+      p.decon = 0.85;
+      await __sleep(400);
+      const on = __row(150, x0, x1);
+      p.decon = 0;
+      await __sleep(400);
+      const off = __row(150, x0, x1);
+      // Mean per-pixel colour change the pass made, and how red the band is
+      // with and without it (red minus green: the wall's colour showing).
+      let diff = 0, redOn = 0, redOff = 0;
+      for (let i = 0; i < on.length; i++) {
+        for (let c = 0; c < 3; c++) diff += Math.abs(on[i][c] - off[i][c]) / (3 * on.length);
+        // The band: x 78..102, where the blurred edge of the person is.
+        if (i >= 18 && i < 42) {
+          redOn += on[i][0] - on[i][1];
+          redOff += off[i][0] - off[i][1];
+        }
+      }
+      return { diff, redOn, redOff };
+    });
+  }
+
+  test('leaves a flat room exactly as it was', async ({ page }) => {
+    await seedEffectsRoom(page);
+    await installRoom(page, null);
+    const seen = await measure(page);
+    // No person colour to pull toward: the two taps agree, so nothing moves.
+    // (Slack for the scene behind the matte changing between the two reads.)
+    expect(seen.diff).toBeLessThan(6);
+  });
+
+  test('pulls the old room\'s colour out of the band of a person', async ({ page }) => {
+    await seedEffectsRoom(page);
+    await installRoom(page, 3);
+    const seen = await measure(page);
+    // Less of the old wall in the band with the pass on than off.
+    expect(seen.redOn).toBeLessThan(seen.redOff - 30);
+  });
+});

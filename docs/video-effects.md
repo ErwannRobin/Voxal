@@ -238,6 +238,25 @@ silhouette to about 2 inside it. With `MASK_DILATE = 3` in front, that band
 sits wholly outside the real subject: a soft outline, never a bite out of an
 ear. At 720p the band works out around 20 px.
 
+### Edge colour is the person's, not the room's
+
+The band is where a pixel is part person and part the room behind them. Over
+the old room that is invisible; over a scene or an image it is a halo of the
+old wall around the head and shoulders, which no amount of mask tuning removes,
+because the colour itself is wrong. The composite therefore decontaminates the
+band (`uDecon`, `DECON_STRENGTH`, in `FRAG_COMPOSITE`): it reads the matte's
+gradient, takes the camera's colour a few matte texels inside (`fg`) and
+outside (`bk`) the band, and pulls the pixel toward `fg` by how much of it is
+`bk` (`t`, the pixel's position on the `bk` to `fg` line). A pure person pixel
+has `t` of 1 and is untouched; so is a flat room, where `fg` and `bk` agree.
+Weighted by how deep in the band the pixel is, so the two ends of the ramp
+are not moved. It runs for an image or a scene and never for blur (whose
+background IS the room) or the keyed frame (the receiver composites that one,
+and a second pass here would be done twice). Eight extra reads, only in the
+band. `Processor.decon` is the knob; `unit-video-effects.spec.js` ("edge
+decontamination") pins both halves: a flat room is unchanged, and a blurred
+person edge on a red wall carries less red with it on.
+
 ### …and both of them are the middle of a slider
 
 Those numbers are tuned, not universal. A plain wall forgives a crisp edge; hair,

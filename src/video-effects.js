@@ -282,6 +282,11 @@ var VideoEffects = (function () {
   // to decide. Four texels is ~20 px on a 1280-wide camera: the region where
   // hair and shoulders go wrong, and no deeper.
   var REF_CORE_ERODE     = 4;
+  // Edge colour decontamination (FRAG_COMPOSITE): how far the person's colour
+  // is pulled into the matte's band, 0-1, and how far apart, in matte texels,
+  // the four taps either side of the band are.
+  var DECON_STRENGTH     = 0.85;
+  var DECON_STEP         = 2.0;
   var REF_CORE_LO        = 0.60;
   var REF_CORE_HI        = 0.95;
   // The band the reference may decide is widened by this much, in mask
@@ -1571,6 +1576,7 @@ var VideoEffects = (function () {
     'uniform vec2 uZone;',
     'uniform float uTiltOn;',
     'uniform highp uint uTiltBits;',
+    'uniform float uDecon;',
     'out vec4 outColor;',
     'void main() {',
     '  vec2 flip = vec2(vUv.x, 1.0 - vUv.y);',
@@ -1620,6 +1626,46 @@ var VideoEffects = (function () {
     '    }',
     '    outColor = vec4(o, 1.0);',
     '    return;',
+    '  }',
+    // Edge colour decontamination. A pixel in the matte's band is part person,
+    // part the room behind them, and over a different background the room's
+    // share shows as a halo. Where the band is, pull the pixel's colour toward
+    // the person's own colour a little way inside (found along the matte's
+    // gradient), by how much of the pixel is the old room: the colour it
+    // would have had with no room behind it. Never run for the keyed frame
+    // (returned above), and never for the blur, whose background IS the room.
+    // Pure person pixels are not touched: their t below is 1.
+    '  if (uDecon > 0.0 && uBgMode > 0.5 && m > 0.02 && m < 0.98) {',
+    '    vec2 mt = 1.0 / vec2(textureSize(uMask, 0));',
+    '    vec2 g = vec2(texture(uMask, flip + vec2(mt.x * 2.0, 0.0)).r - texture(uMask, flip - vec2(mt.x * 2.0, 0.0)).r,',
+    '                  texture(uMask, flip + vec2(0.0, mt.y * 2.0)).r - texture(uMask, flip - vec2(0.0, mt.y * 2.0)).r);',
+    '    float gl2 = length(g);',
+    '    if (gl2 > 0.004) {',
+    '      vec2 dir = g / gl2 * mt;',
+    '      vec3 fg = vec3(0.0); float fw = 0.0;',
+    '      vec3 bk = vec3(0.0); float bw = 0.0;',
+    '      for (int i = 1; i <= 4; i++) {',
+    '        float k = float(i) * ' + DECON_STEP.toFixed(1) + ';',
+    '        vec2 pi = flip + dir * k;',
+    '        vec2 po = flip - dir * k;',
+    '        float mi = smoothstep(uEdge.x, uEdge.y, texture(uMask, pi).r);',
+    '        float mo = smoothstep(uEdge.x, uEdge.y, texture(uMask, po).r);',
+    '        float wi = smoothstep(0.9, 1.0, mi);',
+    '        float wo = 1.0 - smoothstep(0.0, 0.1, mo);',
+    '        fg += texture(uSharp, pi).rgb * wi; fw += wi;',
+    '        bk += texture(uSharp, po).rgb * wo; bw += wo;',
+    '      }',
+    '      if (fw > 0.5 && bw > 0.5) {',
+    '        fg /= fw; bk /= bw;',
+    '        vec3 d = fg - bk;',
+    '        float dd = dot(d, d);',
+    '        if (dd > 0.004) {',
+    '          float t = clamp(dot(sharp - bk, d) / dd, 0.0, 1.0);',
+    '          float band = clamp(6.0 * m * (1.0 - m), 0.0, 1.0);',
+    '          sharp = mix(sharp, fg, (1.0 - t) * band * uDecon);',
+    '        }',
+    '      }',
+    '    }',
     '  }',
     '  vec3 bg;',
     '  float soft = 0.0;',
@@ -2002,6 +2048,7 @@ var VideoEffects = (function () {
     // here and refreshed by applyEdge(); the draw loop must not touch
     // localStorage.
     this.edge = edgeProfile(readSharpness());
+    this.decon = DECON_STRENGTH;
 
     // Low-light state. gain 1 / contrast 1 means "set no canvas filter at
     // all", which is both the well-lit case and the unsupported one.
@@ -3288,6 +3335,7 @@ var VideoEffects = (function () {
     gl.uniform2f(uloc(gl, this.pComp, 'uShadow'), sh.cast, sh.contact);
     gl.uniform1f(uloc(gl, this.pComp, 'uWrap'), useScene && this.scene ? this.scene.wrap : 0);
     gl.uniform2f(uloc(gl, this.pComp, 'uEdge'), this.edge.lo, this.edge.hi);
+    gl.uniform1f(uloc(gl, this.pComp, 'uDecon'), this.decon);
     var x = this.bgXform();
     gl.uniform4f(uloc(gl, this.pComp, 'uBgXform'), x[0], x[1], x[2], x[3]);
     if (this.keyed && this.keyed.demand > 0) this.drawKeyed(w, h);
