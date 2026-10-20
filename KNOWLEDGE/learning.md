@@ -423,3 +423,5 @@ Design: `docs/video-effects.md`. Preview any scene/look headlessly with `make sc
 
 
 - **Virtual background + phone rotation**: the effect canvas is sized once (`initGL()` from track settings), so a turned phone stretched the picture. `Processor.followCameraShape()` (from `onFrame`) rebuilds GL when the video flips orientation; `sizeFromTrack()` trusts the video element's orientation over track settings, which lag or never update on some phones. Not covered by an automated test.
+
+- **Keyed receiver fills the tile**: the key-in canvas takes the TILE's shape (`setStageAspect`), not the picture's; the picture aspect comes from `handle.pictureAspect()`, never the `<video>` element's size (it follows the canvas, so deciding from it feeds back). Ignored until the handle resolves or the self-test reads the wrong canvas.

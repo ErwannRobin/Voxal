@@ -84,37 +84,37 @@ test.afterEach(async ({ page }) => {
 });
 
 test.describe('the setting', () => {
-  test('is off by default, stores only "on", and fires its hook when set', async ({ page }) => {
+  test('is on by default, stores only "off", and fires its hook when set', async ({ page }) => {
     const seen = await page.evaluate(() => {
       const fired = [];
       VideoEffects.onSubjectOnlyChange((on) => fired.push(on));
       const initial = [VideoEffects.readSubjectOnly(), localStorage.getItem(VideoEffects.SUBJECT_ONLY_KEY)];
-      const wrote = VideoEffects.writeSubjectOnly(true);
+      const wrote = VideoEffects.writeSubjectOnly(false);
       const stored = localStorage.getItem('send-subject-only');
       const firedAfterWrite = fired.length;    // writing alone is not a change main.js hears about
-      VideoEffects.setSubjectOnly(false);
-      const cleared = localStorage.getItem('send-subject-only');
       VideoEffects.setSubjectOnly(true);
+      const cleared = localStorage.getItem('send-subject-only');
+      VideoEffects.setSubjectOnly(false);
       return { key: VideoEffects.SUBJECT_ONLY_KEY, initial, wrote, stored, firedAfterWrite,
         cleared, fired, now: VideoEffects.readSubjectOnly() };
     });
     expect(seen.key).toBe('send-subject-only');
-    expect(seen.initial).toEqual([false, null]);
-    expect(seen.wrote).toBe(true);
-    expect(seen.stored).toBe('on');
+    expect(seen.initial).toEqual([true, null]);
+    expect(seen.wrote).toBe(false);
+    expect(seen.stored).toBe('off');
     expect(seen.firedAfterWrite).toBe(0);
-    // Off is an absence, never a stored 'off'.
+    // On is an absence, never a stored 'on'.
     expect(seen.cleared).toBe(null);
-    expect(seen.fired).toEqual([false, true]);
-    expect(seen.now).toBe(true);
+    expect(seen.fired).toEqual([true, false]);
+    expect(seen.now).toBe(false);
   });
 
-  test('anything but "on" reads as off', async ({ page }) => {
-    const seen = await page.evaluate(() => ['off', 'true', '1', ''].map((v) => {
+  test('only "off" reads as off ("on", from the opt-in build, still reads as on)', async ({ page }) => {
+    const seen = await page.evaluate(() => ['off', 'on', 'true', ''].map((v) => {
       localStorage.setItem(VideoEffects.SUBJECT_ONLY_KEY, v);
       return VideoEffects.readSubjectOnly();
     }));
-    expect(seen).toEqual([false, false, false, false]);
+    expect(seen).toEqual([false, true, true, true]);
   });
 
   test('the toggle renders, stores and fires — or only reports, when given onChange', async ({ page }) => {
@@ -127,6 +127,7 @@ test.describe('the setting', () => {
       const before = [t.button.id, t.button.getAttribute('aria-checked'), t.button.getAttribute('aria-label')];
       t.button.click();
       const after = [t.button.getAttribute('aria-checked'), localStorage.getItem('send-subject-only')];
+      localStorage.removeItem('send-subject-only');
 
       const reported = [];
       const el2 = document.createElement('div');
@@ -134,12 +135,12 @@ test.describe('the setting', () => {
       t2.button.click();
       return { before, after, fired, reported, stillOn: localStorage.getItem('send-subject-only') };
     });
-    expect(seen.before).toEqual(['btn-subject-only-test', 'false', 'Let others draw my scene']);
-    expect(seen.after).toEqual(['true', 'on']);
-    expect(seen.fired).toEqual([true]);
+    expect(seen.before).toEqual(['btn-subject-only-test', 'true', 'Let others draw my scene']);
+    expect(seen.after).toEqual(['false', 'off']);
+    expect(seen.fired).toEqual([false]);
     // onChange replaces the store-and-fire, as for every other toggle.
     expect(seen.reported).toEqual([false]);
-    expect(seen.stillOn).toBe('on');
+    expect(seen.stillOn).toBe(null);
   });
 
   test('the constants the two ends must agree on', async ({ page }) => {

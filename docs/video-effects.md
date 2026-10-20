@@ -786,7 +786,7 @@ against a real webcam in a real room.
 
 ## Keyed sending and receiving
 
-**Let others draw my scene** (`send-subject-only`, off unless chosen). A scene is
+**Let others draw my scene** (`send-subject-only`, on unless switched off). A scene is
 generated from a handful of numbers, so it does not have to cross the network at
 all. With a scene picked and this setting on, a peer whose device can draw the
 scene is sent a picture of you over flat key green instead of the finished
@@ -994,6 +994,19 @@ in this room").
 `canKeyIn()` says no there), a sender encoding H.264 (Playwright's Chromium
 cannot), the bitrate share and the receiver's cost on a real call. See
 `KNOWLEDGE/todos.md`.
+
+### Filling the tile
+
+A keyed picture is drawn on the receiver, so it has no edge of its own. When the
+tile showing it is a different shape from the picture (a landscape tile for a
+portrait phone, say), `main.js` tells the receiver the tile's shape
+(`syncKeyedStageShape()` → `handle.setStageAspect()`, debounced) and the output
+canvas takes that shape: the person stays whole in the middle
+(`KeyInProcessor.fit()` / `uFit` in `FRAG_KEYIN`) and the scene continues past
+the picture where the tile would otherwise show black bars. The matte, soft mask
+and subject geometry stay in the picture's own shape; only the scene and the
+output are the tile's. It is applied only once the handle is out, so the
+self-test reads a canvas of the picture's shape.
 
 ## The room turns with the phone
 
