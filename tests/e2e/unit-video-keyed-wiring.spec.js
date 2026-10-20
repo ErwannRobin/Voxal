@@ -372,7 +372,7 @@ test.describe('signalling', () => {
   test('hello carries the capability and the live offer', async ({ page }) => {
     const hello = await page.evaluate(() => helloMessage());
     expect(hello.protocolVersion).toBe(4);
-    expect(hello.caps).toEqual(['keyed-video-1']);
+    expect(hello.caps).toEqual(['keyed-video-1', 'keyed-tilt-1']);
     expect(hello.keyedOffer).toBeNull();
     const cannot = await page.evaluate(() => { window.__keyed.canKeyIn = false; return helloMessage().caps; });
     expect(cannot).toEqual([]);
@@ -416,7 +416,7 @@ test.describe('signalling', () => {
     expect(seen.aEntry.keyedOffer).toMatchObject({ epoch: 3, scene: 'island', edgeE: -0.2, size: [320, 180] });
     expect(seen.oldEntry.caps).toEqual([]);
     expect(seen.oldEntry.keyedOffer).toBeNull();
-    expect(seen.hostCaps).toEqual(['keyed-video-1']);
+    expect(seen.hostCaps).toEqual(['keyed-video-1', 'keyed-tilt-1']);
     expect(seen.hostKeyedOffer).toBeNull();
   });
 
@@ -543,7 +543,7 @@ test.describe('signalling', () => {
     expect(seen.clamped).toEqual({
       epoch: 2, scene: 'island',
       look: { tint: [2, 0.5, 1], exposure: 1, dirX: -1, dirY: 0.5, hard: 1, side: -1 },
-      edgeE: 0, size: [16, 4096],
+      edgeE: 0, size: [16, 4096], tilt: false,
     });
 
     await seedRoom(page, { selfId: 'me', isHost: false, roomCode: 'h', connections: [{ id: 'h' }, { id: 'p1' }] });
@@ -556,6 +556,45 @@ test.describe('signalling', () => {
       return { size: connections.size, self: connections.has('me'), stranger: connections.has('stranger'), acks: _keyedAcks.size };
     });
     expect(receiver).toEqual({ size: 2, self: false, stranger: false, acks: 0 });
+  });
+
+  test('the tilt flag is true only when literally true, and joins the look key', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const base = { epoch: 1, scene: 'office' };
+      const off = sanitizeKeyedOffer(base), on = sanitizeKeyedOffer({ ...base, tilt: true });
+      return {
+        absent: off.tilt, on: on.tilt,
+        truthy: [1, 'true', {}, []].map((v) => sanitizeKeyedOffer({ ...base, tilt: v }).tilt),
+        differs: keyedOfferLookKey(off) !== keyedOfferLookKey(on),
+      };
+    });
+    expect(seen).toEqual({ absent: false, on: true, truthy: [false, false, false, false], differs: true });
+  });
+
+  test('the strip is allowed only with a flowing sensor and no keyable peer lacking the capability', async ({ page }) => {
+    await seedRoom(page, {
+      selfId: 'me', isHost: true, roomCode: 'me',
+      connections: [{ id: 'a', caps: ['keyed-video-1', 'keyed-tilt-1'] }, { id: 'b', caps: ['keyed-video-1', 'keyed-tilt-1'] },
+        { id: 'plain', caps: [] }],
+    });
+    const seen = await page.evaluate(() => {
+      const real = DeviceTilt.ready;
+      const out = {};
+      DeviceTilt.ready = () => false;
+      out.silent = keyedTiltOk();
+      DeviceTilt.ready = () => true;
+      out.flowing = keyedTiltOk();
+      // An older keyable peer takes the strip away from everyone…
+      connections.get('plain').caps = ['keyed-video-1'];
+      out.oldPeer = keyedTiltOk();
+      // …and one that cannot be keyed at all does not.
+      connections.get('plain').caps = [];
+      connections.delete('a'); connections.delete('b');
+      out.nobody = keyedTiltOk();
+      DeviceTilt.ready = real;
+      return out;
+    });
+    expect(seen).toEqual({ silent: false, flowing: true, oldPeer: false, nobody: true });
   });
 
   test('the host relays at most two non-null offers a second per source; a null always passes', async ({ page }) => {
@@ -1219,7 +1258,7 @@ test.describe('drawing a sender\'s scene', () => {
         state: _keyedReceivers.get('p1').state,
       };
     });
-    expect(seen.hello).toEqual([['keyed-video-1']]);
+    expect(seen.hello).toEqual([['keyed-video-1', 'keyed-tilt-1']]);
     expect(seen.acks[0]).toEqual(['p1', true, 'mc_p1_1', 1, 'office']);
     expect(seen.offer).toBe('office');
     expect(seen.state).toBe('ready');

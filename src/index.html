@@ -325,6 +325,18 @@
                 image, or when video goes through the relay.
               </p>
               <p id="settings-subject-only-status" class="settings-hint settings-subject-only-status hidden" aria-live="polite"></p>
+              <div id="settings-bg-tilt-card" class="hidden">
+                <div class="settings-field settings-inline-toggle" style="margin-top:12px">
+                  <label for="btn-bg-tilt" style="flex:1">Move the background with my phone</label>
+                  <div id="settings-bg-tilt"></div>
+                </div>
+                <p class="settings-hint">
+                  With an animated scene, the room behind you turns as you tilt or turn
+                  your phone, the way a real one would. Uses the phone's motion sensor;
+                  nothing is recorded or sent anywhere except the angle itself, to people
+                  who draw your scene.
+                </p>
+              </div>
               <div class="settings-device-head" style="margin-top:12px">
                 <label id="settings-blur-strength-label">Blur strength</label>
               </div>
@@ -1010,6 +1022,7 @@
          animated backgrounds) must come before video-effects.js, which builds
          its presets from it. -->
     <script src="net-usage.js"></script>
+    <script src="device-tilt.js"></script>
     <script src="video-scenes.js"></script>
     <script src="video-effects.js"></script>
     <!-- The emoji picker's dataset (generated; see scripts/gen-emoji-data.mjs).

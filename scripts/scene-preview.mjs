@@ -9,6 +9,7 @@
 //   node scripts/scene-preview.mjs --size 360x640 --long 384   an upright phone
 //   node scripts/scene-preview.mjs --look '{"exposure":0.25}'              a dim room: evening
 //   node scripts/scene-preview.mjs --look '{"dirX":-0.8,"sideMix":0}'      lit from the left
+//   node scripts/scene-preview.mjs --view '{"yaw":0.3,"pitch":-0.1}'       the camera turned (radians), as a tilting phone turns it
 //   node scripts/scene-preview.mjs --time 80 --person  a later moment, with a stand-in subject
 //   node scripts/scene-preview.mjs --alpha             the nearness channel instead (white = near)
 //   node scripts/scene-preview.mjs --raw               one redraw, stretched (what shows if the resolve cannot compile)
@@ -52,7 +53,7 @@ const ALL = ['office', 'island', 'cybercafe', 'mountain', 'countryside'];
 const args = process.argv.slice(2);
 const opt = {
   w: 1280, h: 720, long: 512, frames: 24, t: 37, look: '{}', person: false, alpha: false, raw: false,
-  bits: false, still: false, seconds: 4, q: 32, resolve: null, out: path.join(ROOT, 'scene-previews') };
+  view: 'null', bits: false, still: false, seconds: 4, q: 32, resolve: null, out: path.join(ROOT, 'scene-previews') };
 const ids = [];
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -61,6 +62,7 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--frames') opt.frames = Math.max(1, +args[++i]);
   else if (a === '--time') opt.t = +args[++i];
   else if (a === '--look') opt.look = args[++i];
+  else if (a === '--view') opt.view = args[++i];
   else if (a === '--out') opt.out = path.resolve(args[++i]);
   else if (a === '--person') opt.person = true;
   else if (a === '--alpha') opt.alpha = true;
@@ -155,7 +157,7 @@ for (const id of list) {
       const at = opt.raw ? null : VideoScenes.JITTER[age % VideoScenes.JITTER.length];
       gl.bindFramebuffer(gl.FRAMEBUFFER, small.f);
       gl.viewport(0, 0, bw, bh);
-      VideoScenes.setUniforms(gl, prog, bw, bh, t, look, at ? { jitter: at, detail: H } : null);
+      VideoScenes.setUniforms(gl, prog, bw, bh, t, look, at ? { jitter: at, detail: H } : null, JSON.parse(opt.view));
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       if (at) {
         gl.useProgram(pResolve);

@@ -312,8 +312,10 @@ uniform vec4  uSubject;   // centroid (uv, y up) and half extent (uv)
 uniform sampler2D uNoise; // 256 x 256 lattice, four corners to a texel (see noiseTexture)
 uniform vec2  uJitter;    // where in its pixel this frame looks, px from the centre (see RESOLVE_FRAG)
 uniform float uDetail;    // the height the frames are resolved to, px; 0 = uRes.y
+uniform mat3  uView;      // the phone's turn since the room was set up (viewMatrix()); identity = a still camera
 
 float T, KEY, ELEV, MOTION, NIGHT, PX, HX, FOCAL;
+float MIR = 1.0;   // -1 while the room is drawn mirrored for a light on the left (shade())
 vec2 SUBJ, SUBJR, SEED;
 
 const float PI = 3.14159265359;
@@ -448,8 +450,17 @@ float specks(vec2 p, float density, float size, float drift) {
 // A pinhole, 50 degrees from top to bottom; a narrow (upright) frame widens it
 // a little so a phone still sees a room and not a keyhole. World: y up, the
 // camera looks down -z, +x is the key light's side (main() mirrors the rest).
+//
+// uView turns the camera the way the phone has turned, so the room stays where
+// it was while the picture moves over it. It is a turn of the PICTURE, so it
+// is applied in screen space: a mirrored room (MIR) un-mirrors, turns, mirrors.
+vec3 viewFwd(vec3 d) { d.x *= MIR; d = uView * d; d.x *= MIR; return d; }
+vec3 viewInv(vec3 d) { d.x *= MIR; d = d * uView; d.x *= MIR; return d; }
+// Where the straight-ahead of a still camera lands in the turned picture: what
+// a layer drawn in the picture's own plane has to follow.
+vec2 viewShift() { vec3 s = viewInv(vec3(0.0, 0.0, -1.0)); return s.xy * FOCAL / max(-s.z, 0.2); }
 vec3 camRay(vec2 p, float pitch) {
-  vec3 d = normalize(vec3(p.x, p.y, -FOCAL));
+  vec3 d = normalize(viewFwd(vec3(p.x, p.y, -FOCAL)));
   float c = cos(pitch), s = sin(pitch);
   return vec3(d.x, d.y * c - d.z * s, d.y * s + d.z * c);
 }
@@ -2706,6 +2717,7 @@ vec2 toScreen(vec3 world, vec3 ro, float pitch) {
   vec3 d = world - ro;
   float c = cos(pitch), s = sin(pitch);
   vec3 cam = vec3(d.x, d.y * c + d.z * s, -d.y * s + d.z * c);
+  cam = viewInv(cam);
   return cam.xy * FOCAL / max(-cam.z, 1e-4);
 }
 float chimneySmoke(vec2 p, vec3 ro, vec3 farmBase) {
@@ -2898,7 +2910,7 @@ vec4 scene(vec2 p, out vec3 emit) {
   float recv = 0.0;
   if (to > 0.0) { col = oakColor(oakBase, ro + rd * to, rd); recv = 0.15; }
   // And the grass over the lot.
-  vec4 fg = foreground(p);
+  vec4 fg = foreground(p - viewShift());
   col = mix(col, fg.rgb, fg.a);
   return vec4(col, recv * (1.0 - fg.a) + 0.45 * fg.a);
 }
@@ -2914,6 +2926,7 @@ vec4 scene(vec2 p, out vec3 emit) {
   var MAIN = `
 vec4 shade(vec2 p, float m, out vec3 e) {
   SUBJ.x = (uSubject.x - 0.5) * 2.0 * HX * m;
+  MIR = m;
   return scene(vec2(p.x * m, p.y), e);
 }
 void main() {
@@ -3124,7 +3137,7 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
       gl.deleteProgram(p);
       throw new Error('scene ' + job.id + ': ' + log);
     }
-    var names = ['uRes', 'uTime', 'uSideMix', 'uLook', 'uTint', 'uExposure', 'uSubject', 'uNoise', 'uJitter', 'uDetail'];
+    var names = ['uRes', 'uTime', 'uSideMix', 'uLook', 'uTint', 'uExposure', 'uSubject', 'uNoise', 'uJitter', 'uDetail', 'uView'];
     var loc = {};
     names.forEach(function (n) { loc[n] = gl.getUniformLocation(p, n); });
     return { program: p, loc: loc, id: job.id };
@@ -3202,12 +3215,44 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     return tex;
   }
 
+  // The turn of the picture as a mat3 for the shader (column-major):
+  // Ry(yaw) Rx(pitch) Rz(roll), the angles the sender measures from its phone
+  // (see decomposeView()) and ships to a receiver drawing its scene. Absent or
+  // non-finite angles are a still camera.
+  var VIEW_IDENTITY = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+  function viewMatrix(v) {
+    if (!v) return VIEW_IDENTITY;
+    var y = Number(v.yaw), p = Number(v.pitch), r = Number(v.roll);
+    if (!isFinite(y) || !isFinite(p) || !isFinite(r)) return VIEW_IDENTITY;
+    if (!y && !p && !r) return VIEW_IDENTITY;
+    var cy = Math.cos(y), sy = Math.sin(y), cp = Math.cos(p), sp = Math.sin(p), cr = Math.cos(r), sr = Math.sin(r);
+    // Row-major R = Ry Rx Rz, written out.
+    var m00 = cy * cr + sy * sp * sr, m01 = -cy * sr + sy * sp * cr, m02 = sy * cp;
+    var m10 = cp * sr,                m11 = cp * cr,                 m12 = -sp;
+    var m20 = -sy * cr + cy * sp * sr, m21 = sy * sr + cy * sp * cr, m22 = cy * cp;
+    return new Float32Array([m00, m10, m20, m01, m11, m21, m02, m12, m22]);
+  }
+
+  // The inverse of viewMatrix(): the angles of a row-major rotation matrix
+  // (nine numbers) that was built as Ry Rx Rz.
+  function decomposeView(m) {
+    var s = -m[5];
+    return {
+      yaw: Math.atan2(m[2], m[8]),
+      pitch: Math.asin(s < -1 ? -1 : s > 1 ? 1 : s),
+      roll: Math.atan2(m[3], m[4])
+    };
+  }
+
   // Set a scene's uniforms. The caller has bound the target framebuffer and
   // viewport, and draws the full-screen triangle afterwards. `frame`, when the
   // frames are resolved into a bigger picture (RESOLVE_FRAG), says where in its
   // pixel this one looks ({ jitter: [x, y] }, px from the centre) and how tall
   // that picture is ({ detail }, px); without it a frame is a plain picture.
-  function setUniforms(gl, prog, w, h, time, look, frame) {
+  //
+  // `view`, when the phone has turned ({ yaw, pitch, roll }, radians), turns
+  // the scene's camera by the same: see viewMatrix().
+  function setUniforms(gl, prog, w, h, time, look, frame, view) {
     var L = prog.loc;
     gl.useProgram(prog.program);
     // The noise table lives on its own unit, so nothing the camera pipeline
@@ -3228,6 +3273,7 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     var j = frame && frame.jitter;
     gl.uniform2f(L.uJitter, j ? j[0] : 0, j ? j[1] : 0);
     gl.uniform1f(L.uDetail, (frame && frame.detail) || 0);
+    gl.uniformMatrix3fv(L.uView, false, viewMatrix(view));
   }
 
   // --- thumbnails -----------------------------------------------------------
@@ -3356,6 +3402,8 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     compileProgram: compileProgram,
     compileProgramAsync: compileProgramAsync,
     setUniforms: setUniforms,
+    viewMatrix: viewMatrix,
+    decomposeView: decomposeView,
     thumbnails: thumbnails,
     isSoftwareGL: isSoftwareGL,
     THUMB_TIME: THUMB_TIME,

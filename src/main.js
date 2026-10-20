@@ -26,12 +26,15 @@
  *                  protocolVersion, appVersion }
  *                  caps: what this device can do for others, e.g. ['keyed-video-1']
  *                  = it can draw a sender's scene behind a keyed camera picture.
- *                  keyedOffer: { epoch, scene, look, edgeE, size } | null — what a
+ *                  'keyed-tilt-1' = it also reads the tilt strip a keyed frame may
+ *                  carry (the sender's phone's turn, drawn into the top edge).
+ *                  keyedOffer: { epoch, scene, look, edgeE, size, tilt } | null — what a
  *                  sender would key, if a receiver says it is ready for it. scene
  *                  is null while the sender holds keying back (blur, an image, a
  *                  green shirt): its keyed track then carries the plain composite.
  *                  hello is authoritative (saying nothing = none); a peer-list is
- *                  not: a missing caps keeps what was known, and a missing
+ *                  not (tilt: true means the keyed frames carry that strip, and the
+ *                  epoch changes whenever it flips): a missing caps keeps what was known, and a missing
  *                  keyedOffer means none only from a host that has the capability,
  *                  outside the post-migration settle.
  *   peer-joined  { peerId, pseudo }               host -> all existing peers
@@ -9759,6 +9762,11 @@ var VIDEO_SUBJECT_ONLY_KEY =
   (typeof VideoEffects === 'undefined') ? null : (VideoEffects.SUBJECT_ONLY_KEY || null);
 var KEYED_VIDEO_CAP =
   (typeof VideoEffects === 'undefined' || !VideoEffects.KEYED_CAP) ? null : VideoEffects.KEYED_CAP;
+// Whether this build reads a keyed frame's tilt strip. Advertised next to the
+// keyed capability, never without it: a sender draws the strip only when EVERY
+// peer it could key has this, because a receiver without it would show the
+// strip's black and white cells across the top of the picture.
+var KEYED_TILT_CAP = 'keyed-tilt-1';
 
 function videoBackgroundMode() {
   return (typeof VideoEffects === 'undefined') ? 'off' : VideoEffects.readMode();
@@ -13805,6 +13813,7 @@ async function startVideoShare() {
   // behalf is the one thing it must never do by itself.
   await publishLocalTrack('video', localVideoStream);
   updateVideoModeUI();
+  syncBackgroundTilt();
   // Fire and forget: the flip button appears a tick later if there is a second
   // camera. Nothing waits on it, so a slow enumerateDevices never delays video.
   cameraFlipAvailable().then(function(supported) {
@@ -13836,6 +13845,7 @@ function stopVideoShare() {
   keyedSendStopped();
   localVideoActive = false;
   updateVideoModeUI();
+  syncBackgroundTilt();
 }
 
 // --- Front/back camera flip (mobile) ------------------------------------------
@@ -13921,6 +13931,7 @@ async function flipCamera() {
       await VideoEffects.setSource(newStream);
       localVideoStream._effectsOriginal = newStream;
       if (previousRaw && previousRaw !== newStream) stopStreamTracks(previousRaw);
+      syncBackgroundTilt();   // the other camera looks the opposite way
       updateVideoModeUI();
       updatePeerList();
       return;
@@ -13952,13 +13963,68 @@ var _videoBgLight = null;
 var _videoBgReference = null;
 var _videoBgSubjectOnly = null;
 
+// --- Background tilt (phones) -----------------------------------------------------
+//
+// An animated scene turns with the phone (DeviceTilt -> VideoEffects.setTilt),
+// and, for peers drawing the scene themselves, the same turn rides in the keyed
+// frame's tilt strip. Level-triggered: syncBackgroundTilt() works out whether
+// the sensor is wanted from live state, so every place that changes the camera
+// or the background just calls it, and a slow timer catches the rest.
+
+var _videoBgTilt = null;
+var _tiltGestureArmed = false;
+var _tiltTimer = null;
+
+function backgroundTiltWanted() {
+  if (!IS_MOBILE_DEVICE || typeof DeviceTilt === 'undefined' || !DeviceTilt.supported()) return false;
+  if (!keyedApi('readBackgroundTilt') || !VideoEffects.readBackgroundTilt()) return false;
+  if (!localVideoActive || !localVideoStream || !localVideoStream._effectsProcessor) return false;
+  return String(videoBackgroundMode()).indexOf('preset:') === 0;
+}
+
+// iOS shows its motion prompt only from a user gesture, and the one that chose
+// the scene is long gone by the time the camera is up. So the first tap while
+// the sensor is wanted but silent asks (the picker and the toggle are taps too).
+function armTiltGesture() {
+  if (_tiltGestureArmed || typeof DeviceTilt === 'undefined' || !DeviceTilt.needsPermission()) return;
+  _tiltGestureArmed = true;
+  var onTap = function() {
+    if (!backgroundTiltWanted() || DeviceTilt.ready()) return;
+    document.removeEventListener('click', onTap, true);
+    _tiltGestureArmed = false;
+    DeviceTilt.requestPermission().then(function() { syncBackgroundTilt(); }, function() { /* denied: no tilt */ });
+  };
+  document.addEventListener('click', onTap, true);
+}
+
+function syncBackgroundTilt() {
+  if (typeof DeviceTilt === 'undefined' || !keyedApi('setTilt')) return;
+  if (backgroundTiltWanted()) {
+    DeviceTilt.setFacing(_cameraFacing);
+    DeviceTilt.start({
+      onChange: function(v) { VideoEffects.setTilt(v); },
+      // Ready flips the offer's `tilt` flag.
+      onState: function() { refreshKeyedSend(); }
+    });
+    if (!DeviceTilt.ready()) armTiltGesture();
+    if (!_tiltTimer) _tiltTimer = setInterval(syncBackgroundTilt, 2000);
+  } else {
+    var was = DeviceTilt.ready();
+    DeviceTilt.stop();
+    VideoEffects.setTilt(null);
+    if (_tiltTimer) { clearInterval(_tiltTimer); _tiltTimer = null; }
+    if (was) refreshKeyedSend();
+  }
+}
+
 function syncVideoBackgroundControls() {
   var mode = videoBackgroundMode();
   _videoBgPickers.forEach(function(p) { try { p.sync(mode); } catch (e) { /* ignore */ } });
   [_videoBgStrength, _videoBgSharpness, _videoBgQuality, _videoBgLight,
-   _videoBgReference, _videoBgSubjectOnly].forEach(function(c) {
+   _videoBgReference, _videoBgSubjectOnly, _videoBgTilt].forEach(function(c) {
     if (c) { try { c.sync(); } catch (e) { /* ignore */ } }
   });
+  syncBackgroundTilt();
   renderVideoBackgroundReference();
   renderKeyedStatus();
   // The room control lives on the self-view tile; refreshing the stage is what
@@ -14417,6 +14483,18 @@ function initVideoBackgroundUI() {
         title: 'With an animated scene, the people you call draw it on their own device' });
   }
   if (keyedApi('onSubjectOnlyChange')) VideoEffects.onSubjectOnlyChange(onSubjectOnlyChanged);
+  // "Move the background with my phone": phones only, so the card stays hidden
+  // everywhere else.
+  if (IS_MOBILE_DEVICE && typeof DeviceTilt !== 'undefined' && DeviceTilt.supported() &&
+      keyedApi('renderBackgroundTilt')) {
+    _videoBgTilt = VideoEffects.renderBackgroundTilt(
+      document.getElementById('settings-bg-tilt'),
+      { id: 'btn-bg-tilt', label: 'Move the background with my phone',
+        title: 'The scene turns as you tilt or turn the phone' });
+    var tiltCard = document.getElementById('settings-bg-tilt-card');
+    if (tiltCard) tiltCard.classList.remove('hidden');
+    if (keyedApi('onBackgroundTiltChange')) VideoEffects.onBackgroundTiltChange(function() { syncBackgroundTilt(); });
+  }
   // The published pipeline's keyed state (scene, look, why it is withheld)
   // changed: that is a new offer. The settings preview never has one.
   if (keyedApi('onKeyedState')) {
@@ -14997,6 +15075,7 @@ var KEYED_SEND_TICK_MS = 5000;       // re-check acks for expiry while any exist
 
 var _keyedEpoch = 0;          // bumped when the offer appears or the keyed track changes
 var _keyedEpochTrack = null;  // the keyed track the current epoch was issued for
+var _keyedEpochTilt = false;  // whether the current epoch's frames carry the tilt strip
 var _keyedOfferLive = false;  // whether the last computed offer was non-null
 var _keyedSentOffer = null;   // the offer this client last put on the wire
 var _keyedSentAt = 0;         // …and when, if it was non-null
@@ -15019,7 +15098,7 @@ function keyedApi(name) {
 // that most need the saving, cannot even reach.
 function localCaps() {
   if (IS_TINY_EMBED || !KEYED_VIDEO_CAP || !keyedApi('canKeyIn')) return [];
-  try { return VideoEffects.canKeyIn() ? [KEYED_VIDEO_CAP] : []; } catch (e) { return []; }
+  try { return VideoEffects.canKeyIn() ? [KEYED_VIDEO_CAP, KEYED_TILT_CAP] : []; } catch (e) { return []; }
 }
 
 // Wire input. At most 16 short strings, or null when it is not a list at all —
@@ -15088,7 +15167,8 @@ function sanitizeKeyedOffer(raw) {
       side: Number(look.side) < 0 ? -1 : 1
     },
     edgeE: keyedClamp(raw.edgeE, -1, 0, 0),
-    size: size
+    size: size,
+    tilt: raw.tilt === true
   };
 }
 
@@ -15145,6 +15225,19 @@ function anyPeerSupportsKeyed() {
 // setting is on, the camera is shared through a running pipeline, it goes over
 // the mesh, and somebody here can receive it. The keyed track is asked for only
 // once everything else holds, because asking creates it.
+// Whether the keyed frames may carry the tilt strip: the phone's sensor is
+// flowing and every peer that could be keyed reads it. One that cannot (an
+// older build) takes the strip away from everybody — the keyed track is one
+// picture for all of them.
+function keyedTiltOk() {
+  if (!KEYED_TILT_CAP || typeof DeviceTilt === 'undefined' || !DeviceTilt.ready()) return false;
+  var self = peer && peer.id, ok = true;
+  connections.forEach(function(c, id) {
+    if (id !== self && peerSupports(id, KEYED_VIDEO_CAP) && !peerSupports(id, KEYED_TILT_CAP)) ok = false;
+  });
+  return ok;
+}
+
 function currentOffer() {
   var s = localVideoStream;
   var t = _localVideoTopology.video;
@@ -15152,6 +15245,7 @@ function currentOffer() {
   if (keyedSubjectOnlyOn() && localVideoActive && s && s._effectsProcessor && t && t.mode === 'p2p' &&
       keyedApi('keyedTrack') && keyedApi('keyedState') && anyPeerSupportsKeyed()) {
     try { track = VideoEffects.keyedTrack(s) || null; } catch (e) { track = null; }
+    if (track && keyedApi('setKeyedTilt')) { try { VideoEffects.setKeyedTilt(s, keyedTiltOk()); } catch (e) { /* ignore */ } }
     if (track) { try { state = VideoEffects.keyedState(s) || null; } catch (e) { state = null; } }
   }
   if (!track || !state) { _keyedOfferLive = false; return null; }
@@ -15159,13 +15253,18 @@ function currentOffer() {
   if (_localCameraSuspended && track.enabled) { try { track.enabled = false; } catch (e) { /* ended */ } }
   // A new epoch whenever the offer appears, or the keyed track is a different
   // one: an ack names its epoch, so nothing acked before can key this.
-  if (!_keyedOfferLive || track !== _keyedEpochTrack) {
+  // The strip is part of the frame format, so turning it on or off is a new
+  // epoch too: nobody acked before it can be on the keyed track for it.
+  var tilt = state.tilt === true;
+  if (!_keyedOfferLive || track !== _keyedEpochTrack || tilt !== _keyedEpochTilt) {
     _keyedEpoch++;
     _keyedEpochTrack = track;
+    _keyedEpochTilt = tilt;
   }
   _keyedOfferLive = true;
   return sanitizeKeyedOffer({
-    epoch: _keyedEpoch, scene: state.scene, look: state.look, edgeE: state.edgeE, size: state.size
+    epoch: _keyedEpoch, scene: state.scene, look: state.look, edgeE: state.edgeE, size: state.size,
+    tilt: tilt
   });
 }
 
@@ -15589,7 +15688,7 @@ function keyedStamp(o, name) {
 }
 
 function keyedOfferLookKey(offer) {
-  return offer ? JSON.stringify([offer.scene, offer.look, offer.edgeE, offer.size]) : '';
+  return offer ? JSON.stringify([offer.scene, offer.look, offer.edgeE, offer.size, offer.tilt === true]) : '';
 }
 
 // Each keyed sender costs a WebGL context and a full scene render. A phone has
@@ -17150,6 +17249,7 @@ function resetVideoState() {
   _cameraFacing = 'user';
   _cameraFlipSupported = false;
   _localCameraSuspended = false;
+  syncBackgroundTilt();
   releaseStageWakeLock();
   closeStagePanels();
   // Choosing not to watch someone is scoped to the room you chose it in.

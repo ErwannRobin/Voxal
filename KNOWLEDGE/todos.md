@@ -1076,6 +1076,17 @@ H.264/AAC MP4 layout with ffmpeg-made streams (see `KNOWLEDGE/learning.md`,
 - [ ] Firefox: confirm which of its WebCodecs encoders answer `supported`, and
       that the real-time `MediaRecorder` fallback produces a playable file.
 
+## 📱 Background tilt (phones) — verify on devices
+
+Shipped on web/JS (OTA); `NSMotionUsageDescription` needs a store build. Everything below was only exercised with synthetic `DeviceOrientationEvent`s.
+
+- [ ] **iOS Safari and the Capacitor app:** does `requestPermission()` prompt on the first tap, and do events arrive in the WKWebView? If the app never prompts, `Info.plist` may need more than the usage string.
+- [ ] **Android Chrome / WebView:** confirm `deviceorientation` is the relative (gyro) one and not the magnetometer-jumpy absolute; if it jumps, use `RelativeOrientationSensor` where present.
+- [ ] **Sign and gain:** on a real phone, tilt left/right/up/down in both cameras and in landscape-held — the background must slide the way the person does. `LIMIT`, `BASE_TAU_S` and the scene's field of view against the real lens (a gain constant) are guesses.
+- [ ] **The strip through a real encoder** at starved bitrates on the smallest portrait frame (cells are 4–5 px). The check rejects a mangled strip (the room holds its last turn), so the failure is a stiff background, not a broken picture.
+- [ ] **Lag:** the scene is redrawn at ≤20 Hz, so the room can trail the person by a frame or two in a quick turn. Raise the scene's rate while the phone moves, or re-project the resolve history by the rotation (also keeps it sharp in motion).
+- [ ] Settings preview does not tilt (it runs no published camera); the picker's chips never do.
+
 ---
 
 _Add new items above this line._
