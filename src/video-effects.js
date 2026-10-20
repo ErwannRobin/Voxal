@@ -2074,6 +2074,10 @@ var VideoEffects = (function () {
     var s = t && t.getSettings ? t.getSettings() : null;
     var w = (s && s.width) || this.video.videoWidth || 1280;
     var h = (s && s.height) || this.video.videoHeight || 720;
+    // Track settings can lag a rotation (or never change on some phones) while
+    // the frames already arrive the other way up: the video's shape wins.
+    var vw = this.video.videoWidth, vh = this.video.videoHeight;
+    if (vw && vh && (vw >= vh) !== (w >= h)) { var t0 = w; w = h; h = t0; }
     return { w: w, h: h };
   };
 
@@ -2928,6 +2932,11 @@ var VideoEffects = (function () {
       return;
     }
 
+    // A phone turned: the camera now delivers the other way up, but the canvas
+    // (and every buffer sized from it) still has the old shape, so the picture
+    // is stretched into it. Rebuild for the new shape, as setSource() does.
+    if (this.followCameraShape()) return;
+
     var now = performance.now();
     if (this.refCapture) this.captureStep();
     if (this.segmenter && (now - this.lastSeg) >= this.segInterval) {
@@ -2940,6 +2949,26 @@ var VideoEffects = (function () {
     }
     this.requestKeyedFrame();
     this.measure(now);
+  };
+
+  Processor.prototype.followCameraShape = function () {
+    if (this.rebuilding) return true;
+    var vw = this.video.videoWidth, vh = this.video.videoHeight;
+    var cw = this.canvas.width, ch = this.canvas.height;
+    if (!vw || !vh || !cw || !ch) return false;
+    // Orientation, not size: a few pixels either way is not a turned phone.
+    if ((vw >= vh) === (cw >= ch)) return false;
+    var self = this;
+    this.rebuilding = true;
+    this.refLoaded = false;
+    this.releaseGL();
+    this.initGL();
+    this.applyBackground(this.mode).then(function () {
+      self.rebuilding = false;
+    }, function () {
+      self.rebuilding = false;
+    });
+    return true;
   };
 
   Processor.prototype.runSegment = function (now) {

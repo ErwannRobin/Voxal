@@ -421,3 +421,5 @@ Design: `docs/video-effects.md`. Preview any scene/look headlessly with `make sc
 - On iOS `resize` fires before layout settles (stale `innerWidth`, media queries, safe-area insets). `scheduleStageRelayout()` is also driven by `orientationchange`, `screen.orientation` `change` and `visualViewport` `resize`, with settle passes at 150 and 400 ms. Not verified on a real device.
 - Measure a sliding panel with its layout size (`offsetHeight`), not `getBoundingClientRect()` (the header enters with `translateY(-100%)`, so `--stage-inset-top` came out 0).
 
+
+- **Virtual background + phone rotation**: the effect canvas is sized once (`initGL()` from track settings), so a turned phone stretched the picture. `Processor.followCameraShape()` (from `onFrame`) rebuilds GL when the video flips orientation; `sizeFromTrack()` trusts the video element's orientation over track settings, which lag or never update on some phones. Not covered by an automated test.
