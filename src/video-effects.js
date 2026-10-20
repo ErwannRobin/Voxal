@@ -309,6 +309,14 @@ var VideoEffects = (function () {
   // landscapes are the most expensive thing the page draws, and sixty per cent
   // of the pixels of a backdrop nobody is looking at closely is plenty.
   var SCENE_LONG = IS_MOBILE ? 384 : 512;
+  // …and how much bigger than that it starts. Whatever moves in a scene (a
+  // palm, the water's edge) is not added up over redraws (see resolveScene()),
+  // so it shows exactly as sharp as one redraw is: at 512 that is a third of a
+  // 720p picture, stretched, and it reads as standard definition. So the
+  // buffer starts above SCENE_LONG and the governor walks it down, after
+  // segmentation and before the scene's redraw rate, on a device that cannot
+  // keep up. A phone starts nearer to SCENE_LONG: it has less to spend.
+  var SCENE_SCALE = IS_MOBILE ? [1.25, 1] : [1.5, 1];
   // How often the scene itself is redrawn. Its motion is slow by design, and a
   // background that changes on every frame is one the encoder pays for on every
   // frame — so it runs well under the camera's rate, and halves under load
@@ -2100,6 +2108,8 @@ var VideoEffects = (function () {
     this.sceneLook = 0;        // which JITTER point the next redraw looks through
     this.sceneHzSteps = SCENE_HZ.slice();
     this.sceneStep = 0;
+    this.sceneScaleSteps = SCENE_SCALE.slice();
+    this.sceneScaleStep = 0;
     this.lastScene = 0;
     this.lastDraw = 0;
     this.sceneStart = 0;
@@ -2694,7 +2704,8 @@ var VideoEffects = (function () {
     if (!id) throw new Error('unknown scene');
     var want = VideoScenes.byId(id);
     var cw = this.canvas.width, ch = this.canvas.height;
-    var k = Math.min(1, SCENE_LONG * (want.res || 1) / Math.max(cw, ch));
+    var scale = this.sceneScaleSteps ? this.sceneScaleSteps[this.sceneScaleStep] : 1;
+    var k = Math.min(1, SCENE_LONG * scale * (want.res || 1) / Math.max(cw, ch));
     var nw = Math.max(2, Math.round(cw * k)), nh = Math.max(2, Math.round(ch * k));
     if (this.texScene && (nw !== this.sceneW || nh !== this.sceneH)) {
       // Another scene, another size: the buffers follow it.
@@ -3622,6 +3633,21 @@ var VideoEffects = (function () {
       if (typeof console !== 'undefined' && console.info) {
         console.info('[VideoEffects] ' + Math.round(achieved) + ' fps — segmentation stepped to ' +
                      this.segHzSteps[this.segStep] + ' Hz');
+      }
+      return;
+    }
+    // Then the scene's resolution, back to SCENE_LONG: the buffer is
+    // reallocated and the picture starts over, so a pick of another scene
+    // does not undo it (the ladder is the processor's, not the scene's).
+    if (this.sceneId && this.sceneScaleSteps && this.sceneScaleStep < this.sceneScaleSteps.length - 1) {
+      this.sceneScaleStep++;
+      this.slowWindows = 0;
+      var keep = this.sceneStep;
+      try { this.ensureScene(this.sceneId); } catch (e) { /* the old buffer stands */ }
+      this.sceneStep = keep;
+      if (typeof console !== 'undefined' && console.info) {
+        console.info('[VideoEffects] ' + Math.round(achieved) + ' fps — scene buffer stepped to ' +
+                     this.sceneScaleSteps[this.sceneScaleStep] + 'x');
       }
       return;
     }

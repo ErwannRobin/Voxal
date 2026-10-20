@@ -736,10 +736,26 @@ sunbeam) change with each `JITTER` point too (`SEED`), so the added-up frames
 average them away. Fixed, as they are for a single frame, they came out as grain
 in the clouds once nothing blurred them.
 
+### What moves is as sharp as one redraw
+
+The resolve adds redraws up only where nothing changed. A palm in the breeze,
+the water's edge, a cloud's rim: those pixels fall back to the single redraw
+(`moved` above), so they are exactly as sharp as the small buffer is. That is
+the "standard definition" look in a call, and `make scene-preview ARGS='island
+--live'` shows it (the clock runs between redraws, as in a call; without
+`--live` the picture is a frozen moment, which is the best case and hides it).
+So the buffer **starts larger than `SCENE_LONG`**: `SCENE_SCALE`, `[1.5, 1]` on
+desktop (768 long, before a scene's own `res`) and `[1.25, 1]` on a phone. The
+governor walks it down in its own step: segmentation first, then the buffer
+back to `SCENE_LONG` (reallocated; the picture starts over), then the scene's
+redraw rate, then it gives up. The ladder belongs to the processor, so picking
+another scene does not undo a step that the device has already shown it needs.
+A keyed receiver draws at scale 1: it shares its GPU with every other peer.
+
 ### Cost, and the step-down
 
-The scene is drawn into a buffer of at most 512 on its long side (384 on mobile)
-and resolved up to the camera's size (above). Each scene says how much of that
+The scene is drawn into a buffer of at most 512 on its long side (384 on mobile;
+more at the start, see above) and resolved up to the camera's size (above). Each scene says how much of that
 buffer it needs (`res` in the catalogue) and how often it should be redrawn
 (`hz`, with the rate it falls to under load):
 
@@ -761,8 +777,8 @@ image, the same rule that makes **off** free. Under load the scene is redrawn
 less often, and a still room takes that much longer to sharpen.
 
 Under load, the existing ladder runs first (segmentation steps down), then the
-scene drops to the lower rate of its own ladder, and only then does the effect
-give up.
+scene's buffer drops back to `SCENE_LONG`, then the scene drops to the lower
+rate of its own ladder, and only then does the effect give up.
 
 Picking a scene compiles its shader, once per scene per camera. The compile goes
 through `KHR_parallel_shader_compile` where the driver has it, and whatever was

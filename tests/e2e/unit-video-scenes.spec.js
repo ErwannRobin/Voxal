@@ -803,6 +803,10 @@ test.describe('in the camera pipeline', () => {
         return px;
       };
       const mean = (px) => { let s = 0; for (let i = 0; i < px.length; i += 4) s += window.__luma(px, i); return s / (px.length / 4); };
+      // At the base size, not the larger one a call starts at: this camera is
+      // small enough that the larger buffer would be the camera's own size,
+      // and there would be no detail left to gain.
+      p.sceneScaleStep = p.sceneScaleSteps.length - 1;
       // Synchronously, so no other frame can be drawn in between.
       p.ensureScene('office');
       const first = mean(read(p.fbSceneOut[p.sceneOut], W, H));
@@ -1013,9 +1017,9 @@ test.describe('in the camera pipeline', () => {
   });
 
   // Under load the scene is the second thing to give: segmentation steps down
-  // first, then the scene redraws at half rate, and only then does the effect
-  // give up.
-  test('under load the scene slows down before the effect gives up', async ({ page }) => {
+  // first, then the scene's buffer comes back to its base size, then the scene
+  // redraws at half rate, and only then does the effect give up.
+  test('under load the scene buffer steps down, then it slows down, before the effect gives up', async ({ page }) => {
     const seen = await page.evaluate(async () => {
       await VideoEffects.wrap(window.__mkLitCamera('#555', '#999'), 'preset:office');
       const p = VideoEffects.active();
@@ -1023,12 +1027,15 @@ test.describe('in the camera pipeline', () => {
       const slow = (t) => { p.frames = 1; p.windowStart = t - 5000; p.measure(t); };
       const t0 = performance.now() + 100000;
       slow(t0);
-      const first = { sceneStep: p.sceneStep, gaveUp: !!p.gaveUp };
-      VideoEffects.onOverload(() => {});
+      const first = { scaleStep: p.sceneScaleStep, sceneStep: p.sceneStep, gaveUp: !!p.gaveUp };
       slow(t0 + 6000);
-      return { first, gaveUp: !!p.gaveUp, hz: VideoEffects._sceneConfig.hz };
+      const second = { sceneStep: p.sceneStep, gaveUp: !!p.gaveUp };
+      VideoEffects.onOverload(() => {});
+      slow(t0 + 12000);
+      return { first, second, gaveUp: !!p.gaveUp, hz: VideoEffects._sceneConfig.hz };
     });
-    expect(seen.first).toEqual({ sceneStep: 1, gaveUp: false });
+    expect(seen.first).toEqual({ scaleStep: 1, sceneStep: 0, gaveUp: false });
+    expect(seen.second).toEqual({ sceneStep: 1, gaveUp: false });
     expect(seen.gaveUp).toBe(true);
     expect(seen.hz[1]).toBeLessThan(seen.hz[0]);
   });
