@@ -49,7 +49,14 @@ var VideoEffects = (function () {
 
   var STORAGE_KEY = 'video-background';
 
-  var CACHE_NAME  = 'voxal-seg-v1';
+  // Must equal the exact @mediapipe/tasks-vision version in package.json (a
+  // test pins it). The loader .js and the .wasm are a matched pair, and the
+  // filenames never change: without this in the URL and the cache name, a
+  // browser that cached 1.1.0's binary pairs it with 1.1.1's loader and dies on
+  // `wasmExports["eg"].value`.
+  var SEG_RUNTIME_VERSION = '1.1.1';
+  var CACHE_PREFIX = 'voxal-seg-';
+  var CACHE_NAME  = CACHE_PREFIX + SEG_RUNTIME_VERSION;
   var MODEL_FILE  = 'selfie_segmenter_landscape.tflite';
   var WASM_LOADER = 'vision_wasm_internal.js';
   var WASM_BINARY = 'vision_wasm_internal.wasm';
@@ -1036,6 +1043,12 @@ var VideoEffects = (function () {
     try { return new URL(url, document.baseURI).href; } catch (e) { return url; }
   }
 
+  // The runtime's URL carries its version so neither the HTTP cache (immutable
+  // on /assets/seg/) nor CacheStorage can hand back a file of another version.
+  function versioned(url) {
+    return absolute(url) + '?v=' + SEG_RUNTIME_VERSION;
+  }
+
   function modelUrl() { return ASSET_DIR + MODEL_FILE; }
 
   // --- MediaPipe loading, with progress and a way out -----------------------
@@ -1120,6 +1133,14 @@ var VideoEffects = (function () {
   // fetch produces anyway, so the two fall out together.
   function runtimeBinaryUrl(url, signal) {
     var open = window.caches ? caches.open(CACHE_NAME) : Promise.reject();
+    // Drop the binaries of every other runtime version.
+    if (window.caches) {
+      caches.keys().then(function (keys) {
+        keys.forEach(function (k) {
+          if (k.indexOf(CACHE_PREFIX) === 0 && k !== CACHE_NAME) caches.delete(k);
+        });
+      }).catch(function () { /* best effort */ });
+    }
     return open.then(function (cache) {
       return cache.match(url).then(function (hit) {
         if (hit) { report('cache', 1, 1); return hit.blob(); }
@@ -1144,14 +1165,14 @@ var VideoEffects = (function () {
     // Dynamic import is legal from a classic script and keeps the runtime off
     // the critical path — nothing is fetched until an effect is turned on.
     _runtime = Promise.all([
-      import(absolute(base + BUNDLE_FILE)),
-      runtimeBinaryUrl(absolute(base + WASM_BINARY), ctl && ctl.signal)
+      import(versioned(base + BUNDLE_FILE)),
+      runtimeBinaryUrl(versioned(base + WASM_BINARY), ctl && ctl.signal)
     ]).then(function (r) {
       _loadAbort = null;
       report('ready', 1, 1);
       return {
         ImageSegmenter: r[0].ImageSegmenter,
-        fileset: { wasmLoaderPath: absolute(base + WASM_LOADER), wasmBinaryPath: r[1] }
+        fileset: { wasmLoaderPath: versioned(base + WASM_LOADER), wasmBinaryPath: r[1] }
       };
     }, function (err) {
       _loadAbort = null;
