@@ -225,6 +225,9 @@ var VideoEffects = (function () {
   // never darkens: a well-lit scene gets gain 1.0, which sets no filter at all
   // and therefore costs nothing.
   var LIGHT_ADAPT_KEY = 'light-adapt';
+  // Full HD capture (desktop only), absent = 720p. Read by main.js's capture
+  // constraints and bitrate cap; here because both documents render the toggle.
+  var FULLHD_KEY = 'video-resolution';
   // Phones only: turn an animated scene's camera with the phone. Absent is ON
   // (like light-adapt) — the effect is the point, and nothing about it leaves
   // the device unless the person also lets others draw their scene.
@@ -282,6 +285,11 @@ var VideoEffects = (function () {
   // to decide. Four texels is ~20 px on a 1280-wide camera: the region where
   // hair and shoulders go wrong, and no deeper.
   var REF_CORE_ERODE     = 4;
+  // Edge colour decontamination (FRAG_COMPOSITE): how far the person's colour
+  // is pulled into the matte's band, 0-1, and how far apart, in matte texels,
+  // the four taps either side of the band are.
+  var DECON_STRENGTH     = 0.85;
+  var DECON_STEP         = 2.0;
   var REF_CORE_LO        = 0.60;
   var REF_CORE_HI        = 0.95;
   // The band the reference may decide is widened by this much, in mask
@@ -304,6 +312,20 @@ var VideoEffects = (function () {
   // landscapes are the most expensive thing the page draws, and sixty per cent
   // of the pixels of a backdrop nobody is looking at closely is plenty.
   var SCENE_LONG = IS_MOBILE ? 384 : 512;
+  // …and how much bigger than that it starts. Whatever moves in a scene (a
+  // palm, the water's edge) is not added up over redraws (see resolveScene()),
+  // so it shows exactly as sharp as one redraw is: at 512 that is a third of a
+  // 720p picture, stretched, and it reads as standard definition. So the
+  // buffer starts above SCENE_LONG and the governor walks it down, after
+  // segmentation and before the scene's redraw rate, on a device that cannot
+  // keep up. A phone starts nearer to SCENE_LONG: it has less to spend.
+  var SCENE_SCALE = IS_MOBILE ? [1.25, 1] : [1.5, 1];
+  var SCENE_SCALE_MAX = 2.25;   // 1152 long: what a 1920 picture asks for
+  function sceneScaleLadder(long) {
+    if (IS_MOBILE) return SCENE_SCALE.slice();
+    var top = Math.min(SCENE_SCALE_MAX, Math.max(SCENE_SCALE[0], 0.6 * long / SCENE_LONG));
+    return top > SCENE_SCALE[0] + 0.01 ? [top, SCENE_SCALE[0], 1] : SCENE_SCALE.slice();
+  }
   // How often the scene itself is redrawn. Its motion is slow by design, and a
   // background that changes on every frame is one the encoder pays for on every
   // frame — so it runs well under the camera's rate, and halves under load
@@ -697,6 +719,33 @@ var VideoEffects = (function () {
     // setting — get it without asking.
     try { return localStorage.getItem(LIGHT_ADAPT_KEY) !== 'off'; }
     catch (e) { return true; }
+  }
+
+  // Full HD: opt-in, off unless stored as 'fhd', and never on a phone (it
+  // captures smaller to save battery and data). A change is a new capture, so
+  // main.js owns what happens next (onFullHDChange); here is only the storage.
+  function readFullHD() {
+    if (IS_MOBILE) return false;
+    try { return localStorage.getItem(FULLHD_KEY) === 'fhd'; }
+    catch (e) { return false; }
+  }
+
+  function writeFullHD(on) {
+    on = !!on;
+    try {
+      if (on) localStorage.setItem(FULLHD_KEY, 'fhd');
+      else localStorage.removeItem(FULLHD_KEY);
+    } catch (e) { /* private mode — it still applies for this session */ }
+    return on;
+  }
+
+  var _onFullHD = null;
+  function onFullHDChange(fn) { _onFullHD = fn; }
+
+  function setFullHD(on) {
+    on = writeFullHD(on);
+    if (_onFullHD) { try { _onFullHD(on); } catch (e) { /* ignore */ } }
+    return on;
   }
 
   function readBackgroundTilt() {
@@ -1571,6 +1620,7 @@ var VideoEffects = (function () {
     'uniform vec2 uZone;',
     'uniform float uTiltOn;',
     'uniform highp uint uTiltBits;',
+    'uniform float uDecon;',
     'out vec4 outColor;',
     'void main() {',
     '  vec2 flip = vec2(vUv.x, 1.0 - vUv.y);',
@@ -1620,6 +1670,46 @@ var VideoEffects = (function () {
     '    }',
     '    outColor = vec4(o, 1.0);',
     '    return;',
+    '  }',
+    // Edge colour decontamination. A pixel in the matte's band is part person,
+    // part the room behind them, and over a different background the room's
+    // share shows as a halo. Where the band is, pull the pixel's colour toward
+    // the person's own colour a little way inside (found along the matte's
+    // gradient), by how much of the pixel is the old room: the colour it
+    // would have had with no room behind it. Never run for the keyed frame
+    // (returned above), and never for the blur, whose background IS the room.
+    // Pure person pixels are not touched: their t below is 1.
+    '  if (uDecon > 0.0 && uBgMode > 0.5 && m > 0.02 && m < 0.98) {',
+    '    vec2 mt = 1.0 / vec2(textureSize(uMask, 0));',
+    '    vec2 g = vec2(texture(uMask, flip + vec2(mt.x * 2.0, 0.0)).r - texture(uMask, flip - vec2(mt.x * 2.0, 0.0)).r,',
+    '                  texture(uMask, flip + vec2(0.0, mt.y * 2.0)).r - texture(uMask, flip - vec2(0.0, mt.y * 2.0)).r);',
+    '    float gl2 = length(g);',
+    '    if (gl2 > 0.004) {',
+    '      vec2 dir = g / gl2 * mt;',
+    '      vec3 fg = vec3(0.0); float fw = 0.0;',
+    '      vec3 bk = vec3(0.0); float bw = 0.0;',
+    '      for (int i = 1; i <= 4; i++) {',
+    '        float k = float(i) * ' + DECON_STEP.toFixed(1) + ';',
+    '        vec2 pi = flip + dir * k;',
+    '        vec2 po = flip - dir * k;',
+    '        float mi = smoothstep(uEdge.x, uEdge.y, texture(uMask, pi).r);',
+    '        float mo = smoothstep(uEdge.x, uEdge.y, texture(uMask, po).r);',
+    '        float wi = smoothstep(0.9, 1.0, mi);',
+    '        float wo = 1.0 - smoothstep(0.0, 0.1, mo);',
+    '        fg += texture(uSharp, pi).rgb * wi; fw += wi;',
+    '        bk += texture(uSharp, po).rgb * wo; bw += wo;',
+    '      }',
+    '      if (fw > 0.5 && bw > 0.5) {',
+    '        fg /= fw; bk /= bw;',
+    '        vec3 d = fg - bk;',
+    '        float dd = dot(d, d);',
+    '        if (dd > 0.004) {',
+    '          float t = clamp(dot(sharp - bk, d) / dd, 0.0, 1.0);',
+    '          float band = clamp(6.0 * m * (1.0 - m), 0.0, 1.0);',
+    '          sharp = mix(sharp, fg, (1.0 - t) * band * uDecon);',
+    '        }',
+    '      }',
+    '    }',
     '  }',
     '  vec3 bg;',
     '  float soft = 0.0;',
@@ -2002,6 +2092,7 @@ var VideoEffects = (function () {
     // here and refreshed by applyEdge(); the draw loop must not touch
     // localStorage.
     this.edge = edgeProfile(readSharpness());
+    this.decon = DECON_STRENGTH;
 
     // Low-light state. gain 1 / contrast 1 means "set no canvas filter at
     // all", which is both the well-lit case and the unsupported one.
@@ -2053,6 +2144,8 @@ var VideoEffects = (function () {
     this.sceneLook = 0;        // which JITTER point the next redraw looks through
     this.sceneHzSteps = SCENE_HZ.slice();
     this.sceneStep = 0;
+    this.sceneScaleSteps = SCENE_SCALE.slice();
+    this.sceneScaleStep = 0;
     this.lastScene = 0;
     this.lastDraw = 0;
     this.sceneStart = 0;
@@ -2160,6 +2253,11 @@ var VideoEffects = (function () {
     var size = this.sizeFromTrack();
     this.canvas.width = size.w;
     this.canvas.height = size.h;
+    // The scene buffer's ladder follows the picture: about 0.6 of its long
+    // side at the top, so a Full HD camera gets a bigger buffer than a 720p
+    // one, then 1.5x and SCENE_LONG as the governor steps down. Only while
+    // nothing has been stepped (a rotation rebuilds this and must not forget).
+    if (!this.sceneScaleStep) this.sceneScaleSteps = sceneScaleLadder(Math.max(size.w, size.h));
 
     // Not desynchronized: the canvas is never in the DOM, so the low-latency
     // path has nothing to make faster, and the keyed copy (keyedTrack()) reads
@@ -2647,7 +2745,8 @@ var VideoEffects = (function () {
     if (!id) throw new Error('unknown scene');
     var want = VideoScenes.byId(id);
     var cw = this.canvas.width, ch = this.canvas.height;
-    var k = Math.min(1, SCENE_LONG * (want.res || 1) / Math.max(cw, ch));
+    var scale = this.sceneScaleSteps ? this.sceneScaleSteps[this.sceneScaleStep] : 1;
+    var k = Math.min(1, SCENE_LONG * scale * (want.res || 1) / Math.max(cw, ch));
     var nw = Math.max(2, Math.round(cw * k)), nh = Math.max(2, Math.round(ch * k));
     if (this.texScene && (nw !== this.sceneW || nh !== this.sceneH)) {
       // Another scene, another size: the buffers follow it.
@@ -3288,6 +3387,7 @@ var VideoEffects = (function () {
     gl.uniform2f(uloc(gl, this.pComp, 'uShadow'), sh.cast, sh.contact);
     gl.uniform1f(uloc(gl, this.pComp, 'uWrap'), useScene && this.scene ? this.scene.wrap : 0);
     gl.uniform2f(uloc(gl, this.pComp, 'uEdge'), this.edge.lo, this.edge.hi);
+    gl.uniform1f(uloc(gl, this.pComp, 'uDecon'), this.decon);
     var x = this.bgXform();
     gl.uniform4f(uloc(gl, this.pComp, 'uBgXform'), x[0], x[1], x[2], x[3]);
     if (this.keyed && this.keyed.demand > 0) this.drawKeyed(w, h);
@@ -3574,6 +3674,21 @@ var VideoEffects = (function () {
       if (typeof console !== 'undefined' && console.info) {
         console.info('[VideoEffects] ' + Math.round(achieved) + ' fps — segmentation stepped to ' +
                      this.segHzSteps[this.segStep] + ' Hz');
+      }
+      return;
+    }
+    // Then the scene's resolution, back to SCENE_LONG: the buffer is
+    // reallocated and the picture starts over, so a pick of another scene
+    // does not undo it (the ladder is the processor's, not the scene's).
+    if (this.sceneId && this.sceneScaleSteps && this.sceneScaleStep < this.sceneScaleSteps.length - 1) {
+      this.sceneScaleStep++;
+      this.slowWindows = 0;
+      var keep = this.sceneStep;
+      try { this.ensureScene(this.sceneId); } catch (e) { /* the old buffer stands */ }
+      this.sceneStep = keep;
+      if (typeof console !== 'undefined' && console.info) {
+        console.info('[VideoEffects] ' + Math.round(achieved) + ' fps — scene buffer stepped to ' +
+                     this.sceneScaleSteps[this.sceneScaleStep] + 'x');
       }
       return;
     }
@@ -5176,6 +5291,18 @@ var VideoEffects = (function () {
     });
   }
 
+  function renderFullHD(el, opts) {
+    opts = opts || {};
+    return renderToggle(el, {
+      id: opts.id,
+      label: opts.label || 'Full HD video',
+      title: opts.title,
+      read: readFullHD,
+      onChange: opts.onChange,
+      apply: setFullHD
+    });
+  }
+
   function renderLightAdapt(el, opts) {
     opts = opts || {};
     return renderToggle(el, {
@@ -5263,6 +5390,7 @@ var VideoEffects = (function () {
     QUALITY_DEFAULT: QUALITY_DEFAULT,
     QUALITIES: QUALITIES,
     LIGHT_ADAPT_KEY: LIGHT_ADAPT_KEY,
+    FULLHD_KEY: FULLHD_KEY,
     REFERENCE_KEY: REFERENCE_KEY,
     PRESETS: PRESETS,
     SEG_LONG: SEG_LONG,
@@ -5329,6 +5457,11 @@ var VideoEffects = (function () {
     setBackgroundTilt: setBackgroundTilt,
     onBackgroundTiltChange: onBackgroundTiltChange,
     renderBackgroundTilt: renderBackgroundTilt,
+    readFullHD: readFullHD,
+    writeFullHD: writeFullHD,
+    setFullHD: setFullHD,
+    onFullHDChange: onFullHDChange,
+    renderFullHD: renderFullHD,
     readLightAdapt: readLightAdapt,
     writeLightAdapt: writeLightAdapt,
     setLightAdapt: setLightAdapt,

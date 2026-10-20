@@ -12,6 +12,7 @@
 //   node scripts/scene-preview.mjs --view '{"yaw":0.3,"pitch":-0.1}'       the camera turned (radians), as a tilting phone turns it
 //   node scripts/scene-preview.mjs --time 80 --person  a later moment, with a stand-in subject
 //   node scripts/scene-preview.mjs --alpha             the nearness channel instead (white = near)
+//   node scripts/scene-preview.mjs --live             the clock runs between redraws, as in a call (default: one frozen moment, the best case)
 //   node scripts/scene-preview.mjs --raw               one redraw, stretched (what shows if the resolve cannot compile)
 //   node scripts/scene-preview.mjs --bits --person     and what each costs a video encoder
 //   node scripts/scene-preview.mjs --bits --still      what a room that does not move at all costs: the resolve's own churn
@@ -52,7 +53,7 @@ const ALL = ['office', 'island', 'cybercafe', 'mountain', 'countryside'];
 
 const args = process.argv.slice(2);
 const opt = {
-  w: 1280, h: 720, long: 512, frames: 24, t: 37, look: '{}', person: false, alpha: false, raw: false,
+  w: 1280, h: 720, long: 512, frames: 24, t: 37, look: '{}', person: false, alpha: false, raw: false, live: false,
   view: 'null', bits: false, still: false, seconds: 4, q: 32, resolve: null, out: path.join(ROOT, 'scene-previews') };
 const ids = [];
 for (let i = 0; i < args.length; i++) {
@@ -67,6 +68,7 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--person') opt.person = true;
   else if (a === '--alpha') opt.alpha = true;
   else if (a === '--raw') opt.raw = true;
+  else if (a === '--live') opt.live = true;
   else if (a === '--bits') opt.bits = true;
   else if (a === '--still') opt.still = true;
   else if (a === '--seconds') opt.seconds = +args[++i];
@@ -208,9 +210,11 @@ for (const id of list) {
       }
     };
     // A room holding still: --frames redraws of the same moment.
-    const t0 = performance.now(); redraw(opt.t); show(); const first = performance.now() - t0;
-    const t1 = performance.now(); redraw(opt.t); show(); const timed = performance.now() - t1;
-    for (let i = 2; i < (opt.raw ? 1 : opt.frames); i++) redraw(opt.t);
+    const liveHz = VideoScenes.byId(id).hz[0];
+    const at = (i) => opt.t + (opt.live ? i / liveHz : 0);
+    const t0 = performance.now(); redraw(at(0)); show(); const first = performance.now() - t0;
+    const t1 = performance.now(); redraw(at(1)); show(); const timed = performance.now() - t1;
+    for (let i = 2; i < (opt.raw ? 1 : opt.frames); i++) redraw(at(i));
     show();
     paint();
     const url = out.toDataURL('image/png');

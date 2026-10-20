@@ -238,6 +238,25 @@ silhouette to about 2 inside it. With `MASK_DILATE = 3` in front, that band
 sits wholly outside the real subject: a soft outline, never a bite out of an
 ear. At 720p the band works out around 20 px.
 
+### Edge colour is the person's, not the room's
+
+The band is where a pixel is part person and part the room behind them. Over
+the old room that is invisible; over a scene or an image it is a halo of the
+old wall around the head and shoulders, which no amount of mask tuning removes,
+because the colour itself is wrong. The composite therefore decontaminates the
+band (`uDecon`, `DECON_STRENGTH`, in `FRAG_COMPOSITE`): it reads the matte's
+gradient, takes the camera's colour a few matte texels inside (`fg`) and
+outside (`bk`) the band, and pulls the pixel toward `fg` by how much of it is
+`bk` (`t`, the pixel's position on the `bk` to `fg` line). A pure person pixel
+has `t` of 1 and is untouched; so is a flat room, where `fg` and `bk` agree.
+Weighted by how deep in the band the pixel is, so the two ends of the ramp
+are not moved. It runs for an image or a scene and never for blur (whose
+background IS the room) or the keyed frame (the receiver composites that one,
+and a second pass here would be done twice). Eight extra reads, only in the
+band. `Processor.decon` is the knob; `unit-video-effects.spec.js` ("edge
+decontamination") pins both halves: a flat room is unchanged, and a blurred
+person edge on a red wall carries less red with it on.
+
 ### …and both of them are the middle of a slider
 
 Those numbers are tuned, not universal. A plain wall forgives a crisp edge; hair,
@@ -717,10 +736,38 @@ sunbeam) change with each `JITTER` point too (`SEED`), so the added-up frames
 average them away. Fixed, as they are for a single frame, they came out as grain
 in the clouds once nothing blurred them.
 
+### What moves is as sharp as one redraw
+
+The resolve adds redraws up only where nothing changed. A palm in the breeze,
+the water's edge, a cloud's rim: those pixels fall back to the single redraw
+(`moved` above), so they are exactly as sharp as the small buffer is. That is
+the "standard definition" look in a call, and `make scene-preview ARGS='island
+--live'` shows it (the clock runs between redraws, as in a call; without
+`--live` the picture is a frozen moment, which is the best case and hides it).
+So the buffer **starts larger than `SCENE_LONG`**: `SCENE_SCALE`, `[1.5, 1]` on
+desktop (768 long, before a scene's own `res`) and `[1.25, 1]` on a phone. The
+governor walks it down in its own step: segmentation first, then the buffer
+back to `SCENE_LONG` (reallocated; the picture starts over), then the scene's
+redraw rate, then it gives up. The ladder belongs to the processor, so picking
+another scene does not undo a step that the device has already shown it needs.
+A keyed receiver draws at scale 1: it shares its GPU with every other peer.
+
+**Full HD** (Settings → Video → *Full HD video*, desktop only, off by default,
+`video-resolution` = `fhd`). The effect canvas is the camera's size, so a Full
+HD picture starts with the capture: `cameraCaptureCap()` asks for 1920x1080 and
+`cameraMaxBitrate()` lifts the per-listener cap to 2.5 Mbps (the room-size
+`scaleResolutionDownBy` still applies on top). The scene ladder follows the
+picture (`sceneScaleLadder()`): about 0.6 of its long side at the top, so
+`[2.25, 1.5, 1]` for 1920 (1152 long, before a scene's `res`) and `[1.5, 1]`
+for 1280, stepped down by the same governor. Switching it restarts a running
+camera: the canvas is sized once from the capture (`initGL()`), so there is no
+live swap. It is the dearest setting on the page: segmentation, the scene and
+the encoder all work on 2.25x the pixels.
+
 ### Cost, and the step-down
 
-The scene is drawn into a buffer of at most 512 on its long side (384 on mobile)
-and resolved up to the camera's size (above). Each scene says how much of that
+The scene is drawn into a buffer of at most 512 on its long side (384 on mobile;
+more at the start, see above) and resolved up to the camera's size (above). Each scene says how much of that
 buffer it needs (`res` in the catalogue) and how often it should be redrawn
 (`hz`, with the rate it falls to under load):
 
@@ -742,8 +789,8 @@ image, the same rule that makes **off** free. Under load the scene is redrawn
 less often, and a still room takes that much longer to sharpen.
 
 Under load, the existing ladder runs first (segmentation steps down), then the
-scene drops to the lower rate of its own ladder, and only then does the effect
-give up.
+scene's buffer drops back to `SCENE_LONG`, then the scene drops to the lower
+rate of its own ladder, and only then does the effect give up.
 
 Picking a scene compiles its shader, once per scene per camera. The compile goes
 through `KHR_parallel_shader_compile` where the driver has it, and whatever was
