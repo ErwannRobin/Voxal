@@ -20,6 +20,7 @@ make hooks        # (Re)enable the git hooks in .githooks/ — npm install alrea
 make test         # Full suite: Rust type-check + Rust unit tests + Playwright E2E
 make test-rust    # Rust unit tests only
 make test-e2e     # Fast Playwright E2E (unit project: pure-logic + UI flows)
+make test-e2e-changed # Only the spec files you edited since main (what pre-push used to run)
 make test-mesh    # Multi-peer WebRTC E2E (mesh project: real PeerJS + migration)
 make coverage     # Rust + E2E + API coverage reports (see below)
 make coverage-rust # Rust coverage via cargo-llvm-cov → src-tauri/target/llvm-cov/html/
@@ -45,7 +46,7 @@ make release      # Bump version, build signed release, publish GitHub Release
 
 **macOS URL scheme:** `make dev` cannot register `voxal://` (needs a real `.app` bundle). Run `make build-debug` once, open the `.app`, then return to `make dev`. The registration persists.
 
-**Git hooks** live in `.githooks/` (plain `sh`, no hook manager), enabled by `core.hooksPath`, which `npm install`'s `prepare` script sets (`scripts/install-hooks.mjs`, a no-op without `.git` or under `CI`). `pre-commit` lints staged files only (ESLint, JSON, rustfmt, `git diff --check`) and reads a partially staged file from the index, not the working tree. `pre-push` runs only what the pushed range touches (API tests / the E2E spec files it edited / `cargo test` / `swiftc -parse`) — never the whole E2E unit suite (many minutes; CI runs it, `PREPUSH_E2E=all` opts in) and never the mesh suite. `--no-verify` bypasses either. ESLint (`eslint.config.js`) is correctness-only, with no formatting rules. The frontend's cross-file globals are listed there by hand, so a NEW global shared between classic scripts must be added to that list. The `Lint` job in `tests.yml` runs the same checks over the whole tree and is part of `All tests green`.
+**Git hooks** live in `.githooks/` (plain `sh`, no hook manager), enabled by `core.hooksPath`, which `npm install`'s `prepare` script sets (`scripts/install-hooks.mjs`, a no-op without `.git` or under `CI`). `pre-commit` lints staged files only (ESLint, JSON, rustfmt, `git diff --check`) and reads a partially staged file from the index, not the working tree. `pre-push` runs only what the pushed range touches (API tests / `cargo test` / `swiftc -parse`) — no E2E (many minutes; CI runs it, `PREPUSH_E2E=all` opts in): a push that edits spec files only prints a reminder to run **`make test-e2e-changed`**, which runs the spec files edited since main (committed or not) — and never the mesh suite. `--no-verify` bypasses either. ESLint (`eslint.config.js`) is correctness-only, with no formatting rules. The frontend's cross-file globals are listed there by hand, so a NEW global shared between classic scripts must be added to that list. The `Lint` job in `tests.yml` runs the same checks over the whole tree and is part of `All tests green`.
 
 **E2E tests** use Playwright against `http://127.0.0.1:8080` (config: `playwright.config.js`, tests in `tests/e2e/`). Two projects: `unit` (fast, deterministic — pure-logic + UI flows; excludes `@mesh`) and `mesh` (multi-peer; only `@mesh`). Specs import `test`/`expect` from `tests/e2e/fixtures.js` (not `@playwright/test` directly) so coverage can be layered in transparently.
 

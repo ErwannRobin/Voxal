@@ -1,5 +1,5 @@
 .PHONY: help run run-web gen-build-info dev debug build build-debug build-signed build-web install clean lint hooks check test \
-        test-rust test-api test-e2e test-mesh coverage coverage-rust coverage-e2e \
+        test-rust test-api test-e2e test-e2e-changed test-mesh coverage coverage-rust coverage-e2e \
         coverage-api coverage-summary coverage-badge bench bench-app bench-audio bench-video \
         bench-report bench-publish bench-history \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
@@ -35,6 +35,7 @@ help:
 	@echo "  test         Run all test suites (check + Rust tests + Playwright)"
 	@echo "  test-rust    Run Rust unit tests"
 	@echo "  test-e2e     Run fast Playwright E2E tests (unit project)"
+	@echo "  test-e2e-changed Run only the E2E spec files you edited since main (what pre-push used to run)"
 	@echo "  test-mesh    Run multi-peer WebRTC E2E tests (mesh project)"
 	@echo "  coverage     Generate Rust + E2E + API coverage reports"
 	@echo "  coverage-rust Generate Rust coverage report (cargo-llvm-cov)"
@@ -361,6 +362,11 @@ test-api:
 
 test-e2e:
 	npm run test:e2e
+
+# The spec files edited on this branch (plus uncommitted ones), unit project only.
+# pre-push no longer runs these itself; it points here. BASE=<ref> moves the start.
+test-e2e-changed:
+	@./scripts/e2e-changed.sh
 
 test-mesh:
 	npm run test:mesh

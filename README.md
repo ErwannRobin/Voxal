@@ -181,7 +181,7 @@ safety net.
 | Hook | Runs | Time |
 |---|---|---|
 | `pre-commit` | On **staged** files only: ESLint for JS, JSON validity, `rustfmt --check` for Rust, conflict markers/whitespace | ~2 s |
-| `pre-push` | Only what your pushed commits touch: API tests (`api/`), the E2E spec files you edited (`tests/e2e/*.spec.js` — not the whole suite, CI runs that; `PREPUSH_E2E=all` runs it anyway), Rust tests (`src-tauri/`), a Swift syntax check (`ios/**/*.swift`, macOS only). Pushes that only change `src/` or docs run nothing | seconds to a couple of minutes |
+| `pre-push` | Only what your pushed commits touch: API tests (`api/`), Rust tests (`src-tauri/`), a Swift syntax check (`ios/**/*.swift`, macOS only). Pushes that only change `src/` or docs run nothing. No E2E: a push that edits `tests/e2e/*.spec.js` just prints a reminder to run `make test-e2e-changed` (CI runs the suite; `PREPUSH_E2E=all` runs it in the hook anyway) | seconds |
 
 The mesh suite is never run by a hook (slow, timing-sensitive; CI runs it).
 `pre-push` tests the working tree, so stash unrelated edits if you want the
