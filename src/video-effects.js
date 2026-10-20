@@ -218,6 +218,10 @@ var VideoEffects = (function () {
   // never darkens: a well-lit scene gets gain 1.0, which sets no filter at all
   // and therefore costs nothing.
   var LIGHT_ADAPT_KEY = 'light-adapt';
+  // Phones only: turn an animated scene's camera with the phone. Absent is ON
+  // (like light-adapt) — the effect is the point, and nothing about it leaves
+  // the device unless the person also lets others draw their scene.
+  var BACKGROUND_TILT_KEY = 'background-tilt';
   var LIGHT_TARGET    = 0.42;   // mean luma, 0-1, that the segmenter's input aims for
   var LIGHT_GAIN_MAX  = 2.6;
   var LIGHT_SAMPLE_MS = 400;    // how often the scene is measured
@@ -359,6 +363,87 @@ var VideoEffects = (function () {
     ring: [[2, 2], [17, 2], [2, 17], [17, 17]],
     patch: [[9, 9], [10, 9], [9, 10], [10, 10]]
   };
+
+  // The tilt strip. A sender on a phone turns its scene's camera with the
+  // phone (see setTilt()), and a receiver drawing that scene must turn the same
+  // way on the same frame — a message could not promise that, and every one
+  // between two non-hosts would ride the host. So the turn travels IN the
+  // frame: a row of 32 black-or-white cells along the top edge, between the
+  // two marker zones, half a zone tall. Luma only, for the reason the patch is
+  // black: it survives 4:2:0 and a starved encoder. The strip is cut like a
+  // zone (the subject is key there), and a receiver reserves it only when the
+  // sender's offer says `tilt` — see KEYED_TILT_CAP in main.js.
+  //
+  // Cell 0 is white and cell 1 black (where the key colour would be neither);
+  // then yaw 9 bits, pitch 9, roll 6 — each the angle's share of its range —
+  // and a 6-bit check (see tiltSum()) that rejects a frame the codec mangled.
+  var KEY_TILT = {
+    cells: 32,
+    rows: 0.5,                         // the strip's height, in zones
+    yaw: 32 * Math.PI / 180,           // ±, radians
+    pitch: 16 * Math.PI / 180,
+    roll: 8 * Math.PI / 180,
+    bits: [9, 9, 6]
+  };
+
+  function tiltQuant(v, range, bits) {
+    var top = (1 << bits) - 1;
+    var q = Math.round((Math.min(1, Math.max(-1, v / range)) * 0.5 + 0.5) * top);
+    return isFinite(q) ? q : top >> 1;
+  }
+  function tiltUnquant(q, range, bits) {
+    return ((q / ((1 << bits) - 1)) * 2 - 1) * range;
+  }
+  // The 24 data bits as four 6-bit groups, XORed (and offset, so an all-zero
+  // payload is not its own sum): any single flipped cell changes it.
+  function tiltSum(data) {
+    return ((data & 63) ^ ((data >>> 6) & 63) ^ ((data >>> 12) & 63) ^ ((data >>> 18) & 63) ^ 21) & 63;
+  }
+
+  // { yaw, pitch, roll } in radians -> the strip's 32 cells as one uint32
+  // (cell i is bit i). Angles beyond the ranges are clamped, non-numbers read
+  // as zero.
+  function encodeTilt(v) {
+    var B = KEY_TILT.bits;
+    var y = tiltQuant(Number(v && v.yaw) || 0, KEY_TILT.yaw, B[0]);
+    var p = tiltQuant(Number(v && v.pitch) || 0, KEY_TILT.pitch, B[1]);
+    var r = tiltQuant(Number(v && v.roll) || 0, KEY_TILT.roll, B[2]);
+    var bits = 1;                          // cell 0 white, cell 1 black
+    bits |= y << 2;
+    bits |= p << (2 + B[0]);
+    bits |= r << (2 + B[0] + B[1]);
+    bits |= tiltSum((bits >>> 2) & 0xFFFFFF) << (2 + B[0] + B[1] + B[2]);
+    return bits >>> 0;
+  }
+
+  // The 32 cells' bits -> { yaw, pitch, roll }, or null when the sync cells or
+  // the sum disagree.
+  function decodeTilt(bits) {
+    var B = KEY_TILT.bits;
+    bits = bits >>> 0;
+    if ((bits & 3) !== 1) return null;
+    var y = (bits >>> 2) & ((1 << B[0]) - 1);
+    var p = (bits >>> (2 + B[0])) & ((1 << B[1]) - 1);
+    var r = (bits >>> (2 + B[0] + B[1])) & ((1 << B[2]) - 1);
+    var c = (bits >>> (2 + B[0] + B[1] + B[2])) & 63;
+    if (c !== tiltSum((bits >>> 2) & 0xFFFFFF)) return null;
+    return {
+      yaw: tiltUnquant(y, KEY_TILT.yaw, B[0]),
+      pitch: tiltUnquant(p, KEY_TILT.pitch, B[1]),
+      roll: tiltUnquant(r, KEY_TILT.roll, B[2])
+    };
+  }
+
+  // The phone's turn since the room was set up, from main.js's sensor: the
+  // scene's camera of every LOCAL pipeline turns with it (a receiver's scene
+  // turns by what the strip says instead). null = a still camera.
+  var _tilt = null;
+  function setTilt(v) {
+    if (!v) { _tilt = null; return; }
+    var y = Number(v.yaw), p = Number(v.pitch), r = Number(v.roll);
+    _tilt = (isFinite(y) && isFinite(p) && isFinite(r)) ? { yaw: y, pitch: p, roll: r } : null;
+  }
+  function getTilt() { return _tilt; }
 
   // The sender's own guards. Each one withholds keying — the keyed canvas
   // then carries the plain composite with no markers, so a peer on the keyed
@@ -603,6 +688,20 @@ var VideoEffects = (function () {
     // setting — get it without asking.
     try { return localStorage.getItem(LIGHT_ADAPT_KEY) !== 'off'; }
     catch (e) { return true; }
+  }
+
+  function readBackgroundTilt() {
+    try { return localStorage.getItem(BACKGROUND_TILT_KEY) !== 'off'; }
+    catch (e) { return true; }
+  }
+
+  function writeBackgroundTilt(on) {
+    on = !!on;
+    try {
+      if (on) localStorage.removeItem(BACKGROUND_TILT_KEY);
+      else localStorage.setItem(BACKGROUND_TILT_KEY, 'off');
+    } catch (e) { /* private mode — it still applies for this session */ }
+    return on;
   }
 
   function writeLightAdapt(on) {
@@ -1447,6 +1546,8 @@ var VideoEffects = (function () {
     'uniform float uWrap;',
     'uniform float uKeyOut;',
     'uniform vec2 uZone;',
+    'uniform float uTiltOn;',
+    'uniform highp uint uTiltBits;',
     'out vec4 outColor;',
     'void main() {',
     '  vec2 flip = vec2(vUv.x, 1.0 - vUv.y);',
@@ -1483,6 +1584,13 @@ var VideoEffects = (function () {
     '    bool tl = top && flip.x < uZone.x;',
     '    bool tr = top && flip.x > 1.0 - uZone.x;',
     '    vec3 o = (tl || tr) ? key : mix(key, sharp, m);',
+    // The tilt strip: 32 cells between the zones, bit i of uTiltBits, white
+    // for 1. Drawn over the person — the receiver reserves it.
+    '    if (uTiltOn > 0.5 && flip.y < uZone.y * ' + KEY_TILT.rows.toFixed(2) + ' && flip.x > uZone.x && flip.x < 1.0 - uZone.x) {',
+    '      float cell = floor((flip.x - uZone.x) / (1.0 - 2.0 * uZone.x) * ' + KEY_TILT.cells.toFixed(1) + ');',
+    '      cell = min(cell, ' + (KEY_TILT.cells - 1).toFixed(1) + ');',
+    '      o = vec3(float((uTiltBits >> uint(cell)) & 1u));',
+    '    }',
     '    if (tr) {',
     '      vec2 q = vec2(flip.x - (1.0 - uZone.x), flip.y) / uZone - 0.5;',
     '      if (max(abs(q.x), abs(q.y)) < ' + (KEY_MARKER.patch / 2).toFixed(4) + ') o = vec3(0.0);',
@@ -1541,6 +1649,7 @@ var VideoEffects = (function () {
       return 'zoneTap(' + side + ', vec2(' + f(p[0]) + ', ' + f(p[1]) + '))';
     }
     var src = [
+      'uniform float uTiltStrip;',
       'float keyE(vec3 x) { return x.g - max(x.r, x.b); }',
       'bool keyLike(vec3 x) { return x.g > 0.75 && x.r < 0.25 && x.b < 0.25; }',
       'vec3 zoneTap(float side, vec2 f) {',
@@ -1580,7 +1689,13 @@ var VideoEffects = (function () {
     // it is. See KEYIN_SATURATE.
     src.push('float keyRamp(float a) { return a < ' + KEY_ALPHA_FLOOR.toFixed(4) + ' ? 0.0 : (a > ' +
              KEYIN_SATURATE.toFixed(4) + ' ? 1.0 : a); }');
-    src.push('bool inZone(vec2 q) { return q.y < uZone.y && (q.x < uZone.x || q.x > 1.0 - uZone.x); }');
+    // The two corner zones, and — when the sender's offer says it draws one —
+    // the tilt strip between them.
+    src.push('bool inZone(vec2 q) {');
+    src.push('  if (q.y < uZone.y && (q.x < uZone.x || q.x > 1.0 - uZone.x)) return true;');
+    src.push('  return uTiltStrip > 0.5 && q.y < uZone.y * ' + KEY_TILT.rows.toFixed(2) +
+             ' && q.x > uZone.x && q.x < 1.0 - uZone.x;');
+    src.push('}');
     return src;
   }
 
@@ -2600,6 +2715,16 @@ var VideoEffects = (function () {
     this.drawQuad(this.fbSoftA, this.softW, this.softH);
   };
 
+  // The turn of the scene's camera: the phone's own, for a pipeline that is
+  // drawing the scene for this device's camera.
+  Processor.prototype.sceneView = function () { return _tilt; };
+
+  // Whether drawScene() will redraw on this frame (its own rate gate).
+  Processor.prototype.sceneDue = function (now) {
+    var hz = this.sceneHzSteps[this.sceneStep];
+    return !this.lastScene || (now - this.lastScene) >= 1000 / hz;
+  };
+
   // Ease the look every frame; redraw the scene at its own, lower rate.
   Processor.prototype.drawScene = function (now) {
     var gl = this.gl;
@@ -2616,7 +2741,7 @@ var VideoEffects = (function () {
     var t = VideoScenes.THUMB_TIME + (now - this.sceneStart) / 1000;
     var at = this.texSceneOut ? VideoScenes.JITTER[this.sceneLook++ % VideoScenes.JITTER.length] : null;
     VideoScenes.setUniforms(gl, prog, this.sceneW, this.sceneH, t, this.look,
-                            at ? { jitter: at, detail: this.canvas.height } : null);
+                            at ? { jitter: at, detail: this.canvas.height } : null, this.sceneView());
     this.drawQuad(this.fbScene, this.sceneW, this.sceneH);
     gl.bindTexture(gl.TEXTURE_2D, this.texScene);
     gl.generateMipmap(gl.TEXTURE_2D);
@@ -3151,7 +3276,7 @@ var VideoEffects = (function () {
     track._voxalKeyed = true;
     this.keyed = {
       canvas: c, ctx: ctx, capture: cs, track: track, manual: manual,
-      demand: 0, pending: false,
+      demand: 0, pending: false, tilt: false,
       checked: false, failed: false,
       copyTimes: [], slow: false,
       sent: null, sentAt: 0
@@ -3197,7 +3322,8 @@ var VideoEffects = (function () {
         hard: round3(L.hard),
         side: L.side < 0 ? -1 : 1
       },
-      edgeE: round3(this.edgeE)
+      edgeE: round3(this.edgeE),
+      tilt: !!this.keyed.tilt
     };
   };
 
@@ -3212,7 +3338,7 @@ var VideoEffects = (function () {
     if (!k || this.rebuilding || this.stopped) return;
     var s = this.keyedSnapshot(), last = k.sent;
     var urgent = !last || last.scene !== s.scene || last.reason !== s.reason ||
-                 last.look.side !== s.look.side ||
+                 last.look.side !== s.look.side || last.tilt !== s.tilt ||
                  last.size[0] !== s.size[0] || last.size[1] !== s.size[1];
     if (!urgent) {
       if (now - k.sentAt < KEY_STATE_MS) return;
@@ -3237,6 +3363,8 @@ var VideoEffects = (function () {
     var Z = KEY_MARKER.zone * Math.min(w, h);
     gl.uniform2f(uloc(gl, this.pComp, 'uZone'), Z / w, Z / h);
     gl.uniform1f(uloc(gl, this.pComp, 'uKeyOut'), reason ? 0 : 1);
+    gl.uniform1f(uloc(gl, this.pComp, 'uTiltOn'), (!reason && k.tilt) ? 1 : 0);
+    if (!reason && k.tilt) gl.uniform1ui(uloc(gl, this.pComp, 'uTiltBits'), encodeTilt(_tilt));
     this.drawQuad(null, w, h);
     this.copyKeyed(w, h);
     if (!reason && !k.checked) {
@@ -3245,6 +3373,7 @@ var VideoEffects = (function () {
     }
     if (!reason) {
       gl.uniform1f(uloc(gl, this.pComp, 'uKeyOut'), 0);
+      gl.uniform1f(uloc(gl, this.pComp, 'uTiltOn'), 0);
       this.drawQuad(null, w, h);
       // A keyed frame that failed its own check never goes out: the keyed
       // canvas gets the composite instead, from now on.
@@ -3627,6 +3756,11 @@ var VideoEffects = (function () {
     this.resolved = false;
     this.paused = false;
     this.expectKeyed = false;
+    this.tiltStrip = false;   // the offer says the frames carry a tilt strip
+    this.view = null;         // the sender's turn, as last read off it: { yaw, pitch, roll }
+    this.viewAt = 0;
+    this.tiltCanvas = null;
+    this.tiltCtx = null;
     this.video = hiddenVideo(remote);
     this.canvas = document.createElement('canvas');
     this.gl = null;
@@ -3690,7 +3824,7 @@ var VideoEffects = (function () {
   }
 
   ['drawQuad', 'bindTex', 'ensureScene', 'allocSoft', 'buildSoft', 'drawScene',
-   'resolveScene', 'shadowPlan', 'pump', 'unpump', 'repoint'].forEach(function (name) {
+   'resolveScene', 'shadowPlan', 'pump', 'unpump', 'repoint', 'sceneDue'].forEach(function (name) {
     KeyInProcessor.prototype[name] = Processor.prototype[name];
   });
 
@@ -3706,7 +3840,49 @@ var VideoEffects = (function () {
     }
     if (offer.edgeE !== undefined && offer.edgeE !== null) o.edgeE = finiteIn(offer.edgeE, -1, 0, o.edgeE);
     this.edgeE = o.edgeE;
+    this.tiltStrip = offer.tilt === true;
+    if (!this.tiltStrip) this.view = null;
     if (offer.look) this.applyLook(offer.look);
+  };
+
+  // The scene turns the way the sender's phone has, as the strip on the
+  // frame says; none when it does not carry one.
+  KeyInProcessor.prototype.sceneView = function () { return this.view; };
+
+  // Read the strip off the newest frame: 32 cells along the top edge, sampled
+  // at their centres into a 32x1 canvas. Called only when the scene is about
+  // to be redrawn, so it is at most as often as that (20 a second) and never
+  // for a frame the scene would not use. A frame that does not decode (a
+  // composite passing through, a mangled one) keeps the last turn for half a
+  // second and then eases back to a still camera.
+  KeyInProcessor.prototype.readTilt = function (now) {
+    var v = this.video, vw = v.videoWidth, vh = v.videoHeight, n = KEY_TILT.cells, got;
+    if (!vw || !vh || v.readyState < 2) return;
+    try {
+      if (!this.tiltCtx) {
+        this.tiltCanvas = document.createElement('canvas');
+        this.tiltCanvas.width = n; this.tiltCanvas.height = 1;
+        this.tiltCtx = this.tiltCanvas.getContext('2d', { willReadFrequently: true });
+      }
+      var Z = KEY_MARKER.zone * Math.min(vw, vh), sh = Math.max(2, Z * KEY_TILT.rows);
+      // The middle half of the strip's height: its edges bleed into the
+      // picture below and the top row.
+      this.tiltCtx.drawImage(v, Z, sh * 0.25, Math.max(n, vw - 2 * Z), sh * 0.5, 0, 0, n, 1);
+      var d = this.tiltCtx.getImageData(0, 0, n, 1).data, bits = 0;
+      for (var i = 0; i < n; i++) {
+        var lum = (0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]) / 255;
+        if (lum > 0.5) bits |= (1 << i);
+      }
+      got = decodeTilt(bits >>> 0);
+    } catch (e) { got = null; }
+    if (got) {
+      this.view = got;
+      this.viewAt = now;
+    } else if (this.view && now - this.viewAt > 500) {
+      var k = 0.85;
+      this.view = { yaw: this.view.yaw * k, pitch: this.view.pitch * k, roll: this.view.roll * k };
+      if (Math.abs(this.view.yaw) + Math.abs(this.view.pitch) + Math.abs(this.view.roll) < 1e-4) this.view = null;
+    }
   };
 
   // The look is the SENDER's: exposure, white balance and the light's
@@ -4014,6 +4190,7 @@ var VideoEffects = (function () {
     gl.uniform2f(uloc(gl, p, 'uZone'), this.zone[0], this.zone[1]);
     gl.uniform1f(uloc(gl, p, 'uExpectKeyed'), expect ? 1 : 0);
     gl.uniform1f(uloc(gl, p, 'uKeyedRecently'), recent ? 1 : 0);
+    gl.uniform1f(uloc(gl, p, 'uTiltStrip'), this.tiltStrip ? 1 : 0);
     gl.uniform2f(uloc(gl, p, 'uOff'), 0.25 / this.segW, 0.25 / this.segH);
     // The same distance in pixels down the picture as across it: the zone is
     // square in pixels, so zone.y / zone.x is the frame's width over height.
@@ -4038,6 +4215,7 @@ var VideoEffects = (function () {
     gl.uniform2f(uloc(gl, p, 'uZone'), this.zone[0], this.zone[1]);
     gl.uniform1f(uloc(gl, p, 'uExpectKeyed'), expect ? 1 : 0);
     gl.uniform1f(uloc(gl, p, 'uKeyedRecently'), recent ? 1 : 0);
+    gl.uniform1f(uloc(gl, p, 'uTiltStrip'), this.tiltStrip ? 1 : 0);
     gl.uniform1f(uloc(gl, p, 'uEdgeE'), this.edgeE);
     var sh = this.shadowPlan();
     gl.uniform2f(uloc(gl, p, 'uShadowOff'), sh.offX, sh.offY);
@@ -4071,7 +4249,10 @@ var VideoEffects = (function () {
     this.keyMask(this.texCam, this.expectKeyed, recent);
     // Drawn in passthrough too: its history stays warm, and what the
     // receiver pays now is what it will pay once keyed frames arrive.
-    if (this.sceneId) this.drawScene(now);
+    if (this.sceneId) {
+      if (this.tiltStrip && this.sceneDue(now)) this.readTilt(now);
+      this.drawScene(now);
+    }
     this.buildSoft();
     this.composite(this.texCam, this.expectKeyed, recent);
     return true;
@@ -4155,6 +4336,7 @@ var VideoEffects = (function () {
         for (var x = 0; x < pw; x++) {
           var i = y * pw + x;
           if (y + 0.5 < zy && (x + 0.5 < zx || x + 0.5 > pw - zx)) continue;
+          if (this.tiltStrip && y + 0.5 < zy * KEY_TILT.rows) continue;
           var e = rgba[i * 4 + 1] / 255 - Math.max(rgba[i * 4] / 255, rgba[i * 4 + 2] / 255);
           var a0 = Math.min(1, Math.max(0, 1 - e / eK));
           grid[i] = a0 < KEY_ALPHA_FLOOR ? 0 : a0 > KEYIN_SATURATE ? 255 : Math.round(a0 * 255);
@@ -4433,6 +4615,14 @@ var VideoEffects = (function () {
   function keyedState(stream) {
     var p = processorOf(stream);
     return p ? p.keyedSnapshot() : null;
+  }
+
+  // Whether the keyed frames carry the tilt strip. main.js turns it on only
+  // when its offer will say so and every peer that can be keyed reads it (and
+  // the epoch changes with it, so nobody is on the keyed track meanwhile).
+  function setKeyedTilt(stream, on) {
+    var p = processorOf(stream);
+    if (p && p.keyed) p.keyed.tilt = !!on;
   }
 
   function onKeyedState(fn) { _onKeyedState = fn; }
@@ -4857,6 +5047,25 @@ var VideoEffects = (function () {
 
   // --- the low-light toggle -------------------------------------------------
 
+  var _onBackgroundTilt = null;
+  function onBackgroundTiltChange(fn) { _onBackgroundTilt = fn; }
+  function setBackgroundTilt(on) {
+    on = writeBackgroundTilt(on);
+    if (_onBackgroundTilt) { try { _onBackgroundTilt(on); } catch (e) { /* ignore */ } }
+    return on;
+  }
+  function renderBackgroundTilt(el, opts) {
+    opts = opts || {};
+    return renderToggle(el, {
+      id: opts.id,
+      label: opts.label || 'Move the background with my phone',
+      title: opts.title,
+      read: readBackgroundTilt,
+      onChange: opts.onChange,
+      apply: setBackgroundTilt
+    });
+  }
+
   function renderLightAdapt(el, opts) {
     opts = opts || {};
     return renderToggle(el, {
@@ -5004,6 +5213,12 @@ var VideoEffects = (function () {
     normalizeQuality: normalizeQuality,
     qualityLabel: qualityLabel,
     renderQuality: renderQuality,
+    BACKGROUND_TILT_KEY: BACKGROUND_TILT_KEY,
+    readBackgroundTilt: readBackgroundTilt,
+    writeBackgroundTilt: writeBackgroundTilt,
+    setBackgroundTilt: setBackgroundTilt,
+    onBackgroundTiltChange: onBackgroundTiltChange,
+    renderBackgroundTilt: renderBackgroundTilt,
     readLightAdapt: readLightAdapt,
     writeLightAdapt: writeLightAdapt,
     setLightAdapt: setLightAdapt,
@@ -5037,6 +5252,12 @@ var VideoEffects = (function () {
     KEYED_CAP: KEYED_CAP,
     canKeyIn: canKeyIn,
     keyedTrack: keyedTrack,
+    setKeyedTilt: setKeyedTilt,
+    setTilt: setTilt,
+    getTilt: getTilt,
+    encodeTilt: encodeTilt,
+    decodeTilt: decodeTilt,
+    KEY_TILT: KEY_TILT,
     isKeyedTrack: isKeyedTrack,
     setKeyedDemand: setKeyedDemand,
     keyedState: keyedState,

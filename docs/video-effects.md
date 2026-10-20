@@ -995,6 +995,87 @@ in this room").
 cannot), the bitrate share and the receiver's cost on a real call. See
 `KNOWLEDGE/todos.md`.
 
+## The room turns with the phone
+
+On a phone, an animated scene is a room that stays where it was while the
+picture moves over it. `src/device-tilt.js` reads `deviceorientation`, takes
+the camera's rotation since a baseline pose, and hands it to the scene shader as
+`uView` (`VideoScenes.viewMatrix()`): the scene's rays are turned by it
+**before** each scene's own fixed pitch (`camRay()`). A pure rotation moves every
+depth by the same amount, so the real person in the frame and the scene slide
+together with no parallax to fake. Translation (walking, leaning) is not
+measured: double-integrating an accelerometer drifts inside a second.
+
+* **Mobile only** (`IS_MOBILE_DEVICE`), on by default, switched off in Settings →
+  Video → *Move the background with my phone* (`background-tilt`, `'off'` stored,
+  absence = on). The card is hidden everywhere else. Only `index.html` has it —
+  `settings.html` is the desktop window.
+* **The rotation is built, not the angles used.** The three Euler angles are
+  turned into a matrix first: an upright phone, which is how a selfie is held,
+  sits next to the angles' singularity, where alpha and gamma swing while the
+  rotation barely moves. The result is decomposed as `Ry(yaw) Rx(pitch) Rz(roll)`
+  (`VideoScenes.decomposeView()`), small angles only.
+* **Camera and screen.** The front camera looks the other way and its frame is
+  not mirrored (only the self-view is), so its image-right is the screen's left;
+  the screen's own rotation (`screen.orientation.angle`) is folded in; a flip
+  starts from a new baseline (`DeviceTilt.setFacing()`).
+* **A baseline that follows you.** It eases toward the phone with a 7 s time
+  constant, so a posture you settle into becomes straight ahead again and the
+  room never drifts into the far corner of its own walls; a quick turn is
+  followed in full. The angles go through a soft limit (28° yaw, 14° pitch, 7°
+  roll — linear to 60 %, then rolled off) that stays inside what the keyed
+  frame can carry.
+* **A mirrored room** (the light is on the left) is drawn by un-mirroring the
+  screen ray, turning it and mirroring it again (`viewFwd()` / `viewInv()` in the
+  header, `MIR` set by `shade()`), so a turn to the right moves the room left
+  whichever side the sun is on. Things drawn in the picture's plane rather than
+  the world (the countryside's foreground grass, the chimney's smoke via
+  `toScreen()`) follow it through `viewShift()` / `viewInv()`.
+* **iOS asks.** `DeviceOrientationEvent.requestPermission()` only from a user
+  gesture, and the one that picked the scene is long gone by the time the camera
+  is up — so `armTiltGesture()` asks on the first tap while the sensor is wanted
+  but silent. `NSMotionUsageDescription` is in `Info.plist` (a native-shell
+  change: it ships with a store build, the rest is OTA). Where no event ever
+  arrives `DeviceTilt.ready()` stays false and nothing changes.
+* **Moving costs.** While the phone moves, the resolve pass's own motion test
+  fires (the redraw and the history differ) and the picture is the soft redraw
+  for those frames, sharp again when the phone is still; the encoder pays for
+  the motion, as it does for any. Not done: re-projecting the history by the
+  rotation, which would keep it sharp throughout.
+
+### Carried to the people who draw your scene
+
+With *Let others draw my scene* a receiver draws the room itself, from an offer
+sent at most once a second — no way to say "the phone is turning" at 20 Hz, and
+every message between two non-hosts rides the host. So the turn travels **in the
+frame**, which also makes it exactly synchronous with the person it belongs to.
+
+* **The strip.** 32 black-or-white cells along the top edge between the two
+  marker zones, half a zone tall (`KEY_TILT`). Luma only, for the patch's reason.
+  Cell 0 white and cell 1 black (the key green is neither); then yaw 9 bits,
+  pitch 9, roll 6 — each the angle's share of its range (±32°, ±16°, ±8°) — and a
+  6-bit XOR of the data's four 6-bit groups (`tiltSum()`), which catches any one
+  flipped cell. Quantum: 0.125° yaw, 0.06° pitch, 0.25° roll.
+* **Only when everybody can read it.** The sender draws the strip only while
+  the sensor is flowing **and** every peer that could be keyed advertises
+  `keyed-tilt-1` (`keyedTiltOk()`); the keyed track is one picture for all of
+  them, and a receiver without it would show the cells across the top. An
+  older keyable peer takes the strip away from everyone.
+* **The offer says so.** `keyedOffer.tilt`, and a change of it is a **new epoch**
+  — acks name their epoch, so nobody is on the keyed track for a frame format they
+  have not applied. The receiver reserves the strip (it is a zone: cut and drawn
+  as scene) only when its offer says `tilt`; `inZone()` reads `uTiltStrip`.
+* **Reading it.** The receiver samples the strip into a 32x1 canvas at the
+  cells' centres (`readTilt()`), only when the scene is about to be redrawn
+  (`sceneDue()`, at most 20 a second — never for a frame the scene would not
+  use). A frame that does not decode keeps the last turn for half a second, then
+  eases back to a still camera, so a composite passing through (keying held
+  back) never leaves a room frozen at an angle.
+* **Not measured:** the strip through a real encoder at starved bitrates. Cells
+  are 4–5 px wide on the smallest portrait frame; if a real call shows misreads,
+  the check rejects them (the room holds its last turn) and the fix is fewer,
+  wider cells.
+
 ## Switching backgrounds does not touch the wire
 
 This is the property the design exists to protect.
@@ -1221,11 +1302,13 @@ apps.
 | File | What it holds |
 |---|---|
 | `src/video-effects.js` | The whole pipeline, the shaders (generated from `gaussianHalfKernel`), the mode/strength/sharpness/accuracy/low-light/keyed storage, the picker and the controls under it; the keyed output (`keyedTrack()`, `setKeyedDemand()`, `keyedState()`) and the receiving end (`canKeyIn()`, `KeyInProcessor` behind `keyIn()`, the CPU-only `keyProbe()`) |
+| `src/device-tilt.js` | The phone's turn for the scene's camera: `deviceorientation` -> a rotation since a slowly following baseline -> yaw/pitch/roll, per camera and screen rotation |
 | `src/video-scenes.js` | The five animated scenes (one shader each), measuring how you are lit (`measureSubject()` / `lookFromStats()` / `easeLook()`), the async compile and the chip thumbnails |
 | `src/main.js` | `maybeApplyVideoEffects()`, `applyVideoBackground()`, `swapLocalVideoTrack()`, the unwrap in `stopStreamTracks()`, the effects branches in `flipCamera()` and `setLocalCameraSuspended()`, the tile button in `_buildVideoTile()`, and `positionVideoBackgroundPopover()` / `renderVideoBackgroundProgress()`. The keyed camera: `localCaps()`, `currentOffer()`, `keyedFor()`, `refreshKeyedSend()` and the reconcile behind `queueVideoSenderMutation()`, the receivers (`reconcileKeyedReceivers()`, `displayVideoStreamFor()`), `keyedStatus()`, and `keyedVideoBitrate()` |
 | `tests/e2e/unit-video-effects.spec.js` | Coverage, with inference stubbed via `window.__voxalSegStub` |
 | `tests/e2e/unit-video-scenes.spec.js` | The scenes: every one renders, moves only a little, mirrors to the light; the measurement; shadow, light wrap and motion through the real pipeline |
 | `tests/e2e/unit-video-keyed.spec.js` | The keyed frame, pixel for pixel, and every guard that withholds it |
 | `tests/e2e/unit-video-keyin.spec.js` | The receiving end: the round trip, detection, staying out of the user's own pipeline, and the codec round trips through VP8 (band colour error, starved markers, the switch) |
+| `tests/e2e/unit-background-tilt.spec.js` | The room turning with the phone: the strip codec, the view matrix, the sensor's algebra on synthetic events, the sender drawing the strip, a receiver reading it |
 | `tests/e2e/unit-video-keyed-wiring.spec.js` | `main.js`: the protocol, which peer gets which track, the receiver's lifecycle, `keyedStatus()` |
 | `tests/e2e/mesh-keyed.spec.js` | `@mesh`: four real peers, a green watchdog on every receiver through keying on, scene changes, blur, the setting, the camera and the host leaving |

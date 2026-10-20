@@ -199,6 +199,16 @@ CLAUDE.md describes the final shape of the phone stage chrome; this keeps the go
 - Two old tests used "narrow viewport" as a stand-in for "no stage"; when behaviour changes, check whether a test asserted mechanism or intent.
 - Test traps: `transition` on a panel makes `getComputedStyle` a race (poll: `pickSettled()` in `unit-video-mobile.spec.js`); when walking `document.styleSheets` test `rule.selectorText` before `cssRules` (nested CSS gives style rules an empty, truthy `cssRules`); `getComputedStyle(el,'::before').display` is `block` for a pseudo that doesn't exist → check `content`; a button pinned under the header is only caught by a **click** test.
 
+## Phone tilt (`device-tilt.js`, the tilt strip)
+
+- **Build a rotation matrix from `deviceorientation`; never use alpha/beta/gamma as the turn.** An upright phone (a selfie) is next to the Z-X'-Y'' singularity (beta ≈ 90°), where alpha and gamma swing while the pose barely moves. Decompose only the small *relative* turn (`Ry Rx Rz`) afterwards.
+- **Front camera: image-right is the screen's LEFT, forward is out of the screen.** The published frame is unmirrored (only the self-view is). Screen rotation (`screen.orientation.angle`) is a local `Rz(-a)` on the device frame. Camera change → new baseline.
+- **Scene shaders mirror the room for a light on the left by mirroring `p`** (`shade(p, m)`), so a view turn must be applied in screen space (`viewFwd`/`viewInv` un-mirror with `MIR`), or a right turn moves the room the wrong way on half the lights. Anything drawn in the picture's plane (countryside grass, chimney smoke) must follow `viewShift()` / `viewInv()` or it stays glued to the glass.
+- **The turn rides in the keyed frame (a luma strip), not a message**: messages between non-hosts ride the host (≤2 offers/s), and a frame carries its turn exactly in step with the person. The strip must be reserved by the receiver only when the *offer* says so, and the offer's `tilt` flipping is a **new epoch** — otherwise a receiver can be on the keyed track while the cells land as picture. A sender draws it only if every keyable peer has `keyed-tilt-1` (one picture for all).
+- **A sum check like `y + 3p + 5r` misses flips of any bit whose weight is a multiple of 64** (found by the test, not by thought). XOR the data's 6-bit groups instead: every single-cell flip changes it.
+- **iOS prompts for motion only from a user gesture**, long after the scene chip was tapped; `armTiltGesture()` asks on the first tap while the sensor is wanted but silent. A WebView that never delivers an event leaves `DeviceTilt.ready()` false and the app unchanged. `NSMotionUsageDescription` is in `Info.plist` (store build). Not yet checked on a real device.
+- Tests on this machine: `unit-video-keyed.spec.js` "a green subject withholds keying…" fails on a clean `main` too (`slow-copy`: this GPU's keyed copy is over its 4 ms budget); the scenes spec's afterEach can time out under 3 parallel workers and passes alone.
+
 ## Running Playwright in this container
 
 `/opt/pw-browsers` ships an older Chromium than the installed `@playwright/test` wants, and the download is proxy-blocked. Don't symlink; use a throwaway config (not committed) that pins the binary:
