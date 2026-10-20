@@ -225,6 +225,9 @@ var VideoEffects = (function () {
   // never darkens: a well-lit scene gets gain 1.0, which sets no filter at all
   // and therefore costs nothing.
   var LIGHT_ADAPT_KEY = 'light-adapt';
+  // Full HD capture (desktop only), absent = 720p. Read by main.js's capture
+  // constraints and bitrate cap; here because both documents render the toggle.
+  var FULLHD_KEY = 'video-resolution';
   // Phones only: turn an animated scene's camera with the phone. Absent is ON
   // (like light-adapt) — the effect is the point, and nothing about it leaves
   // the device unless the person also lets others draw their scene.
@@ -317,6 +320,12 @@ var VideoEffects = (function () {
   // segmentation and before the scene's redraw rate, on a device that cannot
   // keep up. A phone starts nearer to SCENE_LONG: it has less to spend.
   var SCENE_SCALE = IS_MOBILE ? [1.25, 1] : [1.5, 1];
+  var SCENE_SCALE_MAX = 2.25;   // 1152 long: what a 1920 picture asks for
+  function sceneScaleLadder(long) {
+    if (IS_MOBILE) return SCENE_SCALE.slice();
+    var top = Math.min(SCENE_SCALE_MAX, Math.max(SCENE_SCALE[0], 0.6 * long / SCENE_LONG));
+    return top > SCENE_SCALE[0] + 0.01 ? [top, SCENE_SCALE[0], 1] : SCENE_SCALE.slice();
+  }
   // How often the scene itself is redrawn. Its motion is slow by design, and a
   // background that changes on every frame is one the encoder pays for on every
   // frame — so it runs well under the camera's rate, and halves under load
@@ -710,6 +719,33 @@ var VideoEffects = (function () {
     // setting — get it without asking.
     try { return localStorage.getItem(LIGHT_ADAPT_KEY) !== 'off'; }
     catch (e) { return true; }
+  }
+
+  // Full HD: opt-in, off unless stored as 'fhd', and never on a phone (it
+  // captures smaller to save battery and data). A change is a new capture, so
+  // main.js owns what happens next (onFullHDChange); here is only the storage.
+  function readFullHD() {
+    if (IS_MOBILE) return false;
+    try { return localStorage.getItem(FULLHD_KEY) === 'fhd'; }
+    catch (e) { return false; }
+  }
+
+  function writeFullHD(on) {
+    on = !!on;
+    try {
+      if (on) localStorage.setItem(FULLHD_KEY, 'fhd');
+      else localStorage.removeItem(FULLHD_KEY);
+    } catch (e) { /* private mode — it still applies for this session */ }
+    return on;
+  }
+
+  var _onFullHD = null;
+  function onFullHDChange(fn) { _onFullHD = fn; }
+
+  function setFullHD(on) {
+    on = writeFullHD(on);
+    if (_onFullHD) { try { _onFullHD(on); } catch (e) { /* ignore */ } }
+    return on;
   }
 
   function readBackgroundTilt() {
@@ -2217,6 +2253,11 @@ var VideoEffects = (function () {
     var size = this.sizeFromTrack();
     this.canvas.width = size.w;
     this.canvas.height = size.h;
+    // The scene buffer's ladder follows the picture: about 0.6 of its long
+    // side at the top, so a Full HD camera gets a bigger buffer than a 720p
+    // one, then 1.5x and SCENE_LONG as the governor steps down. Only while
+    // nothing has been stepped (a rotation rebuilds this and must not forget).
+    if (!this.sceneScaleStep) this.sceneScaleSteps = sceneScaleLadder(Math.max(size.w, size.h));
 
     // Not desynchronized: the canvas is never in the DOM, so the low-latency
     // path has nothing to make faster, and the keyed copy (keyedTrack()) reads
@@ -5250,6 +5291,18 @@ var VideoEffects = (function () {
     });
   }
 
+  function renderFullHD(el, opts) {
+    opts = opts || {};
+    return renderToggle(el, {
+      id: opts.id,
+      label: opts.label || 'Full HD video',
+      title: opts.title,
+      read: readFullHD,
+      onChange: opts.onChange,
+      apply: setFullHD
+    });
+  }
+
   function renderLightAdapt(el, opts) {
     opts = opts || {};
     return renderToggle(el, {
@@ -5337,6 +5390,7 @@ var VideoEffects = (function () {
     QUALITY_DEFAULT: QUALITY_DEFAULT,
     QUALITIES: QUALITIES,
     LIGHT_ADAPT_KEY: LIGHT_ADAPT_KEY,
+    FULLHD_KEY: FULLHD_KEY,
     REFERENCE_KEY: REFERENCE_KEY,
     PRESETS: PRESETS,
     SEG_LONG: SEG_LONG,
@@ -5403,6 +5457,11 @@ var VideoEffects = (function () {
     setBackgroundTilt: setBackgroundTilt,
     onBackgroundTiltChange: onBackgroundTiltChange,
     renderBackgroundTilt: renderBackgroundTilt,
+    readFullHD: readFullHD,
+    writeFullHD: writeFullHD,
+    setFullHD: setFullHD,
+    onFullHDChange: onFullHDChange,
+    renderFullHD: renderFullHD,
     readLightAdapt: readLightAdapt,
     writeLightAdapt: writeLightAdapt,
     setLightAdapt: setLightAdapt,

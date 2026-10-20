@@ -1775,3 +1775,75 @@ test.describe('edge decontamination', () => {
     expect(seen.redOn).toBeLessThan(seen.redOff - 30);
   });
 });
+
+// Full HD: an opt-in, desktop-only capture size. The setting stores 'fhd' (and
+// nothing when off), moves the camera constraints and the bitrate cap, and
+// gives the scene a bigger buffer to start from.
+test.describe('full HD video', () => {
+  test('is off by default, stored as fhd, and moves the capture size and the bitrate cap', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const before = {
+        on: VideoEffects.readFullHD(), stored: localStorage.getItem(VideoEffects.FULLHD_KEY),
+        w: cameraCaptureCap().width.ideal, bps: cameraMaxBitrate(),
+      };
+      VideoEffects.writeFullHD(true);
+      const after = {
+        on: VideoEffects.readFullHD(), stored: localStorage.getItem(VideoEffects.FULLHD_KEY),
+        w: cameraCaptureCap().width.ideal, h: cameraCaptureCap().height.ideal, bps: cameraMaxBitrate(),
+      };
+      VideoEffects.writeFullHD(false);
+      return { before, after, off: localStorage.getItem(VideoEffects.FULLHD_KEY) };
+    });
+    expect(seen.before).toEqual({ on: false, stored: null, w: 1280, bps: 600000 });
+    expect(seen.after).toEqual({ on: true, stored: 'fhd', w: 1920, h: 1080, bps: 2500000 });
+    // Back off is an absence, like every other default here.
+    expect(seen.off).toBeNull();
+  });
+
+  test('the Video settings toggle stores it and restarts a running camera', async ({ page }) => {
+    await seedEffectsRoom(page);
+    await page.evaluate(async () => {
+      window.__gums = [];
+      const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = (c) => { window.__gums.push(c.video); return gum(c); };
+      await startVideoShare();
+    });
+    await page.click('#btn-open-settings');
+    await page.click('#modal-settings [data-target="settings-video"]');
+    const btn = page.locator('#settings-fullhd .toggle-btn');
+    await expect(btn).toHaveAttribute('aria-checked', 'false');
+    await btn.click();
+    await expect.poll(() => page.evaluate(() => window.__gums.length)).toBe(2);
+    const seen = await page.evaluate(() => ({
+      stored: localStorage.getItem(VideoEffects.FULLHD_KEY),
+      w: window.__gums[1].width.ideal,
+      live: localVideoActive,
+    }));
+    expect(seen).toEqual({ stored: 'fhd', w: 1920, live: true });
+  });
+
+  test('a Full HD picture starts the scene buffer larger, and steps down through the base', async ({ page }) => {
+    const seen = await page.evaluate(async () => {
+      const mk = (w, h) => {
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const ctx = c.getContext('2d');
+        let n = 0;
+        const paint = () => { ctx.fillStyle = '#666'; ctx.fillRect(0, 0, w, h); ctx.fillStyle = '#fff'; ctx.fillRect((n++ * 7) % w, 0, 2, 1); };
+        paint();
+        const s = c.captureStream(15);
+        const t = setInterval(paint, 66);
+        s.getVideoTracks()[0].addEventListener('ended', () => clearInterval(t));
+        return s;
+      };
+      await VideoEffects.wrap(mk(1920, 1080), 'blur');
+      const fhd = VideoEffects.active().sceneScaleSteps.slice();
+      VideoEffects.active().stop && VideoEffects.active().stop();
+      await VideoEffects.wrap(mk(1280, 720), 'blur');
+      const hd = VideoEffects.active().sceneScaleSteps.slice();
+      return { fhd, hd };
+    });
+    expect(seen.fhd).toEqual([2.25, 1.5, 1]);
+    expect(seen.hd).toEqual([1.5, 1]);
+  });
+});

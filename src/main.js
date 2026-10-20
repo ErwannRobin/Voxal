@@ -6760,6 +6760,7 @@ function tuneAudioSenders(pc) {
 var CAMERA_MAX_BITRATE = 600000;    // ~600 kbps per listener
 var CAMERA_MAX_BITRATE_MOBILE = 300000;
 var CAMERA_MAX_BITRATE_FRUGAL = 150000;  // save-data, or a 2g/3g link
+var CAMERA_MAX_BITRATE_FHD = 2500000;    // Full HD (Settings → Video), desktop only
 var SCREEN_MAX_BITRATE = 1500000;   // screens need more; text must stay legible
 
 // A phone uploads one encode per listener over a metered link, so it gets a
@@ -6769,7 +6770,7 @@ var SCREEN_MAX_BITRATE = 1500000;   // screens need more; text must stay legible
 // Safari) has no Network Information API at all. Its ABSENCE must therefore
 // fall through to the plain mobile cap, never to the desktop one.
 function cameraMaxBitrate() {
-  if (!IS_MOBILE_DEVICE) return CAMERA_MAX_BITRATE;
+  if (!IS_MOBILE_DEVICE) return fullHDVideo() ? CAMERA_MAX_BITRATE_FHD : CAMERA_MAX_BITRATE;
   var conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
   if (conn) {
     if (conn.saveData) return CAMERA_MAX_BITRATE_FRUGAL;
@@ -9805,6 +9806,8 @@ var VIDEO_DETECTION_QUALITY_KEY =
   (typeof VideoEffects === 'undefined') ? null : VideoEffects.QUALITY_KEY;
 var VIDEO_LIGHT_ADAPT_KEY =
   (typeof VideoEffects === 'undefined') ? null : VideoEffects.LIGHT_ADAPT_KEY;
+var VIDEO_FULLHD_KEY =
+  (typeof VideoEffects === 'undefined') ? null : (VideoEffects.FULLHD_KEY || null);
 var VIDEO_REFERENCE_KEY =
   (typeof VideoEffects === 'undefined') ? null : VideoEffects.REFERENCE_KEY;
 // "Let others draw my scene" — and the capability token a receiver advertises
@@ -9933,8 +9936,37 @@ var CAMERA_CAPTURE_CAP_MOBILE = {
   frameRate: { ideal: 24,  max: 24  }
 };
 
+// Full HD is opt-in (Settings → Video) and desktop only. Same `ideal`/`max`
+// rule as the others: the OS stays free to pick its native profile.
+var CAMERA_CAPTURE_CAP_FHD = {
+  width:     { ideal: 1920, max: 1920 },
+  height:    { ideal: 1080, max: 1080 },
+  frameRate: { ideal: 30,   max: 30   }
+};
+
+function fullHDVideo() {
+  return !IS_MOBILE_DEVICE && typeof VideoEffects !== 'undefined' &&
+    typeof VideoEffects.readFullHD === 'function' && VideoEffects.readFullHD();
+}
+
 function cameraCaptureCap() {
-  return IS_MOBILE_DEVICE ? CAMERA_CAPTURE_CAP_MOBILE : CAMERA_CAPTURE_CAP;
+  if (IS_MOBILE_DEVICE) return CAMERA_CAPTURE_CAP_MOBILE;
+  return fullHDVideo() ? CAMERA_CAPTURE_CAP_FHD : CAMERA_CAPTURE_CAP;
+}
+
+// A new capture size is a new capture: switch the camera off and on again, the
+// way a user would. Not replaceTrack — the effect canvas is sized once from the
+// camera (see Processor.initGL), so the pipeline has to be rebuilt anyway.
+var _fullHDRestarting = false;
+async function onFullHDChanged() {
+  if (_fullHDRestarting || !localVideoActive) return;
+  _fullHDRestarting = true;
+  try {
+    stopVideoShare();
+    await startVideoShare();
+  } finally {
+    _fullHDRestarting = false;
+  }
 }
 
 // Which way the phone's camera is pointing. Session state, never persisted —
@@ -14054,6 +14086,7 @@ var _videoBgStrength = null;
 var _videoBgSharpness = null;
 var _videoBgQuality = null;
 var _videoBgLight = null;
+var _videoFullHD = null;
 var _videoBgReference = null;
 var _videoBgSubjectOnly = null;
 
@@ -14563,6 +14596,17 @@ function initVideoBackgroundUI() {
     document.getElementById('settings-light-adapt'),
     { id: 'btn-light-adapt', label: 'Adapt to low light',
       title: 'Brighten the detector\'s copy of the picture in a dim room' });
+  // Full HD: desktop only, so the row stays hidden everywhere else. A change
+  // is a new capture (onFullHDChanged), not a uniform.
+  if (!IS_MOBILE_DEVICE && keyedApi('renderFullHD')) {
+    _videoFullHD = VideoEffects.renderFullHD(
+      document.getElementById('settings-fullhd'),
+      { id: 'btn-fullhd', label: 'Full HD video',
+        title: 'Capture, draw and send your camera at 1080p' });
+    var fhdCard = document.getElementById('settings-fullhd-card');
+    if (fhdCard) fhdCard.classList.remove('hidden');
+    VideoEffects.onFullHDChange(onFullHDChanged);
+  }
   _videoBgReference = VideoEffects.renderReference(
     document.getElementById('settings-bg-reference'),
     { id: 'btn-bg-reference', label: 'Fixed camera',
@@ -20377,8 +20421,15 @@ window.addEventListener('DOMContentLoaded', function() {
                           NETWORK_USAGE_REQUEST_KEY, VIDEO_BACKGROUND_STORAGE_KEY,
                           VIDEO_BLUR_STRENGTH_KEY, VIDEO_EDGE_SHARPNESS_KEY,
                           VIDEO_DETECTION_QUALITY_KEY, VIDEO_LIGHT_ADAPT_KEY,
-                          VIDEO_REFERENCE_KEY, VIDEO_SUBJECT_ONLY_KEY];
+                          VIDEO_REFERENCE_KEY, VIDEO_SUBJECT_ONLY_KEY, VIDEO_FULLHD_KEY];
     if (relevantKeys.indexOf(e.key) === -1) return;
+    if (e.key === VIDEO_FULLHD_KEY) {
+      // Full HD, flipped in the preferences window: a new capture size, which
+      // only this window (it holds the camera) can do.
+      if (_videoFullHD) _videoFullHD.sync();
+      onFullHDChanged();
+      return;
+    }
     if (e.key === VIDEO_SUBJECT_ONLY_KEY) {
       // "Let others draw my scene", flipped in the preferences window, which
       // holds no calls. Which peer is sent which track is decided here — per

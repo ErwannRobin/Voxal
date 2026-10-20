@@ -303,6 +303,19 @@
             and it costs their device some work. Has no effect with blur or your own
             image, or when video goes through the relay.
           </p>
+          <div id="settings-fullhd-card">
+            <div class="settings-field settings-inline-toggle" style="margin-top:12px">
+              <label for="btn-fullhd" style="flex:1">Full HD video</label>
+              <div id="settings-fullhd"></div>
+            </div>
+            <p class="settings-hint">
+              Captures your camera at 1080p, draws the background at that size and
+              sends it that way: sharper for you and for everyone you call, at the
+              price of more work on this computer and about four times the upload
+              per person. Restarts your camera when switched. A computer that cannot
+              keep up is stepped down on its own.
+            </p>
+          </div>
           <div class="settings-device-head" style="margin-top:12px">
             <label id="settings-blur-strength-label">Blur strength</label>
           </div>
@@ -1487,6 +1500,13 @@
         });
         var bgQuality = VideoEffects.renderQuality($id('settings-detection-quality'), {
           onChange: function(q) { VideoEffects.writeQuality(q); }
+        });
+        // Full HD: stored here; the main window holds the camera and restarts it.
+        VideoEffects.renderFullHD($id('settings-fullhd'), {
+          id: 'btn-fullhd',
+          label: 'Full HD video',
+          title: 'Capture, draw and send your camera at 1080p',
+          onChange: function(on) { VideoEffects.writeFullHD(on); }
         });
         var bgLight = VideoEffects.renderLightAdapt($id('settings-light-adapt'), {
           id: 'btn-light-adapt',

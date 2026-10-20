@@ -752,6 +752,18 @@ redraw rate, then it gives up. The ladder belongs to the processor, so picking
 another scene does not undo a step that the device has already shown it needs.
 A keyed receiver draws at scale 1: it shares its GPU with every other peer.
 
+**Full HD** (Settings → Video → *Full HD video*, desktop only, off by default,
+`video-resolution` = `fhd`). The effect canvas is the camera's size, so a Full
+HD picture starts with the capture: `cameraCaptureCap()` asks for 1920x1080 and
+`cameraMaxBitrate()` lifts the per-listener cap to 2.5 Mbps (the room-size
+`scaleResolutionDownBy` still applies on top). The scene ladder follows the
+picture (`sceneScaleLadder()`): about 0.6 of its long side at the top, so
+`[2.25, 1.5, 1]` for 1920 (1152 long, before a scene's `res`) and `[1.5, 1]`
+for 1280, stepped down by the same governor. Switching it restarts a running
+camera: the canvas is sized once from the capture (`initGL()`), so there is no
+live swap. It is the dearest setting on the page: segmentation, the scene and
+the encoder all work on 2.25x the pixels.
+
 ### Cost, and the step-down
 
 The scene is drawn into a buffer of at most 512 on its long side (384 on mobile;
