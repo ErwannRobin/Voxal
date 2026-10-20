@@ -786,7 +786,7 @@ against a real webcam in a real room.
 
 ## Keyed sending and receiving
 
-**Let others draw my scene** (`send-subject-only`, off unless chosen). A scene is
+**Let others draw my scene** (`send-subject-only`, on unless switched off). A scene is
 generated from a handful of numbers, so it does not have to cross the network at
 all. With a scene picked and this setting on, a peer whose device can draw the
 scene is sent a picture of you over flat key green instead of the finished

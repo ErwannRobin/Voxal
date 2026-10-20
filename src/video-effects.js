@@ -327,9 +327,11 @@ var VideoEffects = (function () {
   // takes fewer bits; the scene is generated from a few numbers, so nothing of
   // it has to cross the network at all.
   //
-  // The off position stores nothing — absent is OFF, the opposite polarity of
-  // light-adapt and bg-reference — because this one changes what other
-  // people's devices do, and nobody should find it on without having asked.
+  // On unless switched off — absent is ON, the polarity of light-adapt and
+  // bg-reference ('on', written by the build that made this an opt-in, still
+  // reads as on). It only does anything for a person who picked an animated
+  // scene, and only with a mesh peer that advertised the capability and
+  // acked, so on by default costs nobody who has not asked for a scene.
   var SUBJECT_ONLY_KEY = 'send-subject-only';
   // What a peer advertises when it can receive a keyed stream.
   var KEYED_CAP = 'keyed-video-1';
@@ -757,15 +759,15 @@ var VideoEffects = (function () {
   // --- the keyed stream: the preference -------------------------------------
 
   function readSubjectOnly() {
-    try { return localStorage.getItem(SUBJECT_ONLY_KEY) === 'on'; }
-    catch (e) { return false; }
+    try { return localStorage.getItem(SUBJECT_ONLY_KEY) !== 'off'; }
+    catch (e) { return true; }
   }
 
   function writeSubjectOnly(on) {
     on = !!on;
     try {
-      if (on) localStorage.setItem(SUBJECT_ONLY_KEY, 'on');
-      else localStorage.removeItem(SUBJECT_ONLY_KEY);
+      if (on) localStorage.removeItem(SUBJECT_ONLY_KEY);
+      else localStorage.setItem(SUBJECT_ONLY_KEY, 'off');
     } catch (e) { /* private mode — it still applies for this session */ }
     return on;
   }

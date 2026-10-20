@@ -8876,6 +8876,12 @@ function _refreshDeviceInfoPopover() {
     collectDeviceInfo().then(function(info) {
       if (_deviceInfoPeerId !== 'self') return;
       _renderDeviceInfo(body, info, _aggregateLinkStats());
+      var ks = keyedStatus();
+      var kw = document.createElement('div');
+      kw.appendChild(_diSection('🎬', 'Drawn scene'));
+      kw.appendChild(_diRow('Let others draw my scene', ks.state === 'off' ? 'Off' : 'On'));
+      kw.appendChild(_diRow('Status', ks.state === 'off' ? null : (keyedStatusText(ks) || null)));
+      body.appendChild(kw);
     });
     return;
   }
@@ -8904,8 +8910,54 @@ function _refreshDeviceInfoPopover() {
     body.appendChild(el);
   }
 
+  body.appendChild(_buildKeyedSection(_deviceInfoPeerId));
   body.appendChild(_buildAudioCheckSection(_deviceInfoPeerId));
   body.appendChild(_buildRemoteLogSection(_deviceInfoPeerId));
+}
+
+// "Let others draw my scene", as it stands with ONE peer: what our camera sends
+// them, and what theirs does here. Read live from the same state the tracks are
+// chosen by (keyedFor(), _keyedReceivers), so it can say why a peer is still on
+// the plain composite.
+function _keyedSendingState(peerId) {
+  if (!keyedSubjectOnlyOn()) return 'Off (setting)';
+  if (!localVideoActive || !localVideoStream) return 'Camera off';
+  if (videoBackgroundMode().indexOf('preset:') !== 0 || !localVideoStream._effectsProcessor) {
+    return 'Composite (no animated scene)';
+  }
+  var t = _localVideoTopology.video;
+  if (t && t.mode === 'sfu') return 'Composite (video goes through the relay)';
+  if (!peerSupports(peerId, KEYED_VIDEO_CAP)) return 'Composite (their app cannot draw scenes)';
+  if (!keyedRelayCapable(peerId)) return 'Composite (their connection cannot)';
+  if (keyedFor(peerId)) return 'Scene drawn on their device';
+  return 'Composite (waiting for their device to confirm)';
+}
+
+function _keyedReceivingState(peerId) {
+  var conn = connections.get(peerId);
+  var entry = _keyedReceivers.get(peerId);
+  if (entry) {
+    if (entry.gaveUp) return 'Gave up (' + entry.gaveUp + ')';
+    if (entry.state === 'ready') {
+      var st = _keyedStageShape.get(peerId);
+      return 'Drawing their scene here' + (st && st.want ? ' · filling the tile (' + st.want.toFixed(2) + ')' : '');
+    }
+    return entry.state === 'closing' ? 'Going back to their composite' : 'Starting';
+  }
+  if (conn && conn.keyedOffer && conn.keyedOffer.scene) return 'Offered, not drawing (' + (keyedReceiveEligible(peerId, conn) ? 'waiting' : 'not eligible here') + ')';
+  return conn && conn.videoActive ? 'Plain picture' : 'No camera';
+}
+
+function _buildKeyedSection(peerId) {
+  var wrap = document.createElement('div');
+  wrap.appendChild(_diSection('🎬', 'Drawn scene'));
+  var conn = connections.get(peerId);
+  wrap.appendChild(_diRow('Their app', peerSupports(peerId, KEYED_VIDEO_CAP) ? 'Can draw scenes' : 'Cannot draw scenes'));
+  wrap.appendChild(_diRow('Your camera → them', _keyedSendingState(peerId)));
+  wrap.appendChild(_diRow('Their camera → you', _keyedReceivingState(peerId)));
+  var offer = conn && conn.keyedOffer;
+  wrap.appendChild(_diRow('Their scene', offer && offer.scene ? offer.scene : null));
+  return wrap;
 }
 
 // "Can you hear me?" — the one thing local stats can never answer.

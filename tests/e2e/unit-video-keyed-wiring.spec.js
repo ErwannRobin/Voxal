@@ -60,10 +60,10 @@ async function installKeyedContract(page) {
       const KEY = 'send-subject-only';
       let hook = null;
       ve.SUBJECT_ONLY_KEY = KEY;
-      ve.readSubjectOnly = () => { try { return localStorage.getItem(KEY) === 'on'; } catch (e) { return false; } };
+      ve.readSubjectOnly = () => { try { return localStorage.getItem(KEY) !== 'off'; } catch (e) { return true; } };
       ve.writeSubjectOnly = (on) => {
         on = !!on;
-        if (on) localStorage.setItem(KEY, 'on'); else localStorage.removeItem(KEY);
+        if (on) localStorage.removeItem(KEY); else localStorage.setItem(KEY, 'off');
         return on;
       };
       ve.onSubjectOnlyChange = (fn) => { hook = fn; };
@@ -197,7 +197,8 @@ async function seedSender(page, opts = {}) {
   });
   await page.evaluate(async ({ peers, subjectOnly, mode }) => {
     localStorage.setItem('video-routing-mode', 'p2p-only');
-    if (subjectOnly !== false) localStorage.setItem(VideoEffects.SUBJECT_ONLY_KEY, 'on');
+    if (subjectOnly === false) localStorage.setItem(VideoEffects.SUBJECT_ONLY_KEY, 'off');
+    else localStorage.removeItem(VideoEffects.SUBJECT_ONLY_KEY);
     VideoEffects.writeMode(mode || 'preset:office');
     window.__sent = [];
     window.__swapLog = [];
@@ -291,23 +292,23 @@ const offersSent = (page) => page.evaluate(() =>
   window.__sent.filter((s) => s.msg.type === 'video-keyed').map((s) => ({ to: s.to, offer: s.msg.offer })));
 
 test.describe('the setting', () => {
-  test('is off by default, and the switch stores only "on"', async ({ page }) => {
+  test('is on by default, and the switch stores only "off"', async ({ page }) => {
     expect(await page.evaluate(() => [VideoEffects.readSubjectOnly(), localStorage.getItem(VideoEffects.SUBJECT_ONLY_KEY)]))
-      .toEqual([false, null]);
+      .toEqual([true, null]);
     await page.click('#btn-open-settings');
     await page.click('#modal-settings [data-target="settings-video"]');
     const btn = page.locator('#settings-subject-only .toggle-btn');
-    await expect(btn).toHaveAttribute('aria-checked', 'false');
+    await expect(btn).toHaveAttribute('aria-checked', 'true');
     await expect(page.locator('label[for="btn-subject-only"]')).toHaveText('Let others draw my scene');
-    await btn.click();
-    expect(await page.evaluate(() => [VideoEffects.readSubjectOnly(), localStorage.getItem(VideoEffects.SUBJECT_ONLY_KEY)]))
-      .toEqual([true, 'on']);
-    // Switched on outside a call, the line under it says why it is idle.
+    // On outside a call, the line under it says why it is idle.
     await expect(page.locator('#settings-subject-only-status')).toHaveText('Not in use: your camera is off');
     await btn.click();
     expect(await page.evaluate(() => [VideoEffects.readSubjectOnly(), localStorage.getItem(VideoEffects.SUBJECT_ONLY_KEY)]))
-      .toEqual([false, null]);
+      .toEqual([false, 'off']);
     await expect(page.locator('#settings-subject-only-status')).toBeHidden();
+    await btn.click();
+    expect(await page.evaluate(() => [VideoEffects.readSubjectOnly(), localStorage.getItem(VideoEffects.SUBJECT_ONLY_KEY)]))
+      .toEqual([true, null]);
   });
 
   test('both settings pages carry the switch, under the picker, with the same ids and hint', async ({ page }) => {
@@ -334,16 +335,16 @@ test.describe('the setting', () => {
     await page.goto('/settings.html');
     await page.click('.prefs-nav-btn[data-target="settings-video"]');
     const btn = page.locator('#settings-subject-only .toggle-btn');
-    await expect(btn).toHaveAttribute('aria-checked', 'false');
+    await expect(btn).toHaveAttribute('aria-checked', 'true');
     await btn.click();
-    expect(await page.evaluate(() => localStorage.getItem(VideoEffects.SUBJECT_ONLY_KEY))).toBe('on');
+    expect(await page.evaluate(() => localStorage.getItem(VideoEffects.SUBJECT_ONLY_KEY))).toBe('off');
     // It only stores: no status line here, the main window holds the calls.
     expect(await page.locator('#settings-subject-only-status').count()).toBe(0);
     await page.evaluate(() => {
       localStorage.removeItem(VideoEffects.SUBJECT_ONLY_KEY);
       window.dispatchEvent(new StorageEvent('storage', { key: VideoEffects.SUBJECT_ONLY_KEY, newValue: null }));
     });
-    await expect(btn).toHaveAttribute('aria-checked', 'false');
+    await expect(btn).toHaveAttribute('aria-checked', 'true');
   });
 
   test('flipped in the preferences window, it re-runs the senders, never applyVideoBackground', async ({ page }) => {
@@ -354,8 +355,8 @@ test.describe('the setting', () => {
       window.__bgApplied = 0;
       window.applyVideoBackground = () => { window.__bgApplied++; };
       window.__swapLog = [];
-      localStorage.removeItem(VideoEffects.SUBJECT_ONLY_KEY);
-      window.dispatchEvent(new StorageEvent('storage', { key: VideoEffects.SUBJECT_ONLY_KEY, newValue: null }));
+      localStorage.setItem(VideoEffects.SUBJECT_ONLY_KEY, 'off');
+      window.dispatchEvent(new StorageEvent('storage', { key: VideoEffects.SUBJECT_ONLY_KEY, newValue: 'off' }));
     });
     await page.evaluate(() => window.__flush());
     expect(await senderTracks(page)).toEqual({ p1: 'composite', p2: 'composite' });
@@ -1276,12 +1277,34 @@ test.describe('drawing a sender\'s scene', () => {
   });
 });
 
+test.describe('the device-info popover', () => {
+  test('carries a Drawn scene section that says what each direction is doing', async ({ page }) => {
+    await seedSender(page);
+    await ack(page, 'p1');
+    const rows = await page.evaluate(() => {
+      const read = (id) => Array.from(_buildKeyedSection(id).querySelectorAll('.di-row'))
+        .map((r) => [r.children[0].textContent, r.children[1].textContent]);
+      const on = read('p1');
+      const waiting = read('p2');
+      localStorage.setItem(VideoEffects.SUBJECT_ONLY_KEY, 'off');
+      return { on, waiting, off: read('p1') };
+    });
+    const send = (r) => r.find((x) => x[0] === 'Your camera → them')[1];
+    expect(send(rows.on)).toBe('Scene drawn on their device');
+    expect(send(rows.waiting)).toMatch(/^Composite/);
+    expect(send(rows.off)).toBe('Off (setting)');
+  });
+});
+
 test.describe('keyedStatus()', () => {
   test('says why it is idle, and how many people it is in use for', async ({ page }) => {
-    const off = await page.evaluate(() => keyedStatus());
+    const off = await page.evaluate(() => {
+      localStorage.setItem(VideoEffects.SUBJECT_ONLY_KEY, 'off');
+      return keyedStatus();
+    });
     expect(off).toEqual({ state: 'off' });
     expect(await page.evaluate(() => {
-      localStorage.setItem(VideoEffects.SUBJECT_ONLY_KEY, 'on');
+      localStorage.removeItem(VideoEffects.SUBJECT_ONLY_KEY);
       return keyedStatus();
     })).toEqual({ state: 'inactive', reason: 'not-sharing' });
 
