@@ -496,12 +496,14 @@ test.describe('the receiver', () => {
   });
 
   test('a strip that stops decoding eases the scene back to a still camera', async ({ page }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(150_000);
     await startReceiver(page, { tilt: true, view: { yaw: 0.2, pitch: 0, roll: 0 } });
     const seen = await page.evaluate(async () => {
       await window.__waitFor(() => window.__p.view, 8000);
       window.__strip = null;                  // no cells at all: key green where they were
-      const gone = await window.__waitFor(() => window.__p.view === null, 25_000);
+      // The ease is per redraw (x0.85, ~47 of them), and software GL redraws a
+      // scene a couple of times a second, so it takes ~24 s here and more on CI.
+      const gone = await window.__waitFor(() => window.__p.view === null, 80_000);
       return { gone };
     });
     expect(seen.gone).toBe(true);
