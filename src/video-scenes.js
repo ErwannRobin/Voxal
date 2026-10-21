@@ -85,6 +85,8 @@ var VideoScenes = (function () {
       swatch: 'linear-gradient(180deg,#7fb2df 0%,#cfe6ef 48%,#3fa3a6 52%,#e9dcbc 100%)' },
     { id: 'cybercafe', label: 'Cyber café', shadow: 0.45, wrap: 0.42, res: 1.0, hz: [15, 8],
       swatch: 'linear-gradient(120deg,#2a1714 0%,#5a2a3c 50%,#1d3550 100%)' },
+    { id: 'penthouse', label: 'Neon Rain Penthouse', shadow: 0.38, wrap: 0.48, res: 0.90, hz: [12, 6],
+      swatch: 'linear-gradient(135deg,#080d22 0%,#20214c 42%,#00d9e8 68%,#f33caa 100%)' },
     { id: 'mountain', label: 'Mountain', shadow: 0, wrap: 0.28, res: 0.70, hz: [10, 5],
       swatch: 'linear-gradient(180deg,#8fb4d9 0%,#e6eef5 45%,#5f7387 70%,#2f4a35 100%)' },
     { id: 'countryside', label: 'Countryside', shadow: 0, wrap: 0.28, res: 0.80, hz: [10, 5],
@@ -2059,6 +2061,20 @@ vec4 scene(vec2 p, out vec3 emit) {
   // the slopes. Nearby, pines on the banks are real objects with a lit side and a
   // shaded one. Nothing here is near enough to take your shadow. In a dim room it
   // is the blue hour.
+  // A first penthouse variant reuses the established ray-march path and its
+  // camera/light integration, while widening the wet city view and shifting the
+  // room from warm brick toward dark glass-and-metal with cyan/magenta spill.
+  // Keeping this in the same shader pipeline avoids a second WebGL context and
+  // preserves the existing cross-platform compositor.
+  var PENTHOUSE = CAFE
+    .replace('const float WX0 = 0.62, WX1 = 2.7, WY0 = -0.12, WY1 = 1.08;', 'const float WX0 = -2.72, WX1 = 2.72, WY0 = -0.62, WY1 = 1.12;')
+    .replace('vec3(0.40, 0.18, 0.12), vec3(0.58, 0.32, 0.21)', 'vec3(0.035, 0.055, 0.105), vec3(0.085, 0.105, 0.17)')
+    .replace('vec3(0.36, 0.33, 0.30)', 'vec3(0.035, 0.045, 0.075)')
+    .replace('vec3(1.0, 0.68, 0.36)', 'vec3(0.20, 0.72, 1.0)')
+    .replace('vec3(1.0, 0.62, 0.30)', 'vec3(1.0, 0.20, 0.62)')
+    .replace('vec3(1.0, 0.28, 0.58)', 'vec3(1.0, 0.10, 0.48)')
+    .replace('vec3(0.28, 0.86, 1.0)', 'vec3(0.08, 0.88, 1.0)');
+
   var MOUNTAIN = `
 // Units are kilometres, +x toward the key light, the camera looks down -z from
 // a bank a few metres above a lake whose surface is y = 0.
@@ -2917,7 +2933,7 @@ vec4 scene(vec2 p, out vec3 emit) {
 `;
 
   var SOURCES = {
-    office: OFFICE, island: ISLAND, cybercafe: CAFE, mountain: MOUNTAIN, countryside: COUNTRYSIDE
+    office: OFFICE, island: ISLAND, cybercafe: CAFE, penthouse: PENTHOUSE, mountain: MOUNTAIN, countryside: COUNTRYSIDE
   };
 
   // The common entry point. scene() is authored with the key light on the
