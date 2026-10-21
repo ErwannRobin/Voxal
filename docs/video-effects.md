@@ -1,7 +1,7 @@
 # Camera background effects (blur & virtual backgrounds)
 
-Voxal can blur what is behind you, or replace it with one of five animated
-scenes or an image of your own. This document covers how the pipeline is built,
+Voxal can blur what is behind you, or replace it with one of six animated
+scenes (including the experimental Neon Rain Penthouse) or an image of your own. This document covers how the pipeline is built,
 why it is built that way, where the assets come from, and what happens on a
 device that cannot keep up. The scenes have [their own section](#animated-scenes).
 
