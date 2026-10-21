@@ -481,7 +481,7 @@ costs a sharper halo, not a broken picture.
 ## Animated scenes
 
 The presets are not pictures, and they are not layered drawings either. **Office**,
-**Island**, **Cyber café**, **Mountain** and **Countryside** are each one fragment
+**Island**, **Cyber café**, **Mountain**, **Countryside** and **Neon rain** are each one fragment
 shader in `src/video-scenes.js` that renders a small **3D world** from a pinhole
 camera, lit the way a camera would see it: a sun and a sky from a single-
 scattering atmosphere, ray-marched cumulus, haze that thickens with distance,
@@ -498,7 +498,64 @@ never can be.
 | Island | A lagoon at eye height: Fresnel sea, turquoise shallows with **caustics**, a reef with surf, glitter, wet sand that mirrors the sky, a 3D **coconut palm** lit through its leaves, an islet, a sail, gulls | cumulus, the swell, the shore lapping, the palm | lightly — the sand |
 | Cyber café | A brick wall that is a *height field* (so a lamp or neon skimming it picks out every course), pendant lamps, neon, laptops, a mug with steam, jars on a shelf, and a **wet street window** where each drop is a lens | the neon breathing, code scrolling, drops sliding, steam | yes — the brick wall |
 | Mountain | An alpine lake: a **ray-marched range** (snow, strata, forest, haze), a **mirror lake** that reflects it all, mist, pines you could walk around | cirrus and the shade of clouds on the slopes, mist, ripples | no — everything is far away |
+| Neon rain | A double-height penthouse over a **stormy night city seen from above**: a glass wall with slim posts, a low sofa with underglow, a smoked-glass table, an arc lamp, **polished floor that mirrors the strips and the city**, cyan cove and magenta side strips. The city is **geometry** (a grid of blocks walked by each ray), the glass is wet (lens drops, runnels), rain falls in three depths and a far flash lights the clouds | rain and drops, the odd window changing, traffic on the streets and in the air, mist banks, beacons, the strips breathing, a flash every so often | yes — the room |
 | Countryside | Rolling farmland: a Voronoi **patchwork of fields**, hedgerows, a lane to a farm, an oak (a signed-distance tree, lit through its leaves), sheep, long grass and flowers | wind over the wheat, **cloud shadows** crossing the hills, the grass | no |
+
+### Neon rain
+
+Why it is the way it is, so the next scene does not have to rediscover it.
+
+**The city is a grid, not a picture.** Each ray walks the cells of a 46 m grid
+(DDA, at most 56 cells, 30 for a reflection) and meets a box per cell (a smaller
+one on top of the tall ones), with a height from a hash and a cluster noise. That
+gives roofs seen from above, towers that rise past the horizon, and parallax when
+the camera turns (the phone's tilt, the mouse orbit, a keyed receiver's strip all
+work without the scene knowing). Windows, banners, screens, roof lines and
+beacons are a function of the hit point; streets are a function of the ground
+point. A *2.5D stack of cards* was rejected: no roofs, no parallax, a repeat the
+eye finds in a second.
+
+**Composition is for a person in front of it.** Straight ahead is a *corridor* of
+low blocks and mist (`corridor` in `building()`), the towers are on the sides, the
+glass posts stand at ±1.85 m (never behind a head), no runnel runs down the middle,
+and on top of that the city thins into mist around the subject (`calm`, from
+`uSubject`, which a keyed receiver also has). The test pins the three of them.
+
+**Windows must stop being windows before they alias.** A window the size of a
+pixel is a different value in every redraw, and the resolve (see *Sharp at the
+size it is shown*) reads that as movement: a frozen room cost 1,716 kb/s at a
+fixed quantizer, against 676 for the café. The fix is the footprint: a window's
+edge is as soft as a pixel is big (`ew`), and past ~2 pixels per window it becomes
+*how many are lit, in their average colour* (`fade`, `plA`) — never "this cell's
+own lit-or-not", which paints blocks the size of a window. Frozen cost came to
+831 kb/s, with the near towers as sharp as before.
+
+**Bloom, as a catalogue property.** There was no bloom. A separate pass would have
+meant another full-size buffer per redraw and its own history; instead the
+resolve reads the *coarse mip levels the pipeline already builds for the light
+wrap* (`textureLod` 2, 3.2 and 4.4 of the redraw), adds them in light with a small
+energy trade (`1 − 0.4·k`), and adds the result to every look *before* the looks
+are compared, so a halo that holds still is as still as the picture. It is one
+uniform (`uBloom`, from `bloom` in the catalogue; 0 means the shader is exactly
+what it was). Cost: three more texture reads per output pixel, and about 3 ms on
+the software GL of this machine (74 → 77 ms a redraw). Not a threshold bloom: with
+no threshold a lamp in a dark room gets a halo and a lit wall only a little
+brighter, which is what this scene wants and what a night scene always wants.
+
+**Hybrid, as it is.** Near geometry (sofa, table, lamp: signed-distance fields
+inside bounding boxes, so the march costs nothing where they are not), the city
+(DDA over boxes), the sky (a cheap domain-warped cloud sheet), the glass (a few
+procedural lens layers) and the floor (an analytic mirror of the strips, a march
+for the objects, and *one* look at the city for either the glass or the floor's
+reflection, so the DDA is in the shader once). Three.js was weighed and not
+taken: a second GL context (the browser kills the oldest past 16), no relight by
+the subject, no keyed receiver, a dependency, and nothing it does here that the
+resolve does not.
+
+**Rain is a bit rate.** Streaks are sparse and as long as a redraw's fall, the
+sliding drops move in bursts a few pixels a second, and the beads hold still;
+without rain the scene costs ~40% less to encode, which is the order of what
+rain is worth.
 
 ### How a scene is built
 
@@ -565,7 +622,12 @@ the mirror) and `--person`, which draws a stand-in head and shoulders over the
 middle of the frame — where a composition is actually judged. `--raw` shows one
 redraw stretched instead (what shows if the resolve cannot compile),
 `--resolve '{...}'` tries other resolve settings, and `--alpha` shows the
-nearness channel instead of the colour. `--bits` also says what each scene costs
+nearness channel instead of the colour. `--nobloom` shows a scene without its
+bloom, `--scenes copy.js` draws from a copy of `video-scenes.js` (to try a
+change, or to switch one layer off and see what it costs), and every picture
+prints its mean luma, the share of crushed and clipped pixels, a 6 × 3 grid of
+means and how much detail it holds, so a change that made it dark is a number as
+well as a picture. `--view` takes any of `yaw`, `pitch`, `roll` (the others are 0). `--bits` also says what each scene costs
 a video encoder, and `--still` holds the clock while it does, so what is left is
 what the redraws themselves change. See the header of `scripts/scene-preview.mjs`.
 
@@ -802,7 +864,7 @@ freeze the call's video.
 
 Each chip shows a gradient swatch (`swatch` in the catalogue) at once, then a
 **thumbnail rendered from the scene's own shader** at the moment the live scene
-starts from (`THUMB_TIME`), so the chip is the picture you get. All five render
+starts from (`THUMB_TIME`), so the chip is the picture you get. All six render
 in one small offscreen WebGL2 context that is released as soon as they are done,
 and only once the chip row is actually on screen (an `IntersectionObserver`):
 every page renders its pickers at load, inside a popover or a settings card that

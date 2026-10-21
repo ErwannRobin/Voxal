@@ -158,7 +158,7 @@ test.describe('the picker', () => {
         .map((c) => c.dataset.mode));
     expect(modes).toEqual([
       'off', 'blur', 'preset:office', 'preset:island', 'preset:cybercafe', 'preset:mountain',
-      'preset:countryside', 'custom',
+      'preset:countryside', 'preset:penthouse', 'custom',
     ]);
   });
 
@@ -292,7 +292,7 @@ test.describe('turning the effect on and off mid-call', () => {
       await applyVideoBackground('blur');
       const track = localVideoStream.getVideoTracks()[0];
       window.__swaps = [];
-      for (const id of ['office', 'island', 'cybercafe', 'mountain', 'countryside']) {
+      for (const id of ['office', 'island', 'cybercafe', 'mountain', 'countryside', 'penthouse']) {
         await applyVideoBackground('preset:' + id);
       }
       await applyVideoBackground('blur');

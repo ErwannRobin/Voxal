@@ -8,7 +8,7 @@ import { test, expect } from './fixtures.js';
 // Inference is stubbed exactly as in unit-video-effects.spec.js — the stub's
 // mask is a centred oval — and everything else is the real GL pipeline.
 
-const SCENES = ['office', 'island', 'cybercafe', 'mountain', 'countryside'];
+const SCENES = ['office', 'island', 'cybercafe', 'mountain', 'countryside', 'penthouse'];
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => { window.__voxalSegStub = true; });
@@ -35,16 +35,21 @@ test.beforeEach(async ({ page }) => {
       const prog = VideoScenes.compileProgram(gl, id);
       const look = Object.assign(VideoScenes.defaultLook(), opts.look || {});
       const out = [];
+      const ms = [];
+      let glError = 0;
       for (const t of opts.times || [37]) {
         gl.viewport(0, 0, W, H);
-        VideoScenes.setUniforms(gl, prog, W, H, t, look);
+        const t0 = performance.now();
+        VideoScenes.setUniforms(gl, prog, W, H, t, look, null, opts.view || null);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         const px = new Uint8Array(W * H * 4);
         gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        ms.push(performance.now() - t0);
+        glError = glError || gl.getError();
         out.push(Array.from(px));
       }
       gl.getExtension('WEBGL_lose_context')?.loseContext();
-      return { w: W, h: H, frames: out };
+      return { w: W, h: H, frames: out, ms, glError };
     };
     window.__luma = (px, i) => 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
 
@@ -207,7 +212,7 @@ test.afterEach(async ({ page }) => {
 });
 
 test.describe('the catalogue', () => {
-  test('five scenes, each with a label, a swatch and its own shader', async ({ page }) => {
+  test('six scenes, each with a label, a swatch and its own shader', async ({ page }) => {
     const seen = await page.evaluate(() => VideoScenes.SCENES.map((s) => ({
       id: s.id, label: !!s.label, swatch: /gradient/.test(s.swatch),
       source: !!VideoScenes.fragmentSource(s.id),
@@ -488,6 +493,370 @@ test.describe('every scene', () => {
       return { max: vals[vals.length - 1], median: vals[vals.length >> 1] };
     });
     expect(seen.max).toBeGreaterThan(seen.median * 2);
+  });
+});
+
+// The penthouse is the one scene with a city that is geometry, a flash of
+// lightning, rain in several layers and a bloom: each of those is pinned here,
+// next to what every scene is held to above. Judged on pictures read back from
+// the GPU, never on the shader's text.
+test.describe('the penthouse', () => {
+  // The mean luma and the horizontal detail (mean absolute step to the next
+  // pixel) of a rectangle given in fractions of the picture, top row first.
+  test.beforeEach(async ({ page }) => {
+    await page.evaluate(() => {
+      window.__region = (r, x0, y0, x1, y1) => {
+        let s = 0, d = 0, n = 0;
+        for (let y = Math.floor(y0 * r.h); y < Math.floor(y1 * r.h); y++) {
+          for (let x = Math.floor(x0 * r.w); x < Math.floor(x1 * r.w) - 1; x++) {
+            const i = (y * r.w + x) * 4;   // GL rows run bottom up; a band and its mirror are measured alike
+            const l = window.__luma(r.px, i);
+            s += l; d += Math.abs(l - window.__luma(r.px, i + 4)); n++;
+          }
+        }
+        return { mean: s / n, detail: d / n };
+      };
+    });
+  });
+
+  test('it draws without a GL error, at every shape a camera has', async ({ page }) => {
+    test.setTimeout(90_000);
+    const seen = await page.evaluate(() => [[160, 90], [90, 160], [256, 256], [480, 270]].map(([w, h]) => {
+      const r = window.__renderScene('penthouse', { w, h });
+      const px = r.frames[0];
+      let sum = 0, sum2 = 0;
+      for (let i = 0; i < w * h; i++) { const l = window.__luma(px, i * 4); sum += l; sum2 += l * l; }
+      const mean = sum / (w * h);
+      return { w, h, mean, sd: Math.sqrt(sum2 / (w * h) - mean * mean), glError: r.glError };
+    }));
+    for (const s of seen) {
+      expect(s.glError, `${s.w}x${s.h}`).toBe(0);
+      expect(s.mean, `${s.w}x${s.h}`).toBeGreaterThan(18);
+      expect(s.mean, `${s.w}x${s.h}`).toBeLessThan(120);
+      expect(s.sd, `${s.w}x${s.h}`).toBeGreaterThan(10);
+    }
+  });
+
+  // It is a view over a city, so the city must be where the eye goes and the
+  // person's head must not be against anything busy: the middle of the glass
+  // (where a head is) holds less detail than the towers on either side of it.
+  test('the middle of the glass is calm, the towers are at its sides', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const r = window.__renderScene('penthouse', { w: 480, h: 270 });
+      const a = { px: r.frames[0], w: r.w, h: r.h };
+      // Frames are bottom row first: the glass is the upper-middle band in the picture, y from 0.12 to 0.56.
+      const flip = (y) => 1 - y;
+      const reg = (x0, y0, x1, y1) => window.__region(a, x0, flip(y1), x1, flip(y0));
+      return { middle: reg(0.40, 0.14, 0.60, 0.56), right: reg(0.80, 0.14, 0.90, 0.56), left: reg(0.12, 0.14, 0.30, 0.56) };
+    });
+    expect(seen.middle.detail).toBeLessThan(seen.right.detail * 0.6);
+    expect(seen.middle.detail).toBeLessThan(seen.left.detail * 0.9);
+  });
+
+  // The calm follows the person, not the middle of the picture: with the
+  // subject far to the right, the same patch of glass is the city again.
+  test('the calm follows the subject', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const look = (cx) => ({ cx, cy: 0.55, sx: 0.12, sy: 0.3, dirX: 0.35, sideMix: 1 });
+      const grab = (cx) => {
+        const r = window.__renderScene('penthouse', { w: 480, h: 270, look: look(cx) });
+        const a = { px: r.frames[0], w: r.w, h: r.h };
+        return window.__region(a, 0.70, 1 - 0.56, 0.84, 1 - 0.14);
+      };
+      return { there: grab(0.78), away: grab(0.30) };
+    });
+    // The patch of glass where a head is, against the same patch with nobody in it.
+    expect(seen.there.detail).toBeLessThan(seen.away.detail * 0.85);
+  });
+
+  // No post, no line, no edge of a tower stands straight through where a head
+  // is: the columns across the middle of the glass are all about as bright.
+  test('nothing runs vertically through the middle of the picture', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const r = window.__renderScene('penthouse', { w: 480, h: 270 });
+      const cols = [];
+      for (let x = Math.floor(r.w * 0.44); x < Math.floor(r.w * 0.56); x++) {
+        let s = 0, n = 0;
+        for (let y = Math.floor(r.h * 0.44); y < Math.floor(r.h * 0.86); y++) { s += window.__luma(r.frames[0], (y * r.w + x) * 4); n++; }
+        cols.push(s / n);
+      }
+      return { lo: Math.min(...cols), hi: Math.max(...cols) };
+    });
+    expect(seen.hi / seen.lo).toBeLessThan(1.25);
+  });
+
+  // The towers are drawn from a model of a city, so turning the view moves the
+  // near ones against the far ones: the scene honours the phone's turn (the
+  // tilt strip a receiver reads), and an upright camera is not a still one.
+  test('a turned view moves the room and the city by different amounts', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const a = window.__renderScene('penthouse', { w: 320, h: 180 });
+      const b = window.__renderScene('penthouse', { w: 320, h: 180, view: { yaw: 0.25, pitch: 0, roll: 0 } });
+      let sum = 0;
+      for (let i = 0; i < a.frames[0].length; i += 4) sum += Math.abs(window.__luma(a.frames[0], i) - window.__luma(b.frames[0], i));
+      return { diff: sum / (a.w * a.h), glError: b.glError };
+    });
+    expect(seen.glError).toBe(0);
+    expect(seen.diff).toBeGreaterThan(6);
+  });
+
+  // Lightning is rare, brief and cold. Sixty seconds, sampled each second: it
+  // lights the sky on a few of them and not on the others, and at the moment
+  // of a stroke the sky is clearly brighter than before it and after it.
+  test('a far flash lights the sky, rarely and briefly', async ({ page }) => {
+    test.setTimeout(90_000);
+    const seen = await page.evaluate(() => {
+      // A stroke is due 35.46 s in (see stormFlash(): 21 s windows, a hash
+      // decides which have one). The sample just after it, and the ones around.
+      const times = [34.5, 35.52, 37.0];
+      for (let t = 40; t < 100; t += 1) times.push(t);
+      const r = window.__renderScene('penthouse', { w: 160, h: 90, times });
+      const sky = (px) => { let s = 0, n = 0; for (let y = 60; y < 85; y++) for (let x = 40; x < 120; x++) { s += window.__luma(px, (y * 160 + x) * 4); n++; } return s / n; };
+      const lum = r.frames.map(sky);
+      const rest = lum.slice(3);
+      const base = rest.slice().sort((a, b) => a - b)[Math.floor(rest.length / 2)];
+      return { before: lum[0], stroke: lum[1], after: lum[2], base, bright: rest.filter((v) => v > base * 1.12).length, total: rest.length };
+    });
+    expect(seen.stroke).toBeGreaterThan(seen.before * 1.3);
+    expect(seen.stroke).toBeGreaterThan(seen.after * 1.3);
+    expect(seen.bright).toBeGreaterThan(0);
+    expect(seen.bright / seen.total).toBeLessThan(0.2);
+  });
+
+  // Quiet, in time: redraws a twelfth of a second apart change the picture by
+  // a level or two, and almost no pixel by a lot — no flicker, no shimmer, nothing
+  // that jumps. (Three seconds with no stroke due.)
+  test('between two redraws nothing flickers', async ({ page }) => {
+    test.setTimeout(90_000);
+    const seen = await page.evaluate(() => {
+      const times = Array.from({ length: 12 }, (_, i) => 40 + i / 12);
+      const r = window.__renderScene('penthouse', { w: 320, h: 180, times });
+      const out = [];
+      for (let k = 1; k < times.length; k++) {
+        let sum = 0, big = 0;
+        const n = r.w * r.h;
+        for (let i = 0; i < n * 4; i += 4) {
+          const d = Math.abs(window.__luma(r.frames[k], i) - window.__luma(r.frames[k - 1], i));
+          sum += d; if (d > 24) big++;
+        }
+        out.push({ mean: sum / n, big: big / n });
+      }
+      return out;
+    });
+    for (const f of seen) {
+      expect(f.mean).toBeLessThan(2.2);
+      expect(f.big).toBeLessThan(0.02);
+    }
+    expect(Math.max(...seen.map((f) => f.mean))).toBeGreaterThan(0);
+  });
+
+  // The rain is on the glass and in the air in front of the city, not on the
+  // floor: what moves between two redraws is in the glass band.
+  test('the rain falls on the glass, not on the room', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const r = window.__renderScene('penthouse', { w: 480, h: 270, times: [40, 40.5] });
+      const move = (x0, y0, x1, y1) => {
+        let s = 0, n = 0;
+        for (let y = Math.floor(y0 * r.h); y < Math.floor(y1 * r.h); y++) {
+          for (let x = Math.floor(x0 * r.w); x < Math.floor(x1 * r.w); x++) {
+            const i = (y * r.w + x) * 4;
+            s += Math.abs(window.__luma(r.frames[0], i) - window.__luma(r.frames[1], i)); n++;
+          }
+        }
+        return s / n;
+      };
+      // GL rows are bottom up: the glass is the upper band of the picture (high y here).
+      return { glass: move(0.14, 0.50, 0.84, 0.88), floor: move(0.30, 0.02, 0.84, 0.20) };
+    });
+    expect(seen.glass).toBeGreaterThan(seen.floor * 3);
+    expect(seen.glass).toBeGreaterThan(0.5);
+  });
+
+  // The city's windows are many, lit in several colours, and the lit share
+  // changes only a little, a window at a time, over minutes.
+  test('the windows are lit in several colours and change one at a time', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const r = window.__renderScene('penthouse', { w: 640, h: 360, times: [40, 100] });
+      const px = r.frames[0];
+      let warm = 0, cool = 0, accent = 0;
+      for (let y = Math.floor(r.h * 0.45); y < Math.floor(r.h * 0.82); y++) {
+        for (let x = Math.floor(r.w * 0.62); x < Math.floor(r.w * 0.9); x++) {
+          const i = (y * r.w + x) * 4, R = px[i], G = px[i + 1], B = px[i + 2];
+          const l = window.__luma(px, i);
+          if (l > 60 && R > G * 1.5 && B > G * 1.5) accent++;   // magenta: dimmer in luma than a white one
+          if (l < 110) continue;
+          if (R > B * 1.25 && G > B) warm++;
+          else if (B > R * 1.2) cool++;
+        }
+      }
+      // Windows only: the rain and the traffic move too, so look at the facade.
+      let same = 0, n = 0;
+      for (let y = Math.floor(r.h * 0.45); y < Math.floor(r.h * 0.82); y++) {
+        for (let x = Math.floor(r.w * 0.72); x < Math.floor(r.w * 0.9); x++) {
+          const i = (y * r.w + x) * 4;
+          if (Math.abs(window.__luma(r.frames[0], i) - window.__luma(r.frames[1], i)) < 30) same++;
+          n++;
+        }
+      }
+      return { warm, cool, accent, kept: same / n };
+    });
+    expect(seen.warm).toBeGreaterThan(20);
+    expect(seen.cool).toBeGreaterThan(20);
+    expect(seen.accent).toBeGreaterThan(0);
+    // Nearly all of the facade is as it was a minute on.
+    expect(seen.kept).toBeGreaterThan(0.75);
+  });
+
+  // The floor is polished: it holds the city and the strips as a mirror.
+  test('the floor mirrors the lights', async ({ page }) => {
+    const seen = await page.evaluate(() => {
+      const r = window.__renderScene('penthouse', { w: 480, h: 270 });
+      const px = r.frames[0];
+      // Under the left LED strip (cyan), on the floor: much brighter than the floor in the middle.
+      const at = (fx, fy) => {
+        let s = 0, n = 0;
+        for (let y = Math.floor(fy * r.h) - 3; y < Math.floor(fy * r.h) + 3; y++) {
+          for (let x = Math.floor(fx * r.w) - 3; x < Math.floor(fx * r.w) + 3; x++) { s += px[(y * r.w + x) * 4 + 2]; n++; }
+        }
+        return s / n;
+      };
+      let best = 0;
+      for (let fx = 0.01; fx < 0.12; fx += 0.01) best = Math.max(best, at(fx, 1 - 0.93));
+      return { strip: best, middle: at(0.55, 1 - 0.93) };
+    });
+    expect(seen.strip).toBeGreaterThan(seen.middle * 1.5);
+  });
+
+  // Not many times dearer than the café, which has a window onto a city too.
+  // (Software GL here, so only the ratio means anything; the bound is loose.)
+  test('it does not cost much more than the café', async ({ page }) => {
+    test.setTimeout(90_000);
+    const seen = await page.evaluate(() => {
+      const times = [37, 38, 39, 40, 41, 42, 43];
+      const cost = (id) => {
+        const r = window.__renderScene(id, { w: 320, h: 180, times });
+        const ms = r.ms.slice(2).sort((a, b) => a - b);
+        return ms[Math.floor(ms.length / 2)];
+      };
+      return { penthouse: cost('penthouse'), cafe: cost('cybercafe') };
+    });
+    expect(seen.penthouse).toBeLessThan(seen.cafe * 4);
+  });
+});
+
+// The glow the resolve adds back for a scene that asks for it (`bloom` in the
+// catalogue), made of the redraw's own coarse mip levels.
+test.describe('bloom', () => {
+  // A black picture with one bright dot, resolved at uBloom.
+  const resolveDot = (bloom) => {
+    const W = 128, H = 72;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const gl = c.getContext('webgl2', { alpha: false, preserveDrawingBuffer: true });
+    const sh = (type, text) => {
+      const o = gl.createShader(type); gl.shaderSource(o, text); gl.compileShader(o);
+      if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o));
+      return o;
+    };
+    const p = gl.createProgram();
+    gl.attachShader(p, sh(gl.VERTEX_SHADER, '#version 300 es\nin vec2 aPos;\nout vec2 vUv;\nvoid main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }\n'));
+    gl.attachShader(p, sh(gl.FRAGMENT_SHADER, VideoScenes.RESOLVE_FRAG));
+    gl.bindAttribLocation(p, 0, 'aPos');
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    // The redraw: mipmapped, as the pipeline's scene buffer is.
+    const px = new Uint8Array(W * H * 4);
+    for (let i = 0; i < W * H; i++) px[i * 4 + 3] = 255;
+    for (let y = 31; y < 41; y++) for (let x = 59; x < 69; x++) { const i = (y * W + x) * 4; px[i] = px[i + 1] = px[i + 2] = 255; }
+    const cur = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, cur);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    const hist = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, hist);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.useProgram(p);
+    gl.uniform1i(gl.getUniformLocation(p, 'uCur'), 0);
+    gl.uniform1i(gl.getUniformLocation(p, 'uHist'), 1);
+    gl.uniform2f(gl.getUniformLocation(p, 'uCurRes'), W, H);
+    gl.uniform2f(gl.getUniformLocation(p, 'uOutRes'), W, H);
+    gl.uniform2f(gl.getUniformLocation(p, 'uJitter'), 0, 0);
+    gl.uniform1f(gl.getUniformLocation(p, 'uAge'), 0);
+    if (bloom !== undefined) gl.uniform1f(gl.getUniformLocation(p, 'uBloom'), bloom);
+    gl.viewport(0, 0, W, H);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const out = new Uint8Array(W * H * 4);
+    gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, out);
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    const at = (x, y) => out[((H - 1 - y) * W + x) * 4];
+    return { dot: at(64, 36), near: at(64 + 9, 36), mid: at(64 + 15, 36), far: at(5, 5), all: Array.from(out) };
+  };
+
+  test('a lit spot gets a halo, a dark corner does not, and the spot is not dimmed away', async ({ page }) => {
+    const seen = await page.evaluate((src) => {
+      const f = new Function('VideoScenes', 'return (' + src + ')');
+      const dot = f(VideoScenes);
+      const off = dot(0), on = dot(0.45);
+      return { off: [off.dot, off.near, off.mid, off.far], on: [on.dot, on.near, on.mid, on.far] };
+    }, resolveDot.toString());
+    // Without it a black picture stays black around the spot.
+    expect(seen.off[1]).toBeLessThan(3);
+    // With it the dark just beside the spot glows, less further out, and nothing at the far corner.
+    expect(seen.on[1]).toBeGreaterThan(12);
+    expect(seen.on[1]).toBeGreaterThan(seen.on[2] + 3);
+    expect(seen.on[2]).toBeGreaterThanOrEqual(seen.on[3]);
+    expect(seen.on[3]).toBeLessThan(4);
+    // The spot itself keeps most of its light.
+    expect(seen.on[0]).toBeGreaterThan(seen.off[0] * 0.8);
+  });
+
+  test('a scene that does not ask for bloom resolves exactly as it did', async ({ page }) => {
+    const seen = await page.evaluate((src) => {
+      const f = new Function('VideoScenes', 'return (' + src + ')');
+      const dot = f(VideoScenes);
+      const unset = dot(undefined), zero = dot(0);
+      let diff = 0;
+      for (let i = 0; i < unset.all.length; i++) if (unset.all[i] !== zero.all[i]) diff++;
+      return { diff };
+    }, resolveDot.toString());
+    expect(seen.diff).toBe(0);
+  });
+
+  // The catalogue says who has it, and the pipeline hands it to the resolve:
+  // the penthouse only, and a scene that has none gets zero.
+  test('the catalogue and the pipeline carry it to the resolve', async ({ page }) => {
+    const seen = await page.evaluate(async () => {
+      const blooms = Object.fromEntries(VideoScenes.SCENES.map((s) => [s.id, s.bloom || 0]));
+      await VideoEffects.wrap(window.__mkLitCamera('#555', '#999'), 'preset:office');
+      const p = VideoEffects.active();
+      const read = () => {
+        const gl = p.gl;
+        return gl.getUniform(p.pResolve, gl.getUniformLocation(p.pResolve, 'uBloom'));
+      };
+      await window.__sleep(300);
+      p.lastScene = 0; p.drawScene(performance.now());
+      const office = read();
+      await VideoEffects.setMode('preset:penthouse');
+      await window.__sleep(300);
+      p.lastScene = 0; p.drawScene(performance.now());
+      return { blooms, office, penthouse: read() };
+    });
+    expect(seen.blooms.penthouse).toBeGreaterThan(0.2);
+    expect(seen.blooms.penthouse).toBeLessThan(0.8);
+    for (const id of ['office', 'island', 'cybercafe', 'mountain', 'countryside']) expect(seen.blooms[id], id).toBe(0);
+    expect(seen.office).toBe(0);
+    expect(seen.penthouse).toBeCloseTo(seen.blooms.penthouse, 3);
   });
 });
 
@@ -1005,13 +1374,13 @@ test.describe('in the camera pipeline', () => {
       const stream = await VideoEffects.wrap(window.__mkLitCamera('#555', '#999'), 'preset:office');
       const track = stream.getVideoTracks()[0];
       const ids = [];
-      for (const id of ['island', 'cybercafe', 'mountain', 'countryside', 'office']) {
+      for (const id of ['island', 'cybercafe', 'mountain', 'countryside', 'penthouse', 'office']) {
         await VideoEffects.setMode('preset:' + id);
         ids.push(VideoEffects.active().sceneId);
       }
       return { ids, same: stream.getVideoTracks()[0] === track, live: track.readyState };
     });
-    expect(seen.ids).toEqual(['island', 'cybercafe', 'mountain', 'countryside', 'office']);
+    expect(seen.ids).toEqual(['island', 'cybercafe', 'mountain', 'countryside', 'penthouse', 'office']);
     expect(seen.same).toBe(true);
     expect(seen.live).toBe('live');
   });
@@ -1067,12 +1436,12 @@ test.describe('the picker', () => {
     await page.click('#btn-open-settings');
     await page.click('#modal-settings [data-target="settings-video"]');
     const chips = page.locator('#settings-bg-picker .bg-chip-scene');
-    await expect(chips).toHaveCount(5);
+    await expect(chips).toHaveCount(SCENES.length);
     await expect.poll(() => page.evaluate(() =>
       Array.from(document.querySelectorAll('#settings-bg-picker .bg-chip-scene'))
         .filter((c) => /url\("(blob|data):/.test(c.style.backgroundImage)).length), { timeout: 100_000 })
-      .toBe(5);
+      .toBe(SCENES.length);
     const labels = await chips.evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')));
-    expect(labels).toEqual(['Office', 'Island', 'Cyber café', 'Mountain', 'Countryside']);
+    expect(labels).toEqual(['Office', 'Island', 'Cyber café', 'Mountain', 'Countryside', 'Neon rain']);
   });
 });

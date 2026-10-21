@@ -436,3 +436,12 @@ Design: `docs/video-effects.md`. Preview any scene/look headlessly with `make sc
 - **An orbit must not flip the offer's `tilt` flag on recentre** (a flip is a new epoch for every receiver): the strip follows "has ever been turned" (`_backgroundOrbitEngaged`), cleared only when the scene/camera goes.
 - **Releasing a WebGL context fires `webglcontextlost` later**, possibly after a new canvas replaced it; a handler that calls `release()` unconditionally tears down the NEW one. Compare the canvas.
 
+## Neon rain (penthouse scene)
+
+- **A sub-pixel pattern is not detail, it is churn.** Lit windows a pixel or two wide differ in every jittered redraw, the resolve calls that movement, and a frozen room cost 1,716 kb/s (café 676). Soften an edge as wide as the pixel, and where a pixel spans several windows draw *how many are lit* in their average colour, never this cell's own lit-or-not (it paints window-sized blocks). `--bits --still` is the instrument (→ 831).
+- **An SDF object inside `if (inBounds)` must return the distance to its bound outside it**, not 1e3: the march steps by it and skips the object entirely (the sofa, table and lamp were invisible).
+- **Bloom without a pass:** the scene buffer is already mipmapped for the light wrap, so `textureLod` of its coarse levels is a free blur. Add it to every look *before* the resolve compares looks (not to the history), in light, with no threshold. It is `uBloom`, set from the catalogue; 0 is the old shader.
+- `--view '{"yaw":0.3}'` did nothing: `viewMatrix()` takes a missing angle as "no view". The preview now fills in zeros.
+- The scene spec's "night scene must be a picture" floor (mean luma > 25, crushed < 25%) applies to a dark scene too: lift the mist and the floor rather than the exposure.
+- Adding a chip widens the picker: the popover is one nowrap strip (`max-width` now 492 px for nine chips); a tenth needs a different layout.
+- `make cap-sync` output (`ios/…/public`, `android/…/public`) is not tracked, so a `src/` change needs no committed mirror.

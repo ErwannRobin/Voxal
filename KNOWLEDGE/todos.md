@@ -4,6 +4,15 @@ Things to implement or investigate, ordered roughly by priority.
 
 ---
 
+## 🌃 Neon rain scene — what is left
+
+- **Not measured on a real GPU.** All timings (74 ms a redraw at 512×288, café 44, office 78, mountain 86 on this machine's software GL) are relative. Check it on an integrated GPU and a phone: the first step down is `hz` 12 → 6, then the buffer.
+- **Two sibling scenes were evaluated, not built:** *Orbital observatory* (the engine already has a spherical-atmosphere integral, bloom and the glass/strip lighting; it needs a planet limb with night-side lights and a station truss) and *Zen after rain* (water and mist reuse the mountain's lake and the island's wet sand; the hard part is foliage and stones that read as such at 512 px, which this engine has no good primitive for yet). Neither was started: one scene at this quality took most of the work, and a middling second one is worse than none.
+- The floor reflection is a single look at the city with a small per-pixel wobble; a real two-tap blur would be smoother but costs a second DDA.
+- Mid-distance towers read as soft grey shapes in the mist: that is the fade to *average* window light. More structure there (set-backs, lit crowns) is the next visual step.
+
+---
+
 ## 🧪 What is still untested in `main.js`
 
 **Status:** the E2E `unit` project covers ~84% of `main.js`'s lines (see

@@ -4655,7 +4655,8 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
   top: 0;
   left: 0;
   width: max-content;
-  max-width: min(380px, calc(100vw - 24px));
+  /* Nine chips in one strip: off, blur, six scenes, your own image. */
+  max-width: min(492px, calc(100vw - 24px));
   z-index: 60;
   padding: 10px 12px 12px;
   border: 1px solid var(--border);

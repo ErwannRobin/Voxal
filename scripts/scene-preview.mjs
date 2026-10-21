@@ -14,6 +14,8 @@
 //   node scripts/scene-preview.mjs --alpha             the nearness channel instead (white = near)
 //   node scripts/scene-preview.mjs --live             the clock runs between redraws, as in a call (default: one frozen moment, the best case)
 //   node scripts/scene-preview.mjs --raw               one redraw, stretched (what shows if the resolve cannot compile)
+//   node scripts/scene-preview.mjs --scenes copy.js    draw from a copy of video-scenes.js (to try a change, or to switch a layer off, without touching src/)
+//   node scripts/scene-preview.mjs --nobloom           a scene that has a bloom, without it (to see what it adds)
 //   node scripts/scene-preview.mjs --bits --person     and what each costs a video encoder
 //   node scripts/scene-preview.mjs --bits --still      what a room that does not move at all costs: the resolve's own churn
 //   node scripts/scene-preview.mjs --resolve '{"gain":0.4}'   other settings than RESOLVE's
@@ -49,7 +51,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const ALL = ['office', 'island', 'cybercafe', 'mountain', 'countryside'];
+const ALL = ['office', 'island', 'cybercafe', 'mountain', 'countryside', 'penthouse'];
 
 const args = process.argv.slice(2);
 const opt = {
@@ -68,6 +70,8 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--person') opt.person = true;
   else if (a === '--alpha') opt.alpha = true;
   else if (a === '--raw') opt.raw = true;
+  else if (a === '--nobloom') opt.nobloom = true;
+  else if (a === '--scenes') opt.scenes = path.resolve(args[++i]);
   else if (a === '--live') opt.live = true;
   else if (a === '--bits') opt.bits = true;
   else if (a === '--still') opt.still = true;
@@ -91,7 +95,7 @@ page.on('pageerror', (e) => console.error('[page]', e.message));
 await page.route('https://scene-preview.test/**', (r) =>
   r.fulfill({ contentType: 'text/html', body: '<!doctype html><title>scenes</title>' }));
 await page.goto('https://scene-preview.test/');
-await page.addScriptTag({ path: path.join(ROOT, 'src', 'video-scenes.js') });
+await page.addScriptTag({ path: opt.scenes || path.join(ROOT, 'src', 'video-scenes.js') });
 
 const tiles = [];
 for (const id of list) {
@@ -124,11 +128,12 @@ for (const id of list) {
       if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
       return p;
     };
-    const target = (w, h) => {
+    const target = (w, h, mips) => {
       const t = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, t);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      // The pipeline's scene buffer is mipmapped (ensureScene() in video-effects.js).
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mips ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -145,8 +150,11 @@ for (const id of list) {
       pShow = mk('#version 300 es\nprecision highp float;\nin vec2 vUv;\nout vec4 o;\nuniform sampler2D uT;\n' +
         'uniform float uAlpha;\nvoid main() { vec4 c = texture(uT, vUv); o = vec4(uAlpha > 0.5 ? vec3(c.a) : c.rgb, 1.0); }\n');
     } catch (e) { return { error: String(e.message).slice(0, 2000) }; }
-    const small = target(bw, bh), pic = [target(W, H), target(W, H)];
+    const small = target(bw, bh, true), pic = [target(W, H), target(W, H)];
     const look = Object.assign(VideoScenes.defaultLook(), JSON.parse(opt.look));
+    // Angles left out are zero (viewMatrix() takes a missing one for "no view").
+    const given = JSON.parse(opt.view);
+    const view = given && Object.assign({ yaw: 0, pitch: 0, roll: 0 }, given);
     const bind = (p, name, unit, t) => {
       gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
       gl.uniform1i(gl.getUniformLocation(p, name), unit);
@@ -159,8 +167,10 @@ for (const id of list) {
       const at = opt.raw ? null : VideoScenes.JITTER[age % VideoScenes.JITTER.length];
       gl.bindFramebuffer(gl.FRAMEBUFFER, small.f);
       gl.viewport(0, 0, bw, bh);
-      VideoScenes.setUniforms(gl, prog, bw, bh, t, look, at ? { jitter: at, detail: H } : null, JSON.parse(opt.view));
+      VideoScenes.setUniforms(gl, prog, bw, bh, t, look, at ? { jitter: at, detail: H } : null, view);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.bindTexture(gl.TEXTURE_2D, small.t);
+      gl.generateMipmap(gl.TEXTURE_2D);
       if (at) {
         gl.useProgram(pResolve);
         bind(pResolve, 'uCur', 0, small.t);
@@ -169,6 +179,7 @@ for (const id of list) {
         gl.uniform2f(gl.getUniformLocation(pResolve, 'uOutRes'), W, H);
         gl.uniform2f(gl.getUniformLocation(pResolve, 'uJitter'), at[0], at[1]);
         gl.uniform1f(gl.getUniformLocation(pResolve, 'uAge'), Math.min(age, 255));
+        gl.uniform1f(gl.getUniformLocation(pResolve, 'uBloom'), opt.nobloom ? 0 : (VideoScenes.byId(id).bloom || 0));
         gl.bindFramebuffer(gl.FRAMEBUFFER, pic[1 - from].f);
         gl.viewport(0, 0, W, H);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -216,6 +227,24 @@ for (const id of list) {
     const t1 = performance.now(); redraw(at(1)); show(); const timed = performance.now() - t1;
     for (let i = 2; i < (opt.raw ? 1 : opt.frames); i++) redraw(at(i));
     show();
+    // How the picture is lit, as numbers: the mean luma, the share of crushed
+    // blacks and of clipped whites, and the mean luma of a 6 x 3 grid (top
+    // row first). A person covers the middle of it, so judge a composition
+    // by the picture, not by these: they are for noticing that it went dark.
+    const luma = (i) => 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
+    const grid = new Float64Array(18), cnt = new Float64Array(18);
+    let sum = 0, lo = 0, hi = 0, edge = 0;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const l = luma(((H - 1 - y) * W + x) * 4);
+        if (x + 1 < W) edge += Math.abs(l - luma(((H - 1 - y) * W + x + 1) * 4));
+        sum += l; if (l < 4) lo++; if (l > 250) hi++;
+        const g = Math.min(2, Math.floor(y * 3 / H)) * 6 + Math.min(5, Math.floor(x * 6 / W));
+        grid[g] += l; cnt[g]++;
+      }
+    }
+    const stats = { mean: sum / (W * H), lo: lo / (W * H), hi: hi / (W * H), edge: edge / (W * H),
+      grid: Array.from(grid, (v, i) => Math.round(v / cnt[i])) };
     paint();
     const url = out.toDataURL('image/png');
     // --bits: what the picture costs the encoder. A few seconds at the scene's
@@ -251,11 +280,14 @@ for (const id of list) {
       bits = { keyKB: sizes[0] / 1024, kbps: rest * 8 / 1000 / ((n - 1) / hz), frames: n, hz };
     }
     gl.getExtension('WEBGL_lose_context')?.loseContext();
-    return { url, first, timed, bits, buffer: bw + 'x' + bh };
+    return { url, first, timed, bits, stats, buffer: bw + 'x' + bh };
   }, { id, opt });
   if (res.error) { console.error(`${id}: ${res.error}`); continue; }
   fs.writeFileSync(path.join(opt.out, `${id}.png`), Buffer.from(res.url.split(',')[1], 'base64'));
   tiles.push(res.url);
+  const st = res.stats;
+  console.log(`${' '.repeat(12)} luma mean ${st.mean.toFixed(1)}, detail ${st.edge.toFixed(2)}, crushed ${(st.lo * 100).toFixed(0)}%, clipped ${(st.hi * 100).toFixed(1)}%, ` +
+    `rows ${[0, 6, 12].map((o) => st.grid.slice(o, o + 6).join(' ')).join(' | ')}`);
   console.log(`${id.padEnd(12)} buffer ${res.buffer}, first redraw ${res.first.toFixed(0)} ms, timed redraw ${res.timed.toFixed(0)} ms` +
     (res.bits ? `, keyframe ${res.bits.keyKB.toFixed(1)} KB, motion ${res.bits.kbps.toFixed(0)} kb/s ` +
       `(${res.bits.frames} frames at ${res.bits.hz} Hz, q${opt.q})` : ''));

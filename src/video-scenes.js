@@ -76,6 +76,9 @@ var VideoScenes = (function () {
   // hz:     how often it is redrawn, and what that falls to under load. Its
   //         motion is slow, so a dear scene is redrawn less often, not made
   //         to look less.
+  // bloom:  (optional) how much of the picture's own glow the resolve adds back:
+  //         the lit parts of the redraw, blurred through its coarse mip levels.
+  //         Absent or 0: none, and the resolve is byte-for-byte what it was.
   // swatch: what the chip shows until its real thumbnail has been rendered,
   //         and where WebGL2 is not available to render one at all.
   var SCENES = [
@@ -88,7 +91,9 @@ var VideoScenes = (function () {
     { id: 'mountain', label: 'Mountain', shadow: 0, wrap: 0.28, res: 0.70, hz: [10, 5],
       swatch: 'linear-gradient(180deg,#8fb4d9 0%,#e6eef5 45%,#5f7387 70%,#2f4a35 100%)' },
     { id: 'countryside', label: 'Countryside', shadow: 0, wrap: 0.28, res: 0.80, hz: [10, 5],
-      swatch: 'linear-gradient(180deg,#9cc4e6 0%,#dceaf2 45%,#86a957 65%,#4f7a2c 100%)' }
+      swatch: 'linear-gradient(180deg,#9cc4e6 0%,#dceaf2 45%,#86a957 65%,#4f7a2c 100%)' },
+    { id: 'penthouse', label: 'Neon rain', shadow: 0.40, wrap: 0.40, res: 1.0, hz: [12, 6], bloom: 0.45,
+      swatch: 'linear-gradient(120deg,#0b1020 0%,#3a1a45 45%,#0f4a66 100%)' }
   ];
 
   // The image presets these scenes replaced, so a stored `preset:aurora` keeps
@@ -2916,8 +2921,755 @@ vec4 scene(vec2 p, out vec3 emit) {
 }
 `;
 
+  // --- the penthouse --------------------------------------------------------
+  //
+  // A double-height room at the top of a tower, at night, in a storm. Behind
+  // you: a low sofa on a floating plinth with its own underglow, a smoked-glass
+  // table, an arc lamp on the key-light side, and a wall of glass with slim
+  // metal posts. The light is the architecture's: a cyan cove along the ceiling
+  // and a strip along the sill, magenta in the sofa's shadow and in the side
+  // walls. The floor is polished stone and mirrors all of it (the strips, the
+  // lamp, the sofa, and the city through the glass).
+  //
+  // Outside is a city seen from 230 m up, and it is geometry, not a picture: a
+  // grid of blocks walked cell by cell (DDA) by each ray, every block a box (a
+  // second, smaller one on top of the tall ones) with a height from a hash and
+  // a cluster noise, so the near roofs are seen from above, the far towers rise
+  // past the horizon, and they move against each other when the phone turns.
+  // Windows are a grid on the box's faces, each lit or dark by hash, a few
+  // flipping state every minute or so; a block may carry a neon banner or a
+  // roof-line; the streets below are lit by lamps, wet asphalt and the lights
+  // of cars. Everything fades into the haze with distance, and a corridor of
+  // low blocks in the middle of the picture leaves a luminous mist behind your
+  // head, so the city is on the sides and the calm is where the person is.
+  //
+  // The glass is wet: drops slide a little, each a lens that shows the city
+  // upside down; beads stay; a few runnels meander down. Rain falls outside in
+  // three depths. A far flash lights the clouds, rarely.
+  var PENTHOUSE = `
+// Metres. The camera is the origin, 1.25 m above the floor, looking down -z at
+// a wall of glass 5 m away. The lamp is on the key-light side (+x); main()
+// mirrors the room when the key light is on the left.
+const float FLOOR_Y = -1.25, CEIL_Y = 2.30, GZ = -4.8, SIDE_X = 3.1;
+const float PITCH = -0.09;       // the camera looks a little down, onto the room
+const vec3  SOFA_C  = vec3(-1.75, FLOOR_Y, -3.95);
+const vec3  TABLE_C = vec3(-1.30, FLOOR_Y, -2.95);
+const vec3  LAMP_A  = vec3(2.60, FLOOR_Y, -3.60);
+const vec3  ORB     = LAMP_A + vec3(-0.62, 1.71, 0.0);
+const float GROUND_Y = -170.0;     // the street, below the camera
+const float CELL = 46.0;           // a block and its street
+const float TOP_MAX = 260.0;       // nothing is taller than this above the camera
+const float FOGK = 0.00062;
+
+vec3 MAGC, CYANC, WARMC;           // the palette: magenta, cyan, a warm white
+float gMat = 0.0;                  // what the last map() found: 0 fabric, 1 metal, 2 smoked glass, 3 lamp, 4 plinth
+float gSkipGlass = 0.0;
+float FL = 0.0;                    // the flash, 0..1
+
+// --- weather ----------------------------------------------------------------
+// A far flash every so often: a stroke, and a weaker one right behind it.
+float to_cut(float t, float tp) { return t < tp ? 1.0 : 0.0; }
+float stormFlash() {
+  float f = 0.0;
+  for (int i = 0; i < 2; i++) {
+    float k = floor(T / 21.0) - float(i);
+    float on = step(0.38, hash11(k * 5.17 + 2.3));
+    float dt = T - (k + 0.1 + 0.7 * hash11(k * 3.31 + 7.0)) * 21.0;
+    float a = sstep(0.0, 0.025, dt) * exp(-max(dt, 0.0) * 7.0);
+    float b = sstep(0.20, 0.23, dt) * exp(-max(dt - 0.20, 0.0) * 4.5) * 0.65;
+    f += on * (a + b) * step(dt, 3.0);
+  }
+  return min(f, 1.0);
+}
+
+// The colour of the night air: the city's glow under cloud, magenta in some
+// directions and teal in others, and a cold flash.
+vec3 hazeCol(vec3 rd) {
+  float az = atan(rd.x, -rd.z);
+  float g = exp(-sq(rd.y / 0.20));
+  float v = noise(vec2(az * 1.7 + 4.0, 2.0));
+  vec3 city = mix(lin(vec3(0.62, 0.20, 0.42)), lin(vec3(0.12, 0.46, 0.70)), sstep(0.12, 0.52, v));
+  return lin(vec3(0.078, 0.108, 0.185)) + city * g * 0.27 + lin(vec3(0.50, 0.62, 1.0)) * FL * 0.20;
+}
+
+vec3 skyCol(vec3 rd) {
+  float y = max(rd.y, 0.0);
+  vec3 col = mix(hazeCol(rd), lin(vec3(0.050, 0.060, 0.110)) + lin(vec3(0.5, 0.6, 1.0)) * FL * 0.05, sstep(0.0, 0.40, y));
+  vec2 u = rd.xz / (y + 0.10) * 0.55 + vec2(0.006, 0.003) * T;
+  float n = fbm3(u * 1.6) * 0.8 + 0.2 * noise(u * 7.0);
+  float cov = sstep(0.30, 0.75, n) * sstep(0.02, 0.12, y);
+  vec3 under = lin(vec3(0.66, 0.24, 0.48)) * exp(-y * 2.2) * 0.80 + lin(vec3(0.14, 0.50, 0.72)) * exp(-y * 4.5) * 0.55;
+  vec3 lit = under * (0.4 + 0.9 * n) + lin(vec3(0.55, 0.65, 1.0)) * FL * (0.25 + 0.75 * n) * 0.9;
+  return col + lit * cov;
+}
+
+// --- the city ---------------------------------------------------------------
+// The block in a cell of the grid: where it stands, how big it is, how high.
+// hh carries four hashes that the facade reads (lit share, banner, kind...).
+// A block a few cells away has an effect on the next, never on the cell the
+// camera is over: the tower the room is in owns that.
+const vec2 OFFC = vec2(17.0, 29.0);
+float building(vec2 cell, out vec2 ctr, out vec2 hs, out vec4 hh) {
+  hh = vec4(hash12(cell + 3.1), hash12(cell + 17.3), hash12(cell + 41.7), hash12(cell + 73.1));
+  ctr = (cell + 0.5) * CELL - OFFC;
+  float D = length(ctr);
+  hs = vec2(0.5 * CELL * (0.44 + 0.36 * hh.y), 0.5 * CELL * (0.44 + 0.36 * hh.z));
+  ctr += (hh.wx - 0.5) * max(CELL - 2.0 * hs - 8.0, 0.0) * 0.5;
+  if (D < 60.0 || hh.x > 0.93) return -1e4;
+  float cluster = 0.40 + 1.2 * noise(ctr * 0.0032 + 7.0);
+  float far = mix(0.35, 1.0, sstep(120.0, 900.0, D));
+  float height = 16.0 + 520.0 * pow(hh.x, 3.2) * cluster * far;
+  // A corridor of low blocks straight ahead, going back: the calm behind the
+  // person. Wide at the end, since far off it is the same angle.
+  float lat = abs(ctr.x) / (-ctr.y + 120.0);
+  float corridor = sstep(0.30, 0.05, lat) * sstep(160.0, 520.0, -ctr.y);
+  height = mix(height, 18.0 + 0.1 * height, corridor);
+  // Near the camera only a tall block shows at all (the rest is below the
+  // sill), so the sides of the picture are framed by towers.
+  float tallSide = sstep(560.0, 140.0, D) * sstep(0.32, 0.62, lat) * step(0.35, hh.y);
+  height = mix(height, 240.0 + 300.0 * hh.x * hh.z + 120.0 * hh.w, tallSide);
+  // And a second rank, farther out, a little off the middle: towers in the mist.
+  float midTall = sstep(1500.0, 900.0, D) * sstep(480.0, 760.0, D) * sstep(0.10, 0.34, lat) * step(0.42, hh.y) * (1.0 - tallSide);
+  height = mix(height, 150.0 + 280.0 * hh.x * hh.w + 90.0 * hh.z, midTall);
+  return GROUND_Y + min(height, GROUND_Y * -1.0 + TOP_MAX);
+}
+
+// A ray (from the camera) against a box: where it enters, and the face.
+float boxHit(vec3 rd, vec3 bmin, vec3 bmax, out vec3 n) {
+  vec3 inv = 1.0 / (rd + vec3(1e-6) * sign(rd + 1e-9));
+  vec3 t0 = bmin * inv, t1 = bmax * inv;
+  vec3 tm = min(t0, t1), tM = max(t0, t1);
+  float tn = max(max(tm.x, tm.y), tm.z), tf = min(min(tM.x, tM.y), tM.z);
+  if (tn > tf || tf < 0.0) return -1.0;
+  n = (tm.x >= tm.y && tm.x >= tm.z) ? vec3(-sign(rd.x), 0.0, 0.0)
+    : (tm.y >= tm.z) ? vec3(0.0, -sign(rd.y), 0.0) : vec3(0.0, 0.0, -sign(rd.z));
+  return tn;
+}
+
+vec3 winTint(float c) {
+  return c < 0.52 ? lin(vec3(1.0, 0.76, 0.48))
+       : c < 0.82 ? lin(vec3(0.80, 0.90, 1.0))
+       : c < 0.90 ? CYANC : c < 0.95 ? MAGC : lin(vec3(1.0, 0.86, 0.35));
+}
+
+// What a face of a block looks like. P: where the ray hit it, N: which way it
+// faces, pw: how many metres one pixel covers there, cid: the block.
+vec3 facade(vec3 P, vec3 N, vec4 hh, vec2 cid, vec2 bc, vec2 hs, float top, float pw) {
+  vec3 dark = lin(vec3(0.030, 0.036, 0.050));
+  float h = P.y - GROUND_Y;
+  if (N.y > 0.5) {
+    // The roof: dark, an edge of light on some blocks, a red beacon on the tall ones.
+    vec3 c = dark * (0.8 + 3.0 * FL) + hazeCol(vec3(0.0, 1.0, 0.0)) * 0.3;
+    float de = min(hs.x - abs(P.x - bc.x), hs.y - abs(P.z - bc.y));
+    float edge = step(0.80, hh.z) * sstep(1.3 + pw, 0.2, de);
+    c += (hh.w > 0.5 ? MAGC : CYANC) * edge * 1.6;
+    if (top > -70.0) {
+      float db = length(P.xz - bc);
+      float pulse = 0.55 + 0.45 * sin(T * 1.6 + hh.w * 40.0);
+      c += lin(vec3(1.0, 0.10, 0.06)) * (sstep(2.2 + pw, 0.3, db) * 2.2 + exp(-db * 0.08) * 0.10) * pulse;
+    }
+    return c;
+  }
+  float s = (abs(N.z) > 0.5 ? P.x : P.z) + hh.w * 13.0;
+  vec2 wc = vec2(s / 2.3, h / 3.5);
+  vec2 wid = floor(wc);
+  vec2 wf = fract(wc) - 0.5;
+  float pl0 = mix(0.10, 0.62, hh.y) * (0.5 + 0.5 * hh.z);
+  // a floor lit end to end: an office left on
+  float band = step(0.86, hash12(vec2(wid.y, hh.x * 91.0 + cid.x * 3.0 + cid.y * 7.0)));
+  float pl = mix(pl0, 0.92, band);
+  vec2 wk = wid + cid * 7.13 + N.xz * 3.7;
+  float lit = step(hash12(wk), pl);
+  // A few windows change their state, a minute or so apart.
+  float tg = step(0.985, hash12(wk + floor(T / 45.0 + hash12(wk + 3.0) * 7.0) * 0.37));
+  lit = abs(lit - tg);
+  vec3 wcol = winTint(hash12(wk + 5.0)) * (0.55 + 0.9 * hash12(wk + 9.0));
+  // The edge of a window is as soft as a pixel is big, so it is never sharper
+  // than the picture can hold still (a hard edge between two looks is noise).
+  float ew = clamp(pw / 2.3 * 1.0, 0.06, 0.22);
+  float pane = sstep(0.32 + ew, 0.32 - ew, abs(wf.x)) * sstep(0.30 + ew, 0.30 - ew, abs(wf.y));
+  // Where a pixel spans several windows the pattern is gone: what is left is
+  // how many of them are lit, and the average of their colours. (Keeping this
+  // cell's own lit-or-not there paints blocks the size of a window.)
+  float fade = sstep(0.26, 0.55, pw / 2.3);
+  float plA = pl0 + 0.14 * (0.92 - pl0);
+  vec3 avgCol = mix(lin(vec3(1.0, 0.76, 0.50)), lin(vec3(0.75, 0.88, 1.0)), hh.w) * (0.55 + 0.9 * noise(vec2(s / 25.0, h / 14.0)));
+  vec3 e = mix(wcol * lit * pane, avgCol * plA * 0.17, fade) * 1.25;
+  // The face itself: glass and metal catching the haze, a little brighter low down.
+  float face = 0.5 + 0.5 * (N.z);
+  vec3 tone = mix(lin(vec3(0.030, 0.036, 0.058)), lin(vec3(0.075, 0.085, 0.125)), hh.y);
+  vec3 spill = mix(MAGC, CYANC, step(0.5, hh.w)) * exp(-h / 70.0) * 0.07;
+  vec3 c = tone * (0.7 + 0.5 * face + 0.6 * sstep(0.0, 400.0, h) + 3.0 * FL) + hazeCol(vec3(N.x, 0.2, -N.z)) * 0.14 * face + spill;
+  // A neon banner down one corner of some blocks.
+  if (hh.x > 0.55 && hh.x < 0.82) {
+    float sc = fract(hh.w * 7.0);
+    vec3 nc = sc < 0.4 ? MAGC : sc < 0.75 ? CYANC : lin(vec3(1.0, 0.62, 0.25));
+    float u = (s - hh.w * 13.0) / 3.5 - floor((s - hh.w * 13.0) / 3.5 / 7.0) * 7.0;
+    float inB = sstep(0.0, 0.25, u) * sstep(1.0, 0.75, u);
+    float hb = (h - (50.0 + 150.0 * hh.y)) / 70.0;
+    float inV = sstep(0.0, 0.05, hb) * sstep(1.0, 0.9, hb);
+    float seg = step(0.30, hash12(vec2(floor(h / 2.2), floor(s / 3.5)) + cid));
+    float on = inB * inV * mix(1.0, seg, 1.0 - sstep(0.4, 1.0, pw / 2.2));
+    e += nc * on * 2.8 * (0.9 + 0.1 * sin(T * 0.7 + hh.w * 30.0));
+  }
+  // A big screen on a few faces: a slab of colour whose picture drifts, slowly.
+  if (hh.z > 0.90 && N.y < 0.5) {
+    float bs = s - hh.w * 13.0;
+    vec2 bq = vec2(bs / 16.0 - floor(bs / 16.0 / 9.0) * 9.0, (h - (30.0 + 90.0 * hh.y)) / 10.0);
+    float inS = sstep(0.0, 0.06, bq.x) * sstep(1.0, 0.94, bq.x) * sstep(0.0, 0.08, bq.y) * sstep(1.0, 0.92, bq.y);
+    float drift = noise(vec2(bq.x * 3.0 + T * 0.05, bq.y * 2.0 + hh.x * 40.0));
+    vec3 sc = mix(mix(MAGC, CYANC, sstep(0.3, 0.7, drift)), lin(vec3(1.0, 0.62, 0.25)), sstep(0.65, 0.9, noise(vec2(bq.y * 3.0, T * 0.03 + hh.y * 20.0))));
+    e += sc * inS * (0.6 + 1.1 * drift) * 1.3;
+  }
+  return c + e;
+}
+
+// The street, from above: asphalt, lamps, the lights of cars, wet.
+vec3 street(vec3 P, float pw, vec3 rd) {
+  vec2 g = (P.xz + OFFC) / CELL;
+  vec2 gd = min(fract(g), 1.0 - fract(g)) * CELL;
+  float st = min(gd.x, gd.y);
+  vec3 col = lin(vec3(0.016, 0.018, 0.026)) * (0.6 + 0.4 * sstep(3.0, 14.0, st));
+  float onSt = sstep(7.5 + pw, 2.0, st);
+  // Colour from the signs, laid on the wet road in blotches.
+  float blotch = sstep(0.40, 0.80, noise(P.xz * 0.045 + 3.0));
+  vec3 pc = mix(MAGC, CYANC, sstep(0.3, 0.7, noise(P.xz * 0.021 + 11.0)));
+  col += pc * blotch * onSt * 0.22;
+  col += hazeCol(vec3(rd.x, 0.15, rd.z)) * 0.25 * onSt;
+  // Lamps along each street, 30 m apart, and cars between them.
+  float avg = sstep(10.0, 30.0, pw);
+  vec3 lamps = vec3(0.0);
+  vec3 cars = vec3(0.0);
+  for (int a = 0; a < 2; a++) {
+    float along = a == 0 ? P.x + OFFC.x : P.z + OFFC.y;
+    float across = a == 0 ? gd.y : gd.x;
+    float line = a == 0 ? floor((P.z + OFFC.y) / CELL + 0.5) : floor((P.x + OFFC.x) / CELL + 0.5);
+    float u = along / 30.0;
+    vec2 dl = vec2((fract(u) - 0.5) * 30.0, across - 5.5);
+    lamps += lin(vec3(1.0, 0.72, 0.42)) * exp(-dot(dl, dl) / (2.0 * sq(1.6 + 0.5 * pw))) * (1.6 / (1.0 + 0.3 * pw));
+    float sp = (hash11(line * 3.7 + float(a) * 9.0) - 0.5) * 7.0;
+    float lane = hash11(line * 5.3 + float(a)) > 0.5 ? 1.0 : -1.0;
+    float cu = (along + T * sp) / 52.0;
+    float ci = floor(cu);
+    float cp = (fract(cu) - 0.5) * 52.0 - (hash11(ci * 7.7 + line) - 0.5) * 24.0;
+    float gate = step(0.45, hash11(ci * 3.1 + line * 11.0 + float(a)));
+    vec2 dc = vec2(cp, across - 2.2 * lane - 0.0);
+    vec3 cc = lane > 0.0 ? lin(vec3(1.0, 0.92, 0.80)) : lin(vec3(1.0, 0.16, 0.10));
+    cars += cc * gate * exp(-dot(dc, dc) / (2.0 * sq(1.5 + 0.7 * pw))) * (1.8 / (1.0 + 0.45 * pw));
+  }
+  lamps = mix(lamps, lin(vec3(1.0, 0.72, 0.42)) * 0.10 * onSt, avg);
+  cars = mix(cars, vec3(0.0), avg);
+  return col + lamps + cars;
+}
+
+// What the glass shows for a ray from the camera: sky, towers, street. blur is
+// how misted the glass is there (radians), nMax the cells it may walk.
+vec3 outside(vec3 rd, float blur, int nMax) {
+  float len2 = length(rd.xz);
+  vec3 haze = hazeCol(rd);
+  float tGround = rd.y < -1e-4 ? GROUND_Y / rd.y : 1e5;
+  float tSky = rd.y > 1e-4 ? TOP_MAX / rd.y : 1e5;
+  float tFar = 2600.0 / max(len2, 1e-3);
+  float tEnd = min(min(tGround, tSky), tFar);
+  vec2 d2 = rd.xz;
+  vec2 stp = vec2(d2.x < 0.0 ? -1.0 : 1.0, d2.y < 0.0 ? -1.0 : 1.0);
+  vec2 ad = max(abs(d2), vec2(1e-5));
+  vec2 cell = vec2(0.0);
+  vec2 tNext = ((cell + (stp * 0.5 + 0.5)) * CELL - OFFC) / (d2 + stp * 1e-5);
+  vec2 tDelta = CELL / ad;
+  float hitT = -1.0;
+  vec3 hitN = vec3(0.0);
+  vec4 hhHit = vec4(0.0);
+  vec2 cidHit = vec2(0.0), ctrHit = vec2(0.0), hsHit = vec2(0.0);
+  float topHit = 0.0;
+  for (int i = 0; i < 64; i++) {
+    if (i >= nMax) break;
+    if (min(tNext.x, tNext.y) > tEnd + CELL) break;
+    vec2 ctr, hs; vec4 hh;
+    float top = building(cell, ctr, hs, hh);
+    if (top > GROUND_Y) {
+      vec3 n1;
+      float t1 = boxHit(rd, vec3(ctr.x - hs.x, GROUND_Y, ctr.y - hs.y), vec3(ctr.x + hs.x, top, ctr.y + hs.y), n1);
+      if (top > -100.0) {
+        // the crown: a smaller box on the tall ones
+        vec3 n2;
+        float t2 = boxHit(rd, vec3(ctr.x - hs.x * 0.62, top, ctr.y - hs.y * 0.62),
+                              vec3(ctr.x + hs.x * 0.62, top + 8.0 + 30.0 * hh.z, ctr.y + hs.y * 0.62), n2);
+        if (t2 > 0.0 && (t1 < 0.0 || t2 < t1)) { t1 = t2; n1 = n2; }
+      }
+      if (t1 > 0.0 && t1 < tEnd) { hitT = t1; hitN = n1; hhHit = hh; cidHit = cell; ctrHit = ctr; hsHit = hs; topHit = top; break; }
+    }
+    if (tNext.x < tNext.y) { cell.x += stp.x; tNext.x += tDelta.x; }
+    else { cell.y += stp.y; tNext.y += tDelta.y; }
+  }
+  vec3 col;
+  float t;
+  float px = PX / FOCAL;
+  if (hitT > 0.0) {
+    t = hitT;
+    float pw = t * px + t * blur;
+    col = facade(rd * t, hitN, hhHit, cidHit, ctrHit, hsHit, topHit, pw);
+  } else if (tGround < min(tSky, tFar)) {
+    t = tGround;
+    float pw = t * px + t * blur;
+    col = street(rd * t, pw, rd);
+  } else {
+    t = 1e4;
+    col = skyCol(rd);
+  }
+  // Air: thicker low down, so the street is behind more of it than a roof.
+  float dens = FOGK * (1.0 + 1.6 * exp(-max(rd.y * t - GROUND_Y * 0.0, 0.0) / 90.0));
+  // banks of mist drifting through: thicker here, thinner there
+  dens *= 0.65 + 0.7 * noise(rd.xz * t * 0.0045 + vec2(T * 0.006, 3.0));
+  float tr = hitT > 0.0 || t < 1e3 ? exp(-t * dens) : 0.0;
+  col = col * tr + haze * (1.0 - tr);
+  // Traffic in the air: two lanes of cars, a long way off, in front of what is behind.
+  for (int k = 0; k < 2; k++) {
+    float fk = float(k);
+    float dl = 520.0 + 380.0 * fk;
+    float tl = dl / max(-rd.z, 1e-3);
+    if (rd.z < -1e-3 && tl < t) {
+      vec3 Q = rd * tl;
+      float along = Q.x + T * (9.0 + 5.0 * fk) * (k == 0 ? 1.0 : -1.0);
+      float ci = floor(along / 120.0);
+      float gate = step(0.55, hash11(ci * 5.3 + fk * 13.0));
+      float ox = (hash11(ci * 2.7 + fk * 3.0) - 0.5) * 60.0;
+      vec2 dq = vec2(max(abs(fract(along / 120.0) * 120.0 - 60.0 - ox) - 9.0, 0.0), Q.y - (-46.0 + 70.0 * fk + 14.0 * hash11(ci + fk)));
+      float pwq = tl * PX / FOCAL;
+      float glow = exp(-dot(dq, dq) / (2.0 * sq(1.6 + pwq))) * gate;
+      vec3 lc = hash11(ci * 7.1 + fk) > 0.5 ? lin(vec3(1.0, 0.92, 0.8)) : lin(vec3(1.0, 0.25, 0.20));
+      col += lc * glow * 1.4 * exp(-tl * FOGK * 1.2) / (1.0 + 0.5 * pwq);
+    }
+  }
+  return col;
+}
+
+// --- the glass, wet ---------------------------------------------------------
+// A drop is a lens: it bends the view by minus its own offset (upside down).
+// xy: how it bends, z: how much of the glass it covers, w: a glint.
+vec4 beads(vec2 g, float cs, float prob, float seed, float rad) {
+  vec2 q = g / cs, id = floor(q), f = fract(q) - 0.5;
+  vec3 h = vec3(hash12(id + seed), hash12(id * 1.7 + seed + 3.1), hash12(id + seed + 8.3));
+  vec2 c = (h.yz - 0.5) * 0.45;
+  float r = rad * (0.6 + 0.8 * h.y);
+  vec2 d = (f - c) / r;
+  float in1 = sstep(1.0, 0.75, length(d)) * step(1.0 - prob, h.x);
+  float glint = in1 * sstep(0.28, 0.0, length(d - vec2(-0.38, 0.42)));
+  return vec4(-d * in1, in1, glint);
+}
+
+// Drops that slide in bursts and rest, each with a thin clean line above it.
+vec4 sliders(vec2 g, float cw, float seed, float speed) {
+  vec2 q = vec2(g.x / cw + seed * 3.7, g.y / (cw * 1.7));
+  float col = floor(q.x);
+  float hc = hash11(col * 7.31 + seed);
+  float ph = T * speed * (0.6 + 0.8 * hc) + hc * 19.0;
+  float slip = floor(ph) + sstep(0.0, 0.32, fract(ph));
+  q.y += slip * 0.5;
+  vec2 id = vec2(col, floor(q.y));
+  vec2 f = vec2(fract(q.x), fract(q.y));
+  vec3 h3 = vec3(hash12(id + seed), hash12(id + 2.1 + seed), hash12(id + 5.7 + seed));
+  if (h3.x > 0.48) return vec4(0.0);
+  float cx = 0.5 + (h3.y - 0.5) * 0.42 + 0.04 * sin(f.y * 16.0 + h3.z * 6.0);
+  float cy = 0.22 + 0.5 * h3.z;
+  vec2 d = (f - vec2(cx, cy)) * vec2(1.0, 0.62);
+  float r = length(d) / 0.15;
+  float drop = sstep(1.0, 0.7, r);
+  float up = f.y - cy;
+  float tx = (f.x - cx - 0.04 * sin(up * 12.0)) / 0.045;
+  float trail = step(0.0, up) * sstep(1.0, 0.45, abs(tx)) * sstep(0.95, 0.0, up);
+  vec2 off = -d / 0.15 * drop + vec2(-tx * 0.8, 0.0) * trail * (1.0 - drop);
+  float lit = trail * sstep(0.3, 0.9, tx) * sstep(1.0, 0.7, tx) * 0.5;
+  return vec4(off, max(drop, trail * 0.6), drop * sstep(0.5, 0.0, length(d / 0.15 - vec2(-0.3, 0.35))) + lit);
+}
+
+// A few runnels that wander down the whole pane.
+vec4 runnels(vec2 g) {
+  vec4 acc = vec4(0.0);
+  for (int k = 0; k < 3; k++) {
+    float fk = float(k);
+    // Away from the middle: a bright line down the glass is not for a head to stand against.
+    float x0 = (k == 0 ? -2.1 : k == 1 ? 1.25 : 2.0) + (k == 0 ? -0.35 : 0.6) * hash11(fk * 3.3 + 1.0);
+    float x = x0 + 0.06 * sin(g.y * 1.7 + fk * 4.0) + 0.05 * (noise(vec2(g.y * 2.1 + fk * 9.0, T * 0.02)) - 0.5);
+    float w = 0.014 + 0.008 * hash11(fk * 5.1);
+    float dx = (g.x - x) / w;
+    float seg = sstep(0.35, 0.65, noise(vec2(g.y * 0.9 + fk * 13.0 + T * 0.03, fk * 7.0)));
+    float m = sstep(1.0, 0.6, abs(dx)) * seg;
+    acc.xy += vec2(-dx, 0.0) * m * 0.9;
+    acc.z = max(acc.z, m);
+    acc.w = max(acc.w, m * sstep(0.5, 1.0, dx * -0.5 + 0.5) * 0.35);
+  }
+  return acc;
+}
+
+vec4 wetGlass(vec2 g) {
+  vec4 a = beads(g, 0.058, 0.15, 1.3, 0.20);
+  vec4 b = beads(g + 0.4, 0.11, 0.14, 7.7, 0.22);
+  vec4 s1 = sliders(g, 0.17, 2.0, 0.045);
+  vec4 s2 = sliders(g + 0.7, 0.30, 5.0, 0.03);
+  vec4 r = runnels(g);
+  vec4 o = a;
+  o.xy += b.xy; o.z = max(o.z, b.z); o.w += b.w;
+  o.xy += s1.xy + s2.xy * 1.2 + r.xy; o.z = max(o.z, max(max(s1.z, s2.z), r.z)); o.w += s1.w + s2.w + r.w;
+  return o;
+}
+
+// Rain falling outside, in three depths: streaks as long as a redraw's fall,
+// sparse, drifting with a slow gust. a: coverage.
+float fallingRain(vec2 g, float lum) {
+  float a = 0.0;
+  float gust = 0.55 + 0.45 * sin(T * 0.11) * sin(T * 0.047 + 1.0);
+  for (int L = 0; L < 3; L++) {
+    float fl2 = float(L);
+    float cw = 0.045 + 0.06 * fl2;
+    vec2 q = vec2(g.x + g.y * (0.10 + 0.04 * fl2), g.y);
+    float colI = floor(q.x / cw);
+    float hc = hash11(colI * 3.91 + fl2 * 17.0);
+    float spd = 1.3 + 0.9 * fl2 + 0.5 * hc;
+    float len = 0.20 + 0.08 * fl2;
+    float cy = q.y / len + T * spd / len + hc * 31.0;
+    float id = floor(cy);
+    vec2 h = vec2(hash12(vec2(colI, id) + fl2 * 5.0), hash12(vec2(colI, id) + 9.1 + fl2));
+    float xo = (h.y - 0.5) * 0.6 * cw;
+    float fy = fract(cy);
+    float streak = sstep(0.016 * (1.0 + fl2), 0.0, abs((fract(q.x / cw) - 0.5) * cw - xo)) * sstep(0.0, 0.2, fy) * sstep(1.0, 0.4, fy);
+    a += streak * step(0.80 + 0.04 * fl2 - 0.16 * gust, h.x) * (0.75 - 0.15 * fl2);
+  }
+  return a * (0.25 + 1.6 * lum);
+}
+
+// --- the room ---------------------------------------------------------------
+float sdRBox(vec3 p, vec3 b, float r) {
+  vec3 q = abs(p) - b + r;
+  return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0) - r;
+}
+
+float map(vec3 p) {
+  float d = 1e3;
+  gMat = 0.0;
+  // The sofa, a long low one, its back toward the glass.
+  vec3 q = p - SOFA_C;
+  float bs = sdBox3(q - vec3(0.0, 0.45, 0.0), vec3(1.6, 0.55, 0.62));
+  if (bs > 0.05) d = min(d, bs);
+  else {
+    float legs = min(min(sdBox3(vec3(abs(q.x) - 1.20, q.y - 0.045, abs(q.z) - 0.34), vec3(0.012, 0.045, 0.012)), 1e3), 1e3);
+    float plinth = sdRBox(q - vec3(0.0, 0.115, 0.0), vec3(1.26, 0.03, 0.40), 0.01);
+    float seat = sdRBox(q - vec3(0.0, 0.22, 0.03), vec3(1.33, 0.065, 0.45), 0.035);
+    float cu = sdRBox(vec3(abs(q.x) - 0.665, q.y - 0.335, q.z - 0.09), vec3(0.64, 0.075, 0.37), 0.045);
+    vec3 b = q - vec3(0.0, 0.60, -0.32);
+    float bx = b.x - clamp(floor(b.x / 0.88 + 0.5), -1.0, 1.0) * 0.88;
+    float cb = sdRBox(vec3(bx, b.y * 0.986 - b.z * 0.17, b.z * 0.986 + b.y * 0.17), vec3(0.425, 0.25, 0.085), 0.05);
+    float arm = sdRBox(vec3(abs(q.x) - 1.30, q.y - 0.38, q.z - 0.0), vec3(0.075, 0.27, 0.46), 0.04);
+    float back = sdRBox(q - vec3(0.0, 0.40, -0.40), vec3(1.34, 0.19, 0.07), 0.03);
+    float fab = min(min(min(seat, cu), min(cb, arm)), back);
+    if (legs < d) { d = legs; gMat = 1.0; }
+    if (plinth < d) { d = plinth; gMat = 4.0; }
+    if (fab < d) { d = fab; gMat = 0.0; }
+  }
+  // The coffee table: a smoked-glass top and a shelf on four thin legs.
+  vec3 r = p - TABLE_C;
+  float bt = sdBox3(r - vec3(0.0, 0.22, 0.0), vec3(0.64, 0.24, 0.40));
+  if (bt > 0.05) d = min(d, bt);
+  else {
+    float top = gSkipGlass > 0.5 ? 1e3 : sdRBox(r - vec3(0.0, 0.395, 0.0), vec3(0.56, 0.010, 0.33), 0.004);
+    float shelf = gSkipGlass > 0.5 ? 1e3 : sdRBox(r - vec3(0.0, 0.10, 0.0), vec3(0.50, 0.008, 0.26), 0.003);
+    float tl = sdBox3(vec3(abs(r.x) - 0.52, r.y - 0.20, abs(r.z) - 0.29), vec3(0.012, 0.20, 0.012));
+    float rim = max(sdBox3(vec3(r.x, r.y - 0.385, r.z), vec3(0.565, 0.007, 0.335)), -sdBox3(vec3(r.x, r.y - 0.385, r.z), vec3(0.545, 0.02, 0.315)));
+    if (tl < d) { d = tl; gMat = 1.0; }
+    if (rim < d) { d = rim; gMat = 1.0; }
+    if (top < d) { d = top; gMat = 2.0; }
+    if (shelf < d) { d = shelf; gMat = 2.0; }
+  }
+  // The arc lamp: a base, a stem, a bend, and a globe that is the light.
+  vec3 l = p - LAMP_A;
+  float bl = sdBox3(l - vec3(-0.40, 0.95, 0.0), vec3(0.62, 1.05, 0.22));
+  if (bl > 0.05) d = min(d, bl);
+  else {
+    float base = sdCylY(l - vec3(0.0, 0.015, 0.0), 0.17, 0.015);
+    float stem = sdCapsule(l, vec3(0.0, 0.03, 0.0), vec3(0.0, 1.55, 0.0), 0.011);
+    float arc1 = sdCapsule(l, vec3(0.0, 1.55, 0.0), vec3(-0.28, 1.76, 0.0), 0.009);
+    float arc2 = sdCapsule(l, vec3(-0.28, 1.76, 0.0), vec3(-0.66, 1.79, 0.0), 0.008);
+    float cord = sdCapsule(l, vec3(-0.66, 1.79, 0.0), ORB - LAMP_A + vec3(0.0, 0.10, 0.0), 0.003);
+    float globe = length(l - (ORB - LAMP_A)) - 0.105;
+    float m = min(min(base, stem), min(arc1, min(arc2, cord)));
+    if (m < d) { d = m; gMat = 1.0; }
+    if (globe < d) { d = globe; gMat = 3.0; }
+  }
+  return d;
+}
+
+// Is any of the objects on the way? Their bounds first, then a short march.
+float marchObjects(vec3 ro, vec3 rd, float tmin, float tmax, int steps) {
+  vec3 lo = vec3(-3.2, FLOOR_Y - 0.05, -4.6), hi = vec3(3.1, 0.75, -2.3);
+  vec3 inv = 1.0 / (rd + vec3(1e-6) * sign(rd + 1e-9));
+  vec3 t0 = (lo - ro) * inv, t1 = (hi - ro) * inv;
+  vec3 a = min(t0, t1), b = max(t0, t1);
+  float tn = max(max(max(a.x, a.y), a.z), tmin), tf = min(min(min(b.x, b.y), b.z), tmax);
+  if (tn > tf) return -1.0;
+  float t = tn;
+  for (int i = 0; i < 48; i++) {
+    if (i >= steps) break;
+    float h = map(ro + rd * t);
+    if (h < 0.0012) return t;
+    t += h * 0.9;
+    if (t > tf) break;
+  }
+  return -1.0;
+}
+
+vec3 mapNormal(vec3 p) {
+  vec3 n = vec3(0.0);
+  for (int i = 0; i < 4; i++) {
+    vec3 e = 0.5773 * (2.0 * vec3(float(((i + 3) >> 1) & 1), float((i >> 1) & 1), float(i & 1)) - 1.0);
+    n += e * map(p + e * 0.0012);
+  }
+  return normalize(n);
+}
+
+vec3 pointLight(vec3 x, vec3 n, vec3 lp, vec3 lc, float k) {
+  vec3 lv = lp - x;
+  float d2 = dot(lv, lv);
+  return lc * max(dot(n, lv * inversesqrt(d2)), 0.0) * k * 6.0 / (0.12 + d2 * 0.5 + d2 * d2 * 0.05);
+}
+
+// All the room's light on a surface: a dark room with a city outside it, and
+// the architecture's own cyan and magenta.
+vec3 roomLight(vec3 X, vec3 n, float breathe) {
+  vec3 L = lin(vec3(0.085, 0.095, 0.150)) * (0.5 + 0.5 * n.y);
+  // The city, an area light behind the glass: faces turned to it.
+  L += (mix(CYANC, MAGC, 0.5) * 0.10 + vec3(0.02) + FL * 0.10) * (0.30 * max(n.y, 0.0) + max(-n.z, 0.0));
+  // The cove along the ceiling, over the glass.
+  L += pointLight(X, n, vec3(-2.2, CEIL_Y - 0.12, GZ + 0.3), CYANC, 1.1 * breathe);
+  L += pointLight(X, n, vec3(0.0, CEIL_Y - 0.12, GZ + 0.3), CYANC, 1.1 * breathe);
+  L += pointLight(X, n, vec3(2.2, CEIL_Y - 0.12, GZ + 0.3), CYANC, 1.1 * breathe);
+  // The strip along the sill.
+  L += pointLight(X, n, vec3(-1.8, FLOOR_Y + 0.08, GZ + 0.25), CYANC, 0.45 * breathe);
+  L += pointLight(X, n, vec3(1.8, FLOOR_Y + 0.08, GZ + 0.25), CYANC, 0.45 * breathe);
+  // The sofa's underglow and the strips in the side walls: magenta.
+  L += pointLight(X, n, SOFA_C + vec3(0.0, 0.09, 0.42), MAGC, 0.40 * breathe);
+  L += pointLight(X, n, SOFA_C + vec3(-1.0, 0.09, 0.30), MAGC, 0.30 * breathe);
+  L += pointLight(X, n, vec3(SIDE_X - 0.15, -0.2, -3.9), MAGC, 0.35 * breathe);
+  L += pointLight(X, n, vec3(-SIDE_X + 0.15, -0.2, -3.9), CYANC, 0.25 * breathe);
+  // The lamp, warm, the one warm thing in the room.
+  L += pointLight(X, n, ORB, WARMC, 1.3);
+  return L;
+}
+
+// The room's strips, as a mirror holds them: the cove, the sill, the side walls.
+vec3 stripRefl(vec3 X, vec3 R, float rough, float breathe) {
+  vec3 c = vec3(0.0);
+  float w2 = sq(0.05 + rough) + 0.002;
+  if (R.y > 1e-3) {
+    float t = (CEIL_Y - X.y) / R.y;
+    vec2 hit = vec2(X.x + R.x * t, X.z + R.z * t);
+    c += CYANC * 2.4 * breathe * exp(-sq(hit.y - (GZ + 0.22)) / (w2 * 6.0)) * sstep(SIDE_X + 0.4, SIDE_X - 0.4, abs(hit.x));
+  }
+  for (int k = 0; k < 2; k++) {
+    float sx = k == 0 ? SIDE_X : -SIDE_X;
+    float t = (sx - X.x) / (abs(R.x) < 1e-4 ? 1e-4 : R.x);
+    if (t > 0.0) {
+      vec2 hit = vec2(X.z + R.z * t, X.y + R.y * t);
+      c += (k == 0 ? MAGC : CYANC) * 2.0 * breathe * exp(-sq(hit.x + 3.9) / (w2 * 0.8)) * sstep(CEIL_Y, CEIL_Y - 0.6, hit.y) * sstep(FLOOR_Y - 0.1, FLOOR_Y + 0.3, hit.y);
+    }
+  }
+  return c;
+}
+
+vec4 scene(vec2 p, out vec3 emit) {
+  emit = vec3(0.0);
+  MAGC = lin(vec3(1.0, 0.16, 0.55));
+  CYANC = lin(vec3(0.12, 0.85, 1.0));
+  WARMC = lin(vec3(1.0, 0.70, 0.40));
+  FL = stormFlash() * 0.5;
+  float breathe = 0.95 + 0.05 * sin(T * 0.45);
+
+  vec3 ro = vec3(0.0);
+  vec3 rd = camRay(p, PITCH);
+  float tg = rd.z < -1e-4 ? GZ / rd.z : 1e5;
+  float tf = rd.y < -1e-4 ? FLOOR_Y / rd.y : 1e5;
+  float tc = rd.y > 1e-4 ? (CEIL_Y) / rd.y : 1e5;
+  float tl = rd.x < -1e-4 ? -SIDE_X / rd.x : 1e5;
+  float tr = rd.x > 1e-4 ? SIDE_X / rd.x : 1e5;
+  float tp = min(min(tg, tf), min(tc, min(tl, tr)));
+
+  vec3 col = vec3(0.0);
+  float rec = 0.9;
+  vec3 crd = rd;            // the one look at the city: through the glass, or in the floor
+  float cw = 0.0;           // how much of it reaches the eye
+  float blur = 0.0;
+  vec3 thru = vec3(1.0);    // what smoked glass lets through
+  float tmin = 0.0;
+  gSkipGlass = 0.0;
+  vec2 gpos = vec2(0.0);
+  float glassHere = 0.0;
+
+  for (int pass = 0; pass < 2; pass++) {
+    float to = marchObjects(ro, rd, tmin, tp, 44);
+    vec3 X, n, alb;
+    float rough = 0.7, spec = 0.0, isFloor = 0.0;
+    vec3 sh = vec3(0.0);
+    bool done = true;
+    if (to > 0.0) {
+      X = rd * to;
+      float mat = gMat;
+      n = mapNormal(X);
+      rec = 0.9;
+      if (mat < 0.5) {
+        alb = lin(vec3(0.105, 0.110, 0.130)) * (0.8 + 0.4 * noise(vec2(X.x * 90.0 + X.z * 40.0, X.y * 90.0)));
+        rough = 0.9;
+      } else if (mat < 1.5) {
+        alb = lin(vec3(0.34, 0.35, 0.38)); rough = 0.30; spec = 0.6;
+      } else if (mat < 2.5) {
+        // smoked glass: a dark film, a clear sheen of the strips, and the room behind
+        vec3 R = reflect(rd, n);
+        float F = 0.06 + 0.94 * pow(1.0 - max(dot(-rd, n), 0.0), 5.0);
+        sh += stripRefl(X, R, 0.05, breathe) * F * 1.4 + hazeCol(R) * F * 0.4;
+        thru *= lin(vec3(0.38, 0.42, 0.46)) * (1.0 - F);
+        if (pass == 0) { col += sh; tmin = to + 0.004; gSkipGlass = 1.0; done = false; }
+        alb = vec3(0.0);
+      } else if (mat < 3.5) {
+        emit += WARMC * 7.0 * thru;
+        alb = vec3(0.0);
+        rec = 0.0;
+      } else {
+        alb = lin(vec3(0.012, 0.012, 0.016)); rough = 0.8;
+      }
+      if (done) {
+        vec3 L = roomLight(X, n, breathe);
+        col += thru * (alb * L + sh);
+        if (spec > 0.0) {
+          vec3 R = reflect(rd, n);
+          col += thru * stripRefl(X, R, rough, breathe) * 0.5 * spec;
+          col += thru * WARMC * pow(max(dot(R, normalize(ORB - X)), 0.0), 40.0) * 1.2 * spec / (0.4 + dot(ORB - X, ORB - X));
+        }
+        // The city at its back: a rim on every edge turned from the glass.
+        float rim = pow(1.0 - max(dot(-rd, n), 0.0), 3.0);
+        col += thru * alb * mix(CYANC, MAGC, 0.5 + 0.5 * n.x) * rim * 0.9 * (0.4 + 0.6 * sstep(-0.3, 0.6, -n.z + n.y * 0.5)) * 0.35;
+      }
+    } else if (tp == tg) {
+      // The glass, and what is behind it.
+      X = rd * tg;
+      glassHere = 1.0;
+      gpos = X.xy;
+      rec = 0.0;
+    } else if (tp == tf) {
+      X = rd * tf;
+      n = vec3(0.0, 1.0, 0.0);
+      isFloor = 1.0;
+      rec = 0.55;
+      float vein = sstep(0.46, 0.50, abs(noise(X.xz * vec2(1.3, 0.7)) - 0.5) * -1.0 + 0.5);
+      alb = lin(vec3(0.075, 0.080, 0.095)) * (0.7 + 0.6 * noise(X.xz * vec2(0.8, 0.5))) * (1.0 + 0.5 * vein);
+      // a rug under the sofa and the table: soft, the one thing here that does not mirror
+      vec2 rq = abs(X.xz - vec2(-1.30, -3.45)) - vec2(1.85, 1.15);
+      float rug = sstep(0.03, -0.03, max(rq.x, rq.y));
+      float rugEdge = sstep(0.045, 0.02, abs(max(rq.x, rq.y) + 0.07));
+      alb = mix(alb, lin(vec3(0.060, 0.062, 0.078)) * (0.8 + 0.4 * noise(X.xz * 160.0)), rug);
+      col += CYANC * 0.05 * exp(-(X.z - GZ) / 1.1) * (1.0 - rug);
+      col += mix(CYANC, MAGC, 0.5 + 0.5 * sin(X.x * 0.9)) * 0.06 * exp(-(X.z - GZ) / 2.6);
+      vec3 L = roomLight(X, n, breathe);
+      col += alb * L;
+      // A polished floor: it holds the room.
+      float cosv = max(-rd.y, 0.0);
+      float F = 0.10 + 0.90 * pow(1.0 - cosv, 5.0);
+      float rugK = rug;
+      vec3 R = reflect(rd, n);
+      R = normalize(R + vec3(noise(X.xz * vec2(2.0, 24.0)) - 0.5, 0.0, noise(X.xz * 7.0 + 5.0) - 0.5) * 0.012);
+      vec3 rf = stripRefl(X, R, 0.10, breathe);
+      float tobj = marchObjects(X + n * 0.002, R, 0.0, 12.0, 28);
+      if (tobj > 0.0) {
+        float mat = gMat;
+        vec3 Xo = X + R * tobj;
+        vec3 no = mapNormal(Xo);
+        vec3 ao = mat < 0.5 ? lin(vec3(0.17, 0.18, 0.21)) : mat < 1.5 ? lin(vec3(0.5)) : mat < 2.5 ? lin(vec3(0.04)) : mat < 3.5 ? vec3(0.0) : lin(vec3(0.012));
+        rf += ao * roomLight(Xo, no, breathe) * 0.9;
+        if (mat > 2.5 && mat < 3.5) rf += WARMC * 4.0;
+        cw = 0.0;
+      } else {
+        // beyond the glass: a ray that rises to the pane sees the city
+        float tgr = R.z < -1e-4 ? (GZ - X.z) / R.z : 1e5;
+        float yg = X.y + R.y * tgr;
+        crd = R;
+        cw = F * 0.92 * sstep(CEIL_Y, CEIL_Y - 0.2, yg) * sstep(0.0, 0.05, tgr);
+      }
+      col += rf * F * (1.0 - 0.8 * rug);
+    } else if (tp == tc) {
+      X = rd * tc;
+      rec = 0.7;
+      n = vec3(0.0, -1.0, 0.0);
+      alb = lin(vec3(0.09, 0.095, 0.11));
+      col += alb * roomLight(X, n, breathe);
+      float cove = sstep(0.11, 0.0, abs(X.z - (GZ + 0.22)) - 0.07);
+      emit += CYANC * 2.0 * breathe * cove;
+    } else {
+      X = rd * min(tl, tr);
+      float side = tl < tr ? -1.0 : 1.0;
+      n = vec3(-side, 0.0, 0.0);
+      rec = 0.9;
+      float fin = sstep(0.0, 0.03, abs(fract(X.z / 0.42) - 0.5) - 0.34);
+      alb = lin(vec3(0.075, 0.078, 0.095)) * (0.55 + 0.45 * fin);
+      col += alb * roomLight(X, n, breathe);
+      float dz = abs(X.z + 3.9);
+      vec3 sc = side > 0.0 ? MAGC : CYANC;
+      emit += sc * 2.2 * breathe * sstep(0.04, 0.012, dz) * sstep(CEIL_Y, CEIL_Y - 0.4, X.y) * sstep(FLOOR_Y, FLOOR_Y + 0.15, X.y);
+      col += sc * exp(-dz * 3.2) * 0.16 * breathe;
+    }
+    if (done) break;
+  }
+
+  // ---- the glass ----
+  if (glassHere > 0.5) {
+    vec2 g = gpos;
+    // wet; the view turns with the phone because the glass is a thing in the room
+    vec4 w = wetGlass(g);
+    crd = normalize(rd + vec3(w.xy * 0.030, 0.0));
+    cw = 1.0;
+    blur = 0.0008 * (1.0 - sstep(0.15, 0.7, w.z));
+  }
+
+  vec3 city = vec3(0.0);
+  if (cw > 0.0) {
+    city = outside(crd, blur, glassHere > 0.5 ? 56 : 30);
+  }
+  if (glassHere > 0.5) {
+    vec2 g = gpos;
+    vec4 w = wetGlass(g);
+    // the person's own calm: the city thins into mist where they are
+    vec2 hc = (vec2(p.x, p.y) - vec2(SUBJ.x, SUBJ.y + 0.45 * SUBJR.y)) / vec2(max(SUBJR.x, 0.18) * 1.15, max(SUBJR.y, 0.2) * 0.8);
+    float calm = exp(-dot(hc, hc) * 1.1) * 0.62;
+    vec3 haze = hazeCol(rd);
+    city = mix(city, haze * 1.15 + lin(vec3(0.03, 0.035, 0.06)), calm);
+    // the rain outside, lit by what is behind it
+    float lum = dot(city, vec3(0.3, 0.55, 0.15));
+    float rain = fallingRain(g, clamp(lum * 1.5, 0.0, 1.0)) * (1.0 - 0.7 * calm);
+    city += (haze * 1.6 + city * 0.9 + lin(vec3(0.20, 0.26, 0.40)) + FL * 0.5) * rain * 1.1;
+    // a drop: darker at the rim, a crescent of the cove's light in its upper left
+    float rl = length(w.xy);
+    float rimD = sstep(0.55, 1.0, rl);
+    float cres = pow(max(dot(w.xy / max(rl, 1e-3), vec2(0.62, -0.78)), 0.0), 6.0) * sstep(0.45, 0.9, rl) * sstep(1.0, 0.8, rl);
+    city *= lin(vec3(0.92, 0.97, 1.0)) * (1.0 - 0.10 * w.z) * (1.0 - 0.55 * rimD * w.z);
+    city += CYANC * cres * 0.12 + lin(vec3(0.85, 0.95, 1.0)) * min(w.w, 1.0) * 0.14;
+    // The slender posts of the wall, and the plinth along the foot of it.
+    float post = sstep(0.040, 0.034, abs(abs(gpos.x) - 2.2));
+    float plinth = sstep(FLOOR_Y + 0.15, FLOOR_Y + 0.14, gpos.y);
+    float strip = sstep(0.014, 0.004, abs(gpos.y - (FLOOR_Y + 0.085)));
+    float edgeL = sstep(0.006, 0.0, abs(abs(abs(gpos.x) - 2.2) - 0.036)) * (1.0 - plinth);
+    city = mix(city, lin(vec3(0.016, 0.018, 0.024)) + CYANC * edgeL * 0.35, max(post, plinth));
+    city += CYANC * strip * plinth * 2.2 * breathe;
+  }
+  // the lamp's halo, and the globe's glare in the air
+  {
+    float tl2 = dot(ORB, rd);
+    float dd = length(cross(ORB, rd));
+    if (tl2 > 0.0) emit += WARMC * (exp(-dd * 14.0) * 0.55 + exp(-dd * 4.0) * 0.10) * (to_cut(tl2, tp));
+  }
+  emit += city * (glassHere > 0.5 ? 1.0 : cw);
+  return vec4(col, rec);
+}
+`;
+
   var SOURCES = {
-    office: OFFICE, island: ISLAND, cybercafe: CAFE, mountain: MOUNTAIN, countryside: COUNTRYSIDE
+    office: OFFICE, island: ISLAND, cybercafe: CAFE, mountain: MOUNTAIN, countryside: COUNTRYSIDE,
+    penthouse: PENTHOUSE
   };
 
   // The common entry point. scene() is authored with the key light on the
@@ -3046,6 +3798,7 @@ uniform vec2 uCurRes;
 uniform vec2 uOutRes;
 uniform vec2 uJitter;
 uniform float uAge;
+uniform float uBloom;
 void main() {
   vec2 uv = gl_FragCoord.xy / uOutRes;
   // This pixel's centre among the redraw's looks: look q fell at q + 0.5 + uJitter.
@@ -3066,6 +3819,21 @@ void main() {
     if (i == 0 && j == 0) near = c;
   }
   cur /= wsum; seen /= wsum;
+  // Bloom, for the scenes that ask for it (uBloom > 0): what is lit around
+  // this pixel, from the coarse levels of the redraw's own mip chain, which the
+  // pipeline builds for the light wrap anyway. It is added to every look
+  // before the looks are compared, so a halo that holds still is as still as
+  // the picture and costs the encoder nothing; and it is added in light, so a
+  // lamp in a dark room gets a halo and a lit wall only a little brighter.
+  if (uBloom > 0.0) {
+    vec3 ba = textureLod(uCur, uv, 2.0).rgb, bb = textureLod(uCur, uv, 3.2).rgb, bc = textureLod(uCur, uv, 4.4).rgb;
+    vec3 bl = (ba * ba * 0.40 + bb * bb * 0.35 + bc * bc * 0.25) * uBloom;
+    float keep = 1.0 - 0.4 * uBloom;
+    cur.rgb = sqrt(cur.rgb * cur.rgb * keep + bl);
+    near.rgb = sqrt(near.rgb * near.rgb * keep + bl);
+    lo.rgb = sqrt(lo.rgb * lo.rgb * keep + bl);
+    hi.rgb = sqrt(hi.rgb * hi.rgb * keep + bl);
+  }
   if (uAge < 0.5) { outColor = cur; return; }
   // The nearest look, measured in the picture's own pixels.
   float s = uOutRes.y / uCurRes.y;

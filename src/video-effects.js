@@ -2907,6 +2907,7 @@ var VideoEffects = (function () {
     gl.uniform2f(uloc(gl, p, 'uOutRes'), this.canvas.width, this.canvas.height);
     gl.uniform2f(uloc(gl, p, 'uJitter'), at[0], at[1]);
     gl.uniform1f(uloc(gl, p, 'uAge'), Math.min(this.sceneAge, 255));
+    gl.uniform1f(uloc(gl, p, 'uBloom'), (this.scene && this.scene.bloom) || 0);
     this.drawQuad(this.fbSceneOut[to], this.canvas.width, this.canvas.height);
     this.sceneOut = to;
     this.sceneAge++;
