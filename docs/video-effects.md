@@ -926,7 +926,11 @@ has proved itself: frames flowing, the scene compiled, a self-test (the GPU's
 upload of a frame against a 2D probe of the same frame, then a keyed and an
 unmarked synthetic frame through the real passes) and 30 warm-up frames with a
 median draw under 6 ms. Running, a rolling median over 8 ms for five seconds is
-a give-up. Every frame:
+a give-up. The scene is drawn in high definition — its buffer at the top of the
+ladder (`SCENE_SCALE_MAX`, phone or not, so ~1152 long against the 1280 canvas)
+— and over either budget it first steps down (`KEYIN_SCENE_SCALE`: 2.25x, then
+the sender's own starting scale, then `SCENE_LONG`), the warm-up restarting
+its count each time; only at the bottom does a miss give up. Every frame:
 
 * **Is it keyed?** The shader asks, from a few taps in each zone, so an unkeyed
   frame is passed through untouched on the very frame it arrives and the tile

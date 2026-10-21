@@ -611,6 +611,31 @@ test.describe('a running receiver', () => {
     expect(seen.alive).toBe(true);
   });
 
+  test('the scene is drawn in high definition, and steps down before the cut-out gives up', async ({ page }) => {
+    test.setTimeout(120_000);
+    const seen = await page.evaluate(async () => {
+      await window.__start();
+      const p = window.__p;
+      const top = { steps: p.sceneScaleSteps.slice(), step: p.sceneScaleStep };
+      // A canvas smaller than any step: nothing to step down to.
+      const small = p.stepSceneScale();
+      p.sceneScaleStep = 0;
+      p.ensureScene(p.sceneId);
+      // A 1280x720 picture: the buffer near the canvas, then smaller each step.
+      p.resize(1280, 720);
+      const sizes = [p.sceneW];
+      while (p.stepSceneScale()) sizes.push(p.sceneW);
+      const res = VideoScenes.byId('office').res || 1;
+      const want = [2.25, 1.5, 1].map((k) => Math.round(1280 * Math.min(1, 512 * k * res / 1280)));
+      return { top, small, sizes, want, step: p.sceneScaleStep, alive: window.__h.alive() };
+    });
+    expect(seen.top).toEqual({ steps: [2.25, 1.5, 1], step: 0 });
+    expect(seen.small).toBe(false);
+    expect(seen.sizes).toEqual(seen.want);
+    expect(seen.step).toBe(2);
+    expect(seen.alive).toBe(true);
+  });
+
   test('over budget it gives up, the probe keeps watching, and a lost context gives up too', async ({ page }) => {
     test.setTimeout(120_000);
     const seen = await page.evaluate(async () => {
