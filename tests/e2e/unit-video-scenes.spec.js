@@ -8,7 +8,7 @@ import { test, expect } from './fixtures.js';
 // Inference is stubbed exactly as in unit-video-effects.spec.js — the stub's
 // mask is a centred oval — and everything else is the real GL pipeline.
 
-const SCENES = ['office', 'island', 'cybercafe', 'mountain', 'countryside'];
+const SCENES = ['office', 'island', 'cybercafe', 'penthouse', 'mountain', 'countryside'];
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => { window.__voxalSegStub = true; });
