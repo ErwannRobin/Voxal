@@ -14094,6 +14094,70 @@ var _videoBgReference = null;
 var _videoBgSubjectOnly = null;
 var _videoBgPreview = null;
 
+// --- Drop an image to set the background (computers) --------------------------
+//
+// Dropping an image file on the window in a room with video mode on stores it
+// as the custom background (the same downscale-and-store path as the picker's
+// "+" chip) and selects it. Tauri's own file-drop handler is off for the main
+// window (`dragDropEnabled: false`), which is what lets the page see the drop.
+
+var _bgDropDepth = 0;
+
+function bgDropAllowed(e) {
+  if (IS_MOBILE_DEVICE || !inRoom || !readVideoModeEnabled() || !keyedApi('setCustomImage')) return false;
+  var dt = e.dataTransfer;
+  if (!dt) return false;
+  var types = dt.types ? Array.prototype.slice.call(dt.types) : [];
+  return types.indexOf('Files') >= 0;
+}
+
+function setBgDropHint(on) {
+  var el = document.getElementById('bg-drop-hint');
+  if (!el && on) {
+    el = document.createElement('div');
+    el.id = 'bg-drop-hint';
+    el.className = 'bg-drop-hint';
+    el.textContent = 'Drop an image to use it as your background';
+    document.body.appendChild(el);
+  }
+  if (el) el.classList.toggle('show', !!on);
+}
+
+function initBackgroundDrop() {
+  if (IS_MOBILE_DEVICE) return;
+  document.addEventListener('dragenter', function(e) {
+    if (!bgDropAllowed(e)) return;
+    e.preventDefault();
+    if (++_bgDropDepth === 1) setBgDropHint(true);
+  });
+  document.addEventListener('dragover', function(e) {
+    if (!bgDropAllowed(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  document.addEventListener('dragleave', function(e) {
+    if (_bgDropDepth && --_bgDropDepth === 0) setBgDropHint(false);
+  });
+  document.addEventListener('drop', function(e) {
+    var allowed = bgDropAllowed(e);
+    _bgDropDepth = 0;
+    setBgDropHint(false);
+    if (!allowed) return;
+    e.preventDefault();
+    var files = Array.prototype.slice.call(e.dataTransfer.files || []);
+    var file = files.filter(function(f) { return /^image\//.test(f.type); })[0];
+    if (!file) { showCopyToast('That is not an image'); return; }
+    VideoEffects.setCustomImage(file).then(function() {
+      return Promise.all(_videoBgPickers.map(function(p) {
+        return p.refreshCustom ? p.refreshCustom() : null;
+      }));
+    }).then(function() {
+      return applyVideoBackground('custom');
+    }).catch(function() { showCopyToast('Could not use that image'); });
+  });
+}
+initBackgroundDrop();
+
 // --- Background tilt (phones) -----------------------------------------------------
 //
 // An animated scene turns with the phone (DeviceTilt -> VideoEffects.setTilt),
@@ -14101,6 +14165,13 @@ var _videoBgPreview = null;
 // frame's tilt strip. Level-triggered: syncBackgroundTilt() works out whether
 // the sensor is wanted from live state, so every place that changes the camera
 // or the background just calls it, and a slow timer catches the rest.
+
+// A scene turns; a custom image slides over the frame (parallax). Both follow
+// the phone's sensor or the computer's drag. Only a scene is ever keyed.
+function backgroundMovable() {
+  var m = String(videoBackgroundMode());
+  return m.indexOf('preset:') === 0 || m === 'custom';
+}
 
 var _videoBgTilt = null;
 var _tiltGestureArmed = false;
@@ -14110,7 +14181,7 @@ function backgroundTiltWanted() {
   if (!IS_MOBILE_DEVICE || typeof DeviceTilt === 'undefined' || !DeviceTilt.supported()) return false;
   if (!keyedApi('readBackgroundTilt') || !VideoEffects.readBackgroundTilt()) return false;
   if (!localVideoActive || !localVideoStream || !localVideoStream._effectsProcessor) return false;
-  return String(videoBackgroundMode()).indexOf('preset:') === 0;
+  return backgroundMovable();
 }
 
 // iOS shows its motion prompt only from a user gesture, and the one that chose
@@ -14146,7 +14217,7 @@ var _backgroundOrbitEngaged = false;
 function backgroundOrbitWanted() {
   if (IS_MOBILE_DEVICE || !keyedApi('attachOrbit')) return false;
   if (!localVideoActive || !localVideoStream || !localVideoStream._effectsProcessor) return false;
-  return String(videoBackgroundMode()).indexOf('preset:') === 0;
+  return backgroundMovable();
 }
 
 function onBackgroundOrbit(v) {
@@ -14154,7 +14225,7 @@ function onBackgroundOrbit(v) {
   if (keyedApi('setTilt')) VideoEffects.setTilt(v);
   if (v && !_backgroundOrbitEngaged) {
     _backgroundOrbitEngaged = true;
-    refreshKeyedSend();
+    if (String(videoBackgroundMode()).indexOf('preset:') === 0) refreshKeyedSend();
   }
 }
 
@@ -14712,7 +14783,7 @@ function initVideoBackgroundUI() {
     _videoBgTilt = VideoEffects.renderBackgroundTilt(
       document.getElementById('settings-bg-tilt'),
       { id: 'btn-bg-tilt', label: 'Move the background with my phone',
-        title: 'The scene turns as you tilt or turn the phone' });
+        title: 'The background moves as you tilt or turn the phone' });
     var tiltCard = document.getElementById('settings-bg-tilt-card');
     if (tiltCard) tiltCard.classList.remove('hidden');
     if (keyedApi('onBackgroundTiltChange')) VideoEffects.onBackgroundTiltChange(function() { syncBackgroundTilt(); });
