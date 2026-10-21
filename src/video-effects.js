@@ -326,6 +326,11 @@ var VideoEffects = (function () {
     var top = Math.min(SCENE_SCALE_MAX, Math.max(SCENE_SCALE[0], 0.6 * long / SCENE_LONG));
     return top > SCENE_SCALE[0] + 0.01 ? [top, SCENE_SCALE[0], 1] : SCENE_SCALE.slice();
   }
+  // A keyed peer's scene, drawn here (KeyInProcessor), always starts at the
+  // top, phone or not: it is somebody's whole background on this screen, and
+  // drawn small it reads as standard definition behind a person in HD. Only
+  // the receiver's own frame budget walks it down (noteDraw()).
+  var KEYIN_SCENE_SCALE = [SCENE_SCALE_MAX, SCENE_SCALE[0], 1];
   // How often the scene itself is redrawn. Its motion is slow by design, and a
   // background that changes on every frame is one the encoder pays for on every
   // frame — so it runs well under the camera's rate, and halves under load
@@ -3964,6 +3969,8 @@ var VideoEffects = (function () {
     this.sceneLook = 0;
     this.sceneHzSteps = SCENE_HZ.slice();
     this.sceneStep = 0;
+    this.sceneScaleSteps = KEYIN_SCENE_SCALE.slice();
+    this.sceneScaleStep = 0;
     this.lastScene = 0;
     this.lastDraw = 0;
     this.sceneStart = 0;
@@ -4523,6 +4530,7 @@ var VideoEffects = (function () {
       clearTimeout(w.timer);
       var m = median(w.times);
       if (m < keyInFrameBudget(KEYIN_WARM_MS)) w.resolve();
+      else if (this.stepSceneScale()) { w.times = []; this.warm = w; }
       else w.reject(new Error('key-in over budget (' + m.toFixed(1) + ' ms a frame)'));
       return;
     }
@@ -4532,7 +4540,31 @@ var VideoEffects = (function () {
     if (now - this.lastBudget < 1000) return;
     this.lastBudget = now;
     if (t.length < 10 || now - t[0][0] < KEYIN_BUDGET_WINDOW_MS * 0.9) return;
-    if (median(t.map(function (x) { return x[1]; })) > keyInFrameBudget(KEYIN_BUDGET_MS)) this.giveUp('budget');
+    if (median(t.map(function (x) { return x[1]; })) <= keyInFrameBudget(KEYIN_BUDGET_MS)) return;
+    if (this.stepSceneScale()) t.length = 0;
+    else this.giveUp('budget');
+  };
+
+  // Over budget, the scene's buffer steps down before the cut-out gives up:
+  // a softer backdrop beats the peer falling back to its own composite.
+  // Reallocated at the new size, its redraw rate kept. A step that leaves the
+  // buffer the size it was (a canvas already smaller than the step) buys
+  // nothing and is walked past; false once no step is left that would.
+  KeyInProcessor.prototype.stepSceneScale = function () {
+    if (!this.sceneId) return false;
+    var w = this.sceneW, h = this.sceneH, keep = this.sceneStep;
+    while (this.sceneScaleStep < this.sceneScaleSteps.length - 1) {
+      this.sceneScaleStep++;
+      try { this.ensureScene(this.sceneId); } catch (e) { return false; }
+      this.sceneStep = keep;
+      if (this.sceneW === w && this.sceneH === h) continue;
+      if (typeof console !== 'undefined' && console.info) {
+        console.info('[VideoEffects] key-in over budget — scene buffer stepped to ' +
+                     this.sceneScaleSteps[this.sceneScaleStep] + 'x');
+      }
+      return true;
+    }
+    return false;
   };
 
   // Where the person is in the picture, from the key itself: the geometry
