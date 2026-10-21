@@ -49,7 +49,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const ALL = ['office', 'island', 'cybercafe', 'mountain', 'countryside'];
+const ALL = ['office', 'island', 'cybercafe', 'penthouse', 'mountain', 'countryside'];
 
 const args = process.argv.slice(2);
 const opt = {
