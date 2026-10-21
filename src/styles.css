@@ -5948,3 +5948,12 @@ html.is-desktop-app body.chat-side.chat-open:not(.embed-tiny) {
 /* The handle is the chat's only entry point, so it says whether the chat is
    already open. */
 .stage-handle-right[aria-expanded="true"] { color: var(--accent); }
+
+/* Drop an image to set the camera background (desktop) */
+.bg-drop-hint {
+  position: fixed; inset: 12px; z-index: 200; display: none;
+  align-items: center; justify-content: center; text-align: center; padding: 24px;
+  border: 2px dashed currentColor; border-radius: 16px;
+  background: rgba(0, 0, 0, 0.55); color: #fff; font-weight: 600; pointer-events: none;
+}
+.bg-drop-hint.show { display: flex; }
