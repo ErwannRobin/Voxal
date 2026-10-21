@@ -14102,6 +14102,13 @@ var _videoBgPreview = null;
 // the sensor is wanted from live state, so every place that changes the camera
 // or the background just calls it, and a slow timer catches the rest.
 
+// A scene turns; a custom image slides over the frame (parallax). Both follow
+// the phone's sensor or the computer's drag. Only a scene is ever keyed.
+function backgroundMovable() {
+  var m = String(videoBackgroundMode());
+  return m.indexOf('preset:') === 0 || m === 'custom';
+}
+
 var _videoBgTilt = null;
 var _tiltGestureArmed = false;
 var _tiltTimer = null;
@@ -14110,7 +14117,7 @@ function backgroundTiltWanted() {
   if (!IS_MOBILE_DEVICE || typeof DeviceTilt === 'undefined' || !DeviceTilt.supported()) return false;
   if (!keyedApi('readBackgroundTilt') || !VideoEffects.readBackgroundTilt()) return false;
   if (!localVideoActive || !localVideoStream || !localVideoStream._effectsProcessor) return false;
-  return String(videoBackgroundMode()).indexOf('preset:') === 0;
+  return backgroundMovable();
 }
 
 // iOS shows its motion prompt only from a user gesture, and the one that chose
@@ -14146,7 +14153,7 @@ var _backgroundOrbitEngaged = false;
 function backgroundOrbitWanted() {
   if (IS_MOBILE_DEVICE || !keyedApi('attachOrbit')) return false;
   if (!localVideoActive || !localVideoStream || !localVideoStream._effectsProcessor) return false;
-  return String(videoBackgroundMode()).indexOf('preset:') === 0;
+  return backgroundMovable();
 }
 
 function onBackgroundOrbit(v) {
@@ -14154,7 +14161,7 @@ function onBackgroundOrbit(v) {
   if (keyedApi('setTilt')) VideoEffects.setTilt(v);
   if (v && !_backgroundOrbitEngaged) {
     _backgroundOrbitEngaged = true;
-    refreshKeyedSend();
+    if (String(videoBackgroundMode()).indexOf('preset:') === 0) refreshKeyedSend();
   }
 }
 
@@ -14712,7 +14719,7 @@ function initVideoBackgroundUI() {
     _videoBgTilt = VideoEffects.renderBackgroundTilt(
       document.getElementById('settings-bg-tilt'),
       { id: 'btn-bg-tilt', label: 'Move the background with my phone',
-        title: 'The scene turns as you tilt or turn the phone' });
+        title: 'The background moves as you tilt or turn the phone' });
     var tiltCard = document.getElementById('settings-bg-tilt-card');
     if (tiltCard) tiltCard.classList.remove('hidden');
     if (keyedApi('onBackgroundTiltChange')) VideoEffects.onBackgroundTiltChange(function() { syncBackgroundTilt(); });

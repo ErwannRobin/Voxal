@@ -413,6 +413,7 @@ var VideoEffects = (function () {
   // Cell 0 is white and cell 1 black (where the key colour would be neither);
   // then yaw 9 bits, pitch 9, roll 6 — each the angle's share of its range —
   // and a 6-bit check (see tiltSum()) that rejects a frame the codec mangled.
+  var BG_PARALLAX_ZOOM = 0.14; // a custom image is zoomed this much while it moves
   var KEY_TILT = {
     cells: 32,
     rows: 0.5,                         // the strip's height, in zones
@@ -3019,12 +3020,39 @@ var VideoEffects = (function () {
   Processor.prototype.bgXform = function () {
     var frameAspect = this.canvas.width / this.canvas.height;
     var a = this.bgAspect || 1;
+    var x;
     if (a > frameAspect) {
       var sx = frameAspect / a;
-      return [sx, 1, (1 - sx) / 2, 0];
+      x = [sx, 1, (1 - sx) / 2, 0];
+    } else {
+      var sy = a / frameAspect;
+      x = [1, sy, 0, (1 - sy) / 2];
     }
-    var sy = a / frameAspect;
-    return [1, sy, 0, (1 - sy) / 2];
+    // Parallax: a custom image slides with the same { yaw, pitch } that turns a
+    // scene. The window is zoomed in a little (eased, so the first tilt does not
+    // pop) to leave the room to slide without clamping at the image's edge.
+    var now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    var dt = this._parAt ? Math.min(0.25, (now - this._parAt) / 1000) : 0;
+    this._parAt = now;
+    var want = _tilt ? 1 : 0, k = this._parK || 0;
+    k += (want - k) * (1 - Math.exp(-dt / 0.25));
+    if (Math.abs(want - k) < 0.002) k = want;
+    this._parK = k;
+    if (k <= 0) return x;
+    var z = 1 / (1 + BG_PARALLAX_ZOOM * k);
+    var cx = x[2] + x[0] / 2, cy = x[3] + x[1] / 2;
+    var w = x[0] * z, h = x[1] * z;
+    var yaw = 0, pitch = 0;
+    if (_tilt) {
+      yaw = Math.max(-1, Math.min(1, _tilt.yaw / KEY_TILT.yaw));
+      pitch = Math.max(-1, Math.min(1, _tilt.pitch / KEY_TILT.pitch));
+    }
+    // Room slides left as the camera turns right: the window moves right.
+    // Pitch up slides the room down: the window moves up (flip y runs down).
+    var mx = (x[0] - w) / 2, my = (x[1] - h) / 2;
+    cx += yaw * mx * k;
+    cy -= pitch * my * k;
+    return [w, h, cx - w / 2, cy - h / 2];
   };
 
   // --- per-frame work -------------------------------------------------------
