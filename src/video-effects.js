@@ -555,12 +555,22 @@ var VideoEffects = (function () {
     try { return normalizeMode(localStorage.getItem(STORAGE_KEY)); } catch (e) { return 'off'; }
   }
 
+  // Who wants to know the stored mode changed in THIS window (a `storage` event
+  // never fires in the window that wrote the value).
+  var _modeListeners = [];
+  function onModeWritten(fn) {
+    if (typeof fn !== 'function') return function () {};
+    _modeListeners.push(fn);
+    return function () { _modeListeners = _modeListeners.filter(function (f) { return f !== fn; }); };
+  }
+
   function writeMode(mode) {
     mode = normalizeMode(mode);
     try {
       if (mode === 'off') localStorage.removeItem(STORAGE_KEY);
       else localStorage.setItem(STORAGE_KEY, mode);
     } catch (e) { /* private mode — the effect still works for this session */ }
+    _modeListeners.slice().forEach(function (fn) { try { fn(mode); } catch (e) { /* a listener must not break a write */ } });
     return mode;
   }
 
@@ -4977,6 +4987,431 @@ var VideoEffects = (function () {
     return b;
   }
 
+  // --- Looking around a scene with the mouse ----------------------------------
+  //
+  // A phone turns its scene with the phone (setTilt()); a computer has no sensor,
+  // so the same turn comes from dragging the picture, like a 3D viewer: pull the
+  // room and it follows the hand, double-click and it settles back. It is the same
+  // { yaw, pitch, roll } the sensor publishes, so everything downstream — every
+  // local pipeline, and the tilt strip of the keyed frame — takes it unchanged.
+  //
+  // The range is the phone's, which is also what the strip can carry
+  // (KEY_TILT): a turn beyond it would be drawn here and clipped for everyone who
+  // draws the scene themselves, and what you set must be what they see. Past the
+  // knee it rolls off instead of stopping dead.
+  var ORBIT_LIMIT = { yaw: 28 * Math.PI / 180, pitch: 14 * Math.PI / 180 };
+  var ORBIT_KNEE = 0.6;
+  var ORBIT_WIND = 1.5;       // how far past the limit the hand may wind up
+  var ORBIT_SPAN = 0.6;       // a drag of this share of the picture's width = the whole yaw range
+  var ORBIT_SLOP = 4;         // px of travel that makes a press a drag (a click still pins a tile)
+  var ORBIT_KEY_STEP = 3 * Math.PI / 180;
+  var ORBIT_RECENTRE_MS = 260;
+
+  function orbitSoften(a, max) {
+    var k = ORBIT_KNEE * max, m = Math.abs(a);
+    if (m <= k) return a;
+    var over = (m - k) / (max - k);
+    return (a < 0 ? -1 : 1) * (k + (max - k) * Math.tanh(over));
+  }
+
+  // opts: {
+  //   enabled()   — may this press start a turn? (default: always)
+  //   mirrored()  — is the picture on screen a mirror of the published frame? A
+  //                 self-view is, and a drag must follow the hand on what is shown.
+  //   onChange(v) — { yaw, pitch, roll } in radians, or null once back at rest
+  //   ignore      — selector of children that keep their own presses
+  //   touch       — also turn on a finger (default false: a phone has its sensor
+  //                 and a finger on a tile is a scroll or a pin)
+  //   keys        — arrow keys turn it while `el` has focus
+  // }
+  // Returns { view(), moved(), reset(animate), destroy() }.
+  function attachOrbit(el, opts) {
+    opts = opts || {};
+    var raw = { yaw: 0, pitch: 0 };
+    var shown = null;
+    var drag = null;
+    var swallow = 0;
+    var anim = 0;
+    var hover = false;
+
+    function on() {
+      try { return opts.enabled ? !!opts.enabled() : true; } catch (e) { return false; }
+    }
+    function publish() {
+      var v = { yaw: orbitSoften(raw.yaw, ORBIT_LIMIT.yaw), pitch: orbitSoften(raw.pitch, ORBIT_LIMIT.pitch), roll: 0 };
+      shown = (v.yaw || v.pitch) ? v : null;
+      if (opts.onChange) { try { opts.onChange(shown); } catch (e) { /* a listener must not break the drag */ } }
+    }
+    function wind(v, max) { var m = max * ORBIT_WIND; return Math.min(m, Math.max(-m, v)); }
+    function setRaw(yaw, pitch) {
+      raw.yaw = wind(yaw, ORBIT_LIMIT.yaw);
+      raw.pitch = wind(pitch, ORBIT_LIMIT.pitch);
+      publish();
+    }
+    function mirror() {
+      try { return opts.mirrored ? !!opts.mirrored() : false; } catch (e) { return false; }
+    }
+    function cancelAnim() { if (anim) { cancelAnimationFrame(anim); anim = 0; } }
+
+    function reset(animate) {
+      cancelAnim();
+      if (!raw.yaw && !raw.pitch) return;
+      if (!animate || typeof requestAnimationFrame !== 'function') { setRaw(0, 0); return; }
+      var from = { yaw: raw.yaw, pitch: raw.pitch };
+      var t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      (function step() {
+        var now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+        var t = Math.min(1, (now - t0) / ORBIT_RECENTRE_MS);
+        var k = 1 - Math.pow(1 - t, 3);
+        setRaw(from.yaw * (1 - k), from.pitch * (1 - k));
+        anim = t < 1 ? requestAnimationFrame(step) : 0;
+      })();
+    }
+
+    function onDown(e) {
+      if (drag) return;
+      if (e.pointerType === 'touch' && !opts.touch) return;
+      if (e.button !== undefined && e.button !== 0) return;
+      if (opts.ignore && e.target && e.target.closest && e.target.closest(opts.ignore)) return;
+      if (!on()) return;
+      var r = el.getBoundingClientRect();
+      cancelAnim();
+      drag = {
+        id: e.pointerId, x: e.clientX, y: e.clientY, active: false,
+        yaw: raw.yaw, pitch: raw.pitch,
+        w: Math.max(1, r.width), h: Math.max(1, r.height),
+        sign: mirror() ? -1 : 1
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onCancel);
+    }
+    function onMove(e) {
+      if (!drag || (e.pointerId !== undefined && e.pointerId !== drag.id)) return;
+      var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (!drag.active) {
+        if (Math.abs(dx) < ORBIT_SLOP && Math.abs(dy) < ORBIT_SLOP) return;
+        drag.active = true;
+        el.classList.add('orbit-drag');
+        // Only now: capturing at the press would take the tile's own click away.
+        try { el.setPointerCapture(drag.id); } catch (err) { /* the pointer is gone */ }
+      }
+      e.preventDefault();
+      // The room follows the hand. Positive yaw is the camera turned RIGHT (the
+      // room slides left, as when a phone is turned that way), so pulling the
+      // picture right is a smaller yaw.
+      setRaw(drag.yaw - drag.sign * dx * (2 * ORBIT_LIMIT.yaw) / (ORBIT_SPAN * drag.w),
+             drag.pitch + dy * (2 * ORBIT_LIMIT.pitch) / (ORBIT_SPAN * drag.h));
+    }
+    function end() {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      el.classList.remove('orbit-drag');
+      try { if (drag) el.releasePointerCapture(drag.id); } catch (err) { /* already released */ }
+    }
+    function onUp() {
+      var was = drag && drag.active;
+      end();
+      drag = null;
+      // The click that follows a drag belongs to the drag, not to whatever the
+      // tile does with a click. It may never come (the pointer moved off), so
+      // the flag expires on its own.
+      if (was) { swallow = setTimeout(function () { swallow = 0; }, 60); }
+    }
+    function onCancel() {
+      // A cancelled gesture hands the picture back rather than leave it half-turned.
+      if (drag && drag.active) { setRaw(drag.yaw, drag.pitch); }
+      end();
+      drag = null;
+    }
+    function onClick(e) {
+      if (!swallow) return;
+      clearTimeout(swallow);
+      swallow = 0;
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    function onDbl() { if (on()) reset(true); }
+    function onHover(e) {
+      if (drag) return;
+      if (e.pointerType === 'touch' && !opts.touch) return;
+      var now = on();
+      if (now !== hover) { hover = now; el.classList.toggle('orbit-ready', now); }
+    }
+    function onLeave() { if (hover) { hover = false; el.classList.remove('orbit-ready'); } }
+    function onKey(e) {
+      if (!opts.keys || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (!on()) return;
+      var dy = 0, dp = 0;
+      if (e.key === 'ArrowLeft') dy = -1;
+      else if (e.key === 'ArrowRight') dy = 1;
+      else if (e.key === 'ArrowUp') dp = -1;
+      else if (e.key === 'ArrowDown') dp = 1;
+      else if (e.key === 'Home' || e.key === '0') { e.preventDefault(); reset(true); return; }
+      else return;
+      e.preventDefault();
+      cancelAnim();
+      setRaw(raw.yaw + dy * ORBIT_KEY_STEP, raw.pitch + dp * ORBIT_KEY_STEP);
+    }
+
+    el.addEventListener('pointerdown', onDown);
+    el.addEventListener('pointermove', onHover);
+    el.addEventListener('pointerleave', onLeave);
+    el.addEventListener('click', onClick, true);
+    el.addEventListener('dblclick', onDbl);
+    el.addEventListener('keydown', onKey);
+
+    return {
+      view: function () { return shown; },
+      moved: function () { return !!shown; },
+      reset: reset,
+      destroy: function () {
+        cancelAnim();
+        end();
+        drag = null;
+        el.removeEventListener('pointerdown', onDown);
+        el.removeEventListener('pointermove', onHover);
+        el.removeEventListener('pointerleave', onLeave);
+        el.removeEventListener('click', onClick, true);
+        el.removeEventListener('dblclick', onDbl);
+        el.removeEventListener('keydown', onKey);
+        el.classList.remove('orbit-ready', 'orbit-drag');
+      }
+    };
+  }
+
+  // --- The background on its own ----------------------------------------------
+  //
+  // The picker shows five stills and the camera shows YOU in front of one; there
+  // was nowhere to just look at the room. This draws the chosen scene alone — no
+  // camera, no person, no segmentation — in Settings, and lets you turn it with
+  // the mouse (the same attachOrbit() the live camera uses), so a scene can be
+  // judged before a call and its look-around tried on its own.
+  //
+  // It works only while it is on screen: a scene is a ray-marched shader, and one
+  // that nobody can see is a GPU spent on nothing (Settings is also open over a
+  // running call). Its WebGL context is released the moment it stops — a page may
+  // hold only a handful, and the camera pipeline needs one.
+  var PREVIEW_FPS = 20;
+  var PREVIEW_MAX_W = 960;
+
+  // Returns { sync(), destroy(), orbit }.
+  function renderScenePreview(el) {
+    if (!el) return null;
+    el.innerHTML = '';
+    el.classList.add('scene-preview');
+
+    var stage = document.createElement('div');
+    stage.className = 'scene-preview-stage';
+    stage.tabIndex = 0;
+    stage.setAttribute('role', 'img');
+    stage.setAttribute('aria-label', 'Background preview. Drag, or use the arrow keys, to look around the room; Home recentres.');
+
+    var note = document.createElement('p');
+    note.className = 'scene-preview-note';
+    note.setAttribute('aria-live', 'polite');
+
+    var hud = document.createElement('div');
+    hud.className = 'scene-preview-hud hidden';
+    var hint = document.createElement('span');
+    hint.className = 'scene-preview-hint';
+    // A finger on this card is a scroll, not a turn (a phone turns its camera
+    // scenes with its sensor), so only a pointer that can really drag says so.
+    var fine;
+    try { fine = !window.matchMedia || window.matchMedia('(pointer: fine)').matches; } catch (e) { fine = true; }
+    hint.textContent = fine ? 'Drag to look around \u00b7 double-click to recentre' : 'Preview';
+    var recentre = document.createElement('button');
+    recentre.type = 'button';
+    recentre.className = 'scene-preview-recentre hidden';
+    recentre.textContent = 'Recentre';
+    hud.appendChild(hint);
+    hud.appendChild(recentre);
+
+    stage.appendChild(note);
+    stage.appendChild(hud);
+    el.appendChild(stage);
+
+    var canvas = null, gl = null, buf = null, prog = null, progId = null;
+    var raf = 0, loadToken = 0, lastDraw = 0, t0 = 0;
+    var visible = false, destroyed = false, failed = '';
+    var view = null;
+
+    var orbit = attachOrbit(stage, {
+      keys: true,
+      enabled: function () { return !!prog; },
+      onChange: function (v) {
+        view = v;
+        recentre.classList.toggle('hidden', !v);
+      }
+    });
+    recentre.addEventListener('click', function () { orbit.reset(true); stage.focus(); });
+    // The Recentre button is a real button inside the drag surface.
+    recentre.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+
+    function sceneId() {
+      var m = readMode();
+      return m.indexOf('preset:') === 0 ? m.slice(7) : null;
+    }
+    function say(text) {
+      note.textContent = text || '';
+      note.classList.toggle('hidden', !text);
+    }
+
+    function release() {
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      loadToken++;
+      if (gl) {
+        try { if (prog) gl.deleteProgram(prog.program); } catch (e) { /* lost */ }
+        try { if (buf) gl.deleteBuffer(buf); } catch (e) { /* lost */ }
+        try { var lose = gl.getExtension('WEBGL_lose_context'); if (lose) lose.loseContext(); } catch (e) { /* lost */ }
+      }
+      if (canvas) { canvas.width = canvas.height = 0; if (canvas.parentNode) canvas.parentNode.removeChild(canvas); }
+      canvas = gl = buf = prog = null;
+      progId = null;
+    }
+
+    function open() {
+      var w = Math.max(2, Math.round(Math.min(PREVIEW_MAX_W, (stage.clientWidth || 480) * Math.min(window.devicePixelRatio || 1, 1.5))));
+      canvas = document.createElement('canvas');
+      canvas.className = 'scene-preview-canvas';
+      canvas.width = w;
+      canvas.height = Math.round(w * 9 / 16);
+      canvas.setAttribute('aria-hidden', 'true');
+      try { gl = canvas.getContext('webgl2', { alpha: false, antialias: false }); } catch (e) { gl = null; }
+      if (!gl) { failed = 'Couldn’t draw the preview on this device.'; canvas = null; return false; }
+      // Compiling a scene on a software GPU freezes the page for seconds; the
+      // thumbnails make the same call, and the same test hook lifts it.
+      if (!window.__voxalThumbsOnSoftwareGL && VideoScenes.isSoftwareGL(gl)) {
+        failed = 'The preview needs graphics acceleration, which this device doesn’t have.';
+        release();
+        return false;
+      }
+      stage.insertBefore(canvas, stage.firstChild);
+      buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      var mine = canvas;
+      canvas.addEventListener('webglcontextlost', function (e) {
+        e.preventDefault();
+        // Our own release() loses the context too, and the event arrives after
+        // a newer canvas may already stand in this one's place.
+        if (!destroyed && mine === canvas) { release(); failed = 'The preview was interrupted. Open Settings again to restart it.'; refresh(); }
+      });
+      t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      return true;
+    }
+
+    // A neutral light and nobody in front of it: the subject box is put below
+    // the picture, small, so there is no shadow or light wrap to explain.
+    var look = VideoScenes.defaultLook();
+    look.dirX = 0.6; look.cx = 0.5; look.cy = 3; look.sx = 0.01; look.sy = 0.01;
+
+    function load(id) {
+      var token = ++loadToken;
+      VideoScenes.compileProgramAsync(gl, id).then(function (p) {
+        if (destroyed || token !== loadToken || !gl) { try { if (gl) gl.deleteProgram(p.program); } catch (e) { /* lost */ } return; }
+        // The old scene keeps being drawn until the new one is ready.
+        try { if (prog) gl.deleteProgram(prog.program); } catch (e) { /* lost */ }
+        prog = p; progId = id;
+        say('');
+        hud.classList.remove('hidden');
+        if (!raf) raf = requestAnimationFrame(frame);
+      }, function () {
+        if (destroyed || token !== loadToken) return;
+        release();
+        failed = 'Couldn’t draw the preview on this device.';
+        refresh();
+      });
+    }
+
+    function frame(now) {
+      raf = 0;
+      if (destroyed || !gl || !prog || !visible) return;
+      raf = requestAnimationFrame(frame);
+      if (now - lastDraw < 1000 / PREVIEW_FPS) return;
+      lastDraw = now;
+      var w = canvas.width, h = canvas.height;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, w, h);
+      VideoScenes.setUniforms(gl, prog, w, h, VideoScenes.THUMB_TIME + (now - t0) / 1000, look, null, view);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+
+    // Level-triggered, like the rest of the settings controls: work out from
+    // what is true now whether a scene should be running.
+    function refresh() {
+      if (destroyed) return;
+      var id = sceneId();
+      var want = !!id && visible && !failed;
+      if (!id) {
+        release();
+        hud.classList.add('hidden');
+        orbit.reset(false);
+        say('Pick one of the animated scenes above to preview it here.');
+        return;
+      }
+      if (failed) { release(); hud.classList.add('hidden'); say(failed); return; }
+      if (!want) {
+        // Out of sight: stop drawing, hand the GPU context back.
+        release();
+        hud.classList.add('hidden');
+        return;
+      }
+      if (!gl && !open()) { hud.classList.add('hidden'); say(failed); return; }
+      if (progId !== id) {
+        if (!prog) say('Loading the scene…');
+        load(id);
+      } else if (!raf) {
+        raf = requestAnimationFrame(frame);
+      }
+    }
+
+    // On screen = the observer says so AND the page is not in a background tab.
+    var inView = true, io = null;
+    function setVisible() {
+      var v = inView && document.visibilityState !== 'hidden';
+      if (v === visible) return;
+      visible = v;
+      // Coming back is a fresh start: whatever stopped it last time may not hold.
+      if (v) failed = '';
+      refresh();
+    }
+    if (typeof IntersectionObserver === 'function') {
+      inView = false;
+      io = new IntersectionObserver(function (entries) {
+        inView = entries.some(function (e) { return e.isIntersecting; });
+        setVisible();
+      });
+      io.observe(el);
+    }
+    visible = inView && document.visibilityState !== 'hidden';
+    document.addEventListener('visibilitychange', setVisible);
+    var offMode = onModeWritten(function () { refresh(); });
+    function onStorage(e) { if (e.key === STORAGE_KEY) refresh(); }
+    window.addEventListener('storage', onStorage);
+
+    refresh();
+
+    return {
+      sync: refresh,
+      orbit: orbit,
+      destroy: function () {
+        destroyed = true;
+        release();
+        if (io) io.disconnect();
+        document.removeEventListener('visibilitychange', setVisible);
+        window.removeEventListener('storage', onStorage);
+        offMode();
+        orbit.destroy();
+        el.innerHTML = '';
+        el.classList.remove('scene-preview');
+      }
+    };
+  }
+
   // opts: { onPick(mode), allowCustom (default true) }
   function renderPicker(el, opts) {
     if (!el) return null;
@@ -5556,6 +5991,10 @@ var VideoEffects = (function () {
     active: active,
     onOverload: onOverload,
     renderPicker: renderPicker,
+    onModeWritten: onModeWritten,
+    attachOrbit: attachOrbit,
+    renderScenePreview: renderScenePreview,
+    ORBIT_LIMIT: ORBIT_LIMIT,
     getCustomImage: getCustomImage,
     setCustomImage: setCustomImage,
     clearCustomImage: clearCustomImage
