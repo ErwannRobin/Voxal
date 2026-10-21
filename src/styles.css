@@ -28,7 +28,7 @@ a, button, [role="button"], input, select, textarea, label {
      OS to overlay the status bar and some Android WebViews then report no inset
      at all — which puts the room header's buttons under a system bar that eats
      every touch aimed at them. */
-  --stage-safe-top: env(safe-area-inset-top, 0px);
+  --stage-safe-top: calc(env(safe-area-inset-top, 0px) + var(--safe-top-extra, 0px));
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 14px;
   line-height: 1.5;
@@ -45,7 +45,17 @@ a, button, [role="button"], input, select, textarea, label {
    .setOverlaysWebView), so there is always one up there to clear — whatever the
    WebView reports. 24px is the shortest Android status bar; a device that
    reports a real inset (a notch, a punch-hole) keeps its own larger one. */
-html.is-native { --stage-safe-top: max(env(safe-area-inset-top, 0px), 24px); }
+html.is-native { --stage-safe-top: calc(max(env(safe-area-inset-top, 0px), 24px) + var(--safe-top-extra, 0px)); }
+
+/* A phone's Dynamic Island / notch is reported exactly (`env(safe-area-inset-top)`),
+   and chrome that starts right at that line still reads as touching it: the island
+   is a black pill with rounded corners, and the inset is the bottom of its box, not
+   of what the eye sees. A home-screen PWA (standalone, translucent status bar) and
+   the Capacitor apps are the two places the page runs under it, so they get a
+   little air on top of the inset. Touch only: an installed desktop PWA is
+   `standalone` too and has no inset to clear. */
+@media (display-mode: standalone) and (pointer: coarse) { :root { --safe-top-extra: 10px; } }
+html.is-native { --safe-top-extra: 10px; }
 
 /* ── Light theme ───────────────────────────────────────────────────── */
 html[data-theme="light"] {
@@ -1275,6 +1285,22 @@ kbd {
   margin-top: 8px;
 }
 
+/* The control row is ONE line, always. Wrapping put a lone chip on a second row,
+   which pushed the talk button up and made the bar a different height in every
+   room. On a narrow phone the chips give up padding instead. */
+#screen-room .room-bottom-bar .ctrl-row {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+#screen-room .room-bottom-bar .ctrl-row .room-action-btn {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+}
+@media (max-width: 360px) {
+  #screen-room .room-bottom-bar .ctrl-row .room-action-btn { padding: 6px 8px; gap: 4px; }
+}
+
 /* ── Landscape (short viewport) — full-width two-column reflow ─────────────
    A phone held in landscape (or a short desktop window) has plenty of width but
    little height, so the default vertical stacks overflow. Go full width and
@@ -1779,7 +1805,7 @@ body.video-stage-immersive #screen-room .room-peers-panel {
   right: auto;
   z-index: 40;
   width: min(300px, 82vw);
-  padding: max(calc(env(safe-area-inset-top) + 14px), 14px) 14px
+  padding: max(calc(var(--stage-safe-top) + 14px), 14px) 14px
            max(calc(env(safe-area-inset-bottom) + 14px), 14px)
            max(calc(env(safe-area-inset-left) + 14px), 14px);
   background: var(--bg-surface);
@@ -3457,7 +3483,7 @@ input[type="password"]:focus { border-color: var(--accent); }
      .modal-header/.modal-footer base rules further down this file would
      otherwise win on source order alone and cancel this out. */
   #modal-settings .modal-header {
-    padding-top: max(calc(env(safe-area-inset-top) + 16px), 16px);
+    padding-top: max(calc(var(--stage-safe-top) + 16px), 16px);
   }
 
   #modal-settings .modal-footer {
@@ -4134,6 +4160,38 @@ details.turn-section .turn-inner {
   color: #fff;
 }
 
+/* Visually hidden, still read out: the speaker button is an icon and its label is
+   what a screen reader says ("Speaker" / "Earpiece"). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The speaker / earpiece switch: one round icon at the right end of the line that
+   tops the control row, standing on the talk area rather than in the row. It is
+   anchored to `.room-controls` (bottom: 100% = the line itself) so it takes no
+   space in any layout and the row below never changes height — the three chips
+   stay on one line. */
+.room-controls { position: relative; }
+.room-action-btn.audio-route-btn {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  z-index: 1;
+}
+
 #video-ctrl-row {
   gap: 8px;
   margin-top: 6px;
@@ -4628,6 +4686,68 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
 
 .bg-picker + .settings-hint { margin-top: 10px; }
 
+/* The scene on its own (VideoEffects.renderScenePreview). A 16:9 window the
+   canvas fills; what is drawn is the scene and nothing else. */
+.scene-preview { max-width: 480px; }
+.scene-preview + .settings-hint { margin-top: 10px; }
+.scene-preview-stage {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #101016;
+  border: 1px solid var(--border);
+  user-select: none;
+  -webkit-user-select: none;
+  outline: none;
+}
+.scene-preview-stage:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+.scene-preview-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.scene-preview-note {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.7);
+}
+.scene-preview-note.hidden { display: none; }
+.scene-preview-hud {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 18px 10px 8px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0));
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 11.5px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+.scene-preview-hud.hidden { display: none; }
+.scene-preview-recentre {
+  pointer-events: auto;
+  padding: 3px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 999px;
+  background: rgba(16, 16, 20, 0.55);
+  color: #fff;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.scene-preview-recentre:hover { border-color: rgba(255, 255, 255, 0.6); }
+.scene-preview-recentre.hidden { display: none; }
+/* Anything the mouse can turn: an open hand over it, a closed one while it does. */
+.orbit-ready { cursor: grab; }
+.orbit-drag, .orbit-drag * { cursor: grabbing !important; }
+.video-tile.orbit-ready, .video-tile.orbit-drag { user-select: none; -webkit-user-select: none; }
+
 /* First run only: the segmentation runtime is not bundled, so say what is
    being downloaded, how far along it is, and offer a way out. */
 .video-bg-progress {
@@ -4915,7 +5035,7 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: max(calc(env(safe-area-inset-top) + 14px), 14px)
+  padding: max(calc(var(--stage-safe-top) + 14px), 14px)
            max(calc(env(safe-area-inset-right) + 14px), 14px)
            max(calc(env(safe-area-inset-bottom) + 14px), 14px) 14px;
   background: var(--bg-surface);
@@ -5484,7 +5604,7 @@ html.is-desktop-app body.chat-side.chat-open:not(.embed-tiny) {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: max(calc(env(safe-area-inset-top) + 14vh), 60px) 16px 16px;
+  padding: max(calc(var(--stage-safe-top) + 14vh), 60px) 16px 16px;
   background: rgba(0, 0, 0, 0.45);
 }
 .command-palette-box {

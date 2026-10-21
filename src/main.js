@@ -12078,6 +12078,9 @@ function _buildVideoTile(tile) {
     });
     bg.addEventListener('pointerdown', function(e) { e.stopPropagation(); });
     el.appendChild(bg);
+
+    // Dragging your own picture turns the scene behind you (computers).
+    wireBackgroundOrbit(el);
   }
 
   var bar = document.createElement('div');
@@ -14089,6 +14092,7 @@ var _videoBgLight = null;
 var _videoFullHD = null;
 var _videoBgReference = null;
 var _videoBgSubjectOnly = null;
+var _videoBgPreview = null;
 
 // --- Background tilt (phones) -----------------------------------------------------
 //
@@ -14124,7 +14128,80 @@ function armTiltGesture() {
   document.addEventListener('click', onTap, true);
 }
 
+// --- Background orbit (computers) ---------------------------------------------
+//
+// A computer has no motion sensor, so its scene turns by dragging your own
+// picture (VideoEffects.attachOrbit): the same { yaw, pitch, roll } the phone's
+// sensor publishes, through the same setTilt() — so every local pipeline, and
+// the keyed frame's tilt strip for the people who draw your scene, take it
+// unchanged. Not the self-view badge: a drag there moves the badge.
+//
+// The strip is part of the frame's format, so the offer's `tilt` flag follows
+// whether a turn has ever been made, not whether the picture is turned right
+// now — a recentre must not be a new epoch for every receiver.
+
+var _backgroundOrbit = null;
+var _backgroundOrbitEngaged = false;
+
+function backgroundOrbitWanted() {
+  if (IS_MOBILE_DEVICE || !keyedApi('attachOrbit')) return false;
+  if (!localVideoActive || !localVideoStream || !localVideoStream._effectsProcessor) return false;
+  return String(videoBackgroundMode()).indexOf('preset:') === 0;
+}
+
+function onBackgroundOrbit(v) {
+  if (!backgroundOrbitWanted()) v = null;
+  if (keyedApi('setTilt')) VideoEffects.setTilt(v);
+  if (v && !_backgroundOrbitEngaged) {
+    _backgroundOrbitEngaged = true;
+    refreshKeyedSend();
+  }
+}
+
+function wireBackgroundOrbit(el) {
+  if (IS_MOBILE_DEVICE || !keyedApi('attachOrbit')) return;
+  if (_backgroundOrbit) {
+    // A rebuilt tile starts straight; so must the scene it controls.
+    var stale = _backgroundOrbit.moved();
+    _backgroundOrbit.destroy();
+    _backgroundOrbit = null;
+    if (stale && keyedApi('setTilt')) VideoEffects.setTilt(null);
+  }
+  _backgroundOrbit = VideoEffects.attachOrbit(el, {
+    enabled: function() { return backgroundOrbitWanted() && !el.closest('#video-stage-self'); },
+    // The self-view is shown mirrored; the published frame is not. A drag must
+    // follow the hand on what is on screen.
+    mirrored: function() {
+      var v = el.querySelector('video');
+      try { return new DOMMatrixReadOnly(getComputedStyle(v).transform).a < 0; } catch (e) { return false; }
+    },
+    onChange: onBackgroundOrbit,
+    ignore: 'button, a'
+  });
+}
+
+function syncBackgroundOrbit() {
+  var hint = document.getElementById('video-bg-orbit-hint');
+  if (hint) hint.classList.toggle('hidden', !backgroundOrbitWanted());
+  if (backgroundOrbitWanted()) return;
+  // No scene, or no camera: hand the picture back, straight.
+  if (_backgroundOrbit) _backgroundOrbit.reset(false);
+  if (_backgroundOrbitEngaged) {
+    _backgroundOrbitEngaged = false;
+    if (keyedApi('setTilt')) VideoEffects.setTilt(null);
+    refreshKeyedSend();
+  }
+}
+
+// Something is turning the scene: a phone's sensor that is flowing, or a
+// computer's hand.
+function backgroundTiltFlowing() {
+  return (typeof DeviceTilt !== 'undefined' && DeviceTilt.ready()) || _backgroundOrbitEngaged;
+}
+
 function syncBackgroundTilt() {
+  // A computer has no sensor to start or stop; its orbit has its own level.
+  if (!IS_MOBILE_DEVICE) { syncBackgroundOrbit(); return; }
   if (typeof DeviceTilt === 'undefined' || !keyedApi('setTilt')) return;
   if (backgroundTiltWanted()) {
     DeviceTilt.setFacing(_cameraFacing);
@@ -14148,7 +14225,7 @@ function syncVideoBackgroundControls() {
   var mode = videoBackgroundMode();
   _videoBgPickers.forEach(function(p) { try { p.sync(mode); } catch (e) { /* ignore */ } });
   [_videoBgStrength, _videoBgSharpness, _videoBgQuality, _videoBgLight,
-   _videoBgReference, _videoBgSubjectOnly, _videoBgTilt].forEach(function(c) {
+   _videoBgReference, _videoBgSubjectOnly, _videoBgTilt, _videoBgPreview].forEach(function(c) {
     if (c) { try { c.sync(); } catch (e) { /* ignore */ } }
   });
   syncBackgroundTilt();
@@ -14577,6 +14654,13 @@ function initVideoBackgroundUI() {
     });
     if (picker) _videoBgPickers.push(picker);
   });
+
+  // The chosen scene on its own, drawn here with no camera behind it. It redraws
+  // whenever the mode is written (VideoEffects.writeMode tells it), and only
+  // while it is on screen.
+  if (keyedApi('renderScenePreview')) {
+    _videoBgPreview = VideoEffects.renderScenePreview(document.getElementById('settings-bg-preview'));
+  }
 
   // Blur strength (Settings → Video, under the picker). Unlike the mode, this
   // never crosses the off↔on boundary, so it is a uniform change inside a pass
@@ -15368,7 +15452,7 @@ function anyPeerSupportsKeyed() {
 // older build) takes the strip away from everybody — the keyed track is one
 // picture for all of them.
 function keyedTiltOk() {
-  if (!KEYED_TILT_CAP || typeof DeviceTilt === 'undefined' || !DeviceTilt.ready()) return false;
+  if (!KEYED_TILT_CAP || !backgroundTiltFlowing()) return false;
   var self = peer && peer.id, ok = true;
   connections.forEach(function(c, id) {
     if (id !== self && peerSupports(id, KEYED_VIDEO_CAP) && !peerSupports(id, KEYED_TILT_CAP)) ok = false;

@@ -292,6 +292,11 @@
           </div>
           <div id="settings-bg-picker" aria-labelledby="settings-bg-label"></div>
           <p class="settings-hint">Blur what is behind you, or replace it. Applies to your camera only, and you are picked out of the picture on this device — no frame is ever sent to a server to do it.</p>
+          <div class="settings-device-head" style="margin-top:12px">
+            <label id="settings-bg-preview-label">Preview</label>
+          </div>
+          <div id="settings-bg-preview" aria-labelledby="settings-bg-preview-label"></div>
+          <p class="settings-hint">The chosen scene on its own, drawn on this device: no camera, no one in front of it. On a computer, drag it to look around the room, or do the same on your own picture during a call.</p>
           <div class="settings-field settings-inline-toggle" style="margin-top:12px">
             <label for="btn-subject-only" style="flex:1">Let others draw my scene</label>
             <div id="settings-subject-only"></div>
@@ -1486,6 +1491,11 @@
         var bgPicker = VideoEffects.renderPicker($id('settings-bg-picker'), {
           onPick: function(mode) { VideoEffects.writeMode(mode); }
         });
+        // The scene on its own. It redraws itself when the mode is written here
+        // (writeMode tells it) or in the main window (`storage`).
+        var bgPreview = (typeof VideoEffects.renderScenePreview === 'function')
+          ? VideoEffects.renderScenePreview($id('settings-bg-preview'))
+          : null;
         // The strength slider rides the same bridge, and for the same reason:
         // writeStrength() only stores, so the running pipeline in the main
         // window picks it up from `storage`. setStrength() would try to apply

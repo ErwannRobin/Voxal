@@ -1140,6 +1140,58 @@ frame**, which also makes it exactly synchronous with the person it belongs to.
   the check rejects them (the room holds its last turn) and the fix is fewer,
   wider cells.
 
+## The room turns with the mouse, and can be looked at alone
+
+A computer has no motion sensor, so the same turn comes from the hand.
+`VideoEffects.attachOrbit(el, opts)` is the one implementation, used twice.
+
+* **On your own picture, in a call** (`wireBackgroundOrbit()` in `main.js`, from
+  `_buildVideoTile()`): drag the self-view and the room follows the hand,
+  double-click to recentre. It publishes the same `{ yaw, pitch, roll }` as the
+  sensor, through the same `setTilt()`, so every local pipeline and the keyed
+  frame's tilt strip take it unchanged. Not the minimised self-view badge (its drag
+  moves the badge), not phones (`IS_MOBILE_DEVICE`: the sensor does it, and a
+  finger on a tile is a scroll or a pin), and only with an animated scene on.
+* **The sign is the room following the hand.** Positive yaw is the camera turned
+  right (the room slides left, as when a phone is turned that way), so pulling the
+  picture right is a *smaller* yaw; pulling down is a larger pitch. The self-view is
+  shown mirrored and the published frame is not, so a mirrored tile reverses yaw
+  (`opts.mirrored`). The first version had the sign backwards — judge a change here
+  with a picture (`renderScenePreview` and the arrow keys make that cheap), not by
+  reading the matrix.
+* **The range is the phone's** (`ORBIT_LIMIT`, 28° / 14°, inside `KEY_TILT`): a
+  turn beyond what the strip carries would be drawn here and clipped for everyone
+  who draws the scene themselves, and what you set must be what they see. Past
+  60% of the limit it rolls off (`tanh`) rather than stopping.
+* **The strip follows whether a turn has *ever* been made, not whether the picture
+  is turned now** (`_backgroundOrbitEngaged`, read by `backgroundTiltFlowing()` next
+  to `DeviceTilt.ready()`). `keyedOffer.tilt` flipping is a new epoch for every
+  receiver, so a recentre must not flip it. It is dropped when the scene or camera
+  goes (`syncBackgroundOrbit()`, run from `syncBackgroundTilt()` on a computer).
+* **A drag is not a click.** Capture starts only after `ORBIT_SLOP` (4 px), and the
+  click that ends a drag is swallowed (capture phase, expires on its own), so it
+  never pins the tile.
+
+**The scene on its own** (Settings → Video → *Preview*,
+`VideoEffects.renderScenePreview()`, in both `settings.html` and the in-page
+modal): the chosen scene drawn alone, no camera, no person, no segmentation, at
+~20 fps with the same drag, arrow keys (Home recentres) and a Recentre button. It
+is a single-sample draw (no jitter accumulation: it is for judging a room and
+trying the look-around, not for measuring sharpness) with a neutral light and the
+subject box put below the picture so there is no shadow to explain.
+
+* It runs **only while on screen** (`IntersectionObserver` + `visibilitychange`),
+  and its WebGL context is released the moment it stops: Settings is also open
+  over a running call, and a page holds only a handful of contexts.
+* It follows the mode written **in its own window** through
+  `VideoEffects.onModeWritten()` (a `storage` event never fires in the writer) and
+  in the other window through `storage`.
+* Software GL (`VideoScenes.isSoftwareGL()`) is refused with a sentence, like the
+  thumbnails: compiling a scene there freezes the page for seconds. Tests lift it
+  with `window.__voxalThumbsOnSoftwareGL`.
+* `webglcontextlost` from its *own* `release()` arrives after a newer canvas may
+  stand in its place; the handler checks it is still the current one.
+
 ## Switching backgrounds does not touch the wire
 
 This is the property the design exists to protect.
