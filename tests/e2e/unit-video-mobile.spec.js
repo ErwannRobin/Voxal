@@ -529,7 +529,10 @@ test.describe('tap the video to put the chrome away', () => {
     expect(await hidden(page)).toBe(false);
   });
 
-  test('the talk button neither goes away nor moves', async ({ page }) => {
+  // It does drop straight down onto the bar's bottom edge (the next test and
+  // line 478 pin where it lands); reading it mid-slide is a race, so this one
+  // only asserts it stays, keeps its size and column, and never rises.
+  test('the talk button neither goes away nor leaves its column', async ({ page }) => {
     await twoCameras(page);
     const btn = () => page.evaluate(() => {
       const b = document.getElementById('ptt-btn').getBoundingClientRect();
@@ -540,7 +543,9 @@ test.describe('tap the video to put the chrome away', () => {
     const shown = await btn();
     await tapVideo(page);
     expect(await hidden(page)).toBe(true);
-    expect(await btn()).toEqual(shown);
+    const after = await btn();
+    expect({ ...after, y: 0 }).toEqual({ ...shown, y: 0 });
+    expect(after.y).toBeGreaterThanOrEqual(shown.y);
   });
 
   const shown = (page, sel) => page.evaluate((s) => {
