@@ -1200,8 +1200,7 @@ test.describe('in the camera pipeline', () => {
       // The same moment drawn once with no jitter, as it is when the resolve
       // is missing, and stretched to the same size.
       const t = VideoScenes.THUMB_TIME + (T - p.sceneStart) / 1000;
-      VideoScenes.setUniforms(gl, p.sceneProgs.office, p.sceneW, p.sceneH, t, p.look, null);
-      p.drawQuad(p.fbScene, p.sceneW, p.sceneH);
+      p.sceneRenderers.office.draw(p.fbScene, p.sceneW, p.sceneH, t, p.look, null);
       const small = read(p.fbScene, p.sceneW, p.sceneH);
       // Opaque: a 2D canvas would premultiply by the nearness otherwise.
       for (let i = 3; i < small.length; i += 4) small[i] = 255;

@@ -3939,6 +3939,82 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     });
   }
 
+  // --- renderers ------------------------------------------------------------
+  //
+  // What the camera pipeline, a keyed receiver, the preview and the thumbnails
+  // hold for a scene: an object that draws it, whatever it is drawn with.
+  //
+  //   draw(fb, w, h, time, look, frame, view)
+  //       Into framebuffer fb (null = the canvas), w x h, with the arguments
+  //       setUniforms() takes. Writes every pixel: rgb display-referred, alpha
+  //       the nearness the subject's shadow reads. Leaves the context as the
+  //       pipeline expects it: no blending, depth test, culling or scissor,
+  //       no vertex array bound, UNPACK_ALIGNMENT 1, fb still bound.
+  //   dispose()
+  //       Gives back everything it allocated in gl.
+  //
+  // A scene with an engine registered for it (register()) is built by that
+  // engine; any other is its fragment shader, wrapped (wrapProgram()). The
+  // pipeline cannot tell the two apart, which is what lets the catalogue move
+  // to another engine one scene at a time.
+  var ENGINES = {};
+  var TRI = typeof Float32Array === 'function' ? new Float32Array([-1, -1, 3, -1, -1, 3]) : null;
+
+  // impl: { create(gl, opts) -> Promise<renderer>, createSync(gl, opts) -> renderer }
+  // createSync may throw when what it needs has not been loaded yet; it is
+  // only asked for once create() has succeeded on some context.
+  function register(id, impl) { ENGINES[id] = impl; }
+
+  function wrapProgram(gl, prog) {
+    var vao = null, buf = null;
+    return {
+      id: prog.id,
+      program: prog.program,
+      loc: prog.loc,
+      draw: function (fb, w, h, time, look, frame, view) {
+        if (!vao) {
+          vao = gl.createVertexArray();
+          buf = gl.createBuffer();
+          gl.bindVertexArray(vao);
+          gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+          gl.bufferData(gl.ARRAY_BUFFER, TRI, gl.STATIC_DRAW);
+          gl.enableVertexAttribArray(0);
+          gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+        }
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb || null);
+        gl.viewport(0, 0, w, h);
+        setUniforms(gl, prog, w, h, time, look, frame, view);
+        gl.bindVertexArray(vao);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.bindVertexArray(null);
+      },
+      dispose: function () {
+        try { gl.deleteProgram(prog.program); } catch (e) { /* lost */ }
+        try { if (vao) gl.deleteVertexArray(vao); } catch (e) { /* lost */ }
+        try { if (buf) gl.deleteBuffer(buf); } catch (e) { /* lost */ }
+        vao = buf = null;
+      }
+    };
+  }
+
+  // Off the page's thread where the platform allows (see compileProgramAsync).
+  function createRenderer(gl, id, opts) {
+    var rid = resolveId(id);
+    if (!rid) return Promise.reject(new Error('unknown scene ' + id));
+    if (ENGINES[rid]) {
+      try { return Promise.resolve(ENGINES[rid].create(gl, opts || {})); } catch (e) { return Promise.reject(e); }
+    }
+    return compileProgramAsync(gl, rid).then(function (p) { return wrapProgram(gl, p); });
+  }
+
+  // Blocking; throws on failure.
+  function createRendererSync(gl, id, opts) {
+    var rid = resolveId(id);
+    if (!rid) throw new Error('unknown scene ' + id);
+    if (ENGINES[rid]) return ENGINES[rid].createSync(gl, opts || {});
+    return wrapProgram(gl, compileProgram(gl, rid));
+  }
+
   // --- the noise table --------------------------------------------------------
   //
   // Every scene is built from noise, and hashing four lattice corners per
@@ -4111,11 +4187,6 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
         resolve(_thumbs);
         return;
       }
-      var buf = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-      gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
       var look = defaultLook();
       look.dirX = 0.6; look.cx = 0.5; look.cy = 0.7; look.sx = 0.25; look.sy = 0.35;
       // Where the driver compiles on its own threads, all five start at once;
@@ -4127,28 +4198,24 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
       // back over the next one's draw.
       var parallel = false;
       try { parallel = !!gl.getExtension('KHR_parallel_shader_compile'); } catch (e) { parallel = false; }
-      var progs = SCENES.map(function (s) {
-        return parallel ? compileProgramAsync(gl, s.id).catch(function () { return null; }) : null;
+      var made = SCENES.map(function (s) {
+        return parallel ? createRenderer(gl, s.id, { thumbnail: true }).catch(function () { return null; }) : null;
       });
       function turn(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
       var chain = Promise.resolve();
       SCENES.forEach(function (s, i) {
         chain = chain.then(function () {
-          if (progs[i]) return progs[i];
+          if (made[i]) return made[i];
           return turn(30).then(function () {
-            return compileProgramAsync(gl, s.id).catch(function () { return null; });
+            return createRenderer(gl, s.id, { thumbnail: true }).catch(function () { return null; });
           });
-        }).then(function (prog) {
-          if (!prog) return null;   // the swatch stays
-          gl.viewport(0, 0, THUMB_W, THUMB_H);
-          setUniforms(gl, prog, THUMB_W, THUMB_H, THUMB_TIME, look);
-          gl.drawArrays(gl.TRIANGLES, 0, 3);
-          gl.deleteProgram(prog.program);
+        }).then(function (r) {
+          if (!r) return null;   // the swatch stays
+          try { r.draw(null, THUMB_W, THUMB_H, THUMB_TIME, look); } finally { r.dispose(); }
           return snapshot(t.canvas).then(function (url) { _thumbs[s.id] = url; });
         }).catch(function () { /* the swatch stays */ });
       });
       chain.then(function () {
-        try { gl.deleteBuffer(buf); } catch (e) { /* ignore */ }
         var lose = gl.getExtension('WEBGL_lose_context');
         if (lose) lose.loseContext();
         resolve(_thumbs);
@@ -4169,6 +4236,9 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     _resolveConfig: RESOLVE,
     compileProgram: compileProgram,
     compileProgramAsync: compileProgramAsync,
+    createRenderer: createRenderer,
+    createRendererSync: createRendererSync,
+    register: register,
     setUniforms: setUniforms,
     viewMatrix: viewMatrix,
     decomposeView: decomposeView,
