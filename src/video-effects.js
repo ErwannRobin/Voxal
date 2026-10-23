@@ -3794,6 +3794,7 @@ var VideoEffects = (function () {
     Object.keys(made).forEach(function (k) {
       try { made[k].dispose(); } catch (e) { /* ignore */ }
     });
+    VideoScenes.releaseContext(gl);
     this.sceneRenderers = {};
     // A rebuilt context compiles its scene again (applyBackground); until it
     // lands, the blur shows rather than a scene with no program behind it.
@@ -4689,6 +4690,7 @@ var VideoEffects = (function () {
     Object.keys(made).forEach(function (k) {
       try { made[k].dispose(); } catch (e) { /* ignore */ }
     });
+    VideoScenes.releaseContext(gl);
     if (this.quad) try { gl.deleteBuffer(this.quad); } catch (e) { /* ignore */ }
     if (this.vao) try { gl.deleteVertexArray(this.vao); } catch (e) { /* ignore */ }
     this.sceneRenderers = {};
@@ -5267,6 +5269,7 @@ var VideoEffects = (function () {
       loadToken++;
       if (gl) {
         try { if (prog) prog.dispose(); } catch (e) { /* lost */ }
+        VideoScenes.releaseContext(gl);
         try { var lose = gl.getExtension('WEBGL_lose_context'); if (lose) lose.loseContext(); } catch (e) { /* lost */ }
       }
       if (canvas) { canvas.width = canvas.height = 0; if (canvas.parentNode) canvas.parentNode.removeChild(canvas); }

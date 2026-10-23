@@ -113,7 +113,26 @@ before `video-effects.js`):
 
 Renders: `scene-previews/baseline/landscape/`.
 
+## Decision (2026-10-23)
+
+**Three.js r186, on the Processor's own context, hybrid** (agent A spike, measured):
+Three draws geometry/PBR/shadows/IBL/instancing into a half-float target; our GLSL stays
+for sky, clouds, water, facades, rain (as Three materials); our raw-GL output pass does
+exposure/tint/ACES/sRGB/dither, alpha = receiver × nearness(depth), and mirroring as an
+image flip (one render per redraw). See `docs/scene-engine.md`.
+
+Work happens in worktree `../voxal-engine-wt`, branch `feat/scene-engine-v2-int`
+(Playwright there: `--config=.pw-wt.config.js`, port 8091).
+
 ## Progress log
 
 - 2026-10-23 — branch created; baseline renders taken; agents A–E launched
   (A architecture spike, B techniques, C art direction, D perf/tests, E visual validation).
+- Reports in `scene-previews/reports/` (main checkout, gitignored). Baseline matrix:
+  `scene-previews/baseline/matrix/`; baseline bench: `D-scene-bench-baseline-{gpu,swiftshader}.md`;
+  legacy library copy: `scene-previews/baseline/video-scenes.legacy.js`.
+- Renderer interface (`createRenderer`/`draw`/`dispose`) in the pipeline (`06f2b11`).
+- Engine (`src/scenes/engine.js`), kit (`src/scenes/kit.js`), vendored Three
+  (`src/assets/three/three.min.js`, `make three-vendor`), preview/bench/compare tooling,
+  test harness `__renderScene` async. Smoke tests pass on Metal and SwiftShader.
+- Flagship agent building `src/scenes/penthouse.js`.

@@ -3997,6 +3997,37 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     };
   }
 
+  // --- scene modules ----------------------------------------------------------
+  //
+  // A scene marked `module: true` in the catalogue is a 3D world built with
+  // Three.js (src/scenes/<id>.js, on src/scenes/engine.js), loaded with
+  // import() the first time it is drawn: nothing is fetched until a scene is
+  // picked, and a page that never shows one never parses Three. Each module
+  // is fetched once per page and kept, so a second context (a keyed receiver,
+  // the preview) builds its renderer synchronously.
+  var _mods = {};
+  function moduleUrl(rel) {
+    var base = (typeof document !== 'undefined' && document.baseURI) || (typeof location !== 'undefined' ? location.href : '');
+    return new URL(rel, base).href;
+  }
+  function loadModule(rel) {
+    var u = moduleUrl(rel);
+    var e = _mods[u];
+    if (!e) {
+      e = _mods[u] = { m: null, p: null };
+      e.p = import(u).then(function (m) { e.m = m; return m; }, function (err) {
+        delete _mods[u];   // a failed fetch may be retried
+        throw err;
+      });
+    }
+    return e.p;
+  }
+  function loadedModule(rel) {
+    var e = _mods[moduleUrl(rel)];
+    return e && e.m;
+  }
+  function sceneModulePath(id) { return 'scenes/' + id + '.js'; }
+
   // Off the page's thread where the platform allows (see compileProgramAsync).
   function createRenderer(gl, id, opts) {
     var rid = resolveId(id);
@@ -4004,15 +4035,35 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     if (ENGINES[rid]) {
       try { return Promise.resolve(ENGINES[rid].create(gl, opts || {})); } catch (e) { return Promise.reject(e); }
     }
+    if (byId(rid).module) {
+      return Promise.all([loadModule('scenes/engine.js'), loadModule(sceneModulePath(rid))]).then(function (ms) {
+        if (gl.isContextLost && gl.isContextLost()) throw new Error('context lost');
+        var r = ms[0].createRenderer(gl, ms[1].default, opts || {});
+        return r.compile().then(function () { return r; }, function (e) { r.dispose(); throw e; });
+      });
+    }
     return compileProgramAsync(gl, rid).then(function (p) { return wrapProgram(gl, p); });
   }
 
-  // Blocking; throws on failure.
+  // Blocking; throws on failure — and for a module scene whose module has not
+  // been loaded yet (createRenderer() has never succeeded for it on this page).
   function createRendererSync(gl, id, opts) {
     var rid = resolveId(id);
     if (!rid) throw new Error('unknown scene ' + id);
     if (ENGINES[rid]) return ENGINES[rid].createSync(gl, opts || {});
+    if (byId(rid).module) {
+      var eng = loadedModule('scenes/engine.js'), mod = loadedModule(sceneModulePath(rid));
+      if (!eng || !mod) throw new Error('scene ' + rid + ' is not loaded yet');
+      return eng.createRenderer(gl, mod.default, opts || {});
+    }
     return wrapProgram(gl, compileProgram(gl, rid));
+  }
+
+  // Before a context is lost on purpose (WEBGL_lose_context): whatever the
+  // scene engine keeps for it (Three's renderer, its programs, its targets).
+  function releaseContext(gl) {
+    var eng = loadedModule('scenes/engine.js');
+    if (eng && gl) { try { eng.releaseContext(gl); } catch (e) { /* a lost context */ } }
   }
 
   // --- the noise table --------------------------------------------------------
@@ -4216,6 +4267,7 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
         }).catch(function () { /* the swatch stays */ });
       });
       chain.then(function () {
+        releaseContext(gl);
         var lose = gl.getExtension('WEBGL_lose_context');
         if (lose) lose.loseContext();
         resolve(_thumbs);
@@ -4238,6 +4290,7 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     compileProgramAsync: compileProgramAsync,
     createRenderer: createRenderer,
     createRendererSync: createRendererSync,
+    releaseContext: releaseContext,
     register: register,
     setUniforms: setUniforms,
     viewMatrix: viewMatrix,
