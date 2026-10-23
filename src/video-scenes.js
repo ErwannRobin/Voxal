@@ -86,7 +86,7 @@ var VideoScenes = (function () {
   var SCENES = [
     { id: 'office', label: 'Office', shadow: 0.55, wrap: 0.22, res: 0.85, hz: [12, 6],
       swatch: 'linear-gradient(120deg,#d9d0c3 0%,#e8e1d6 55%,#a9c3da 100%)' },
-    { id: 'island', label: 'Island', shadow: 0.30, wrap: 0.36, res: 0.80, hz: [10, 5],
+    { id: 'island', label: 'Island', shadow: 0.30, wrap: 0.36, res: 0.80, hz: [10, 5], module: true,
       swatch: 'linear-gradient(180deg,#7fb2df 0%,#cfe6ef 48%,#3fa3a6 52%,#e9dcbc 100%)' },
     { id: 'cybercafe', label: 'Cyber café', shadow: 0.45, wrap: 0.42, res: 1.0, hz: [15, 8],
       swatch: 'linear-gradient(120deg,#2a1714 0%,#5a2a3c 50%,#1d3550 100%)' },
