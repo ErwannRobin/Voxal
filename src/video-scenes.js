@@ -92,7 +92,7 @@ var VideoScenes = (function () {
       swatch: 'linear-gradient(120deg,#2a1714 0%,#5a2a3c 50%,#1d3550 100%)' },
     { id: 'mountain', label: 'Mountain', shadow: 0, wrap: 0.28, res: 0.70, hz: [10, 5], module: true,
       swatch: 'linear-gradient(180deg,#8fb4d9 0%,#e6eef5 45%,#5f7387 70%,#2f4a35 100%)' },
-    { id: 'countryside', label: 'Countryside', shadow: 0, wrap: 0.28, res: 0.80, hz: [10, 5],
+    { id: 'countryside', label: 'Countryside', shadow: 0, wrap: 0.28, res: 0.80, hz: [10, 5], module: true,
       swatch: 'linear-gradient(180deg,#9cc4e6 0%,#dceaf2 45%,#86a957 65%,#4f7a2c 100%)' },
     { id: 'penthouse', label: 'Neon rain', shadow: 0.40, wrap: 0.40, res: 1.0, hz: [12, 6], bloom: 0.45, module: true,
       swatch: 'linear-gradient(120deg,#0b1020 0%,#3a1a45 45%,#0f4a66 100%)' }

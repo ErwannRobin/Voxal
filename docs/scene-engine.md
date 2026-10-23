@@ -170,7 +170,8 @@ Then set `module: true` on its catalogue entry in `src/video-scenes.js`.
 | penthouse (Neon rain) | Three.js | 721 / 556 kb/s vs 1156 / 690 |
 | island | Three.js | 509 / 382 vs 1171 / 751 |
 | mountain | Three.js | 167 / 217 vs 706 / 593 |
-| countryside, office, cybercafe | old shader (behind the same interface) | — |
+| countryside | Three.js | 343 / 292 vs 381 / 330 |
+| office, cybercafe | old shader (behind the same interface) | — |
 
 ## Looking at a scene
 
