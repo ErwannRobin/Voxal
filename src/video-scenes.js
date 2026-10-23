@@ -76,6 +76,8 @@ var VideoScenes = (function () {
   // hz:     how often it is redrawn, and what that falls to under load. Its
   //         motion is slow, so a dear scene is redrawn less often, not made
   //         to look less.
+  // module: (optional) the scene is a Three.js world in src/scenes/<id>.js
+  //         (see docs/scene-engine.md), not a fragment shader in this file.
   // bloom:  (optional) how much of the picture's own glow the resolve adds back:
   //         the lit parts of the redraw, blurred through its coarse mip levels.
   //         Absent or 0: none, and the resolve is byte-for-byte what it was.
@@ -92,7 +94,7 @@ var VideoScenes = (function () {
       swatch: 'linear-gradient(180deg,#8fb4d9 0%,#e6eef5 45%,#5f7387 70%,#2f4a35 100%)' },
     { id: 'countryside', label: 'Countryside', shadow: 0, wrap: 0.28, res: 0.80, hz: [10, 5],
       swatch: 'linear-gradient(180deg,#9cc4e6 0%,#dceaf2 45%,#86a957 65%,#4f7a2c 100%)' },
-    { id: 'penthouse', label: 'Neon rain', shadow: 0.40, wrap: 0.40, res: 1.0, hz: [12, 6], bloom: 0.45,
+    { id: 'penthouse', label: 'Neon rain', shadow: 0.40, wrap: 0.40, res: 1.0, hz: [12, 6], bloom: 0.45, module: true,
       swatch: 'linear-gradient(120deg,#0b1020 0%,#3a1a45 45%,#0f4a66 100%)' }
   ];
 
