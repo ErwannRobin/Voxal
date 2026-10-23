@@ -480,6 +480,13 @@ costs a sharper halo, not a broken picture.
 
 ## Animated scenes
 
+> **Scene engine v2.** The scenes are moving from one ray-marched shader each
+> (described below) to Three.js worlds in `src/scenes/` — see
+> [`scene-engine.md`](scene-engine.md). Everything this section says about the
+> resolve, the look, the shadow, the light wrap, bloom and keyed receivers
+> holds for both; what it says about how a scene is drawn holds for the
+> scenes still on their shader.
+
 The presets are not pictures, and they are not layered drawings either. **Office**,
 **Island**, **Cyber café**, **Mountain**, **Countryside** and **Neon rain** are each one fragment
 shader in `src/video-scenes.js` that renders a small **3D world** from a pinhole

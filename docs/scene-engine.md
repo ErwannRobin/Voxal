@@ -152,6 +152,26 @@ Then set `module: true` on its catalogue entry in `src/video-scenes.js`.
 - **Cheap to compile**: few distinct programs (≤ 8); share materials; one shadow
   map, cached (`k.shadowsChanged()` only when a light really moves).
 
+### Traps found building the first scenes
+
+- `material.envMapIntensity` is ignored once `scene.environment` is set: scale
+  `scene.environmentIntensity` instead.
+- One huge ground or sea quad misdraws on SwiftShader: use a grid whose cells
+  grow with distance.
+- Thin bright lines alias through a half-size mirror: draw their reflections
+  as geometry.
+- Facade windows filter by the buffer's pixel (`facadePatch()` default), which
+  the encoder pays far less for than the picture's.
+
+## Status
+
+| scene | engine | vs old (VP9, moving / frozen) |
+|---|---|---|
+| penthouse (Neon rain) | Three.js | 721 / 556 kb/s vs 1156 / 690 |
+| island | Three.js | 509 / 382 vs 1171 / 751 |
+| mountain | Three.js | 167 / 217 vs 706 / 593 |
+| countryside, office, cybercafe | old shader (behind the same interface) | — |
+
 ## Looking at a scene
 
 ```sh

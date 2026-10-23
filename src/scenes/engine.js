@@ -43,6 +43,31 @@ export { THREE };
 
 // --- the pipeline's GL state ---------------------------------------------------
 
+// The texture each unit had before Three drew, and which unit was active.
+// The old scene shaders touched unit 8 only, and the Processor may lean on a
+// binding persisting across frames on any other; Three binds its own on
+// units 0..n. Units 0..15 cover everything the pipeline uses (0..9).
+const UNITS = 16;
+export function saveBindings(gl) {
+  const active = gl.getParameter(gl.ACTIVE_TEXTURE);
+  const tex = new Array(UNITS);
+  for (let i = 0; i < UNITS; i++) {
+    gl.activeTexture(gl.TEXTURE0 + i);
+    tex[i] = gl.getParameter(gl.TEXTURE_BINDING_2D);
+  }
+  gl.activeTexture(active);
+  return { active, tex };
+}
+export function restoreBindings(gl, b) {
+  if (!b) return;
+  for (let i = 0; i < UNITS; i++) {
+    gl.activeTexture(gl.TEXTURE0 + i);
+    gl.bindTexture(gl.TEXTURE_2D, b.tex[i]);
+    gl.bindTexture(gl.TEXTURE_CUBE_MAP, null);
+  }
+  gl.activeTexture(b.active);
+}
+
 export function restoreState(gl) {
   gl.disable(gl.BLEND);
   gl.disable(gl.DEPTH_TEST);
@@ -661,6 +686,7 @@ void main() {
   draw(fb, w, h, time, look, frame, view) {
     const eng = this.eng, gl = eng.gl, r = eng.renderer;
     if (eng.dead || (gl.isContextLost && gl.isContextLost())) return;
+    const saved = saveBindings(gl);
     r.resetState();
     this.drawing = true;
     const L = this.prepare(w, h, time, look, frame);
@@ -689,6 +715,7 @@ void main() {
       exposure: L.exposure, tint: L.tint, sideMix: look.sideMix,
       near: cam.near, far: cam.far, nearness: this.nearness
     });
+    restoreBindings(gl, saved);
   }
 
   // Compile every program the scene needs without stalling the page where
@@ -696,16 +723,21 @@ void main() {
   // draw() (output colour space is part of Three's program key).
   compile(w, h) {
     const eng = this.eng, r = eng.renderer;
+    const saved = saveBindings(eng.gl);
     r.resetState();
     this.prepare(w || 512, h || 288, 37, defaultLook(), null);
     r.setRenderTarget(eng.target(w || 512, h || 288));
     let done;
     try { done = r.compileAsync(this.scene, this.camera, this.scene); } catch (e) { done = Promise.reject(e); }
+    // Synchronous work (and Three's bindings) happened above: hand the
+    // units back now, and again when the driver is done.
+    r.setRenderTarget(null);
+    restoreState(eng.gl);
+    restoreBindings(eng.gl, saved);
     return Promise.resolve(done).then(() => {
-      r.setRenderTarget(null);
       restoreState(eng.gl);
     }, (e) => {
-      try { r.setRenderTarget(null); restoreState(eng.gl); } catch (e2) { /* lost */ }
+      try { restoreState(eng.gl); } catch (e2) { /* lost */ }
       throw e;
     });
   }
@@ -720,6 +752,11 @@ void main() {
     if (this.disposed) return;
     this.disposed = true;
     const eng = this.eng;
+    const saved = eng.dead ? null : saveBindings(eng.gl);
+    try { this.disposeInner(eng); } finally { if (saved) restoreBindings(eng.gl, saved); }
+  }
+
+  disposeInner(eng) {
     if (this.def.dispose) { try { this.def.dispose(this.k, this.state); } catch (e) { /* ignore */ } }
     if (eng.dead) return;
     try {
@@ -762,8 +799,16 @@ function defaultLook() {
 // and programs are compiled the first time it draws, unless compile() is
 // awaited first (createRenderer does).
 export function createRenderer(gl, def, opts) {
-  const eng = engineFor(gl);
-  const sr = new SceneRenderer(eng, def, opts);
+  // Building (Three's constructor, PMREM, geometry uploads) binds textures
+  // on the pipeline's units: hand them back.
+  const saved = saveBindings(gl);
+  let eng, sr;
+  try {
+    eng = engineFor(gl);
+    sr = new SceneRenderer(eng, def, opts);
+  } finally {
+    restoreBindings(gl, saved);
+  }
   return {
     id: def.id,
     engine: 'three',

@@ -253,8 +253,11 @@ test.describe('the keyed frame', () => {
       p.scene = Object.assign({}, p.scene, { wrap: 0, shadow: 0 });
       await window.__sleep(300);
       const after = p.keyed.ctx.getImageData(0, 0, W, H).data;
+      // The fake camera's dot runs along the bottom rows and may have moved
+      // between the two reads (how far depends on the frame timing): leave
+      // those rows out, as the band above does.
       let moved = 0;
-      for (let i = 0; i < before.length; i++) moved = Math.max(moved, Math.abs(before[i] - after[i]));
+      for (let i = 0; i < W * (H - 4) * 4; i++) moved = Math.max(moved, Math.abs(before[i] - after[i]));
       return { band, worst, floored, floorMiss, interior, moved };
     });
     expect(seen.band).toBeGreaterThan(100);

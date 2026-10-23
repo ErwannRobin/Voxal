@@ -136,3 +136,10 @@ Work happens in worktree `../voxal-engine-wt`, branch `feat/scene-engine-v2-int`
   (`src/assets/three/three.min.js`, `make three-vendor`), preview/bench/compare tooling,
   test harness `__renderScene` async. Smoke tests pass on Metal and SwiftShader.
 - Flagship agent building `src/scenes/penthouse.js`.
+- Draft PR #210 (`feat/scene-engine-v2` on origin = local `feat/scene-engine-v2-int`).
+- Flagship penthouse (`7a7102d`), island (`81cf717`), mountain (`1e6f931`) on the engine;
+  kit fixes from the flagship (`ebfcec8`). Scene agents hit the plan's quota twice:
+  run them one at a time and resume with SendMessage, never restart.
+- Next: countryside (agent paused, no file yet), office, cybercafe; then refinement,
+  bench old vs new (`scripts/scene-bench.mjs --compare`), full suite.
+
