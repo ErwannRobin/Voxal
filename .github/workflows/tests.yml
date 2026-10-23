@@ -5,6 +5,9 @@ on:
     branches: ["main"]
   pull_request:
     branches: ["main"]
+    # `ready_for_review` is not in the default set: without it, taking a PR out
+    # of draft would not run the tests the draft skipped.
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 # No workflow-level `paths-ignore` here, on purpose: `All tests green` is the
@@ -12,6 +15,10 @@ on:
 # reports it — which blocks the merge rather than allowing it. Docs-only changes
 # are skipped per job instead, by the `changes` job below, and the aggregate
 # accepts `skipped` only where `changes` says nothing relevant was touched.
+#
+# A draft pull request runs nothing: `changes` and the aggregate are skipped, and
+# a skipped required check does not block the merge. Marking it ready runs
+# everything (see `types` above). A draft cannot be merged, so nothing slips by.
 
 permissions:
   contents: read
@@ -28,20 +35,22 @@ jobs:
   # `code` is true, so a code change can never skip a test.
   changes:
     name: Detect changes
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
     outputs:
-      code: ${{ steps.filter.outputs.code }}
-      rust: ${{ steps.filter.outputs.rust }}
+      code: ${{ steps.filter.outputs.code || github.event_name == 'workflow_dispatch' }}
+      rust: ${{ steps.filter.outputs.rust || github.event_name == 'workflow_dispatch' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
       - name: Classify changed files
         id: filter
+        if: github.event_name != 'workflow_dispatch'
         uses: dorny/paths-filter@v4
         with:
           predicate-quantifier: every
@@ -98,12 +107,13 @@ jobs:
 
   # The same `cargo test`, on macOS: the crate has `#[cfg(target_os = "macos")]`
   # code that Linux never compiles. Only when the crate (or this file) changed,
-  # and only once the Linux run is green — a change that fails there does not
-  # get to spend macOS minutes finding out again.
+  # only on push to `main` (macOS minutes cost ten times Linux ones, so a pull
+  # request never spends them; the Linux run above covers it), and only once the
+  # Linux run is green.
   rust-tests-macos:
     name: Rust tests (macOS)
     needs: [changes, rust-tests]
-    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.rust == 'true' && github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -352,7 +362,7 @@ jobs:
   # absent — it is non-blocking by design (see above).
   all-tests-green:
     name: All tests green
-    if: always()
+    if: always() && github.event.pull_request.draft != true
     needs: [changes, lint, rust-tests, rust-tests-macos, api-tests, unit-e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -361,7 +371,7 @@ jobs:
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
           CODE_CHANGED: ${{ needs.changes.outputs.code }}
-          RUST_CHANGED: ${{ needs.changes.outputs.code == 'true' && needs.changes.outputs.rust == 'true' }}
+          RUST_CHANGED: ${{ needs.changes.outputs.code == 'true' && needs.changes.outputs.rust == 'true' && github.event_name != 'pull_request' }}
           RUST_RESULT: ${{ needs.rust-tests.result }}
           RUST_MACOS_RESULT: ${{ needs.rust-tests-macos.result }}
           LINT_RESULT: ${{ needs.lint.result }}

@@ -11,6 +11,7 @@ on:
       - "KNOWLEDGE/**"
   pull_request:
     branches: ["main"]
+    types: [opened, synchronize, reopened, ready_for_review]
     paths-ignore:
       - "**/*.md"
       - "KNOWLEDGE/**"
@@ -37,6 +38,7 @@ jobs:
   # A manual dispatch always analyzes Swift; the weekly schedule never does.
   changes:
     name: Detect changes
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -64,6 +66,7 @@ jobs:
 
   analyze-js:
     name: Analyze (javascript-typescript)
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
