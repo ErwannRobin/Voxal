@@ -2707,7 +2707,7 @@ var VideoEffects = (function () {
       // "compiling" rather than "not a scene".
       this.sceneCompiling = true;
       var ready = this.sceneRenderers[id] ? Promise.resolve(this.sceneRenderers[id])
-                                      : VideoScenes.createRenderer(gl, id);
+                                      : VideoScenes.createRenderer(gl, id, this.sceneOpts());
       return ready.then(function (r) {
         if (self.stopped || self.gl !== gl) { if (r !== self.sceneRenderers[id]) r.dispose(); return; }
         self.sceneRenderers[id] = r;
@@ -2804,7 +2804,7 @@ var VideoEffects = (function () {
     }
     // Another scene (or the same one, picked again) starts its picture over.
     this.sceneAge = 0;
-    if (!this.sceneRenderers[id]) this.sceneRenderers[id] = VideoScenes.createRendererSync(gl, id);
+    if (!this.sceneRenderers[id]) this.sceneRenderers[id] = VideoScenes.createRendererSync(gl, id, this.sceneOpts());
     this.sceneId = id;
     this.scene = want;
     // Each scene brings its own redraw rate; a new one starts at the top of
@@ -2865,6 +2865,10 @@ var VideoEffects = (function () {
   // The turn of the scene's camera: the phone's own, for a pipeline that is
   // drawing the scene for this device's camera.
   Processor.prototype.sceneView = function () { return _tilt; };
+
+  // What a scene engine may spend on this pipeline's scene (shadow map size,
+  // reflections, particles): see quality in src/scenes/engine.js.
+  Processor.prototype.sceneOpts = function () { return { quality: 'full', mobile: IS_MOBILE }; };
 
   // Whether drawScene() will redraw on this frame (its own rate gate).
   Processor.prototype.sceneDue = function (now) {
@@ -4044,6 +4048,9 @@ var VideoEffects = (function () {
   // The scene turns the way the sender's phone has, as the strip on the
   // frame says; none when it does not carry one.
   KeyInProcessor.prototype.sceneView = function () { return this.view; };
+  // A peer's scene: drawn on this device for someone else's picture, so it
+  // spends less (smaller shadow map and reflections).
+  KeyInProcessor.prototype.sceneOpts = function () { return { quality: 'receiver', mobile: IS_MOBILE }; };
 
   // Read the strip off the newest frame: 32 cells along the top edge, sampled
   // at their centres into a 32x1 canvas. Called only when the scene is about
@@ -4233,7 +4240,7 @@ var VideoEffects = (function () {
         self.check();
         var s = self.sizeFor(self.video.videoWidth, self.video.videoHeight);
         self.initGL(s.w, s.h);
-        return VideoScenes.createRenderer(self.gl, id);
+        return VideoScenes.createRenderer(self.gl, id, self.sceneOpts());
       })
       .then(function (r) {
         if (self.stopped || self.dead) r.dispose();
@@ -4638,7 +4645,7 @@ var VideoEffects = (function () {
     if (this.stopped || this.dead || !this.gl) return Promise.reject(new Error('key-in is not running'));
     this.wantScene = id;
     var gl = this.gl;
-    var ready = this.sceneRenderers[id] ? Promise.resolve(this.sceneRenderers[id]) : VideoScenes.createRenderer(gl, id);
+    var ready = this.sceneRenderers[id] ? Promise.resolve(this.sceneRenderers[id]) : VideoScenes.createRenderer(gl, id, this.sceneOpts());
     return ready.then(function (r) {
       if (self.stopped || self.gl !== gl) {
         if (r !== self.sceneRenderers[id]) r.dispose();
@@ -5312,7 +5319,7 @@ var VideoEffects = (function () {
 
     function load(id) {
       var token = ++loadToken;
-      VideoScenes.createRenderer(gl, id).then(function (p) {
+      VideoScenes.createRenderer(gl, id, { quality: 'preview', mobile: IS_MOBILE }).then(function (p) {
         if (destroyed || token !== loadToken || !gl) { try { p.dispose(); } catch (e) { /* lost */ } return; }
         // The old scene keeps being drawn until the new one is ready.
         try { if (prog) prog.dispose(); } catch (e) { /* lost */ }
