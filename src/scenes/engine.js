@@ -499,7 +499,11 @@ class SceneRenderer {
         const pm = new THREE.PMREMGenerator(self.eng.renderer);
         const rt = pm.fromEquirectangular(tex);
         pm.dispose();
-        restoreState(self.eng.gl);
+        // Inside draw() (an update() re-baking for the evening), Three is
+        // about to render: its state cache must match the GL state, which
+        // PMREM changed. Outside, the pipeline's state is what must hold.
+        if (self.drawing) self.eng.renderer.resetState();
+        else restoreState(self.eng.gl);
         self.disposables.push(rt);
         self.scene.environment = rt.texture;
         if (intensity != null) self.scene.environmentIntensity = intensity;
@@ -658,8 +662,11 @@ void main() {
     const eng = this.eng, gl = eng.gl, r = eng.renderer;
     if (eng.dead || (gl.isContextLost && gl.isContextLost())) return;
     r.resetState();
+    this.drawing = true;
     const L = this.prepare(w, h, time, look, frame);
-    if (this.def.update) this.def.update(this.k, this.state, time, L);
+    try {
+      if (this.def.update) this.def.update(this.k, this.state, time, L);
+    } finally { this.drawing = false; }
     const cam = this.camera;
     cam.aspect = w / h;
     cam.fov = fovFor(this.fov, w / h);

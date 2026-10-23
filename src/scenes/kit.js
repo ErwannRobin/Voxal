@@ -340,7 +340,10 @@ vec4 mirrorSample(vec3 wp, vec2 off, float lod) {
 
 // A reflective floor or lake surface: k.std() with a planar mirror. `rough`
 // blurs the reflection (mip level), `strength` scales it, `ripple` (0..1)
-// adds a slowly moving distortion (water), filtered by distance.
+// adds a slowly moving distortion (water), filtered by distance. `reflect`
+// replaces the default blend with your own GLSL (runs before opaque_fragment
+// with outgoingLight, normal, vViewPosition, roughnessFactor, rippleGrad(),
+// mirrorSample() and the uniforms above in scope).
 export function mirrorMaterial(k, mesh, p = {}) {
   const pm = planarMirror(k, mesh, p);
   const strength = p.strength == null ? 1 : p.strength;
@@ -368,7 +371,7 @@ vec2 rippleGrad(vec2 x) {
 ` + (p.fragmentHead || ''),
     fragment: p.fragment || {},
     fragmentBefore: {
-      opaque_fragment: `{
+      opaque_fragment: p.reflect ? '{\n' + p.reflect + '\n}' : `{
   vec2 rg = uRipple.x > 0.0 ? rippleGrad(vWorld.xz) * uRipple.x : vec2(0.0);
   vec4 mr = mirrorSample(vWorld, rg * uRipple.w * 10.0, uMirBlur + roughnessFactor * 5.0);
   vec3 Vv = normalize(vViewPosition);
@@ -443,7 +446,12 @@ export function heightfield({ x0, x1, z0, z1, nx = 128, nz = 128, height, color 
 //
 // o: { bay: 2.0, floor: 3.4, glass: [0.70, 0.62] (fraction of a cell), lit:
 //      0.4, litNight: 0.6, warm, cool, accent, strength: 4, period: 4000,
-//      frame: colour of the mullions/spandrels (darker than the wall) }
+//      filter: 'buffer' (default) | 'picture' }
+//
+// `filter`: what a window must be bigger than to be drawn as itself. The
+// picture's pixel (footprint()) keeps more windows, but each costs every
+// receiver bits as the jittered redraws disagree about it; the buffer's pixel
+// (the default) was measured cheaper on the flagship (1050 -> 556 kb/s frozen).
 export function facadePatch(o = {}) {
   const uniforms = {
     uWinCell: { value: new THREE.Vector4(o.bay || 2.0, o.floor || 3.4, (o.glass || [0.7, 0.62])[0], (o.glass || [0.7, 0.62])[1]) },
@@ -455,6 +463,7 @@ export function facadePatch(o = {}) {
     uWinDay: { value: o.dayLit == null ? 0.0 : o.dayLit }
   };
   const box = !!o.instancedBoxes;
+  const fwExpr = o.filter === 'picture' ? 'footprint2(g)' : 'max(fwidth(g), vec2(1e-5))';
   const vertexHead = box ? 'varying vec4 vFacade;\n' : 'attribute vec4 facade;\nvarying vec4 vFacade;\n';
   const vertex = box ? {
     begin_vertex: `
@@ -476,7 +485,7 @@ uniform vec3 uWinWarm; uniform vec3 uWinCool; uniform vec3 uWinAccent; uniform v
 vec4 facadeWindows() {
   if (vFacade.z < 0.0) return vec4(0.0);
   vec2 g = vFacade.xy / uWinCell.xy;
-  vec2 fw = footprint2(g);
+  vec2 fw = ${fwExpr};
   float foot = max(fw.x, fw.y);
   vec2 lo = 0.5 - 0.5 * uWinCell.zw, hi = 0.5 + 0.5 * uWinCell.zw;
   float glass = pulse(g.x, lo.x, hi.x, max(fw.x, 1e-4)) * pulse(g.y, lo.y, hi.y, max(fw.y, 1e-4));
@@ -505,7 +514,7 @@ vec4 facadeWindows() {
 }
 `;
   return {
-    key: 'facade' + (box ? 'B' : 'A'),
+    key: 'facade' + (box ? 'B' : 'A') + (o.filter === 'picture' ? 'p' : 'b'),
     uniforms,
     vertexHead,
     vertex,
@@ -527,7 +536,9 @@ vec4 facadeWindows() {
 // alpha the surfaces wrote is kept.
 //
 // o: { count, box: [x0, x1, y0, y1, z0, z1], speed (m/s), slant (rad), width (m),
-//      length (s of fall drawn), color, opacity, seed, calm (0..1) }
+//      length (s of fall drawn), color, opacity, seed, calm (0..1),
+//      minVis (0..1: how much of its opacity a streak keeps when it is widened
+//      to a pixel; default 0.35 — below that, far rain vanishes) }
 export function rain(k, o = {}) {
   const count = Math.max(1, Math.round((o.count || 600) * k.quality.particles));
   const b = o.box || [-10, 10, -2, 12, -30, -4];
@@ -551,10 +562,10 @@ export function rain(k, o = {}) {
     uRainBox: { value: new THREE.Vector4(b[2], b[3], o.speed || 9, o.slant || 0.25) },
     uRainLook: { value: new THREE.Vector4(o.width || 0.012, o.length || 0.06, o.opacity == null ? 0.18 : o.opacity, o.calm == null ? 0.75 : o.calm) },
     uRainColor: { value: new THREE.Color(o.color == null ? 0x9fb4d0 : o.color) },
-    uRainFade: { value: new THREE.Vector2(o.near || 1.0, o.far || 60.0) }
+    uRainFade: { value: new THREE.Vector3(o.near || 1.0, o.far || 60.0, o.minVis == null ? 0.35 : o.minVis) }
   };
   const decl = `
-uniform vec4 uRainBox; uniform vec4 uRainLook; uniform vec3 uRainColor; uniform vec2 uRainFade;
+uniform vec4 uRainBox; uniform vec4 uRainLook; uniform vec3 uRainColor; uniform vec3 uRainFade;
 varying vec2 vUv; varying float vRainA; varying vec3 vWorld;
 `;
   // Written whole: positions come from the clock, not from the mesh.
@@ -576,7 +587,7 @@ void main() {
   float w = max(uRainLook.x, dist * 1.2 / max(uBufH, 1.0));
   vec3 wp = c + side * position.x * w + vel * position.y * len;
   vUv = uv; vWorld = wp;
-  vRainA = uRainLook.z * (uRainLook.x / w) * (1.0 - smoothstep(uRainFade.y * 0.6, uRainFade.y, dist)) * smoothstep(uRainFade.x * 0.5, uRainFade.x, dist);
+  vRainA = uRainLook.z * max(uRainLook.x / w, uRainFade.z) * (1.0 - smoothstep(uRainFade.y * 0.6, uRainFade.y, dist)) * smoothstep(uRainFade.x * 0.5, uRainFade.x, dist);
   gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
 }`,
     fragmentShader: k.GLSL_FRAGMENT + decl + `
