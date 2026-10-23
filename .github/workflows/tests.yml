@@ -5,6 +5,7 @@ on:
     branches: ["main"]
   pull_request:
     branches: ["main"]
+  workflow_dispatch:
 
 # No workflow-level `paths-ignore` here, on purpose: `All tests green` is the
 # check `main`'s ruleset requires, and a workflow that is filtered out never
@@ -203,10 +204,12 @@ jobs:
   # timing-sensitive than the unit suite, so it runs as its own job and is
   # non-blocking (continue-on-error) — a transient loopback-ICE hiccup must not
   # block merges, but real regressions still show up here (with retries: 2).
+  # Not on pull requests: it is non-blocking, so on a PR it only burns Linux
+  # minutes. It runs on every push to `main` (and on demand) instead.
   mesh-e2e:
     name: E2E (mesh, non-blocking)
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 15
@@ -241,10 +244,14 @@ jobs:
   # explicitly non-blocking check the one time it fired. The number is in the
   # run summary of every run, which is where anyone asking the question already
   # is.
+  #
+  # Not on pull requests: it re-runs the whole unit E2E suite plus an
+  # instrumented Rust build, the most expensive job here, for a number nobody
+  # gates on. It runs on every push to `main` (and on demand) instead.
   coverage:
     name: Coverage (non-blocking)
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 30
@@ -329,7 +336,7 @@ jobs:
             coverage/
             coverage-api/
             src-tauri/target/llvm-cov/html/
-          retention-days: 14
+          retention-days: 3
           if-no-files-found: warn
 
   # Single aggregate check that summarises every gating job above. Branch
