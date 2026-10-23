@@ -3971,6 +3971,7 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     var vao = null, buf = null;
     return {
       id: prog.id,
+      engine: 'shader',
       program: prog.program,
       loc: prog.loc,
       draw: function (fb, w, h, time, look, frame, view) {
@@ -4037,14 +4038,35 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     if (ENGINES[rid]) {
       try { return Promise.resolve(ENGINES[rid].create(gl, opts || {})); } catch (e) { return Promise.reject(e); }
     }
-    if (byId(rid).module) {
+    if (useModule(rid)) {
       return Promise.all([loadModule('scenes/engine.js'), loadModule(sceneModulePath(rid))]).then(function (ms) {
         if (gl.isContextLost && gl.isContextLost()) throw new Error('context lost');
         var r = ms[0].createRenderer(gl, ms[1].default, opts || {});
         return r.compile().then(function () { return r; }, function (e) { r.dispose(); throw e; });
+      }).catch(function (e) {
+        // A module that cannot load or build (an old engine, a failed fetch, a
+        // driver that rejects a program) falls back to the scene's old shader
+        // where it still has one, rather than to no scene at all.
+        if (!SOURCES[rid] || (gl.isContextLost && gl.isContextLost())) throw e;
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn('[VideoScenes] ' + rid + ': engine scene unavailable (' + (e && e.message ? e.message : e) + '), drawing the shader instead');
+        }
+        _moduleFailed[rid] = true;
+        return compileProgramAsync(gl, rid).then(function (p) { return wrapProgram(gl, p); });
       });
     }
     return compileProgramAsync(gl, rid).then(function (p) { return wrapProgram(gl, p); });
+  }
+
+  // Whether scene `id` is drawn by its engine module. `scene-engine` =
+  // 'legacy' in localStorage draws every scene with its old shader instead —
+  // a diagnosis switch, read at each creation, never written by the app.
+  var _moduleFailed = {};
+  function useModule(id) {
+    var s = byId(id);
+    if (!s || !s.module || _moduleFailed[id]) return false;
+    if (!SOURCES[id]) return true;
+    try { return localStorage.getItem('scene-engine') !== 'legacy'; } catch (e) { return true; }
   }
 
   // Blocking; throws on failure — and for a module scene whose module has not
@@ -4053,7 +4075,7 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     var rid = resolveId(id);
     if (!rid) throw new Error('unknown scene ' + id);
     if (ENGINES[rid]) return ENGINES[rid].createSync(gl, opts || {});
-    if (byId(rid).module) {
+    if (useModule(rid)) {
       var eng = loadedModule('scenes/engine.js'), mod = loadedModule(sceneModulePath(rid));
       if (!eng || !mod) throw new Error('scene ' + rid + ' is not loaded yet');
       return eng.createRenderer(gl, mod.default, opts || {});

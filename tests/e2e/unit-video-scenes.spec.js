@@ -42,10 +42,11 @@ test.beforeEach(async ({ page }) => {
         glError = glError || gl.getError();
         out.push(Array.from(px));
       }
+      const engine = r.engine;
       r.dispose();
       VideoScenes.releaseContext(gl);
       gl.getExtension('WEBGL_lose_context')?.loseContext();
-      return { w: W, h: H, frames: out, ms, glError };
+      return { w: W, h: H, frames: out, ms, glError, engine };
     };
     window.__luma = (px, i) => 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
 
@@ -247,6 +248,16 @@ test.describe('the catalogue', () => {
 
 test.describe('every scene', () => {
   for (const id of SCENES) {
+    test(`${id} is drawn by the engine its catalogue entry names`, async ({ page }) => {
+      const seen = await page.evaluate(async (id) => {
+        const r = (await window.__renderScene(id, { w: 32, h: 18 }));
+        return { engine: r.engine, module: !!VideoScenes.byId(id).module };
+      }, id);
+      // A module scene that silently fell back to its old shader would pass
+      // every other test here on the old picture.
+      expect(seen.engine).toBe(seen.module ? 'three' : 'shader');
+    });
+
     test(`${id} compiles and draws a picture, not a flat field`, async ({ page }) => {
       const stats = await page.evaluate(async (id) => {
         const r = (await window.__renderScene(id));
