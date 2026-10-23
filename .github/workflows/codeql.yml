@@ -11,6 +11,7 @@ on:
       - "KNOWLEDGE/**"
   pull_request:
     branches: ["main"]
+    types: [opened, synchronize, reopened, ready_for_review]
     paths-ignore:
       - "**/*.md"
       - "KNOWLEDGE/**"
@@ -37,6 +38,7 @@ jobs:
   # A manual dispatch always analyzes Swift; the weekly schedule never does.
   changes:
     name: Detect changes
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -64,6 +66,7 @@ jobs:
 
   analyze-js:
     name: Analyze (javascript-typescript)
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -130,11 +133,13 @@ jobs:
   # macOS minutes cost ten times Linux ones, and this is the longest job in the
   # repository (~20 min). So it runs only when the change touches Swift inputs
   # (see `changes`) or on a manual dispatch — never on the weekly schedule —
-  # and only after the Linux JavaScript analysis has succeeded.
+  # and only after the Linux JavaScript analysis has succeeded. Not on pull
+  # requests either (nothing requires it): it runs once the change lands on
+  # `main`, rather than on every push to every PR that touches ios/.
   analyze-ios:
     name: Analyze (swift)
     needs: [changes, analyze-js]
-    if: needs.changes.outputs.ios == 'true'
+    if: needs.changes.outputs.ios == 'true' && github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 60
 
