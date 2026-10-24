@@ -4,12 +4,45 @@ Things to implement or investigate, ordered roughly by priority.
 
 ---
 
-## 🌃 Neon rain scene — what is left
+## 🎬 Scene engine v2 (Three.js scenes) — what is left
 
-- **Not measured on a real GPU.** All timings (74 ms a redraw at 512×288, café 44, office 78, mountain 86 on this machine's software GL) are relative. Check it on an integrated GPU and a phone: the first step down is `hz` 12 → 6, then the buffer.
-- **Two sibling scenes were evaluated, not built:** *Orbital observatory* (the engine already has a spherical-atmosphere integral, bloom and the glass/strip lighting; it needs a planet limb with night-side lights and a station truss) and *Zen after rain* (water and mist reuse the mountain's lake and the island's wet sand; the hard part is foliage and stones that read as such at 512 px, which this engine has no good primitive for yet). Neither was started: one scene at this quality took most of the work, and a middling second one is worse than none.
-- The floor reflection is a single look at the city with a small per-pixel wobble; a real two-tap blur would be smoother but costs a second DDA.
-- Mid-distance towers read as soft grey shapes in the mist: that is the fade to *average* window light. More structure there (set-backs, lit crowns) is the next visual step.
+The six scenes were rebuilt on Three.js in PR #210 (`docs/scene-engine.md`).
+Checked only in headless Chromium (SwiftShader, and an Apple M5 through ANGLE
+Metal). Found while building and reviewing them:
+
+**Visual weak points, per scene**
+- **Neon rain (penthouse):** facade windows are chunky; the day look reads too
+  much like night; GPU 4–5 ms with the resolve on an M5 (the dearest scene).
+- **Island:** flat overall; a heavy roof band across the top of an upright
+  (9:16) picture.
+- **Mountain:** near trees are visibly faceted.
+- **Countryside:** the casale and cypresses are backlit and too dark; the
+  umbrella pine sits low in portrait; distant wheat is flat.
+- **Office:** the window leaves the frame in portrait; the dust motes in the
+  sunbeam are invisible.
+- **Cyber café:** the pendants cast no shadows; the tram is a plain slab; little
+  of the bar shows in portrait; night portrait luma is ~31 (just over the
+  25 floor).
+
+**Engine requests the scene authors made**
+- Multisampling in the engine's own target (office and café each built one).
+- A `k.quality.software` flag, so a scene can drop its costliest layers on
+  SwiftShader without sniffing the renderer string itself.
+- Fading a shadow by pixel footprint (contact shadows shimmer when small).
+- A `vertexHead` option on `k.shader`.
+- Smooth alpha by position (nearness from depth is per pixel, so a thin
+  railing in front of the sky gives a jagged shadow edge).
+
+**Cost**
+- First pick on a warm GPU blocks the page 40–420 ms while a scene builds its
+  geometry in JavaScript (countryside worst). Build lazily or in chunks.
+- SwiftShader redraws: cyber café 1.4–3× and mountain up to 1.9× slower than
+  the old shaders.
+
+**Validation not done yet**
+- Real devices: iOS, Android, the macOS app (`make dev`), an integrated GPU.
+- The mesh suite with keyed receivers drawing the new scenes.
+- Decide when the ray-marched fallback shaders in `video-scenes.js` can go.
 
 ---
 
