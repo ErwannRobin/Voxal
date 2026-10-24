@@ -357,7 +357,7 @@ test.describe('scene preview', () => {
     expect(await page.locator('#pv canvas').count()).toBe(0);
   });
 
-  test('draws the chosen scene and turns it when dragged, with a way back', async ({ page }) => {
+  test('draws the chosen scene and turns it when dragged; a double-click recentres', async ({ page }) => {
     // The waits below budget up to 30 s + 60 s before the drag even starts;
     // the screenshot comparison after it needs headroom of its own.
     test.setTimeout(150_000);
@@ -372,7 +372,8 @@ test.describe('scene preview', () => {
     // The shader compiles in its own time (seconds on a software GPU).
     await expect(page.locator('#pv .scene-preview-note')).toBeHidden({ timeout: 60_000 });
     await expect(page.locator('#pv .scene-preview-hud')).toBeVisible();
-    await expect(page.locator('#pv .scene-preview-recentre')).toBeHidden();
+    // No Recentre button: a double-click (two taps on a phone) does it.
+    await expect(page.locator('#pv .scene-preview-recentre')).toHaveCount(0);
 
     const box = await stage.boundingBox();
     const before = await page.screenshot({ clip: box });
@@ -381,7 +382,7 @@ test.describe('scene preview', () => {
     await page.mouse.move(box.x + box.width / 2 + 90, box.y + box.height / 2 + 20, { steps: 8 });
     await page.mouse.up();
 
-    await expect(page.locator('#pv .scene-preview-recentre')).toBeVisible({ timeout: 30_000 });
+    await expect.poll(() => page.evaluate(() => window.__pv.orbit.view()), { timeout: 30_000 }).not.toBeNull();
     const view = await page.evaluate(() => window.__pv.orbit.view());
     expect(view.yaw).toBeLessThan(0);
     expect(view.pitch).toBeGreaterThan(0);
@@ -392,9 +393,8 @@ test.describe('scene preview', () => {
     const shot = async () => page.screenshot({ clip: box, timeout: 20_000 });
     await expect.poll(async () => !(await shot()).equals(before), { timeout: 40_000 }).toBe(true);
 
-    await page.locator('#pv .scene-preview-recentre').click();
+    await stage.dblclick({ position: { x: 40, y: 40 } });
     await expect.poll(() => page.evaluate(() => window.__pv.orbit.view())).toBeNull();
-    await expect(page.locator('#pv .scene-preview-recentre')).toBeHidden();
   });
 
   test('follows the mode written in this window and gives its GPU context back when stopped', async ({ page }) => {
@@ -496,32 +496,69 @@ test.describe('scene preview', () => {
     expect(back).toBeNull();
   });
 
-  test('full window: over the page at the window\'s shape, with an outline, and Escape brings it back', async ({ page }) => {
+  test('full window: over the page at the window\'s shape, icons for open and close, and Escape brings it back', async ({ page }) => {
     test.setTimeout(90_000);
     await page.evaluate(() => {
       VideoEffects.writeMode('preset:countryside');
       window.__pv = VideoEffects.renderScenePreview(document.getElementById('pv'));
     });
     await expect(page.locator('#pv .scene-preview-note')).toBeHidden({ timeout: 60_000 });
-    await page.locator('#pv .scene-preview-full').click();
+    // An icon, not a word.
+    const open = page.locator('#pv .scene-preview-full');
+    await expect(open).toHaveText('');
+    await expect(open.locator('svg')).toHaveCount(1);
+    await expect(open).toHaveAttribute('aria-label', 'Show the scene over the whole window');
+    await open.click();
     const stage = page.locator('body > .scene-preview-stage.is-full');
     await expect(stage).toBeVisible();
     await expect(page.locator('#pv .scene-preview-placeholder')).toHaveCount(1);
+    await expect(stage.locator('.scene-preview-full')).toBeHidden();
     const vp = page.viewportSize();
     const box = await stage.boundingBox();
     expect(box.width).toBe(vp.width);
     expect(box.height).toBe(vp.height);
     const c = await stage.locator('canvas').evaluate((e) => [e.width, e.height]);
     expect(c[0] / c[1]).toBeCloseTo(vp.width / vp.height, 2);
-    await expect(stage.locator('.scene-preview-outline')).toBeVisible();
     await expect(stage.locator('.scene-preview-title strong')).toHaveText("Val d’Orcia");
     expect(await stage.evaluate((e) => getComputedStyle(e).touchAction)).toBe('none');
+    // No "You" button and no outline of a person any more.
+    await expect(stage.locator('.scene-preview-person, .scene-preview-outline')).toHaveCount(0);
 
-    // The outline can be put away.
-    await stage.locator('.scene-preview-person').click();
-    await expect(stage.locator('.scene-preview-outline')).toBeHidden();
-    await expect(stage.locator('.scene-preview-person')).toHaveAttribute('aria-pressed', 'false');
+    // Top left, an icon that closes it; top right, the scenes, then the light.
+    const close = stage.locator('.scene-preview-close');
+    await expect(close).toBeVisible();
+    await expect(close).toHaveText('');
+    await expect(close).toHaveAttribute('aria-label', 'Back to Settings');
+    const side = stage.locator('.scene-preview-side');
+    await expect(side).toBeVisible();
+    const at = await page.evaluate(() => {
+      const r = (s) => document.querySelector('body > .scene-preview-stage ' + s).getBoundingClientRect();
+      return { close: r('.scene-preview-close'), scenes: r('.scene-preview-scenes'), light: r('.scene-preview-light select'), w: innerWidth };
+    });
+    expect(at.close.left).toBeLessThan(40);
+    expect(at.close.top).toBeLessThan(40);
+    expect(at.scenes.right).toBeGreaterThan(at.w - 40);
+    expect(at.scenes.top).toBeLessThan(40);
+    expect(at.light.top).toBeGreaterThanOrEqual(at.scenes.bottom);
+    expect(at.light.right).toBeGreaterThan(at.w - 40);
 
+    // The scenes only (no "none", no blur, no picture of your own), the
+    // current one checked; one click changes it.
+    const modes = await side.locator('.bg-chip').evaluateAll((cs) => cs.map((c) => c.dataset.mode));
+    expect(modes).toEqual(['preset:office', 'preset:island', 'preset:cybercafe', 'preset:mountain',
+      'preset:countryside', 'preset:penthouse']);
+    await expect(side.locator('.bg-chip[data-mode="preset:countryside"]')).toHaveAttribute('aria-checked', 'true');
+    await side.locator('.bg-chip[data-mode="preset:island"]').click();
+    expect(await page.evaluate(() => VideoEffects.readMode())).toBe('preset:island');
+    await expect(side.locator('.bg-chip[data-mode="preset:island"]')).toHaveAttribute('aria-checked', 'true');
+    await expect(stage.locator('.scene-preview-title strong')).toHaveText(await page.evaluate(() => VideoScenes.byId('island').name));
+    await expect(stage).toBeVisible();
+
+    // Closed with the icon, opened again, then with Escape.
+    await close.click();
+    await expect(page.locator('.scene-preview-stage.is-full')).toHaveCount(0);
+    await open.click();
+    await expect(stage).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.locator('#pv > .scene-preview-stage')).toHaveCount(1);
     await expect(page.locator('.scene-preview-stage.is-full')).toHaveCount(0);

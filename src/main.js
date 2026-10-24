@@ -14734,6 +14734,8 @@ function initVideoBackgroundUI() {
   // while it is on screen.
   if (keyedApi('renderScenePreview')) {
     _videoBgPreview = VideoEffects.renderScenePreview(document.getElementById('settings-bg-preview'), {
+      // A scene picked in the full window: applied like one from the picker.
+      onPick: function(mode) { applyVideoBackground(mode); },
       // What the cost line says about the call in progress: this window owns
       // the bandwidth samples (_collectBandwidthSample, every few seconds).
       live: function() {

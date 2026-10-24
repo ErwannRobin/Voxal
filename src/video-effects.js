@@ -5580,9 +5580,10 @@ var VideoEffects = (function () {
   // alone — no camera, no segmentation — in Settings, and lets you turn it with
   // the mouse or a finger (the same attachOrbit() the live camera uses), so a
   // scene can be judged before a call and its look-around tried on its own.
-  // "Full window" takes the picture out of the card and over the whole window,
-  // at the window's own shape — upright on a phone, as the camera would send it
-  // — with an outline of where you would stand.
+  // The full-window button takes the picture out of the card and over the
+  // whole window, at the window's own shape — upright on a phone, as the
+  // camera would send it — with the scenes at the top right, one click each,
+  // and the scene light under them.
   //
   // Under it: the scene's name, what is in it, and what it costs. Upload is
   // the encoder's measured price (`kbps` in the catalogue); the cost on THIS
@@ -5626,19 +5627,14 @@ var VideoEffects = (function () {
     return pct < 1 ? 'under 1%' : pct < 10 ? pct.toFixed(1) + '%' : Math.round(pct) + '%';
   }
 
-  // Where a person sits in the full-window preview's outline, as a look's
-  // subject box (see measureSubject()): centred, the bottom 62% of the height.
-  function outlineSubject(look, w, h) {
-    look.cx = 0.5; look.cy = 0.7;
-    look.sx = Math.min(0.48, 0.3 * h / Math.max(1, w)); look.sy = 0.3;
-  }
+  var EXPAND_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>';
+  var CLOSE_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" ' +
+    'stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>';
 
-  var OUTLINE_SVG = '<svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMax meet" aria-hidden="true">' +
-    '<path d="M0 100 C0 81 12 71 30 67 C38 65 41 61 41 56 L41 51 C34 47 30 39 30 31 ' +
-    'C30 18 39 9 50 9 C61 9 70 18 70 31 C70 39 66 47 59 51 L59 56 C59 61 62 65 70 67 ' +
-    'C88 71 100 81 100 100 Z"/></svg>';
-
-  // opts: { live() — { sendingBps } of this window's call, or null }
+  // opts: { live()       — { sendingBps } of this window's call, or null
+  //         onPick(mode) — a scene picked in the full window (default: writeMode) }
   // Returns { sync(), destroy(), orbit, setFull(on), isFull(), cost() }.
   function renderScenePreview(el, opts) {
     if (!el) return null;
@@ -5656,22 +5652,21 @@ var VideoEffects = (function () {
     note.className = 'scene-preview-note';
     note.setAttribute('aria-live', 'polite');
 
-    var outline = document.createElement('div');
-    outline.className = 'scene-preview-outline hidden';
-    outline.innerHTML = OUTLINE_SVG;
-
-    // What the full window shows of the info below the card.
-    var title = document.createElement('div');
+    var hud = document.createElement('div');
+    hud.className = 'scene-preview-hud hidden';
+    // The full window's line about the scene: its name and what it costs.
+    var hudText = document.createElement('span');
+    hudText.className = 'scene-preview-hud-text';
+    var title = document.createElement('span');
     title.className = 'scene-preview-title hidden';
     var titleName = document.createElement('strong');
     var titleCost = document.createElement('span');
     title.appendChild(titleName);
     title.appendChild(titleCost);
-
-    var hud = document.createElement('div');
-    hud.className = 'scene-preview-hud hidden';
     var hint = document.createElement('span');
     hint.className = 'scene-preview-hint';
+    hudText.appendChild(title);
+    hudText.appendChild(hint);
     var fine;
     try { fine = !window.matchMedia || window.matchMedia('(pointer: fine)').matches; } catch (e) { fine = true; }
     function hintText() {
@@ -5680,7 +5675,7 @@ var VideoEffects = (function () {
     }
     var buttons = document.createElement('span');
     buttons.className = 'scene-preview-buttons';
-    function hudButton(cls, text, label) {
+    function hudButton(cls, text, label, host) {
       var b = document.createElement('button');
       b.type = 'button';
       b.className = 'scene-preview-btn ' + cls;
@@ -5688,28 +5683,36 @@ var VideoEffects = (function () {
       if (label) { b.setAttribute('aria-label', label); b.title = label; }
       // A real button inside the drag surface keeps its own press.
       b.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
-      buttons.appendChild(b);
+      (host || buttons).appendChild(b);
       return b;
     }
-    var recentre = hudButton('scene-preview-recentre hidden', 'Recentre');
     // A panorama you added: make the way you are looking its starting view.
     var keepView = hudButton('scene-preview-keep hidden', 'Keep this view', 'Start this panorama looking this way');
-    var personBtn = hudButton('scene-preview-person hidden', 'You', 'Show where you would stand');
-    personBtn.setAttribute('aria-pressed', 'true');
-    var fullBtn = hudButton('scene-preview-full', 'Full window', 'Show the scene over the whole window');
-    // The scene light, at hand in the full window, where Settings is out of
-    // reach: the same setting as Settings → Video → Scene light.
-    var lightHost = document.createElement('span');
-    lightHost.className = 'scene-preview-light hidden';
-    buttons.insertBefore(lightHost, buttons.firstChild);
-    var lightView = renderSceneLight(lightHost, { compact: true });
-    hud.appendChild(hint);
+    var fullBtn = hudButton('scene-preview-icon scene-preview-full', '', 'Show the scene over the whole window');
+    fullBtn.innerHTML = EXPAND_SVG;
+    hud.appendChild(hudText);
     hud.appendChild(buttons);
 
+    // The full window's top: a close button on the left; on the right the
+    // scenes, one click each, and the scene light under them (the same
+    // setting as Settings → Video → Scene light, out of reach from here).
+    var closeBtn = hudButton('scene-preview-icon scene-preview-close hidden', '', 'Back to Settings', stage);
+    closeBtn.innerHTML = CLOSE_SVG;
+    var side = document.createElement('div');
+    side.className = 'scene-preview-side hidden';
+    side.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+    var pickHost = document.createElement('div');
+    pickHost.className = 'scene-preview-scenes';
+    var lightHost = document.createElement('div');
+    lightHost.className = 'scene-preview-light';
+    side.appendChild(pickHost);
+    side.appendChild(lightHost);
+    var lightView = renderSceneLight(lightHost, { compact: true });
+    var picker = null;   // built the first time the full window opens
+
     stage.appendChild(note);
-    stage.appendChild(outline);
-    stage.appendChild(title);
     stage.appendChild(hud);
+    stage.appendChild(side);
     el.appendChild(stage);
 
     // The name, what is in it, and what it costs.
@@ -5743,7 +5746,7 @@ var VideoEffects = (function () {
     var canvas = null, gl = null, prog = null, progId = null;
     var raf = 0, loadToken = 0, lastDraw = 0, t0 = 0, lastInfo = 0;
     var visible = false, destroyed = false, failed = '';
-    var view = null, full = false, showPerson = true, placeholder = null, prevFocus = null;
+    var view = null, full = false, placeholder = null, prevFocus = null;
     // The cost on this device: one redraw at a call's size, every so often.
     var probe = null, gpuMs = null, cpuMs = null, lastProbe = 0, samples = [], soft = false;
     var px = new Uint8Array(4);
@@ -5753,11 +5756,10 @@ var VideoEffects = (function () {
       // A finger turns it too: sideways in the card, where up and down is the
       // page's scroll (touch-action: pan-y), every way in the full window.
       touch: true,
-      ignore: '.scene-preview-btn',
+      ignore: '.scene-preview-btn, .scene-preview-side',
       enabled: function () { return !!prog; },
       onChange: function (v) {
         view = v;
-        recentre.classList.toggle('hidden', !v);
         var sc = VideoScenes.byId(sceneId());
         keepView.classList.toggle('hidden', !(v && sc && sc.custom && sc.kind === 'panorama'));
       }
@@ -5780,13 +5782,8 @@ var VideoEffects = (function () {
         refresh();
       });
     });
-    recentre.addEventListener('click', function () { orbit.reset(true); stage.focus(); });
-    personBtn.addEventListener('click', function () {
-      showPerson = !showPerson;
-      personBtn.setAttribute('aria-pressed', showPerson ? 'true' : 'false');
-      outline.classList.toggle('hidden', !(full && showPerson));
-    });
-    fullBtn.addEventListener('click', function () { setFull(!full); });
+    fullBtn.addEventListener('click', function () { setFull(true); });
+    closeBtn.addEventListener('click', function () { setFull(false); });
 
     function sceneId() {
       var m = readMode();
@@ -5865,18 +5862,16 @@ var VideoEffects = (function () {
     }
 
     // A neutral light and nobody in front of it: the subject box is put below
-    // the picture, small, so there is no shadow or light wrap to explain. The
-    // full window's outline moves it to where the outline stands.
+    // the picture, small, so there is no shadow or light wrap to explain.
     var look = VideoScenes.defaultLook();
-    function previewLook(w, h) {
+    look.cx = 0.5; look.cy = 3; look.sx = 0.01; look.sy = 0.01;
+    function previewLook() {
       look.dirX = 0.6;
       // The scene light chosen in Settings, or a neutral day for 'match my room'
       // (there is no camera here to match).
       var L = sceneLight();
       look.exposure = L ? L.exposure : 1;
       look.tint = L ? L.tint.slice() : [1, 1, 1];
-      if (full && showPerson) outlineSubject(look, w, h);
-      else { look.cx = 0.5; look.cy = 3; look.sx = 0.01; look.sy = 0.01; }
       return look;
     }
 
@@ -6044,12 +6039,19 @@ var VideoEffects = (function () {
         try { if (prevFocus && prevFocus.focus) prevFocus.focus({ preventScroll: true }); } catch (e) { /* gone */ }
         prevFocus = null;
       }
-      fullBtn.textContent = on ? 'Close' : 'Full window';
-      fullBtn.setAttribute('aria-label', on ? 'Back to Settings' : 'Show the scene over the whole window');
-      fullBtn.title = fullBtn.getAttribute('aria-label');
-      personBtn.classList.toggle('hidden', !on);
-      lightHost.classList.toggle('hidden', !on);
-      outline.classList.toggle('hidden', !(on && showPerson));
+      if (on && !picker) {
+        picker = renderPicker(pickHost, {
+          scenesOnly: true,
+          onPick: function (mode) {
+            if (opts.onPick) opts.onPick(mode);
+            else writeMode(mode);
+          }
+        });
+      }
+      if (picker) picker.sync();
+      fullBtn.classList.toggle('hidden', on);
+      closeBtn.classList.toggle('hidden', !on);
+      side.classList.toggle('hidden', !on);
       hint.textContent = hintText();
       fit();
       paintInfo();
@@ -6063,6 +6065,7 @@ var VideoEffects = (function () {
       var id = sceneId();
       var want = !!id && visible && !failed;
       paintInfo();
+      if (picker) picker.sync();
       if (!id) {
         if (full) setFull(false);
         release();
@@ -6143,6 +6146,7 @@ var VideoEffects = (function () {
         offMode();
         orbit.destroy();
         if (lightView) lightView.destroy();
+        if (pickHost._offCustomScenes) pickHost._offCustomScenes();
         el.innerHTML = '';
         el.classList.remove('scene-preview');
       }
@@ -6165,8 +6169,104 @@ var VideoEffects = (function () {
     'stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 7.5v9L12 21l8-4.5v-9z"/>' +
     '<path d="M4 7.5 12 12l8-4.5M12 12v9"/></svg>';
 
+  // --- a tooltip that also works on a phone ---------------------------------
+  //
+  // A `title` is a hover, and a phone has none. attachTip() shows one small
+  // card for the page: after a beat of hover, on keyboard focus, or on a
+  // touch screen after a long press — whose click is then swallowed, so a
+  // press that asked "what is this?" does not also do it.
+  var TIP_HOVER_MS = 400, TIP_PRESS_MS = 450, TIP_SLOP = 10, TIP_SHOW_MS = 6000;
+  var _tipEl = null, _tipFor = null, _tipTimer = 0;
+  function tipEl() {
+    if (_tipEl) return _tipEl;
+    _tipEl = document.createElement('div');
+    _tipEl.className = 've-tip hidden';
+    _tipEl.setAttribute('role', 'tooltip');
+    document.body.appendChild(_tipEl);
+    document.addEventListener('pointerdown', function (e) {
+      if (_tipFor && !_tipFor.contains(e.target)) hideTip();
+    }, true);
+    window.addEventListener('scroll', function () { hideTip(); }, true);
+    return _tipEl;
+  }
+  function hideTip(anchor) {
+    if (anchor && anchor !== _tipFor) return;
+    clearTimeout(_tipTimer);
+    _tipTimer = 0;
+    if (_tipEl) _tipEl.classList.add('hidden');
+    _tipFor = null;
+  }
+  function showTip(anchor, text) {
+    if (!text || !anchor.isConnected) return;
+    var t = tipEl();
+    t.textContent = text;
+    t.classList.remove('hidden');
+    _tipFor = anchor;
+    // Above the anchor, inside the window; below it when there is no room.
+    var r = anchor.getBoundingClientRect(), w = t.offsetWidth, h = t.offsetHeight;
+    var x = Math.max(8, Math.min(window.innerWidth - w - 8, r.left + r.width / 2 - w / 2));
+    var y = r.top - h - 8;
+    if (y < 8) y = Math.min(window.innerHeight - h - 8, r.bottom + 8);
+    t.style.left = Math.round(x) + 'px';
+    t.style.top = Math.round(y) + 'px';
+    clearTimeout(_tipTimer);
+    _tipTimer = setTimeout(function () { hideTip(anchor); }, TIP_SHOW_MS);
+  }
+  // text: a string, or a function returning one (read each time it shows).
+  function attachTip(el, text) {
+    var get = typeof text === 'function' ? text : function () { return text; };
+    var hover = 0, press = null, swallow = false;
+    function txt() { try { return get() || ''; } catch (e) { return ''; } }
+    // The card replaces the browser's own: two at once would say it twice.
+    el.removeAttribute('title');
+    if (typeof text === 'string') el.setAttribute('aria-description', text);
+    function endPress() { if (press) { clearTimeout(press.timer); press = null; } }
+    el.addEventListener('pointerenter', function (e) {
+      if (e.pointerType !== 'mouse') return;
+      clearTimeout(hover);
+      hover = setTimeout(function () { showTip(el, txt()); }, TIP_HOVER_MS);
+    });
+    el.addEventListener('pointerleave', function (e) {
+      if (e.pointerType !== 'mouse') return;
+      clearTimeout(hover);
+      hideTip(el);
+    });
+    el.addEventListener('focus', function () {
+      try { if (el.matches(':focus-visible')) showTip(el, txt()); } catch (e) { /* no :focus-visible */ }
+    });
+    el.addEventListener('blur', function () { hideTip(el); });
+    el.addEventListener('pointerdown', function (e) {
+      clearTimeout(hover);
+      endPress();
+      if (e.pointerType === 'mouse') { hideTip(el); return; }
+      press = { x: e.clientX, y: e.clientY, timer: setTimeout(function () {
+        press = null;
+        swallow = true;
+        showTip(el, txt());
+      }, TIP_PRESS_MS) };
+    });
+    el.addEventListener('pointermove', function (e) {
+      if (press && (Math.abs(e.clientX - press.x) > TIP_SLOP || Math.abs(e.clientY - press.y) > TIP_SLOP)) endPress();
+    });
+    el.addEventListener('pointerup', function () {
+      endPress();
+      // The click a long press ends with, if the browser sends one at all.
+      if (swallow) setTimeout(function () { swallow = false; }, 400);
+    });
+    el.addEventListener('pointercancel', endPress);
+    el.addEventListener('click', function (e) {
+      if (!swallow) return;
+      swallow = false;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }, true);
+    // The platform's own long-press menu would land on top of the card.
+    el.addEventListener('contextmenu', function (e) { if (swallow || press) e.preventDefault(); });
+  }
+
   // opts: { onPick(mode), onError(text), allowCustom (default true),
-  //         addScene (default true: the chip that adds a 360° photo or a 3D model) }
+  //         addScene (default true: the chip that adds a 360° photo or a 3D model),
+  //         scenesOnly (the scenes and nothing else: the preview's full window) }
   function renderPicker(el, opts) {
     if (!el) return null;
     opts = opts || {};
@@ -6176,18 +6276,23 @@ var VideoEffects = (function () {
     el.setAttribute('aria-label', 'Background');
 
     var chips = [];
+    // The scenes alone (the preview's full window): no "none", no blur, no
+    // flat picture, nothing to add.
+    var scenesOnly = !!opts.scenesOnly;
 
-    var none = chip('bg-chip-none', 'No background effect', 'off');
-    none.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" ' +
-      'stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/>' +
-      '<line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg>';
-    chips.push(none);
+    if (!scenesOnly) {
+      var none = chip('bg-chip-none', 'No background effect', 'off');
+      none.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" ' +
+        'stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/>' +
+        '<line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg>';
+      chips.push(none);
 
-    var blur = chip('bg-chip-blur', 'Blur my background', 'blur');
-    blur.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" ' +
-      'stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 8h16"/><path d="M4 12h16"/>' +
-      '<path d="M4 16h16"/></svg>';
-    chips.push(blur);
+      var blur = chip('bg-chip-blur', 'Blur my background', 'blur');
+      blur.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" ' +
+        'stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 8h16"/><path d="M4 12h16"/>' +
+        '<path d="M4 16h16"/></svg>';
+      chips.push(blur);
+    }
 
     // The scenes. Each chip shows a gradient swatch at once and its real
     // thumbnail — rendered from the scene's own shader — once that is ready.
@@ -6234,13 +6339,14 @@ var VideoEffects = (function () {
 
     // The chip that adds a scene of your own, and the input behind it.
     var addScene = null, sceneInput = null;
-    if (opts.addScene !== false) {
+    if (opts.addScene !== false && !scenesOnly) {
       addScene = document.createElement('button');
       addScene.type = 'button';
       addScene.className = 'bg-chip bg-chip-add-scene';
-      addScene.title = 'Add a scene: a 360° photo or a 3D model (.glb)';
-      addScene.setAttribute('aria-label', addScene.title);
+      addScene.setAttribute('aria-label', 'Add a scene: a 360° photo or a 3D model (.glb)');
       addScene.innerHTML = CUBE_SVG;
+      attachTip(addScene, 'Add a scene of your own: a 360° photo (twice as wide as it is tall) ' +
+        'or a 3D model (.glb). It stays on this device.');
       sceneInput = document.createElement('input');
       sceneInput.type = 'file';
       sceneInput.accept = '.glb,model/gltf-binary,image/jpeg,image/png,image/webp';
@@ -6248,10 +6354,17 @@ var VideoEffects = (function () {
     }
 
     var custom = null, clearBtn = null, fileInput = null;
-    if (opts.allowCustom !== false) {
+    if (opts.allowCustom !== false && !scenesOnly) {
       custom = chip('bg-chip-custom', 'Use my own image', 'custom');
       custom.innerHTML = '<span class="bg-chip-plus" aria-hidden="true">+</span>';
       chips.push(custom);
+      // What the "+" can do, and where the rest is.
+      attachTip(custom, function () {
+        if (hasCustom) return 'Your own picture, as a still background. ✕ removes it.';
+        return 'Use a photo of your own as a still background (JPEG, PNG or WebP). ' +
+          (addScene ? 'For a 360° photo or a 3D model, use the cube.'
+                    : 'For a 360° photo or a 3D model, add it in Settings → Video → Background.');
+      });
 
       clearBtn = document.createElement('button');
       clearBtn.type = 'button';
@@ -6380,7 +6493,7 @@ var VideoEffects = (function () {
         c.classList.toggle('is-active', on);
         c.tabIndex = on ? 0 : -1;
       });
-      if (!allChips().some(function (c) { return c.dataset.mode === mode; })) none.tabIndex = 0;
+      if (!allChips().some(function (c) { return c.dataset.mode === mode; }) && allChips()[0]) allChips()[0].tabIndex = 0;
     }
 
     function pick(mode) {

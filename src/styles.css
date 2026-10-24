@@ -4745,7 +4745,22 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
 }
 .scene-preview-btn:hover { border-color: rgba(255, 255, 255, 0.6); }
 .scene-preview-btn.hidden { display: none; }
-.scene-preview-person[aria-pressed="false"] { opacity: 0.6; }
+/* The full-window and close buttons: an icon in a round glass button. */
+.scene-preview-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+.scene-preview-icon svg { display: block; }
+.scene-preview-close {
+  position: absolute;
+  z-index: 2;
+  top: max(14px, env(safe-area-inset-top));
+  left: max(14px, env(safe-area-inset-left));
+}
 /* A finger turns the scene sideways in the card; up and down stays the page's
    scroll. In the full window it turns every way. */
 .scene-preview-stage { touch-action: pan-y; }
@@ -4767,47 +4782,54 @@ html.scene-preview-open, html.scene-preview-open body { overflow: hidden; }
   font-size: 13px;
 }
 .scene-preview-stage.is-full .scene-preview-btn { padding: 7px 14px; font-size: 13px; }
+.scene-preview-stage.is-full .scene-preview-icon { width: 40px; height: 40px; padding: 0; }
+/* Top right of the full window: the scenes, one click each, and the scene
+   light under them. The strip scrolls sideways when the window is narrow; its
+   padding leaves the selected chip's ring (drawn outside the chip) unclipped. */
+.scene-preview-side {
+  position: absolute;
+  z-index: 2;
+  top: max(14px, env(safe-area-inset-top));
+  right: max(14px, env(safe-area-inset-right));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: calc(100% - 88px);
+}
+.scene-preview-side.hidden { display: none; }
+/* The host is the picker itself (renderPicker() adds .bg-picker to it). */
+.scene-preview-scenes.bg-picker {
+  max-width: 100%;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 30px;
+  background: rgba(16, 16, 20, 0.55);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+.scene-preview-scenes.bg-picker::-webkit-scrollbar { display: none; }
+.scene-preview-scenes .bg-chip { border-color: rgba(255, 255, 255, 0.3); }
 .scene-preview-placeholder {
   aspect-ratio: 16 / 9;
   border: 1px dashed var(--border);
   border-radius: 10px;
 }
-.scene-preview-title {
-  position: absolute;
-  left: 0; right: 0; top: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: max(14px, env(safe-area-inset-top)) 16px 28px;
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0));
-  color: #fff;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
-  pointer-events: none;
-}
+/* The HUD's words: in the full window the scene's name and cost, then the hint. */
+.scene-preview-hud-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.scene-preview-title { display: flex; flex-direction: column; gap: 2px; color: #fff; }
 .scene-preview-title strong { font-size: 16px; font-weight: 600; }
 .scene-preview-title span { font-size: 12px; opacity: 0.85; }
 .scene-preview-title.hidden { display: none; }
-/* Where you would stand: a head and shoulders in shadow, at most the bottom
-   62% of the picture, and never wider than it (an upright phone). */
-.scene-preview-outline {
-  position: absolute;
-  left: 50%;
-  bottom: 0;
-  height: 62%;
-  aspect-ratio: 1;
-  max-width: 100%;
-  transform: translateX(-50%);
-  pointer-events: none;
-}
-.scene-preview-outline svg { display: block; width: 100%; height: 100%; fill: rgba(8, 8, 12, 0.78); }
-.scene-preview-outline.hidden { display: none; }
 
-/* Settings → Video → Scene light, and its copy in the full window's HUD. */
+/* Settings → Video → Scene light, and its copy in the full window. */
 .scene-light-select { max-width: 320px; }
 .scene-light-now { margin-top: 6px; }
 .scene-light-now.hidden { display: none; }
-.scene-preview-light { display: inline-flex; }
-.scene-preview-light.hidden { display: none; }
+.scene-preview-light { display: flex; }
 .scene-preview-light .org-select {
   pointer-events: auto;
   width: auto;
@@ -5079,6 +5101,25 @@ html.scene-preview-open, html.scene-preview-open body { overflow: hidden; }
 }
 .bg-chip-clear:hover { color: var(--text); border-color: var(--accent); }
 .bg-chip-clear.hidden { display: none; }
+/* A long press on a chip asks what it is (attachTip()): no text selection or
+   platform menu on the way. */
+.bg-chip { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+
+/* The card attachTip() shows: above everything, the full-window preview too. */
+.ve-tip {
+  position: fixed;
+  z-index: 9999;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.4;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
 
 /* Rendered, but invisible and out of the way. `display: none` would be simpler
    and would stop WKWebView opening the file dialog at all. */

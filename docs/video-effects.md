@@ -1279,7 +1279,11 @@ A computer has no motion sensor, so the same turn comes from the hand.
 **The scene on its own** (Settings → Video → *Preview*,
 `VideoEffects.renderScenePreview()`, in both `settings.html` and the in-page
 modal): the chosen scene drawn alone, no camera, no person, no segmentation, at
-~20 fps with the same drag, arrow keys (Home recentres) and a Recentre button. It
+~20 fps with the same drag, arrow keys (Home recentres) and double-click (two taps
+on a phone) to recentre. Its full-window button (an icon) puts it over the whole
+window at the window's shape, with an icon to close it at the top left and, at
+the top right, the scenes alone (`renderPicker({ scenesOnly: true })`, one click
+each, applied through the caller's `onPick`) and the scene light under them. It
 is a single-sample draw (no jitter accumulation: it is for judging a room and
 trying the look-around, not for measuring sharpness) with a neutral light and the
 subject box put below the picture so there is no shadow to explain.
