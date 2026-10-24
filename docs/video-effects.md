@@ -1141,9 +1141,12 @@ background goes off and the peers get the plain camera — rather than freeze.
 
 The switch alone says nothing about whether it is doing anything, and in a
 default room of three, or with blur picked, it is not. `keyedStatus()` decides,
-and two lines say it: under the switch in Settings and in the background
-popover ("In use for 1 of 2 people", "Not in use: video goes through the relay
-in this room").
+and two lines say it. Under the switch in Settings, every state ("In use for 1
+of 2 people", "Not in use: video goes through the relay in this room"). In the
+background popover of a call, only while it is in use, in words that say what
+it means ("2 of 3 people draw this scene on their own device; the others see
+your usual picture.", `keyedPopoverText()`), with an (i) whose tooltip says the
+rest: a call is not told about a feature that is doing nothing.
 
 **Not verified**: receiving on WebKit (Safari, every iOS browser, the iOS app —
 `canKeyIn()` says no there), a sender encoding H.264 (Playwright's Chromium
@@ -1244,9 +1247,10 @@ frame**, which also makes it exactly synchronous with the person it belongs to.
   the check rejects them (the room holds its last turn) and the fix is fewer,
   wider cells.
 
-## The room turns with the mouse, and can be looked at alone
+## The room turns with the hand, and can be looked at alone
 
-A computer has no motion sensor, so the same turn comes from the hand.
+A computer has no motion sensor, so the same turn comes from the hand; a phone
+has both.
 `VideoEffects.attachOrbit(el, opts)` is the one implementation, used twice.
 
 * **On your own picture, in a call** (`wireBackgroundOrbit()` in `main.js`, from
@@ -1254,8 +1258,12 @@ A computer has no motion sensor, so the same turn comes from the hand.
   double-click to recentre. It publishes the same `{ yaw, pitch, roll }` as the
   sensor, through the same `setTilt()`, so every local pipeline and the keyed
   frame's tilt strip take it unchanged. Not the minimised self-view badge (its drag
-  moves the badge), not phones (`IS_MOBILE_DEVICE`: the sensor does it, and a
-  finger on a tile is a scroll or a pin), and only with an animated scene on.
+  moves the badge), and only with an animated scene on. On a phone a finger
+  does it too (`touch: IS_MOBILE_DEVICE`; the tile takes `.orbit-touch`,
+  `touch-action: none`, only while a scene runs) and the drag is **added** to
+  the sensor's turn (`applyBackgroundTurn()`, clamped to `DeviceTilt.LIMIT`):
+  the hand moves the room from wherever the phone has it. A tap still toggles
+  the room's chrome, since a drag's click is swallowed.
 * **The sign is the room following the hand.** Positive yaw is the camera turned
   right (the room slides left, as when a phone is turned that way), so pulling the
   picture right is a *smaller* yaw; pulling down is a larger pitch. The self-view is
@@ -1271,7 +1279,7 @@ A computer has no motion sensor, so the same turn comes from the hand.
   is turned now** (`_backgroundOrbitEngaged`, read by `backgroundTiltFlowing()` next
   to `DeviceTilt.ready()`). `keyedOffer.tilt` flipping is a new epoch for every
   receiver, so a recentre must not flip it. It is dropped when the scene or camera
-  goes (`syncBackgroundOrbit()`, run from `syncBackgroundTilt()` on a computer).
+  goes (`syncBackgroundOrbit()`, run from `syncBackgroundTilt()`).
 * **A drag is not a click.** Capture starts only after `ORBIT_SLOP` (4 px), and the
   click that ends a drag is swallowed (capture phase, expires on its own), so it
   never pins the tile.

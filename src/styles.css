@@ -4858,6 +4858,9 @@ html.scene-preview-open, html.scene-preview-open body { overflow: hidden; }
 .orbit-ready { cursor: grab; }
 .orbit-drag, .orbit-drag * { cursor: grabbing !important; }
 .video-tile.orbit-ready, .video-tile.orbit-drag { user-select: none; -webkit-user-select: none; }
+/* A phone turns the scene with a finger on your own picture: that drag is
+   ours, not a pan (syncBackgroundOrbit() sets it only while a scene runs). */
+.video-tile.orbit-touch { touch-action: none; -webkit-user-select: none; user-select: none; }
 
 /* First run only: the segmentation runtime is not bundled, so say what is
    being downloaded, how far along it is, and offer a way out. */
@@ -4888,8 +4891,8 @@ html.scene-preview-open, html.scene-preview-open body { overflow: hidden; }
 }
 .video-bg-progress .btn { align-self: flex-start; }
 
-/* "Let others draw my scene": one line under the chips saying whether it is in
-   use in this room. Only present while the setting is on. */
+/* What is at work on your picture, under the chips: "Let others draw my
+   scene" while it is in use (only then), and how to turn the scene. */
 .video-bg-subject-only {
   margin: 10px 0 0;
   max-width: 320px;
@@ -4897,6 +4900,26 @@ html.scene-preview-open, html.scene-preview-open body { overflow: hidden; }
   color: var(--text-muted);
 }
 .video-bg-subject-only.hidden { display: none; }
+/* The (i) after a line: its tooltip says the rest (attachTip()). */
+.video-bg-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 4px;
+  padding: 0;
+  vertical-align: -4px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  font: italic 600 11px/1 Georgia, serif;
+  cursor: help;
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+.video-bg-info:hover, .video-bg-info:focus-visible { color: var(--text); border-color: var(--accent); }
 
 /* Fixed camera: the empty-room reference, under the chips. Only present while
    the setting is on (the default) and an effect is running. */

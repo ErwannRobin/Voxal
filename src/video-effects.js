@@ -6213,7 +6213,9 @@ var VideoEffects = (function () {
     _tipTimer = setTimeout(function () { hideTip(anchor); }, TIP_SHOW_MS);
   }
   // text: a string, or a function returning one (read each time it shows).
-  function attachTip(el, text) {
+  // opts.click: a click (a tap) shows and hides it too — for an (i) that
+  // does nothing else.
+  function attachTip(el, text, opts) {
     var get = typeof text === 'function' ? text : function () { return text; };
     var hover = 0, press = null, swallow = false;
     function txt() { try { return get() || ''; } catch (e) { return ''; } }
@@ -6262,6 +6264,13 @@ var VideoEffects = (function () {
     }, true);
     // The platform's own long-press menu would land on top of the card.
     el.addEventListener('contextmenu', function (e) { if (swallow || press) e.preventDefault(); });
+    if (opts && opts.click) {
+      el.addEventListener('click', function () {
+        clearTimeout(hover);
+        if (_tipFor === el) hideTip(el);
+        else showTip(el, txt());
+      });
+    }
   }
 
   // opts: { onPick(mode), onError(text), allowCustom (default true),
@@ -7019,6 +7028,7 @@ var VideoEffects = (function () {
     renderPicker: renderPicker,
     onModeWritten: onModeWritten,
     attachOrbit: attachOrbit,
+    attachTip: attachTip,
     renderScenePreview: renderScenePreview,
     sceneStats: sceneStats,
     SCENE_LIGHT_KEY: SCENE_LIGHT_KEY,

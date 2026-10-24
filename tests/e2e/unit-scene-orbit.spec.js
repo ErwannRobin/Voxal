@@ -309,21 +309,94 @@ test.describe('turning your own scene in a call', () => {
   test('the hint in the background popover shows only while a scene can be turned', async ({ page }) => {
     await page.evaluate(() => syncBackgroundOrbit());
     expect(await page.evaluate(() => document.getElementById('video-bg-orbit-hint').classList.contains('hidden'))).toBe(false);
+    expect(await page.evaluate(() => document.getElementById('video-bg-orbit-hint').textContent))
+      .toBe('Drag your own picture to look around the scene \u00b7 double-click to recentre.');
     await page.evaluate(() => { VideoEffects.writeMode('off'); syncBackgroundOrbit(); });
     expect(await page.evaluate(() => document.getElementById('video-bg-orbit-hint').classList.contains('hidden'))).toBe(true);
   });
 });
 
-test.describe('on a phone the sensor does it, not the mouse', () => {
-  test('no orbit is attached to the self tile', async ({ page }) => {
+test.describe('on a phone a finger turns it too, on top of the sensor', () => {
+  test.beforeEach(async ({ page }) => {
     await stubNative(page);
     await page.goto('/');
-    const attached = await page.evaluate(() => {
+    await page.evaluate(() => {
+      localStorage.setItem(VideoEffects.STORAGE_KEY, 'preset:office');
+      localVideoActive = true;
+      localVideoStream = { _effectsProcessor: {}, getVideoTracks: () => [], getTracks: () => [] };
+      window.__refreshes = 0;
+      refreshKeyedSend = function () { window.__refreshes++; };
       const tile = _buildVideoTile({ key: 'camera:self', kind: 'camera', self: true });
+      tile.style.cssText = 'position:fixed;left:20px;top:100px;width:300px;height:400px';
       document.body.appendChild(tile);
-      return !!_backgroundOrbit;
+      window.__tile = tile;
+      syncBackgroundOrbit();
     });
-    expect(attached).toBe(false);
+  });
+  test.afterEach(async ({ page }) => {
+    await page.evaluate(() => { try { VideoEffects.setTilt(null); } catch (e) { /* ignore */ } });
+  });
+
+  // A finger's drag across the tile (the pointer events a touch screen sends).
+  const swipe = (page, dx) => page.evaluate((d) => {
+    const el = window.__tile;
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width / 2, y = r.top + r.height / 2;
+    const at = (type, px) => new PointerEvent(type, { pointerType: 'touch', pointerId: 11, isPrimary: true,
+      button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX: px, clientY: y, bubbles: true, cancelable: true });
+    el.dispatchEvent(at('pointerdown', x));
+    for (let i = 1; i <= 6; i++) window.dispatchEvent(at('pointermove', x + i * d / 6));
+    window.dispatchEvent(at('pointerup', x + d));
+    return VideoEffects.getTilt();
+  }, dx);
+
+  test('a swipe on your own picture turns the scene, and the picture is not the page\'s to pan', async ({ page }) => {
+    expect(await page.evaluate(() => !!_backgroundOrbit)).toBe(true);
+    expect(await page.evaluate(() => getComputedStyle(window.__tile).touchAction)).toBe('none');
+    const t = await swipe(page, -80);
+    expect(t).not.toBeNull();
+    expect(Math.abs(t.yaw)).toBeGreaterThan(0.01);
+    expect(await page.evaluate(() => backgroundTiltFlowing())).toBe(true);
+    expect(await page.evaluate(() => window.__refreshes)).toBe(1);
+    expect(await page.evaluate(() => document.getElementById('video-bg-orbit-hint').textContent))
+      .toBe('Drag your own picture to look around the scene \u00b7 double-tap to recentre.');
+  });
+
+  test('the drag is added to the phone\'s own turn, never past the sensor\'s limits', async ({ page }) => {
+    const drag = await swipe(page, -80);
+    const both = await page.evaluate(() => {
+      _sensorTurn = { yaw: 0.05, pitch: 0.02, roll: 0.04 };
+      applyBackgroundTurn();
+      const a = VideoEffects.getTilt();
+      _sensorTurn = { yaw: 10, pitch: -10, roll: 10 };
+      applyBackgroundTurn();
+      const far = VideoEffects.getTilt();
+      _sensorTurn = null;
+      applyBackgroundTurn();
+      return { a, far, lim: DeviceTilt.LIMIT, alone: VideoEffects.getTilt() };
+    });
+    expect(both.a.yaw).toBeCloseTo(drag.yaw + 0.05, 5);
+    expect(both.a.pitch).toBeCloseTo(drag.pitch + 0.02, 5);
+    expect(both.a.roll).toBeCloseTo(0.04, 5);
+    expect(both.far.yaw).toBeCloseTo(both.lim.yaw, 5);
+    expect(both.far.pitch).toBeCloseTo(-both.lim.pitch, 5);
+    expect(both.far.roll).toBeCloseTo(both.lim.roll, 5);
+    expect(both.alone.yaw).toBeCloseTo(drag.yaw, 5);
+  });
+
+  test('not on the self-view badge, and not without a scene', async ({ page }) => {
+    await page.evaluate(() => {
+      const badge = document.createElement('div');
+      badge.id = 'video-stage-self';
+      document.body.appendChild(badge);
+      badge.appendChild(window.__tile);
+      syncBackgroundOrbit();
+    });
+    expect(await page.evaluate(() => window.__tile.classList.contains('orbit-touch'))).toBe(false);
+    expect(await swipe(page, -80)).toBeNull();
+    await page.evaluate(() => { document.body.appendChild(window.__tile); VideoEffects.writeMode('blur'); syncBackgroundOrbit(); });
+    expect(await page.evaluate(() => window.__tile.classList.contains('orbit-touch'))).toBe(false);
+    expect(await swipe(page, -80)).toBeNull();
   });
 });
 
