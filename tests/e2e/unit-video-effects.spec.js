@@ -155,10 +155,12 @@ test.describe('the picker', () => {
   test('offers none, blur, every preset and a custom slot', async ({ page }) => {
     const modes = await page.evaluate(() =>
       Array.from(document.querySelectorAll('#settings-bg-picker .bg-chip'))
-        .map((c) => c.dataset.mode));
+        .map((c) => c.dataset.mode || (c.classList.contains('bg-chip-add-scene') ? 'add-scene' : '?')));
+    // "Add a scene" is an action, not a mode: it sits after the scenes, before
+    // the custom picture (docs/custom-scenes.md).
     expect(modes).toEqual([
       'off', 'blur', 'preset:office', 'preset:island', 'preset:cybercafe', 'preset:mountain',
-      'preset:countryside', 'preset:penthouse', 'custom',
+      'preset:countryside', 'preset:penthouse', 'add-scene', 'custom',
     ]);
   });
 

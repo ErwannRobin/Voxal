@@ -86,6 +86,8 @@ transparent layers (rain, glass, glows) keep the alpha below them.
 
 ## Writing a scene
 
+A scene a user adds from a file (a 360° panorama or a `.glb` model) is not written this way: `src/scenes/custom.js` builds its definition from the file. See [`docs/custom-scenes.md`](custom-scenes.md).
+
 ```js
 // src/scenes/example.js
 import { THREE } from './engine.js';

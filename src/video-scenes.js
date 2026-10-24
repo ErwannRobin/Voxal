@@ -126,7 +126,90 @@ var VideoScenes = (function () {
 
   function byId(id) {
     for (var i = 0; i < SCENES.length; i++) if (SCENES[i].id === id) return SCENES[i];
+    return customById(id);
+  }
+
+  // --- scenes people add -------------------------------------------------------
+  //
+  // A 360° panorama or a 3D model (glTF binary), added from Settings → Video
+  // (video-effects.js stores the file in IndexedDB) and drawn by the engine
+  // from src/scenes/custom.js. What is known about each is this list, in
+  // localStorage under `custom-scenes`, so that every document knows the ids
+  // synchronously (a stored `preset:u-…` mode must read back as a scene):
+  //
+  //   { id: 'u-' + 8 hex, kind: 'panorama' | 'model', name, bytes, added,
+  //     thumb: a small JPEG data URL, options: { yaw, pitch, fov, ... } }
+  //
+  // byId() answers for them with a catalogue entry (customEntry()), marked
+  // `custom`: never offered to a keyed peer (nobody else has the file), never
+  // mirrored, no measured upload. See docs/custom-scenes.md.
+  var CUSTOM_KEY = 'custom-scenes';
+  var CUSTOM_MAX = 12;
+  var _custom = null;
+  var _customEntries = {};
+  var _customListeners = [];
+  function validCustom(m) {
+    return m && typeof m.id === 'string' && /^u-[0-9a-f]{8}$/.test(m.id) &&
+           (m.kind === 'panorama' || m.kind === 'model') && typeof m.name === 'string';
+  }
+  function customScenes() {
+    if (_custom === null) {
+      var list;
+      try { list = JSON.parse(localStorage.getItem(CUSTOM_KEY) || '[]'); } catch (e) { list = []; }
+      _custom = Array.isArray(list) ? list.filter(validCustom).slice(0, CUSTOM_MAX) : [];
+      _customEntries = {};
+    }
+    return _custom.slice();
+  }
+  function customEntry(m) {
+    var key = m.id + '|' + (m.name || '') + '|' + (m.thumb ? m.thumb.length : 0) + '|' + JSON.stringify(m.options || {});
+    var e = _customEntries[m.id];
+    if (e && e._key === key) return e;
+    var mb = m.bytes ? (m.bytes / 1048576).toFixed(m.bytes < 10485760 ? 1 : 0) + ' MB' : '';
+    e = {
+      id: m.id, custom: true, kind: m.kind, _key: key, meta: m,
+      label: m.kind === 'model' ? '3D model' : '360° panorama',
+      name: m.name,
+      blurb: (m.kind === 'model' ? 'A 3D model you added' : 'A 360° panorama you added') +
+             (mb ? ' (' + mb + ', on this device only)' : ' (on this device only)') +
+             '. People you call get your picture with it, not the file.',
+      kbps: null,
+      shadow: m.kind === 'model' ? 0.4 : 0, wrap: 0.3, res: 1,
+      hz: [10, 5], module: true, mirror: false,
+      swatch: m.thumb ? 'url("' + m.thumb + '")' : 'linear-gradient(135deg,#2c3140 0%,#59607a 100%)'
+    };
+    _customEntries[m.id] = e;
+    return e;
+  }
+  function customById(id) {
+    var list = customScenes();
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return customEntry(list[i]);
     return null;
+  }
+  function notifyCustom() {
+    _customListeners.slice().forEach(function (fn) { try { fn(); } catch (e) { /* a listener must not break the rest */ } });
+  }
+  // Replace the list (video-effects.js does, after storing or removing a file).
+  function saveCustomScenes(list) {
+    list = (list || []).filter(validCustom).slice(0, CUSTOM_MAX);
+    try { localStorage.setItem(CUSTOM_KEY, JSON.stringify(list)); } catch (e) { throw new Error('could not save the list of your scenes', { cause: e }); }
+    _custom = null;
+    notifyCustom();
+  }
+  // Told when the list changes, in this window or another one.
+  function onCustomChange(fn) {
+    _customListeners.push(fn);
+    return function () {
+      var i = _customListeners.indexOf(fn);
+      if (i !== -1) _customListeners.splice(i, 1);
+    };
+  }
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('storage', function (e) {
+      if (e.key !== CUSTOM_KEY && e.key !== null) return;
+      _custom = null;
+      notifyCustom();
+    });
   }
 
   // A scene id from anything that might be stored: a current id, a legacy one,
@@ -4138,6 +4221,19 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     if (ENGINES[rid]) {
       try { return Promise.resolve(ENGINES[rid].create(gl, opts || {})); } catch (e) { return Promise.reject(e); }
     }
+    var cs = byId(rid);
+    if (cs && cs.custom) {
+      // A scene someone added: its file, parsed by custom.js, built by the
+      // engine. No shader to fall back to: a file that cannot be drawn is
+      // reported, and the pipeline keeps what it was showing.
+      return Promise.all([loadModule('scenes/engine.js'), loadModule('scenes/custom.js')]).then(function (ms) {
+        return ms[1].load(cs.meta).then(function (def) {
+          if (gl.isContextLost && gl.isContextLost()) throw new Error('context lost');
+          var r = ms[0].createRenderer(gl, def, opts || {});
+          return r.compile().then(function () { return r; }, function (e) { r.dispose(); throw e; });
+        });
+      });
+    }
     if (useModule(rid)) {
       return Promise.all([loadModule('scenes/engine.js'), loadModule(sceneModulePath(rid))]).then(function (ms) {
         if (gl.isContextLost && gl.isContextLost()) throw new Error('context lost');
@@ -4175,6 +4271,13 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     var rid = resolveId(id);
     if (!rid) throw new Error('unknown scene ' + id);
     if (ENGINES[rid]) return ENGINES[rid].createSync(gl, opts || {});
+    var cs = byId(rid);
+    if (cs && cs.custom) {
+      var ce = loadedModule('scenes/engine.js'), cm = loadedModule('scenes/custom.js');
+      var def = cm && cm.loaded(rid);
+      if (!ce || !def) throw new Error('scene ' + rid + ' is not loaded yet');
+      return ce.createRenderer(gl, def, opts || {});
+    }
     if (useModule(rid)) {
       var eng = loadedModule('scenes/engine.js'), mod = loadedModule(sceneModulePath(rid));
       if (!eng || !mod) throw new Error('scene ' + rid + ' is not loaded yet');
@@ -4424,6 +4527,13 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     THUMB_TIME: THUMB_TIME,
     defaultLook: defaultLook,
     LIGHTS: LIGHTS,
+    CUSTOM_KEY: CUSTOM_KEY,
+    CUSTOM_MAX: CUSTOM_MAX,
+    customScenes: customScenes,
+    saveCustomScenes: saveCustomScenes,
+    onCustomChange: onCustomChange,
+    // The scene module that parses them, once loaded (forget() after a removal).
+    customModule: function () { return loadModule('scenes/custom.js'); },
     lightAtHour: lightAtHour,
     clockLightName: clockLightName,
     chosenLight: chosenLight,

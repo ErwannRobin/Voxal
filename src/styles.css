@@ -5042,6 +5042,10 @@ html.scene-preview-open, html.scene-preview-open body { overflow: hidden; }
   color: #fff;
 }
 .bg-chip-image { background-color: var(--bg-raised); }
+/* The chip that adds a scene of your own; a scene you added keeps a dashed
+   ring until picked, so it reads as yours. */
+.bg-chip-add-scene.is-busy { opacity: 0.5; pointer-events: none; }
+.bg-chip-own:not(.is-active) { border-style: dashed; }
 .bg-chip-plus {
   font-size: 22px;
   line-height: 1;

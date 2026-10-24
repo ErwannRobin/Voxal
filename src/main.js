@@ -14713,6 +14713,9 @@ function initVideoBackgroundUI() {
     var host = document.getElementById(id);
     if (!host) return;
     var picker = VideoEffects.renderPicker(host, {
+      // Adding a scene of your own (a 360° photo, a 3D model) belongs in
+      // Settings; the room's popover only picks among them.
+      addScene: id === 'settings-bg-picker',
       onPick: function(mode) {
         // Choosing is the whole point of the popover, so get it out of the way
         // of the preview the choice was made for. onPick only fires on an
@@ -16506,6 +16509,7 @@ function resetKeyedState() {
 var KEYED_STATUS_TEXT = {
   'not-sharing': 'Not in use: your camera is off',
   'no-scene': 'Not in use: pick an animated scene',
+  'own-scene': 'Not in use: a scene you added is sent as your picture (nobody else has the file)',
   'relay': 'Not in use: video goes through the relay in this room',
   'no-capable-peer': 'Not in use: nobody here can draw the scene',
   'paused': 'Paused for now: everyone gets your usual picture'
@@ -16517,6 +16521,8 @@ function keyedStatus() {
   if (videoBackgroundMode().indexOf('preset:') !== 0 || !localVideoStream._effectsProcessor) {
     return { state: 'inactive', reason: 'no-scene' };
   }
+  var own = typeof VideoScenes !== 'undefined' && VideoScenes.byId(videoBackgroundMode().slice(7));
+  if (own && own.custom) return { state: 'inactive', reason: 'own-scene' };
   var t = _localVideoTopology.video;
   if (t && t.mode === 'sfu') return { state: 'inactive', reason: 'relay' };
   var st = null;

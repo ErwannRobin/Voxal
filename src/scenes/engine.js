@@ -593,6 +593,9 @@ class SceneRenderer {
       phys: (p) => self.material(THREE.MeshPhysicalMaterial, p),
       lambert: (p) => self.material(THREE.MeshLambertMaterial, p),
       basic: (p) => self.material(THREE.MeshBasicMaterial, p),
+      // A material made elsewhere (a loaded model's), given the engine's
+      // patch in place: { receiver, additive, patch }.
+      adopt: (m, p) => self.adopt(m, p),
       shader: (p) => self.shaderMaterial(p),
       // A light-emitting surface that lights nothing: the colour is radiance
       // (linear, can exceed 1), scaled like every emissive (uEmis).
@@ -626,11 +629,19 @@ class SceneRenderer {
   // whose patches have the same key).
   material(Ctor, params) {
     const p = Object.assign({}, params);
-    const patch = p.patch || null; delete p.patch;
-    const receiver = p.receiver == null ? 0.95 : p.receiver; delete p.receiver;
-    const additive = !!p.additive; delete p.additive;
-    const defines = p.defines || null; delete p.defines;
-    const m = new Ctor(p);
+    const extra = { patch: p.patch, receiver: p.receiver, additive: p.additive, defines: p.defines };
+    delete p.patch; delete p.receiver; delete p.additive; delete p.defines;
+    return this.adopt(new Ctor(p), extra);
+  }
+
+  // The same patch on a material made elsewhere (a glTF model's, see
+  // custom.js): `extra` is { receiver, additive, patch, defines }, as above.
+  adopt(m, extra) {
+    extra = extra || {};
+    const patch = extra.patch || null;
+    const receiver = extra.receiver == null ? 0.95 : extra.receiver;
+    const additive = !!extra.additive;
+    const defines = extra.defines || null;
     if (defines) m.defines = Object.assign({}, m.defines || {}, defines);
     if (m.transparent) blendKeepingAlpha(m, additive);
     const U = this.U;
@@ -723,7 +734,10 @@ void main() {
     U.uRes.value.set(w, h);
     U.uMotion.value = Math.min(1, Math.max(0, look.motion || 0));
     U.uKey.value = Math.min(1, Math.abs(look.dirX || 0));
-    const m = look.sideMix >= 0.5 ? 1 : -1;
+    // A scene that may not be mirrored (`mirror: false`: a photograph, a
+    // model with lettering in it) is always shown as authored.
+    const fixed = this.def.mirror === false;
+    const m = fixed || look.sideMix >= 0.5 ? 1 : -1;
     // The subject in the authored picture: mirrored with it when the picture
     // will be shown the other way round. y up, like gl_FragCoord.
     const cx = m > 0 ? look.cx : 1 - look.cx;
@@ -733,7 +747,7 @@ void main() {
       exposure: E, tint, night,
       key: U.uKey.value, elev: look.dirY || 0, motion: U.uMotion.value,
       cx, cy: look.cy, sx: look.sx, sy: look.sy,
-      sideMix: look.sideMix
+      sideMix: fixed ? 1 : look.sideMix
     };
   }
 
@@ -767,7 +781,7 @@ void main() {
     r.setRenderTarget(null);
     restoreState(gl);
     eng.outputPass(fb, w, h, {
-      exposure: L.exposure, tint: L.tint, sideMix: look.sideMix,
+      exposure: L.exposure, tint: L.tint, sideMix: L.sideMix,
       near: cam.near, far: cam.far, nearness: this.nearness
     });
     restoreBindings(gl, saved);

@@ -1133,6 +1133,141 @@ var VideoEffects = (function () {
     });
   }
 
+  // --- scenes people add (a 360° panorama, a 3D model) ---------------------
+  //
+  // The file goes into the same IndexedDB store as the custom image, under
+  // 'scene:<id>'; what is known about it goes into VideoScenes' list
+  // (`custom-scenes` in localStorage), which every document reads. Adding one
+  // DRAWS it once, off screen, before it is kept: that is its thumbnail, and
+  // the proof that this device can draw it (a file that cannot be drawn is
+  // refused rather than offered as a chip that fails). See
+  // docs/custom-scenes.md and src/scenes/custom.js.
+  var SCENE_MODEL_MAX_BYTES = 64 * 1048576;
+  var SCENE_PANO_MAX_W = 8192;
+  var SCENE_PANO_RATIO = [1.8, 2.2];          // an equirectangular picture is 2:1
+  var SCENE_THUMB = [320, 180];
+
+  // A refusal the picker can put in words (`code`).
+  function sceneError(code, message) {
+    var e = new Error(message);
+    e.code = code;
+    return e;
+  }
+  function newSceneId() {
+    var b = new Uint8Array(4);
+    (window.crypto || window.msCrypto).getRandomValues(b);
+    return 'u-' + Array.prototype.map.call(b, function (x) { return ('0' + x.toString(16)).slice(-2); }).join('');
+  }
+  function sceneName(file) {
+    var n = String(file && file.name || '').replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
+    return (n || 'My scene').slice(0, 40);
+  }
+  function isModelFile(file) {
+    return /\.glb$/i.test(file.name || '') || file.type === 'model/gltf-binary';
+  }
+
+  // The file as it will be stored: a panorama re-encoded at most 8192 wide (a
+  // camera picture never needs more), a model as it is once its header says
+  // it is a glTF binary.
+  function prepareSceneFile(file) {
+    if (isModelFile(file)) {
+      if (file.size > SCENE_MODEL_MAX_BYTES) return Promise.reject(sceneError('too-big', 'model over 64 MB'));
+      return file.slice(0, 4).arrayBuffer().then(function (head) {
+        var m = new Uint8Array(head);
+        // 'glTF', the binary container's magic.
+        if (m[0] !== 0x67 || m[1] !== 0x6c || m[2] !== 0x54 || m[3] !== 0x46) throw sceneError('not-glb', 'not a glTF binary');
+        return { kind: 'model', blob: file };
+      });
+    }
+    return loadBitmap(file).then(function (bmp) {
+      var ratio = bmp.width / bmp.height;
+      if (ratio < SCENE_PANO_RATIO[0] || ratio > SCENE_PANO_RATIO[1]) {
+        if (bmp.close) try { bmp.close(); } catch (e) { /* ignore */ }
+        throw sceneError('not-panorama', 'not a 2:1 panorama');
+      }
+      var w = Math.min(SCENE_PANO_MAX_W, bmp.width), h = Math.round(w / ratio);
+      var c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(bmp, 0, 0, w, h);
+      if (bmp.close) try { bmp.close(); } catch (e) { /* ignore */ }
+      return new Promise(function (resolve, reject) {
+        c.toBlob(function (blob) {
+          if (!blob) { reject(sceneError('unreadable', 'could not encode the picture')); return; }
+          resolve({ kind: 'panorama', blob: blob });
+        }, 'image/jpeg', 0.92);
+      });
+    }, function () { throw sceneError('unreadable', 'not a picture this browser can read'); });
+  }
+
+  // Draw a stored scene once, off screen, as a small JPEG data URL.
+  function sceneThumbnail(id) {
+    var c = document.createElement('canvas');
+    c.width = SCENE_THUMB[0]; c.height = SCENE_THUMB[1];
+    var gl = null;
+    try { gl = c.getContext('webgl2', { alpha: false, antialias: false, preserveDrawingBuffer: true }); } catch (e) { gl = null; }
+    if (!gl) return Promise.reject(sceneError('no-gl', 'WebGL2 unavailable'));
+    function done() {
+      VideoScenes.releaseContext(gl);
+      try { var lose = gl.getExtension('WEBGL_lose_context'); if (lose) lose.loseContext(); } catch (e) { /* lost */ }
+    }
+    return VideoScenes.createRenderer(gl, id, { quality: 'preview', mobile: IS_MOBILE }).then(function (r) {
+      var look = VideoScenes.defaultLook();
+      look.dirX = 0.6; look.cx = 0.5; look.cy = 3; look.sx = 0.01; look.sy = 0.01;
+      try { r.draw(null, c.width, c.height, VideoScenes.THUMB_TIME, look, null, null); } finally { r.dispose(); }
+      var url = c.toDataURL('image/jpeg', 0.8);
+      done();
+      return url;
+    }, function (e) { done(); throw e; });
+  }
+
+  function addCustomScene(file) {
+    if (!file) return Promise.reject(sceneError('unreadable', 'no file'));
+    var list = VideoScenes.customScenes();
+    if (list.length >= VideoScenes.CUSTOM_MAX) return Promise.reject(sceneError('full', 'too many scenes'));
+    var id = newSceneId();
+    var meta = null;
+    return prepareSceneFile(file).then(function (prep) {
+      meta = { id: id, kind: prep.kind, name: sceneName(file), bytes: prep.blob.size, added: Date.now(), options: {} };
+      return idbOp('readwrite', function (store) { return store.put(prep.blob, 'scene:' + id); });
+    }).then(function () {
+      // Listed first, so that the draw below finds it; withdrawn if it fails.
+      VideoScenes.saveCustomScenes(VideoScenes.customScenes().concat([meta]));
+      return sceneThumbnail(id).catch(function (e) {
+        throw sceneError('draw-failed', 'could not draw it: ' + (e && e.message ? e.message : e));
+      });
+    }).then(function (thumb) {
+      var now = VideoScenes.customScenes().map(function (m) {
+        return m.id === id ? Object.assign({}, m, { thumb: thumb }) : m;
+      });
+      VideoScenes.saveCustomScenes(now);
+      meta.thumb = thumb;
+      return meta;
+    }).catch(function (e) {
+      if (meta) removeCustomScene(id);
+      throw e;
+    });
+  }
+
+  function removeCustomScene(id) {
+    VideoScenes.saveCustomScenes(VideoScenes.customScenes().filter(function (m) { return m.id !== id; }));
+    VideoScenes.customModule().then(function (m) { m.forget(id); }, function () { /* never loaded */ });
+    return idbOp('readwrite', function (store) { return store.delete('scene:' + id); })
+      .catch(function () { return null; });
+  }
+
+  // Change what is known about a scene (its name, its options: a panorama's
+  // view). The parsed file is forgotten, so the next draw builds it anew.
+  function updateCustomScene(id, changes) {
+    var list = VideoScenes.customScenes().map(function (m) {
+      if (m.id !== id) return m;
+      var n = Object.assign({}, m, changes);
+      if (changes.options) n.options = Object.assign({}, m.options || {}, changes.options);
+      return n;
+    });
+    VideoScenes.saveCustomScenes(list);
+    return VideoScenes.customModule().then(function (m) { m.forget(id); }, function () { /* never loaded */ });
+  }
+
   function loadBitmap(src) {
     if (window.createImageBitmap && (src instanceof Blob)) return createImageBitmap(src);
     return new Promise(function (resolve, reject) {
@@ -3650,6 +3785,8 @@ var VideoEffects = (function () {
     if (k && k.failed) return 'self-check';
     if (k && k.slow) return 'slow-copy';
     if (this.mode.indexOf('preset:') !== 0) return 'mode';
+    // A scene somebody added is a file only this device has.
+    if (this.scene && this.scene.custom) return 'custom';
     if (!this.sceneId) return this.sceneCompiling ? 'compiling' : 'mode';
     if (this.keyGreen) return 'green';
     if (this.keyCorner) return 'corner';
@@ -5555,6 +5692,8 @@ var VideoEffects = (function () {
       return b;
     }
     var recentre = hudButton('scene-preview-recentre hidden', 'Recentre');
+    // A panorama you added: make the way you are looking its starting view.
+    var keepView = hudButton('scene-preview-keep hidden', 'Keep this view', 'Start this panorama looking this way');
     var personBtn = hudButton('scene-preview-person hidden', 'You', 'Show where you would stand');
     personBtn.setAttribute('aria-pressed', 'true');
     var fullBtn = hudButton('scene-preview-full', 'Full window', 'Show the scene over the whole window');
@@ -5606,7 +5745,7 @@ var VideoEffects = (function () {
     var visible = false, destroyed = false, failed = '';
     var view = null, full = false, showPerson = true, placeholder = null, prevFocus = null;
     // The cost on this device: one redraw at a call's size, every so often.
-    var probe = null, timer = null, gpuMs = null, cpuMs = null, lastProbe = 0, samples = [], soft = false;
+    var probe = null, gpuMs = null, cpuMs = null, lastProbe = 0, samples = [], soft = false;
     var px = new Uint8Array(4);
 
     var orbit = attachOrbit(stage, {
@@ -5619,7 +5758,27 @@ var VideoEffects = (function () {
       onChange: function (v) {
         view = v;
         recentre.classList.toggle('hidden', !v);
+        var sc = VideoScenes.byId(sceneId());
+        keepView.classList.toggle('hidden', !(v && sc && sc.custom && sc.kind === 'panorama'));
       }
+    });
+    keepView.addEventListener('click', function () {
+      var id = sceneId(), sc = VideoScenes.byId(id);
+      if (!view || !sc || !sc.custom) return;
+      var o = sc.meta.options || {};
+      var deg = 180 / Math.PI;
+      // The engine's turn and the panorama's own yaw and pitch run opposite
+      // ways (checked by drawing both: unit-custom-scenes.spec.js).
+      updateCustomScene(id, { options: {
+        yaw: Math.round(((o.yaw || 0) - view.yaw * deg) * 10) / 10,
+        pitch: Math.max(-30, Math.min(30, Math.round(((o.pitch || 0) - view.pitch * deg) * 10) / 10))
+      } }).then(function () {
+        orbit.reset(false);
+        // Built again from the stored options.
+        try { if (prog) prog.dispose(); } catch (e) { /* lost */ }
+        prog = null; progId = null;
+        refresh();
+      });
     });
     recentre.addEventListener('click', function () { orbit.reset(true); stage.focus(); });
     personBtn.addEventListener('click', function () {
@@ -5650,7 +5809,6 @@ var VideoEffects = (function () {
       if (raf) { cancelAnimationFrame(raf); raf = 0; }
       loadToken++;
       freeProbe();
-      timer = null;
       if (gl) {
         try { if (prog) prog.dispose(); } catch (e) { /* lost */ }
         VideoScenes.releaseContext(gl);
@@ -5695,8 +5853,6 @@ var VideoEffects = (function () {
       stage.insertBefore(canvas, stage.firstChild);
       fit();
       soft = softwareScenes(gl);
-      // Test hook: measure by waiting even where the GPU's clock is readable.
-      timer = window.__voxalPreviewSyncCost ? null : gpuTimer(gl);
       var mine = canvas;
       canvas.addEventListener('webglcontextlost', function (e) {
         e.preventDefault();
@@ -5746,9 +5902,15 @@ var VideoEffects = (function () {
     }
 
     // One redraw of the scene at the size a 720p call draws it, into a buffer
-    // of its own, timed: by the GPU's own clock where the browser exposes one,
-    // otherwise by waiting for it (gl.finish(), then a one-pixel read) — an
-    // upper bound, the issuing included. A median of the last few.
+    // of its own, timed by waiting for it: gl.finish() first (nothing else of
+    // the preview's is still in flight), then the redraw and a one-pixel read.
+    // An upper bound — the issuing is included — and a median of the last
+    // few. Not the GPU's timer query: on ANGLE over Metal it also counted the
+    // preview's own full-window frame (11 ms for a redraw a fence puts at 1).
+    // Three redraws back to back, the fastest kept: a GPU that idles between
+    // the preview's light frames clocks down, and the first redraw of a burst
+    // paid for that (15 ms against 5 on an M5) — a call keeps it busy.
+    var PROBE_BURST = 3;
     function measure(time) {
       var sc = VideoScenes.byId(progId);
       var size = sceneBufferSize(PREVIEW_CALL_SIZE[0], PREVIEW_CALL_SIZE[1],
@@ -5762,22 +5924,19 @@ var VideoEffects = (function () {
       }
       var lk = previewLook(probe.w, probe.h);
       var frameInfo = { jitter: [0, 0], detail: PREVIEW_CALL_SIZE[1] };
-      var c0;
-      if (timer) {
-        var on = timer.begin();
-        c0 = performance.now();
+      var best = Infinity;
+      for (var i = 0; i < PROBE_BURST; i++) {
+        try { gl.finish(); } catch (e) { /* lost */ }
+        var c0 = performance.now();
         prog.draw(probe.fb, probe.w, probe.h, time, lk, frameInfo, view);
-        cpuMs = easeMs(cpuMs, performance.now() - c0);
-        if (on) timer.end();
-        return;
+        var c1 = performance.now();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, probe.fb);
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        var ms = performance.now() - c0;
+        if (ms < best) { best = ms; cpuMs = c1 - c0; }
       }
-      try { gl.finish(); } catch (e) { /* lost */ }
-      c0 = performance.now();
-      prog.draw(probe.fb, probe.w, probe.h, time, lk, frameInfo, view);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, probe.fb);
-      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      samples.push(performance.now() - c0);
+      samples.push(best);
       if (samples.length > 5) samples.shift();
       var sorted = samples.slice().sort(function (a, b) { return a - b; });
       gpuMs = sorted[sorted.length >> 1];
@@ -5792,7 +5951,6 @@ var VideoEffects = (function () {
       var w = canvas.width, h = canvas.height;
       var t = VideoScenes.THUMB_TIME + (now - t0) / 1000;
       prog.draw(null, w, h, t, previewLook(w, h), null, view);
-      if (timer) { var g = timer.poll(); if (g != null) gpuMs = g; }
       if (now - lastProbe >= PREVIEW_PROBE_MS) {
         lastProbe = now;
         try { measure(t); } catch (e) { /* the preview carries on unmeasured */ }
@@ -5828,7 +5986,7 @@ var VideoEffects = (function () {
       titleName.textContent = sc.name || sc.label;
       upRow.dd.textContent = sc.kbps
         ? 'about ' + sc.kbps[0] + ' kb/s while you move, ' + sc.kbps[1] + ' kb/s while you hold still'
-        : 'not measured yet';
+        : sc.custom ? 'not measured: it depends on your file' : 'not measured yet';
       var hz = (sc.hz || SCENE_HZ)[0];
       var size = sceneBufferSize(PREVIEW_CALL_SIZE[0], PREVIEW_CALL_SIZE[1],
                                  sceneScaleLadder(Math.max(PREVIEW_CALL_SIZE[0], PREVIEW_CALL_SIZE[1]), null, soft)[0],
@@ -5837,8 +5995,8 @@ var VideoEffects = (function () {
       if (progId === id && gpuMs != null) {
         dev = fmtMs(gpuMs) + ' ms of graphics time per redraw at ' + size[0] + '×' + size[1] +
               ', redrawn ' + hz + ' times a second in a call: ' + fmtShare(gpuMs, hz) + ' of the graphics processor';
-        if (cpuMs != null) dev += '; ' + fmtMs(cpuMs) + ' ms of the main processor per redraw';
-        titleCost.textContent = fmtMs(gpuMs) + ' ms a redraw here · about ' + (sc.kbps ? sc.kbps[0] + ' kb/s' : '?') + ' up';
+        if (cpuMs != null) dev += '; ' + fmtMs(cpuMs) + ' ms of it on the main processor';
+        titleCost.textContent = fmtMs(gpuMs) + ' ms a redraw here' + (sc.kbps ? ' · about ' + sc.kbps[0] + ' kb/s up' : '');
       } else {
         dev = progId === id ? 'measuring…' : failed ? 'not measured: the preview could not be drawn' : 'measured while the preview is drawn';
         titleCost.textContent = sc.kbps ? 'about ' + sc.kbps[0] + ' kb/s up' : '';
@@ -5964,7 +6122,17 @@ var VideoEffects = (function () {
       setFull: setFull,
       isFull: function () { return full; },
       // What the info line was built from: { gpuMs, cpuMs, timer } (tests).
-      cost: function () { return { gpuMs: gpuMs, cpuMs: cpuMs, timer: !!timer, probe: probe ? [probe.w, probe.h] : null }; },
+      cost: function () { return { gpuMs: gpuMs, cpuMs: cpuMs, probe: probe ? [probe.w, probe.h] : null }; },
+      // Test hook: n probes now, back to back; the samples they took.
+      measureNow: function (n) {
+        if (!prog || !gl) return null;
+        var out = [];
+        for (var i = 0; i < (n || 5); i++) {
+          measure(VideoScenes.THUMB_TIME);
+          out.push(samples[samples.length - 1]);
+        }
+        return out;
+      },
       destroy: function () {
         if (full) setFull(false);
         destroyed = true;
@@ -5981,7 +6149,24 @@ var VideoEffects = (function () {
     };
   }
 
-  // opts: { onPick(mode), allowCustom (default true) }
+  // What the picker says when a scene cannot be added (addCustomScene()).
+  function sceneErrorText(e) {
+    switch (e && e.code) {
+      case 'not-panorama': return 'That picture is not a 360° panorama: it should be twice as wide as it is tall. For a flat picture, use “Use my own image”.';
+      case 'not-glb': return 'That file is not a 3D model Voxal can read: export it as glTF binary (.glb).';
+      case 'too-big': return 'That model is over 64 MB: export it lighter (fewer polygons, smaller textures).';
+      case 'full': return 'You already have ' + VideoScenes.CUSTOM_MAX + ' scenes of your own: remove one first.';
+      case 'draw-failed': return 'This device could not draw that file. Compressed models (Draco, Meshopt, KTX2) are not supported.';
+      default: return 'Could not add that file as a scene.';
+    }
+  }
+
+  var CUBE_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" ' +
+    'stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 7.5v9L12 21l8-4.5v-9z"/>' +
+    '<path d="M4 7.5 12 12l8-4.5M12 12v9"/></svg>';
+
+  // opts: { onPick(mode), onError(text), allowCustom (default true),
+  //         addScene (default true: the chip that adds a 360° photo or a 3D model) }
   function renderPicker(el, opts) {
     if (!el) return null;
     opts = opts || {};
@@ -6047,6 +6232,21 @@ var VideoEffects = (function () {
       paintThumbs();
     }
 
+    // The chip that adds a scene of your own, and the input behind it.
+    var addScene = null, sceneInput = null;
+    if (opts.addScene !== false) {
+      addScene = document.createElement('button');
+      addScene.type = 'button';
+      addScene.className = 'bg-chip bg-chip-add-scene';
+      addScene.title = 'Add a scene: a 360° photo or a 3D model (.glb)';
+      addScene.setAttribute('aria-label', addScene.title);
+      addScene.innerHTML = CUBE_SVG;
+      sceneInput = document.createElement('input');
+      sceneInput.type = 'file';
+      sceneInput.accept = '.glb,model/gltf-binary,image/jpeg,image/png,image/webp';
+      sceneInput.className = 'bg-file-input bg-scene-input';
+    }
+
     var custom = null, clearBtn = null, fileInput = null;
     if (opts.allowCustom !== false) {
       custom = chip('bg-chip-custom', 'Use my own image', 'custom');
@@ -6081,6 +6281,69 @@ var VideoEffects = (function () {
     });
     if (fileInput) el.appendChild(fileInput);
 
+    // Scenes people added (VideoScenes.customScenes()), after the built-in
+    // ones, each with a ✕ that removes it, then the chip that adds one. Built
+    // again whenever the list changes, here or in another window.
+    var customChips = [], customWraps = [];
+    var customAnchor = custom ? custom.parentNode : (fileInput || null);
+    if (addScene) el.insertBefore(addScene, customAnchor);
+    if (sceneInput) el.appendChild(sceneInput);
+    function allChips() { return chips.concat(customChips); }
+    function renderCustomScenes() {
+      customWraps.forEach(function (w) { if (w.parentNode) w.parentNode.removeChild(w); });
+      customWraps = [];
+      customChips = [];
+      VideoScenes.customScenes().forEach(function (m) {
+        var sc = VideoScenes.byId(m.id);
+        var c = chip('bg-chip-image bg-chip-scene bg-chip-own', m.name, 'preset:' + m.id);
+        c.dataset.scene = m.id;
+        c.style.backgroundImage = sc.swatch;
+        var x = document.createElement('button');
+        x.type = 'button';
+        x.className = 'bg-chip-clear';
+        x.title = 'Remove ' + m.name;
+        x.setAttribute('aria-label', x.title);
+        x.textContent = '✕';
+        x.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          var was = readMode() === 'preset:' + m.id;
+          removeCustomScene(m.id).then(function () { if (was) pick('blur'); });
+        });
+        c.addEventListener('click', function () { pick(c.dataset.mode); });
+        var wrap = document.createElement('span');
+        wrap.className = 'bg-chip-wrap';
+        wrap.appendChild(c);
+        wrap.appendChild(x);
+        el.insertBefore(wrap, addScene || customAnchor);
+        customChips.push(c);
+        customWraps.push(wrap);
+      });
+    }
+    renderCustomScenes();
+    if (el._offCustomScenes) el._offCustomScenes();
+    el._offCustomScenes = VideoScenes.onCustomChange(function () { renderCustomScenes(); sync(); });
+
+    if (addScene) {
+      addScene.addEventListener('click', function () {
+        // Synchronously, as for the image: a file dialog opens only inside the
+        // user's gesture.
+        sceneInput.click();
+      });
+      sceneInput.addEventListener('change', function () {
+        var file = sceneInput.files && sceneInput.files[0];
+        sceneInput.value = '';
+        if (!file) return;
+        addScene.classList.add('is-busy');
+        addCustomScene(file).then(function (meta) {
+          addScene.classList.remove('is-busy');
+          pick('preset:' + meta.id);
+        }, function (e) {
+          addScene.classList.remove('is-busy');
+          if (opts.onError) opts.onError(sceneErrorText(e));
+        });
+      });
+    }
+
     // Whether a custom image is stored, kept as a plain flag rather than read
     // from IndexedDB at click time. See the click handler: the read is async,
     // and an async hop before input.click() loses the user activation, which is
@@ -6111,13 +6374,13 @@ var VideoEffects = (function () {
 
     function sync(mode) {
       mode = normalizeMode(mode === undefined ? readMode() : mode);
-      chips.forEach(function (c) {
+      allChips().forEach(function (c) {
         var on = c.dataset.mode === mode;
         c.setAttribute('aria-checked', on ? 'true' : 'false');
         c.classList.toggle('is-active', on);
         c.tabIndex = on ? 0 : -1;
       });
-      if (!chips.some(function (c) { return c.dataset.mode === mode; })) none.tabIndex = 0;
+      if (!allChips().some(function (c) { return c.dataset.mode === mode; })) none.tabIndex = 0;
     }
 
     function pick(mode) {
@@ -6655,6 +6918,9 @@ var VideoEffects = (function () {
     ORBIT_LIMIT: ORBIT_LIMIT,
     getCustomImage: getCustomImage,
     setCustomImage: setCustomImage,
-    clearCustomImage: clearCustomImage
+    clearCustomImage: clearCustomImage,
+    addCustomScene: addCustomScene,
+    removeCustomScene: removeCustomScene,
+    updateCustomScene: updateCustomScene
   };
 })();
