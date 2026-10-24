@@ -14199,30 +14199,52 @@ function armTiltGesture() {
   document.addEventListener('click', onTap, true);
 }
 
-// --- Background orbit (computers) ---------------------------------------------
+// --- Background orbit (a drag on your own picture) ------------------------------
 //
-// A computer has no motion sensor, so its scene turns by dragging your own
-// picture (VideoEffects.attachOrbit): the same { yaw, pitch, roll } the phone's
-// sensor publishes, through the same setTilt() — so every local pipeline, and
-// the keyed frame's tilt strip for the people who draw your scene, take it
-// unchanged. Not the self-view badge: a drag there moves the badge.
+// A scene also turns by dragging your own picture (VideoEffects.attachOrbit):
+// the same { yaw, pitch, roll } the phone's sensor publishes, through the same
+// setTilt() — so every local pipeline, and the keyed frame's tilt strip for the
+// people who draw your scene, take it unchanged. A computer has only that; a
+// phone has both, and the drag is added to the sensor's turn
+// (applyBackgroundTurn()). Not the self-view badge: a drag there moves the
+// badge.
 //
 // The strip is part of the frame's format, so the offer's `tilt` flag follows
 // whether a turn has ever been made, not whether the picture is turned right
 // now — a recentre must not be a new epoch for every receiver.
 
 var _backgroundOrbit = null;
+var _backgroundOrbitEl = null;
 var _backgroundOrbitEngaged = false;
+// The two turns, each { yaw, pitch, roll } or null: the phone's sensor and the hand.
+var _sensorTurn = null;
+var _orbitTurn = null;
 
 function backgroundOrbitWanted() {
-  if (IS_MOBILE_DEVICE || !keyedApi('attachOrbit')) return false;
+  if (!keyedApi('attachOrbit')) return false;
   if (!localVideoActive || !localVideoStream || !localVideoStream._effectsProcessor) return false;
   return backgroundMovable();
 }
 
+// What the scene is turned by: the sensor's turn and the drag's, added, never
+// further than the sensor itself would go.
+function applyBackgroundTurn() {
+  if (!keyedApi('setTilt')) return;
+  var s = _sensorTurn, o = _orbitTurn;
+  if (!s && !o) { VideoEffects.setTilt(null); return; }
+  var lim = (typeof DeviceTilt !== 'undefined' && DeviceTilt.LIMIT) || { yaw: 0.49, pitch: 0.25, roll: 0.13 };
+  var clamp = function(v, m) { return Math.max(-m, Math.min(m, v)); };
+  VideoEffects.setTilt({
+    yaw: clamp((s ? s.yaw : 0) + (o ? o.yaw : 0), lim.yaw),
+    pitch: clamp((s ? s.pitch : 0) + (o ? o.pitch : 0), lim.pitch),
+    roll: clamp((s ? s.roll : 0) + (o ? o.roll : 0), lim.roll)
+  });
+}
+
 function onBackgroundOrbit(v) {
   if (!backgroundOrbitWanted()) v = null;
-  if (keyedApi('setTilt')) VideoEffects.setTilt(v);
+  _orbitTurn = v;
+  applyBackgroundTurn();
   if (v && !_backgroundOrbitEngaged) {
     _backgroundOrbitEngaged = true;
     if (String(videoBackgroundMode()).indexOf('preset:') === 0) refreshKeyedSend();
@@ -14230,14 +14252,16 @@ function onBackgroundOrbit(v) {
 }
 
 function wireBackgroundOrbit(el) {
-  if (IS_MOBILE_DEVICE || !keyedApi('attachOrbit')) return;
+  if (!keyedApi('attachOrbit')) return;
   if (_backgroundOrbit) {
     // A rebuilt tile starts straight; so must the scene it controls.
     var stale = _backgroundOrbit.moved();
     _backgroundOrbit.destroy();
     _backgroundOrbit = null;
-    if (stale && keyedApi('setTilt')) VideoEffects.setTilt(null);
+    if (_backgroundOrbitEl) _backgroundOrbitEl.classList.remove('orbit-touch');
+    if (stale) { _orbitTurn = null; applyBackgroundTurn(); }
   }
+  _backgroundOrbitEl = el;
   _backgroundOrbit = VideoEffects.attachOrbit(el, {
     enabled: function() { return backgroundOrbitWanted() && !el.closest('#video-stage-self'); },
     // The self-view is shown mirrored; the published frame is not. A drag must
@@ -14246,47 +14270,71 @@ function wireBackgroundOrbit(el) {
       var v = el.querySelector('video');
       try { return new DOMMatrixReadOnly(getComputedStyle(v).transform).a < 0; } catch (e) { return false; }
     },
+    // A finger turns it on a phone (a tap still toggles the room's chrome: a
+    // drag's click is swallowed).
+    touch: IS_MOBILE_DEVICE,
     onChange: onBackgroundOrbit,
     ignore: 'button, a'
   });
+  syncBackgroundOrbit();
+}
+
+// The line in the background popover that says how to turn the scene.
+function backgroundOrbitHintText() {
+  if (!IS_MOBILE_DEVICE) return 'Drag your own picture to look around the scene · double-click to recentre.';
+  var sensor = typeof DeviceTilt !== 'undefined' && DeviceTilt.ready();
+  return (sensor ? 'Turn your phone, or drag your own picture, to look around the scene'
+                 : 'Drag your own picture to look around the scene') + ' · double-tap to recentre.';
 }
 
 function syncBackgroundOrbit() {
+  var wanted = backgroundOrbitWanted();
   var hint = document.getElementById('video-bg-orbit-hint');
-  if (hint) hint.classList.toggle('hidden', !backgroundOrbitWanted());
-  if (backgroundOrbitWanted()) return;
+  if (hint) {
+    hint.classList.toggle('hidden', !wanted);
+    var text = backgroundOrbitHintText();
+    if (wanted && hint.textContent !== text) hint.textContent = text;
+  }
+  // The finger's drag is ours, not the browser's pan, only while it turns
+  // something.
+  if (_backgroundOrbitEl) {
+    _backgroundOrbitEl.classList.toggle('orbit-touch',
+      IS_MOBILE_DEVICE && wanted && !_backgroundOrbitEl.closest('#video-stage-self'));
+  }
+  if (wanted) return;
   // No scene, or no camera: hand the picture back, straight.
   if (_backgroundOrbit) _backgroundOrbit.reset(false);
+  if (_orbitTurn) { _orbitTurn = null; applyBackgroundTurn(); }
   if (_backgroundOrbitEngaged) {
     _backgroundOrbitEngaged = false;
-    if (keyedApi('setTilt')) VideoEffects.setTilt(null);
     refreshKeyedSend();
   }
 }
 
-// Something is turning the scene: a phone's sensor that is flowing, or a
-// computer's hand.
+// Something is turning the scene: a phone's sensor that is flowing, or a hand.
 function backgroundTiltFlowing() {
   return (typeof DeviceTilt !== 'undefined' && DeviceTilt.ready()) || _backgroundOrbitEngaged;
 }
 
 function syncBackgroundTilt() {
-  // A computer has no sensor to start or stop; its orbit has its own level.
-  if (!IS_MOBILE_DEVICE) { syncBackgroundOrbit(); return; }
+  // The drag has its own level, on every device; a computer has no sensor.
+  syncBackgroundOrbit();
+  if (!IS_MOBILE_DEVICE) return;
   if (typeof DeviceTilt === 'undefined' || !keyedApi('setTilt')) return;
   if (backgroundTiltWanted()) {
     DeviceTilt.setFacing(_cameraFacing);
     DeviceTilt.start({
-      onChange: function(v) { VideoEffects.setTilt(v); },
-      // Ready flips the offer's `tilt` flag.
-      onState: function() { refreshKeyedSend(); }
+      onChange: function(v) { _sensorTurn = v; applyBackgroundTurn(); },
+      // Ready flips the offer's `tilt` flag (and the hint's words).
+      onState: function() { refreshKeyedSend(); syncBackgroundOrbit(); }
     });
     if (!DeviceTilt.ready()) armTiltGesture();
     if (!_tiltTimer) _tiltTimer = setInterval(syncBackgroundTilt, 2000);
   } else {
     var was = DeviceTilt.ready();
     DeviceTilt.stop();
-    VideoEffects.setTilt(null);
+    _sensorTurn = null;
+    applyBackgroundTurn();
     if (_tiltTimer) { clearInterval(_tiltTimer); _tiltTimer = null; }
     if (was) refreshKeyedSend();
   }
@@ -14713,6 +14761,9 @@ function initVideoBackgroundUI() {
     var host = document.getElementById(id);
     if (!host) return;
     var picker = VideoEffects.renderPicker(host, {
+      // Adding a scene of your own (a 360° photo, a 3D model) belongs in
+      // Settings; the room's popover only picks among them.
+      addScene: id === 'settings-bg-picker',
       onPick: function(mode) {
         // Choosing is the whole point of the popover, so get it out of the way
         // of the preview the choice was made for. onPick only fires on an
@@ -14730,7 +14781,24 @@ function initVideoBackgroundUI() {
   // whenever the mode is written (VideoEffects.writeMode tells it), and only
   // while it is on screen.
   if (keyedApi('renderScenePreview')) {
-    _videoBgPreview = VideoEffects.renderScenePreview(document.getElementById('settings-bg-preview'));
+    _videoBgPreview = VideoEffects.renderScenePreview(document.getElementById('settings-bg-preview'), {
+      // A scene picked in the full window: applied like one from the picker.
+      onPick: function(mode) { applyVideoBackground(mode); },
+      // What the cost line says about the call in progress: this window owns
+      // the bandwidth samples (_collectBandwidthSample, every few seconds).
+      live: function() {
+        if (!inRoom || !localVideoStream || !_bandwidthCurrent) return null;
+        return { sendingBps: _bandwidthCurrent.out.camera };
+      }
+    });
+  }
+
+  // Scene light (Settings → Video, under the preview). The control stores it;
+  // the camera pipeline reads it on every redraw (VideoEffects.sceneLight()),
+  // so nothing here applies it, and a change in the preferences window arrives
+  // through the `storage` event video-effects.js listens to itself.
+  if (keyedApi('renderSceneLight')) {
+    VideoEffects.renderSceneLight(document.getElementById('settings-scene-light'), { id: 'select-scene-light' });
   }
 
   // Blur strength (Settings → Video, under the picker). Unlike the mode, this
@@ -16485,12 +16553,15 @@ function resetKeyedState() {
 //
 // The switch alone says nothing about whether it is doing anything — and in a
 // room of three on the default routing, or with blur picked, it is not. One
-// pure function decides, and two lines say it: under the switch in Settings, and
-// in the background popover on your own tile.
+// pure function decides, and two lines say it: under the switch in Settings
+// (every state, since that is where the switch is), and in the background
+// popover on your own tile — only while it is in use, with what that means, so
+// a call is not told about a feature that is not there.
 
 var KEYED_STATUS_TEXT = {
   'not-sharing': 'Not in use: your camera is off',
   'no-scene': 'Not in use: pick an animated scene',
+  'own-scene': 'Not in use: a scene you added is sent as your picture (nobody else has the file)',
   'relay': 'Not in use: video goes through the relay in this room',
   'no-capable-peer': 'Not in use: nobody here can draw the scene',
   'paused': 'Paused for now: everyone gets your usual picture'
@@ -16502,6 +16573,8 @@ function keyedStatus() {
   if (videoBackgroundMode().indexOf('preset:') !== 0 || !localVideoStream._effectsProcessor) {
     return { state: 'inactive', reason: 'no-scene' };
   }
+  var own = typeof VideoScenes !== 'undefined' && VideoScenes.byId(videoBackgroundMode().slice(7));
+  if (own && own.custom) return { state: 'inactive', reason: 'own-scene' };
   var t = _localVideoTopology.video;
   if (t && t.mode === 'sfu') return { state: 'inactive', reason: 'relay' };
   var st = null;
@@ -16534,8 +16607,24 @@ function keyedStatusText(st) {
   return KEYED_STATUS_TEXT[st.reason] || '';
 }
 
+var KEYED_IN_USE_TIP = 'Let others draw my scene is on: their Voxal draws the scene behind you on their own ' +
+  'device, in your light and turning with your camera, so it stays sharp on their screen instead of ' +
+  'being squeezed into the video. You send them only yourself, over a plain green background. ' +
+  'Everyone else gets your usual picture. Settings → Video turns it off.';
+
+// The popover's line: only while somebody is actually drawing the scene.
+function keyedPopoverText(st) {
+  if (!st || st.state !== 'active' || !st.peers) return '';
+  if (st.peers >= st.of) {
+    return st.of === 1 ? 'The other person draws this scene on their own device.'
+                       : 'Everyone here draws this scene on their own device.';
+  }
+  return st.peers + ' of ' + st.of + ' people draw this scene on their own device; the others see your usual picture.';
+}
+
 function renderKeyedStatus() {
-  var text = keyedStatusText(keyedStatus());
+  var st = keyedStatus();
+  var text = keyedStatusText(st);
   var line = document.getElementById('settings-subject-only-status');
   if (line) {
     line.classList.toggle('hidden', !text);
@@ -16543,10 +16632,28 @@ function renderKeyedStatus() {
   }
   var pop = document.getElementById('video-bg-subject-only');
   if (pop) {
+    var says = keyedPopoverText(st);
     var shown = !pop.classList.contains('hidden');
-    pop.classList.toggle('hidden', !text);
-    if (pop.textContent !== text) pop.textContent = text;
-    if (shown !== !!text) positionVideoBackgroundPopover();
+    pop.classList.toggle('hidden', !says);
+    var words = pop.querySelector('.video-bg-subject-only-text');
+    if (!words) {
+      pop.textContent = '';
+      words = document.createElement('span');
+      words.className = 'video-bg-subject-only-text';
+      pop.appendChild(words);
+      var info = document.createElement('button');
+      info.type = 'button';
+      info.className = 'video-bg-info';
+      info.textContent = 'i';
+      info.setAttribute('aria-label', 'What this means');
+      // A tap shows it too: on a phone there is no hover, and an (i) does
+      // nothing else.
+      if (keyedApi('attachTip')) VideoEffects.attachTip(info, KEYED_IN_USE_TIP, { click: true });
+      info.addEventListener('click', function(e) { e.stopPropagation(); });
+      pop.appendChild(info);
+    }
+    if (words.textContent !== says) words.textContent = says;
+    if (shown !== !!says) positionVideoBackgroundPopover();
   }
 }
 

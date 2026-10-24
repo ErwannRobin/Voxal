@@ -1336,7 +1336,15 @@ test.describe('keyedStatus()', () => {
       out.rows = rows;
       renderKeyedStatus();
       out.line = document.getElementById('settings-subject-only-status').textContent;
-      out.pop = document.getElementById('video-bg-subject-only').textContent;
+      const pop = document.getElementById('video-bg-subject-only');
+      out.pop = pop.querySelector('.video-bg-subject-only-text').textContent;
+      out.popInfo = !!pop.querySelector('.video-bg-info');
+      // Not in use: Settings says why, the call's popover says nothing.
+      VideoEffects.writeMode('blur');
+      renderKeyedStatus();
+      out.idleLine = document.getElementById('settings-subject-only-status').textContent;
+      out.idlePopHidden = pop.classList.contains('hidden');
+      VideoEffects.writeMode('preset:office');
       return out;
     });
     const byLabel = Object.fromEntries(table.rows.map(([l, st, text]) => [l, { st, text }]));
@@ -1348,6 +1356,9 @@ test.describe('keyedStatus()', () => {
       text: 'Not in use: video goes through the relay in this room' });
     expect(byLabel.nobody.st).toEqual({ state: 'inactive', reason: 'no-capable-peer' });
     expect(table.line).toBe('In use for 1 of 2 people');
-    expect(table.pop).toBe('In use for 1 of 2 people');
+    expect(table.pop).toBe('1 of 2 people draw this scene on their own device; the others see your usual picture.');
+    expect(table.popInfo).toBe(true);
+    expect(table.idleLine).toBe('Not in use: pick an animated scene');
+    expect(table.idlePopHidden).toBe(true);
   });
 });

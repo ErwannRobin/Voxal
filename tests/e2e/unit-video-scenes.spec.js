@@ -209,13 +209,15 @@ test.afterEach(async ({ page }) => {
 });
 
 test.describe('the catalogue', () => {
-  test('six scenes, each with a label, a swatch and its own shader', async ({ page }) => {
+  test('six scenes, each with a label, a name, a blurb, a measured cost, a swatch and its own shader', async ({ page }) => {
     const seen = await page.evaluate(() => VideoScenes.SCENES.map((s) => ({
-      id: s.id, label: !!s.label, swatch: /gradient/.test(s.swatch),
+      id: s.id, label: !!s.label, name: !!s.name, blurb: !!s.blurb && s.blurb.length < 200,
+      kbps: Array.isArray(s.kbps) && s.kbps.length === 2 && s.kbps.every((v) => v > 0),
+      swatch: /gradient/.test(s.swatch),
       source: !!VideoScenes.fragmentSource(s.id),
     })));
     expect(seen.map((s) => s.id)).toEqual(SCENES);
-    for (const s of seen) expect(s).toMatchObject({ label: true, swatch: true, source: true });
+    for (const s of seen) expect(s).toMatchObject({ label: true, name: true, blurb: true, kbps: true, swatch: true, source: true });
   });
 
   // "Purely generated, no assets": nothing a scene draws is fetched. The one
@@ -1239,7 +1241,10 @@ test.describe('in the camera pipeline', () => {
     expect(seen.first).toBeGreaterThan(25);
     expect(seen.age).toBe(14);
     expect(seen.showsResolved).toBe(true);
-    expect(seen.churn).toBeLessThan(0.8);
+    // A software rasteriser's redraws are not multisampled (the engine leaves
+    // that to a GPU: the samples would cost SwiftShader's CPU 40% of a
+    // redraw), so each edge differs a little more between them than on a GPU.
+    expect(seen.churn).toBeLessThan(1.5);
     expect(seen.settled).toBeLessThan(seen.stretched * 0.9);
   });
 
@@ -1381,6 +1386,41 @@ test.describe('in the camera pipeline', () => {
     expect(seen.mountain.step).toBe(0);
   });
 
+  // On a GPU every engine scene starts at the picture's own size, whatever its
+  // catalogue `res` (that is the ray-marched fallback's), and the governor
+  // walks it down the rungs below. The tests' SwiftShader is a software
+  // rasteriser, which keeps the old, smaller start: the hook takes the GPU path.
+  test('on a GPU a scene starts at the picture\'s own size, and steps down the rungs below it', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.evaluate(() => { window.__voxalSceneHardware = true; });
+    const seen = await page.evaluate(async () => {
+      const c = document.createElement('canvas');
+      c.width = 1280; c.height = 720;
+      const ctx = c.getContext('2d');
+      const paint = () => { ctx.fillStyle = '#666'; ctx.fillRect(0, 0, 1280, 720); };
+      paint();
+      const stream = c.captureStream(15);
+      const timer = setInterval(paint, 66);
+      stream.getVideoTracks()[0].addEventListener('ended', () => clearInterval(timer));
+      await VideoEffects.wrap(stream, 'preset:mountain');
+      const p = VideoEffects.active();
+      await window.__waitFor(() => p.sceneId === 'mountain', 60000);
+      const steps = p.sceneScaleSteps.slice();
+      const sizes = [[p.sceneW, p.sceneH]];
+      const stats = VideoEffects.sceneStats();
+      while (p.sceneScaleStep < p.sceneScaleSteps.length - 1) {
+        p.sceneScaleStep++;
+        p.ensureScene('mountain');
+        sizes.push([p.sceneW, p.sceneH]);
+      }
+      return { steps, sizes, stats, res: VideoScenes.byId('mountain').res };
+    });
+    expect(seen.res).toBeLessThan(1);
+    expect(seen.steps).toEqual([2.5, 2.25, 1.5, 1]);
+    expect(seen.sizes).toEqual([[1280, 720], [1152, 648], [768, 432], [512, 288]]);
+    expect(seen.stats).toMatchObject({ id: 'mountain', buffer: [1280, 720], picture: [1280, 720], hz: 10, hzTop: 10, stepped: false });
+  });
+
   test('switching scenes keeps the same published track', async ({ page }) => {
     const seen = await page.evaluate(async () => {
       const stream = await VideoEffects.wrap(window.__mkLitCamera('#555', '#999'), 'preset:office');
@@ -1454,6 +1494,7 @@ test.describe('the picker', () => {
         .filter((c) => /url\("(blob|data):/.test(c.style.backgroundImage)).length), { timeout: 100_000 })
       .toBe(SCENES.length);
     const labels = await chips.evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')));
-    expect(labels).toEqual(['Office', 'Island', 'Cyber café', 'Mountain', 'Countryside', 'Neon rain']);
+    // Named by the place, not the kind of place.
+    expect(labels).toEqual(['Copenhagen studio', 'Lagoon deck', 'Lisbon espresso bar', 'Dolomites lake', 'Val d’Orcia', 'Neon rain']);
   });
 });

@@ -259,3 +259,59 @@ test('twenty scenes made and disposed on one context leave no GL objects behind'
   expect(seen.after.vao).toBe(0);
   expect(seen.error).toBe(0);
 });
+
+// Every renderer but a thumbnail is drawn at the scene's best — the camera's,
+// a keyed peer's, the preview — on a phone as on a computer; only the
+// multisampling differs (8 / 4, none on a software rasteriser like this
+// machine's SwiftShader, where the samples would cost the CPU).
+test('quality: full everywhere but a thumbnail, and no multisampling on a software rasteriser', async ({ page }) => {
+  const seen = await page.evaluate(() => {
+    const { gl } = window.__ctx();
+    const q = (opts) => {
+      const r = window.__E.createRenderer(gl, window.__def, opts);
+      const out = Object.assign({}, r._scene.quality);
+      r.dispose();
+      return out;
+    };
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    const name = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : '';
+    return {
+      software: /swiftshader|llvmpipe|software/i.test(name),
+      full: q({ quality: 'full' }), phone: q({ quality: 'full', mobile: true }),
+      receiver: q({ quality: 'receiver', mobile: true }), preview: q({ quality: 'preview' }),
+      thumb: q({ quality: 'thumb' })
+    };
+  });
+  const best = { shadow: 2048, mirror: 0.5, particles: 1 };
+  for (const k of ['full', 'phone', 'receiver', 'preview']) expect(seen[k]).toMatchObject(best);
+  expect(seen.thumb).toMatchObject({ shadow: 512, mirror: 0, particles: 0.4, samples: 0 });
+  if (seen.software) {
+    for (const k of ['full', 'phone', 'receiver', 'preview']) expect(seen[k]).toMatchObject({ samples: 0, software: true });
+  } else {
+    expect(seen.full.samples).toBeGreaterThan(seen.phone.samples - 1);
+    expect(seen.phone.samples).toBeLessThanOrEqual(4);
+  }
+});
+
+// The context's HDR target is kept per size, two of them: a context that
+// alternates between two sizes (the preview and its cost probe) must not
+// reallocate on every draw.
+test('two sizes on one context keep their own targets', async ({ page }) => {
+  const seen = await page.evaluate(() => {
+    const { gl, fb } = window.__ctx(256, 144);
+    const r = window.__E.createRenderer(gl, window.__def, { quality: 'full' });
+    const L = window.__look();
+    const eng = r._scene.eng;
+    r.draw(fb, 256, 144, 37, L, null, null);
+    const a = eng.rt;
+    r.draw(fb, 128, 72, 37, L, null, null);
+    const b = eng.rt;
+    r.draw(fb, 256, 144, 37, L, null, null);
+    const a2 = eng.rt;
+    r.draw(fb, 64, 36, 37, L, null, null);
+    const kept = eng.rts.length;
+    r.dispose();
+    return { sameA: a === a2, differ: a !== b, kept };
+  });
+  expect(seen).toEqual({ sameA: true, differ: true, kept: 2 });
+});

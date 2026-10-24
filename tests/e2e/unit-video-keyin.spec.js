@@ -636,6 +636,40 @@ test.describe('a running receiver', () => {
     expect(seen.alive).toBe(true);
   });
 
+  // Settings → Video → Scene light is this device's choice for ITS camera: a
+  // keyed peer's scene is drawn in the light that peer offered.
+  test('the receiver draws the sender\'s light, whatever this device\'s scene light', async ({ page }) => {
+    test.setTimeout(120_000);
+    const seen = await page.evaluate(async () => {
+      VideoEffects.writeSceneLight('night');
+      await window.__start();
+      const p = window.__p;
+      const exp = p.lookTarget.exposure;
+      p.lastScene = 0;
+      p.drawScene(performance.now());
+      const out = { hook: typeof p.fixLight, before: exp, after: p.lookTarget.exposure };
+      VideoEffects.writeSceneLight('auto');
+      return out;
+    });
+    expect(seen.hook).toBe('undefined');
+    expect(seen.after).toBe(seen.before);
+    expect(seen.after).not.toBeCloseTo(0.25, 2);
+  });
+
+  test('on a GPU the scene starts at the picture\'s own size', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.evaluate(() => { window.__voxalSceneHardware = true; });
+    const seen = await page.evaluate(async () => {
+      await window.__start();
+      const p = window.__p;
+      p.resize(1280, 720);
+      return { steps: p.sceneScaleSteps.slice(), w: p.sceneW, h: p.sceneH, cw: p.canvas.width, ch: p.canvas.height };
+    });
+    expect(seen.steps).toEqual([2.5, 2.25, 1.5, 1]);
+    expect([seen.cw, seen.ch]).toEqual([1280, 720]);
+    expect([seen.w, seen.h]).toEqual([1280, 720]);
+  });
+
   test('over budget it gives up, the probe keeps watching, and a lost context gives up too', async ({ page }) => {
     test.setTimeout(120_000);
     const seen = await page.evaluate(async () => {

@@ -155,11 +155,49 @@ test.describe('the picker', () => {
   test('offers none, blur, every preset and a custom slot', async ({ page }) => {
     const modes = await page.evaluate(() =>
       Array.from(document.querySelectorAll('#settings-bg-picker .bg-chip'))
-        .map((c) => c.dataset.mode));
+        .map((c) => c.dataset.mode || (c.classList.contains('bg-chip-add-scene') ? 'add-scene' : '?')));
+    // "Add a scene" is an action, not a mode: it sits after the scenes, before
+    // the custom picture (docs/custom-scenes.md).
     expect(modes).toEqual([
       'off', 'blur', 'preset:office', 'preset:island', 'preset:cybercafe', 'preset:mountain',
-      'preset:countryside', 'preset:penthouse', 'custom',
+      'preset:countryside', 'preset:penthouse', 'add-scene', 'custom',
     ]);
+  });
+
+  test('the + says what it can do: on a hover, and on a long press that does not open the file dialog', async ({ page }) => {
+    const plus = page.locator('#settings-bg-picker .bg-chip-custom');
+    const tip = page.locator('.ve-tip');
+    // Its own card, not the browser's title on top of it.
+    expect(await plus.getAttribute('title')).toBeNull();
+    await plus.hover();
+    await expect(tip).toBeVisible();
+    await expect(tip).toContainText('a photo of your own as a still background');
+    await expect(tip).toContainText('use the cube');
+    await page.mouse.move(5, 5);
+    await expect(tip).toBeHidden();
+
+    // A finger: held, the card shows and the press ends without a click.
+    const seen = await page.evaluate(async () => {
+      const el = document.querySelector('#settings-bg-picker .bg-chip-custom');
+      const input = document.querySelector('#settings-bg-picker .bg-file-input:not(.bg-scene-input)');
+      let opened = 0;
+      input.click = () => { opened++; };
+      const r = el.getBoundingClientRect();
+      const at = (type) => new PointerEvent(type, { pointerType: 'touch', pointerId: 3, isPrimary: true,
+        button: 0, clientX: r.left + 10, clientY: r.top + 10, bubbles: true, cancelable: true });
+      el.dispatchEvent(at('pointerdown'));
+      await new Promise((res) => setTimeout(res, 600));
+      const shown = !document.querySelector('.ve-tip').classList.contains('hidden');
+      el.dispatchEvent(at('pointerup'));
+      el.click();
+      // A short tap still does what the chip does.
+      el.dispatchEvent(at('pointerdown'));
+      el.dispatchEvent(at('pointerup'));
+      el.click();
+      return { shown, opened };
+    });
+    expect(seen.shown).toBe(true);
+    expect(seen.opened).toBe(1);
   });
 
   test('picking a chip stores the mode and marks it checked', async ({ page }) => {

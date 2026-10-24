@@ -146,6 +146,9 @@ scene-preview:
 three-vendor:
 	@npx --yes esbuild@0.25.10 scripts/three-entry.mjs --bundle --minify --format=esm \
 	  --legal-comments=inline --outfile=src/assets/three/three.min.js --log-level=warning
+	@npx --yes esbuild@0.25.10 scripts/three-gltf-entry.mjs --bundle --minify --format=esm --external:three \
+	  --legal-comments=inline --outfile=src/assets/three/gltf-loader.min.js --log-level=warning
+	@sed -i.bak -E 's#from ?"three"#from"./three.min.js"#g' src/assets/three/gltf-loader.min.js && rm -f src/assets/three/gltf-loader.min.js.bak
 	@cp node_modules/three/LICENSE src/assets/three/LICENSE
 
 # Stages the ~12 MB MediaPipe vision runtime into src/assets/seg/. The copy

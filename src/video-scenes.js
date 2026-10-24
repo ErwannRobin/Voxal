@@ -70,9 +70,11 @@ var VideoScenes = (function () {
   // shadow: how dark your shadow gets on the scene's near surfaces (0 = the
   //         scene has none — everything in it is far away).
   // wrap:   how much of the scene's light spills onto your outline.
-  // res:    the scene's buffer, as a fraction of the pipeline's (see
-  //         SCENE_LONG in video-effects.js). The ray-marched landscapes are
-  //         the dearest scenes to draw and the softest to look at.
+  // res:    the ray-marched fallback's buffer, as a fraction of the
+  //         pipeline's (see sceneBufferSize() in video-effects.js): those
+  //         landscapes are the dearest to draw and the softest to look at. A
+  //         scene drawn by the engine (`module`) ignores it and is drawn at
+  //         the picture's own size.
   // hz:     how often it is redrawn, and what that falls to under load. Its
   //         motion is slow, so a dear scene is redrawn less often, not made
   //         to look less.
@@ -83,18 +85,38 @@ var VideoScenes = (function () {
   //         Absent or 0: none, and the resolve is byte-for-byte what it was.
   // swatch: what the chip shows until its real thumbnail has been rendered,
   //         and where WebGL2 is not available to render one at all.
+  // name:   what the scene is called in the picker and the preview; `label` is
+  //         the kind of place, kept for anything that names it shortly.
+  // blurb:  one sentence on what is in it, under the preview.
+  // kbps:   what it costs to send, measured: [moving, still] kb/s of VP9 at
+  //         1280x720 and a fixed quality (q32), drawn as a call on a GPU draws
+  //         it (the picture's own size, multisampled), with a stand-in person
+  //         moving in front of it / holding still: scripts/scene-preview.mjs
+  //         --gpu --long 1280 --bits --person | --still, on an Apple M5.
   var SCENES = [
-    { id: 'office', label: 'Office', shadow: 0.55, wrap: 0.22, res: 0.85, hz: [12, 6], module: true,
+    { id: 'office', label: 'Office', name: 'Copenhagen studio',
+      blurb: 'An architect’s studio in an old Copenhagen flat on an October morning: low sun through a tall window, oak shelves, a linden turning gold outside.',
+      kbps: [420, 337], shadow: 0.55, wrap: 0.22, res: 0.85, hz: [12, 6], module: true,
       swatch: 'linear-gradient(120deg,#d9d0c3 0%,#e8e1d6 55%,#a9c3da 100%)' },
-    { id: 'island', label: 'Island', shadow: 0.30, wrap: 0.36, res: 0.80, hz: [10, 5], module: true,
+    { id: 'island', label: 'Island', name: 'Lagoon deck',
+      blurb: 'The shaded deck of an overwater bungalow on a Polynesian lagoon: turquoise shallows, a reef, a volcanic peak in the haze, a leaning palm.',
+      kbps: [1023, 671], shadow: 0.30, wrap: 0.36, res: 0.80, hz: [10, 5], module: true,
       swatch: 'linear-gradient(180deg,#7fb2df 0%,#cfe6ef 48%,#3fa3a6 52%,#e9dcbc 100%)' },
-    { id: 'cybercafe', label: 'Cyber café', shadow: 0.45, wrap: 0.42, res: 1.0, hz: [15, 8], module: true,
+    { id: 'cybercafe', label: 'Cyber café', name: 'Lisbon espresso bar',
+      blurb: 'A 90s internet café under a brick vault in Lisbon, now an espresso bar: azulejos, a zinc bar, old terminals, a tram going by outside.',
+      kbps: [432, 422], shadow: 0.45, wrap: 0.42, res: 1.0, hz: [15, 8], module: true,
       swatch: 'linear-gradient(120deg,#2a1714 0%,#5a2a3c 50%,#1d3550 100%)' },
-    { id: 'mountain', label: 'Mountain', shadow: 0, wrap: 0.28, res: 0.70, hz: [10, 5], module: true,
+    { id: 'mountain', label: 'Mountain', name: 'Dolomites lake',
+      blurb: 'A glassy emerald lake under limestone spires on a September morning: golden larches, a boathouse on stilts, mist on the far water.',
+      kbps: [130, 164], shadow: 0, wrap: 0.28, res: 0.70, hz: [10, 5], module: true,
       swatch: 'linear-gradient(180deg,#8fb4d9 0%,#e6eef5 45%,#5f7387 70%,#2f4a35 100%)' },
-    { id: 'countryside', label: 'Countryside', shadow: 0, wrap: 0.28, res: 0.80, hz: [10, 5], module: true,
+    { id: 'countryside', label: 'Countryside', name: 'Val d’Orcia',
+      blurb: 'Golden wheat on rolling Tuscan hills on a June evening: cypresses up to a stone farmhouse, an umbrella pine, hill towns in the haze.',
+      kbps: [415, 223], shadow: 0, wrap: 0.28, res: 0.80, hz: [10, 5], module: true,
       swatch: 'linear-gradient(180deg,#9cc4e6 0%,#dceaf2 45%,#86a957 65%,#4f7a2c 100%)' },
-    { id: 'penthouse', label: 'Neon rain', shadow: 0.40, wrap: 0.40, res: 1.0, hz: [12, 6], bloom: 0.45, module: true,
+    { id: 'penthouse', label: 'Neon rain', name: 'Neon rain',
+      blurb: 'A penthouse high over a harbour city at night under a storm: rain on the glass, neon, a floor polished to a mirror.',
+      kbps: [885, 496], shadow: 0.40, wrap: 0.40, res: 1.0, hz: [12, 6], bloom: 0.45, module: true,
       swatch: 'linear-gradient(120deg,#0b1020 0%,#3a1a45 45%,#0f4a66 100%)' }
   ];
 
@@ -104,7 +126,90 @@ var VideoScenes = (function () {
 
   function byId(id) {
     for (var i = 0; i < SCENES.length; i++) if (SCENES[i].id === id) return SCENES[i];
+    return customById(id);
+  }
+
+  // --- scenes people add -------------------------------------------------------
+  //
+  // A 360° panorama or a 3D model (glTF binary), added from Settings → Video
+  // (video-effects.js stores the file in IndexedDB) and drawn by the engine
+  // from src/scenes/custom.js. What is known about each is this list, in
+  // localStorage under `custom-scenes`, so that every document knows the ids
+  // synchronously (a stored `preset:u-…` mode must read back as a scene):
+  //
+  //   { id: 'u-' + 8 hex, kind: 'panorama' | 'model', name, bytes, added,
+  //     thumb: a small JPEG data URL, options: { yaw, pitch, fov, ... } }
+  //
+  // byId() answers for them with a catalogue entry (customEntry()), marked
+  // `custom`: never offered to a keyed peer (nobody else has the file), never
+  // mirrored, no measured upload. See docs/custom-scenes.md.
+  var CUSTOM_KEY = 'custom-scenes';
+  var CUSTOM_MAX = 12;
+  var _custom = null;
+  var _customEntries = {};
+  var _customListeners = [];
+  function validCustom(m) {
+    return m && typeof m.id === 'string' && /^u-[0-9a-f]{8}$/.test(m.id) &&
+           (m.kind === 'panorama' || m.kind === 'model') && typeof m.name === 'string';
+  }
+  function customScenes() {
+    if (_custom === null) {
+      var list;
+      try { list = JSON.parse(localStorage.getItem(CUSTOM_KEY) || '[]'); } catch (e) { list = []; }
+      _custom = Array.isArray(list) ? list.filter(validCustom).slice(0, CUSTOM_MAX) : [];
+      _customEntries = {};
+    }
+    return _custom.slice();
+  }
+  function customEntry(m) {
+    var key = m.id + '|' + (m.name || '') + '|' + (m.thumb ? m.thumb.length : 0) + '|' + JSON.stringify(m.options || {});
+    var e = _customEntries[m.id];
+    if (e && e._key === key) return e;
+    var mb = m.bytes ? (m.bytes / 1048576).toFixed(m.bytes < 10485760 ? 1 : 0) + ' MB' : '';
+    e = {
+      id: m.id, custom: true, kind: m.kind, _key: key, meta: m,
+      label: m.kind === 'model' ? '3D model' : '360° panorama',
+      name: m.name,
+      blurb: (m.kind === 'model' ? 'A 3D model you added' : 'A 360° panorama you added') +
+             (mb ? ' (' + mb + ', on this device only)' : ' (on this device only)') +
+             '. People you call get your picture with it, not the file.',
+      kbps: null,
+      shadow: m.kind === 'model' ? 0.4 : 0, wrap: 0.3, res: 1,
+      hz: [10, 5], module: true, mirror: false,
+      swatch: m.thumb ? 'url("' + m.thumb + '")' : 'linear-gradient(135deg,#2c3140 0%,#59607a 100%)'
+    };
+    _customEntries[m.id] = e;
+    return e;
+  }
+  function customById(id) {
+    var list = customScenes();
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return customEntry(list[i]);
     return null;
+  }
+  function notifyCustom() {
+    _customListeners.slice().forEach(function (fn) { try { fn(); } catch (e) { /* a listener must not break the rest */ } });
+  }
+  // Replace the list (video-effects.js does, after storing or removing a file).
+  function saveCustomScenes(list) {
+    list = (list || []).filter(validCustom).slice(0, CUSTOM_MAX);
+    try { localStorage.setItem(CUSTOM_KEY, JSON.stringify(list)); } catch (e) { throw new Error('could not save the list of your scenes', { cause: e }); }
+    _custom = null;
+    notifyCustom();
+  }
+  // Told when the list changes, in this window or another one.
+  function onCustomChange(fn) {
+    _customListeners.push(fn);
+    return function () {
+      var i = _customListeners.indexOf(fn);
+      if (i !== -1) _customListeners.splice(i, 1);
+    };
+  }
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('storage', function (e) {
+      if (e.key !== CUSTOM_KEY && e.key !== null) return;
+      _custom = null;
+      notifyCustom();
+    });
   }
 
   // A scene id from anything that might be stored: a current id, a legacy one,
@@ -293,6 +398,84 @@ var VideoScenes = (function () {
     if (cur.sideMix < want) cur.sideMix = Math.min(want, cur.sideMix + step);
     else if (cur.sideMix > want) cur.sideMix = Math.max(want, cur.sideMix - step);
     return cur;
+  }
+
+  // --- the scene's light, chosen rather than measured -----------------------
+  //
+  // By default the scene is lit to match YOU (lookFromStats() above): a dim
+  // room gets an evening. The person can choose instead (Settings → Video →
+  // Scene light, video-effects.js): a fixed time of day, the clock, or the
+  // screen's light or dark mode. What is chosen is only the look's exposure
+  // and tint — the light's side, its hardness and where you are still come
+  // from the camera — so a keyed peer, who draws the scene from the look in
+  // the offer, sees the same choice with nothing added to the protocol.
+  //
+  // Exposure is what the scenes already key their evening on (night =
+  // smoothstep(0.62, 0.28, exposure) in the engine): 0.42 is dusk, half lit;
+  // 0.25 is night, every lamp on. Tints are colours, renormalised to unit
+  // luma, inside the measured range (LOOK_TINT_MIN..MAX).
+  var LIGHTS = [
+    { id: 'morning',   label: 'Morning',   exposure: 0.95, tint: [0.97, 1.0, 1.07] },
+    { id: 'midday',    label: 'Mid-day',   exposure: 1.2,  tint: [1.0, 1.0, 1.0] },
+    { id: 'afternoon', label: 'Afternoon', exposure: 1.0,  tint: [1.07, 1.0, 0.9] },
+    { id: 'evening',   label: 'Evening',   exposure: 0.42, tint: [1.13, 0.98, 0.84] },
+    { id: 'night',     label: 'Night',     exposure: 0.25, tint: [0.92, 0.98, 1.13] }
+  ];
+  // The light of the day by the local clock: these hours hold the named
+  // light, and the hours between blend from one to the next.
+  var CLOCK = [[0, 'night'], [5.5, 'night'], [7.5, 'morning'], [10, 'morning'],
+               [12.5, 'midday'], [14.5, 'midday'], [17, 'afternoon'],
+               [19.5, 'evening'], [21.5, 'night'], [24, 'night']];
+
+  function lightById(id) {
+    for (var i = 0; i < LIGHTS.length; i++) if (LIGHTS[i].id === id) return LIGHTS[i];
+    return null;
+  }
+  function unitTint(t) {
+    var y = 0.2126 * t[0] + 0.7152 * t[1] + 0.0722 * t[2];
+    return [t[0] / y, t[1] / y, t[2] / y];
+  }
+  // The light at `hour` (0..24, fractional) of the clock: exposure blended in
+  // log space (a stop is a stop at noon and at dusk), tint linearly.
+  function lightAtHour(hour) {
+    hour = ((hour % 24) + 24) % 24;
+    for (var i = 1; i < CLOCK.length; i++) {
+      if (hour > CLOCK[i][0]) continue;
+      var a = lightById(CLOCK[i - 1][1]), b = lightById(CLOCK[i][1]);
+      var span = CLOCK[i][0] - CLOCK[i - 1][0];
+      var k = span > 0 ? (hour - CLOCK[i - 1][0]) / span : 0;
+      k = k * k * (3 - 2 * k);
+      return {
+        exposure: Math.exp(Math.log(a.exposure) * (1 - k) + Math.log(b.exposure) * k),
+        tint: unitTint([0, 1, 2].map(function (c) { return a.tint[c] * (1 - k) + b.tint[c] * k; }))
+      };
+    }
+    return { exposure: LIGHTS[4].exposure, tint: unitTint(LIGHTS[4].tint) };
+  }
+  // What the clock's light is called at `hour`: one light's id, or the two it
+  // is between ('afternoon>evening').
+  function clockLightName(hour) {
+    hour = ((hour % 24) + 24) % 24;
+    for (var i = 1; i < CLOCK.length; i++) {
+      if (hour > CLOCK[i][0]) continue;
+      var a = CLOCK[i - 1][1], b = CLOCK[i][1];
+      return a === b ? a : a + '>' + b;
+    }
+    return 'night';
+  }
+  // The chosen light as { exposure, tint }, or null for 'auto' (match the
+  // camera). `date` is the clock's now; `dark` whether the screen is in dark
+  // mode (for 'screen': a light screen is the middle of the day, a dark one
+  // the evening — the scene follows the screen it is shown beside).
+  function chosenLight(mode, date, dark) {
+    var L = lightById(mode);
+    if (L) return { exposure: L.exposure, tint: unitTint(L.tint) };
+    if (mode === 'clock') {
+      var d = date || new Date();
+      return lightAtHour(d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600);
+    }
+    if (mode === 'screen') return chosenLight(dark ? 'evening' : 'midday');
+    return null;
   }
 
   // --- the shaders ----------------------------------------------------------
@@ -4038,6 +4221,19 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     if (ENGINES[rid]) {
       try { return Promise.resolve(ENGINES[rid].create(gl, opts || {})); } catch (e) { return Promise.reject(e); }
     }
+    var cs = byId(rid);
+    if (cs && cs.custom) {
+      // A scene someone added: its file, parsed by custom.js, built by the
+      // engine. No shader to fall back to: a file that cannot be drawn is
+      // reported, and the pipeline keeps what it was showing.
+      return Promise.all([loadModule('scenes/engine.js'), loadModule('scenes/custom.js')]).then(function (ms) {
+        return ms[1].load(cs.meta).then(function (def) {
+          if (gl.isContextLost && gl.isContextLost()) throw new Error('context lost');
+          var r = ms[0].createRenderer(gl, def, opts || {});
+          return r.compile().then(function () { return r; }, function (e) { r.dispose(); throw e; });
+        });
+      });
+    }
     if (useModule(rid)) {
       return Promise.all([loadModule('scenes/engine.js'), loadModule(sceneModulePath(rid))]).then(function (ms) {
         if (gl.isContextLost && gl.isContextLost()) throw new Error('context lost');
@@ -4075,6 +4271,13 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     var rid = resolveId(id);
     if (!rid) throw new Error('unknown scene ' + id);
     if (ENGINES[rid]) return ENGINES[rid].createSync(gl, opts || {});
+    var cs = byId(rid);
+    if (cs && cs.custom) {
+      var ce = loadedModule('scenes/engine.js'), cm = loadedModule('scenes/custom.js');
+      var def = cm && cm.loaded(rid);
+      if (!ce || !def) throw new Error('scene ' + rid + ' is not loaded yet');
+      return ce.createRenderer(gl, def, opts || {});
+    }
     if (useModule(rid)) {
       var eng = loadedModule('scenes/engine.js'), mod = loadedModule(sceneModulePath(rid));
       if (!eng || !mod) throw new Error('scene ' + rid + ' is not loaded yet');
@@ -4323,6 +4526,17 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     isSoftwareGL: isSoftwareGL,
     THUMB_TIME: THUMB_TIME,
     defaultLook: defaultLook,
+    LIGHTS: LIGHTS,
+    CUSTOM_KEY: CUSTOM_KEY,
+    CUSTOM_MAX: CUSTOM_MAX,
+    customScenes: customScenes,
+    saveCustomScenes: saveCustomScenes,
+    onCustomChange: onCustomChange,
+    // The scene module that parses them, once loaded (forget() after a removal).
+    customModule: function () { return loadModule('scenes/custom.js'); },
+    lightAtHour: lightAtHour,
+    clockLightName: clockLightName,
+    chosenLight: chosenLight,
     measureSubject: measureSubject,
     lookFromStats: lookFromStats,
     easeLook: easeLook,

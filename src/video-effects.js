@@ -312,25 +312,48 @@ var VideoEffects = (function () {
   // landscapes are the most expensive thing the page draws, and sixty per cent
   // of the pixels of a backdrop nobody is looking at closely is plenty.
   var SCENE_LONG = IS_MOBILE ? 384 : 512;
-  // …and how much bigger than that it starts. Whatever moves in a scene (a
-  // palm, the water's edge) is not added up over redraws (see resolveScene()),
-  // so it shows exactly as sharp as one redraw is: at 512 that is a third of a
-  // 720p picture, stretched, and it reads as standard definition. So the
-  // buffer starts above SCENE_LONG and the governor walks it down, after
-  // segmentation and before the scene's redraw rate, on a device that cannot
-  // keep up. A phone starts nearer to SCENE_LONG: it has less to spend.
-  var SCENE_SCALE = IS_MOBILE ? [1.25, 1] : [1.5, 1];
-  var SCENE_SCALE_MAX = 2.25;   // 1152 long: what a 1920 picture asks for
-  function sceneScaleLadder(long) {
-    if (IS_MOBILE) return SCENE_SCALE.slice();
-    var top = Math.min(SCENE_SCALE_MAX, Math.max(SCENE_SCALE[0], 0.6 * long / SCENE_LONG));
-    return top > SCENE_SCALE[0] + 0.01 ? [top, SCENE_SCALE[0], 1] : SCENE_SCALE.slice();
+  // …and the scene is drawn at the picture's OWN size to begin with, phone or
+  // computer. Whatever moves in a scene (a palm, the water's edge, the rain) is
+  // not added up over redraws (see resolveScene()), so it shows exactly as
+  // sharp as one redraw is; the engine's scenes are multisampled and cheap
+  // enough (about a millisecond a redraw on an M-series GPU) that nothing is
+  // gained by drawing them smaller where the device can afford it. Where it
+  // cannot, the governor walks the buffer down these rungs (multiples of
+  // SCENE_LONG), after segmentation and before the scene's redraw rate.
+  //
+  // A software rasteriser (SwiftShader in a VM, a blocklisted driver — and the
+  // tests) draws on the CPU the call also needs: there the scene starts where
+  // it always did, below the picture's size and at the catalogue's `res`
+  // (SCENE_SCALE_SOFT, and about 0.6 of a Full HD picture's long side).
+  var SCENE_SCALE = IS_MOBILE ? [2, 1.25, 1] : [2.25, 1.5, 1];
+  var SCENE_SCALE_SOFT = IS_MOBILE ? [1.25, 1] : [1.5, 1];
+  var SCENE_SCALE_MAX = 2.25;   // 1152 long: the first rung below a 1080p picture
+  // The ladder for a picture whose long side is `long`: its own size, then the
+  // rungs below it.
+  function sceneScaleLadder(long, rungs, software) {
+    if (software) {
+      if (rungs) return rungs.slice();
+      if (IS_MOBILE) return SCENE_SCALE_SOFT.slice();
+      var soft = Math.min(SCENE_SCALE_MAX, Math.max(SCENE_SCALE_SOFT[0], 0.6 * long / SCENE_LONG));
+      return soft > SCENE_SCALE_SOFT[0] + 0.01 ? [soft].concat(SCENE_SCALE_SOFT) : SCENE_SCALE_SOFT.slice();
+    }
+    var top = Math.max(1, long / SCENE_LONG);
+    var out = [top];
+    (rungs || SCENE_SCALE).forEach(function (r) { if (r < top - 0.01) out.push(r); });
+    return out;
   }
-  // A keyed peer's scene, drawn here (KeyInProcessor), always starts at the
-  // top, phone or not: it is somebody's whole background on this screen, and
-  // drawn small it reads as standard definition behind a person in HD. Only
-  // the receiver's own frame budget walks it down (noteDraw()).
-  var KEYIN_SCENE_SCALE = [SCENE_SCALE_MAX, SCENE_SCALE[0], 1];
+  // A keyed peer's scene, drawn here (KeyInProcessor), starts at the top too:
+  // it is somebody's whole background on this screen. Only the receiver's own
+  // frame budget walks it down (noteDraw()). On a software rasteriser, from
+  // these rungs alone.
+  var KEYIN_SCENE_SCALE = [SCENE_SCALE_MAX, SCENE_SCALE_SOFT[0], 1];
+  // Whether a pipeline's context is a software rasteriser, for the ladders
+  // above and sceneBufferSize(). The tests run on one: __voxalSceneHardware
+  // lets them take the hardware path anyway.
+  function softwareScenes(gl) {
+    if (typeof window !== 'undefined' && window.__voxalSceneHardware) return false;
+    try { return VideoScenes.isSoftwareGL(gl); } catch (e) { return false; }
+  }
   // How often the scene itself is redrawn. Its motion is slow by design, and a
   // background that changes on every frame is one the encoder pays for on every
   // frame — so it runs well under the camera's rate, and halves under load
@@ -713,6 +736,77 @@ var VideoEffects = (function () {
     return q;
   }
 
+  // --- the scene's light ------------------------------------------------------
+  //
+  // Settings → Video → Scene light: 'auto' (absent: match my room, the light
+  // the camera measures on you — what scenes have always done), a fixed time of
+  // day (VideoScenes.LIGHTS), 'clock' (the light of the local hour) or 'screen'
+  // (light mode a bright day, dark mode the evening). Only the look's exposure
+  // and tint are chosen (VideoScenes.chosenLight()); the camera pipeline puts
+  // them into the look it draws and offers (fixLight()), and the preview draws
+  // with them too. Read on every redraw, so it is cached here and refreshed by
+  // the `storage` event a write in another window raises.
+  var SCENE_LIGHT_KEY = 'scene-light';
+  var SCENE_LIGHT_MODES = ['auto'].concat(VideoScenes.LIGHTS.map(function (l) { return l.id; }), ['clock', 'screen']);
+  var _sceneLight = null;            // the stored mode, once read
+  var _sceneLightViews = [];         // renderSceneLight() controls, to re-sync
+  var _sceneLightCache = { at: 0, mode: null, dark: null, light: null };
+
+  function normalizeSceneLight(m) {
+    return SCENE_LIGHT_MODES.indexOf(m) === -1 ? 'auto' : m;
+  }
+  function readSceneLight() {
+    if (_sceneLight === null) {
+      try { _sceneLight = normalizeSceneLight(localStorage.getItem(SCENE_LIGHT_KEY)); }
+      catch (e) { _sceneLight = 'auto'; }
+    }
+    return _sceneLight;
+  }
+  function writeSceneLight(m) {
+    m = normalizeSceneLight(m);
+    _sceneLight = m;
+    _sceneLightCache.at = 0;
+    try {
+      if (m === 'auto') localStorage.removeItem(SCENE_LIGHT_KEY);
+      else localStorage.setItem(SCENE_LIGHT_KEY, m);
+    } catch (e) { /* private mode — it still applies for this session */ }
+    _sceneLightViews.forEach(function (v) { try { v.sync(m); } catch (e) { /* gone */ } });
+    return m;
+  }
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('storage', function (e) {
+      if (e.key !== SCENE_LIGHT_KEY && e.key !== null) return;
+      _sceneLight = null;
+      _sceneLightCache.at = 0;
+      var m = readSceneLight();
+      _sceneLightViews.forEach(function (v) { try { v.sync(m); } catch (err) { /* gone */ } });
+    });
+  }
+  // Whether the page is in dark mode: the app's own theme (`data-theme` on
+  // <html>, dark by default), or the system's where it is set to follow it.
+  function screenIsDark() {
+    try {
+      var t = document.documentElement.getAttribute('data-theme') || 'dark';
+      if (t === 'system') return !(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+      return t !== 'light';
+    } catch (e) { return true; }
+  }
+  // The chosen { exposure, tint }, or null to match the camera. Worked out at
+  // most once a second (the clock and the theme change slowly); `now` is a
+  // performance.now()-style time, `date` a Date (both optional, for tests).
+  function sceneLight(now, date) {
+    var mode = readSceneLight();
+    if (mode === 'auto') return null;
+    var c = _sceneLightCache;
+    now = now == null ? Date.now() : now;
+    var dark = mode === 'screen' ? screenIsDark() : null;
+    if (c.mode !== mode || c.dark !== dark || date || !c.light || now - c.at > 1000 || now < c.at) {
+      c.mode = mode; c.dark = dark; c.at = now;
+      c.light = VideoScenes.chosenLight(mode, date || new Date(), dark);
+    }
+    return c.light;
+  }
+
   // A copy, always: the returned array becomes a processor's mutable ladder
   // position, and handing out the shared constant would let one call's
   // step-down rewrite the table for every later one.
@@ -1037,6 +1131,141 @@ var VideoEffects = (function () {
         }, 'image/jpeg', 0.86);
       });
     });
+  }
+
+  // --- scenes people add (a 360° panorama, a 3D model) ---------------------
+  //
+  // The file goes into the same IndexedDB store as the custom image, under
+  // 'scene:<id>'; what is known about it goes into VideoScenes' list
+  // (`custom-scenes` in localStorage), which every document reads. Adding one
+  // DRAWS it once, off screen, before it is kept: that is its thumbnail, and
+  // the proof that this device can draw it (a file that cannot be drawn is
+  // refused rather than offered as a chip that fails). See
+  // docs/custom-scenes.md and src/scenes/custom.js.
+  var SCENE_MODEL_MAX_BYTES = 64 * 1048576;
+  var SCENE_PANO_MAX_W = 8192;
+  var SCENE_PANO_RATIO = [1.8, 2.2];          // an equirectangular picture is 2:1
+  var SCENE_THUMB = [320, 180];
+
+  // A refusal the picker can put in words (`code`).
+  function sceneError(code, message) {
+    var e = new Error(message);
+    e.code = code;
+    return e;
+  }
+  function newSceneId() {
+    var b = new Uint8Array(4);
+    (window.crypto || window.msCrypto).getRandomValues(b);
+    return 'u-' + Array.prototype.map.call(b, function (x) { return ('0' + x.toString(16)).slice(-2); }).join('');
+  }
+  function sceneName(file) {
+    var n = String(file && file.name || '').replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
+    return (n || 'My scene').slice(0, 40);
+  }
+  function isModelFile(file) {
+    return /\.glb$/i.test(file.name || '') || file.type === 'model/gltf-binary';
+  }
+
+  // The file as it will be stored: a panorama re-encoded at most 8192 wide (a
+  // camera picture never needs more), a model as it is once its header says
+  // it is a glTF binary.
+  function prepareSceneFile(file) {
+    if (isModelFile(file)) {
+      if (file.size > SCENE_MODEL_MAX_BYTES) return Promise.reject(sceneError('too-big', 'model over 64 MB'));
+      return file.slice(0, 4).arrayBuffer().then(function (head) {
+        var m = new Uint8Array(head);
+        // 'glTF', the binary container's magic.
+        if (m[0] !== 0x67 || m[1] !== 0x6c || m[2] !== 0x54 || m[3] !== 0x46) throw sceneError('not-glb', 'not a glTF binary');
+        return { kind: 'model', blob: file };
+      });
+    }
+    return loadBitmap(file).then(function (bmp) {
+      var ratio = bmp.width / bmp.height;
+      if (ratio < SCENE_PANO_RATIO[0] || ratio > SCENE_PANO_RATIO[1]) {
+        if (bmp.close) try { bmp.close(); } catch (e) { /* ignore */ }
+        throw sceneError('not-panorama', 'not a 2:1 panorama');
+      }
+      var w = Math.min(SCENE_PANO_MAX_W, bmp.width), h = Math.round(w / ratio);
+      var c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(bmp, 0, 0, w, h);
+      if (bmp.close) try { bmp.close(); } catch (e) { /* ignore */ }
+      return new Promise(function (resolve, reject) {
+        c.toBlob(function (blob) {
+          if (!blob) { reject(sceneError('unreadable', 'could not encode the picture')); return; }
+          resolve({ kind: 'panorama', blob: blob });
+        }, 'image/jpeg', 0.92);
+      });
+    }, function () { throw sceneError('unreadable', 'not a picture this browser can read'); });
+  }
+
+  // Draw a stored scene once, off screen, as a small JPEG data URL.
+  function sceneThumbnail(id) {
+    var c = document.createElement('canvas');
+    c.width = SCENE_THUMB[0]; c.height = SCENE_THUMB[1];
+    var gl = null;
+    try { gl = c.getContext('webgl2', { alpha: false, antialias: false, preserveDrawingBuffer: true }); } catch (e) { gl = null; }
+    if (!gl) return Promise.reject(sceneError('no-gl', 'WebGL2 unavailable'));
+    function done() {
+      VideoScenes.releaseContext(gl);
+      try { var lose = gl.getExtension('WEBGL_lose_context'); if (lose) lose.loseContext(); } catch (e) { /* lost */ }
+    }
+    return VideoScenes.createRenderer(gl, id, { quality: 'preview', mobile: IS_MOBILE }).then(function (r) {
+      var look = VideoScenes.defaultLook();
+      look.dirX = 0.6; look.cx = 0.5; look.cy = 3; look.sx = 0.01; look.sy = 0.01;
+      try { r.draw(null, c.width, c.height, VideoScenes.THUMB_TIME, look, null, null); } finally { r.dispose(); }
+      var url = c.toDataURL('image/jpeg', 0.8);
+      done();
+      return url;
+    }, function (e) { done(); throw e; });
+  }
+
+  function addCustomScene(file) {
+    if (!file) return Promise.reject(sceneError('unreadable', 'no file'));
+    var list = VideoScenes.customScenes();
+    if (list.length >= VideoScenes.CUSTOM_MAX) return Promise.reject(sceneError('full', 'too many scenes'));
+    var id = newSceneId();
+    var meta = null;
+    return prepareSceneFile(file).then(function (prep) {
+      meta = { id: id, kind: prep.kind, name: sceneName(file), bytes: prep.blob.size, added: Date.now(), options: {} };
+      return idbOp('readwrite', function (store) { return store.put(prep.blob, 'scene:' + id); });
+    }).then(function () {
+      // Listed first, so that the draw below finds it; withdrawn if it fails.
+      VideoScenes.saveCustomScenes(VideoScenes.customScenes().concat([meta]));
+      return sceneThumbnail(id).catch(function (e) {
+        throw sceneError('draw-failed', 'could not draw it: ' + (e && e.message ? e.message : e));
+      });
+    }).then(function (thumb) {
+      var now = VideoScenes.customScenes().map(function (m) {
+        return m.id === id ? Object.assign({}, m, { thumb: thumb }) : m;
+      });
+      VideoScenes.saveCustomScenes(now);
+      meta.thumb = thumb;
+      return meta;
+    }).catch(function (e) {
+      if (meta) removeCustomScene(id);
+      throw e;
+    });
+  }
+
+  function removeCustomScene(id) {
+    VideoScenes.saveCustomScenes(VideoScenes.customScenes().filter(function (m) { return m.id !== id; }));
+    VideoScenes.customModule().then(function (m) { m.forget(id); }, function () { /* never loaded */ });
+    return idbOp('readwrite', function (store) { return store.delete('scene:' + id); })
+      .catch(function () { return null; });
+  }
+
+  // Change what is known about a scene (its name, its options: a panorama's
+  // view). The parsed file is forgotten, so the next draw builds it anew.
+  function updateCustomScene(id, changes) {
+    var list = VideoScenes.customScenes().map(function (m) {
+      if (m.id !== id) return m;
+      var n = Object.assign({}, m, changes);
+      if (changes.options) n.options = Object.assign({}, m.options || {}, changes.options);
+      return n;
+    });
+    VideoScenes.saveCustomScenes(list);
+    return VideoScenes.customModule().then(function (m) { m.forget(id); }, function () { /* never loaded */ });
   }
 
   function loadBitmap(src) {
@@ -2269,11 +2498,6 @@ var VideoEffects = (function () {
     var size = this.sizeFromTrack();
     this.canvas.width = size.w;
     this.canvas.height = size.h;
-    // The scene buffer's ladder follows the picture: about 0.6 of its long
-    // side at the top, so a Full HD camera gets a bigger buffer than a 720p
-    // one, then 1.5x and SCENE_LONG as the governor steps down. Only while
-    // nothing has been stepped (a rotation rebuilds this and must not forget).
-    if (!this.sceneScaleStep) this.sceneScaleSteps = sceneScaleLadder(Math.max(size.w, size.h));
 
     // Not desynchronized: the canvas is never in the DOM, so the low-latency
     // path has nothing to make faster, and the keyed copy (keyedTrack()) reads
@@ -2290,6 +2514,12 @@ var VideoEffects = (function () {
     if (!gl) throw new Error('WebGL2 unavailable');
     this.gl = gl;
     fullScreenTriangle(gl, this);
+    // The scene buffer's ladder follows the picture: its own size at the top
+    // (on a GPU), then SCENE_SCALE's rungs as the governor steps down. Only
+    // while nothing has been stepped (a rotation rebuilds this and must not
+    // forget).
+    this.softwareGL = softwareScenes(gl);
+    if (!this.sceneScaleStep) this.sceneScaleSteps = sceneScaleLadder(Math.max(size.w, size.h), null, this.softwareGL);
 
     this.pDown = program(gl, FRAG_DOWNSAMPLE);
     this.pBlur = program(gl, FRAG_BLUR);
@@ -2761,9 +2991,12 @@ var VideoEffects = (function () {
     if (!id) throw new Error('unknown scene');
     var want = VideoScenes.byId(id);
     var cw = this.canvas.width, ch = this.canvas.height;
+    // The renderer first: what draws the scene decides its buffer (an engine
+    // scene is drawn whole; the ray-marched fallback at its `res`).
+    if (!this.sceneRenderers[id]) this.sceneRenderers[id] = VideoScenes.createRendererSync(gl, id, this.sceneOpts());
     var scale = this.sceneScaleSteps ? this.sceneScaleSteps[this.sceneScaleStep] : 1;
-    var k = Math.min(1, SCENE_LONG * scale * (want.res || 1) / Math.max(cw, ch));
-    var nw = Math.max(2, Math.round(cw * k)), nh = Math.max(2, Math.round(ch * k));
+    var size = sceneBufferSize(cw, ch, scale, want, this.sceneRenderers[id].engine, this.softwareGL);
+    var nw = size[0], nh = size[1];
     if (this.texScene && (nw !== this.sceneW || nh !== this.sceneH)) {
       // Another scene, another size: the buffers follow it.
       try { gl.deleteTexture(this.texScene); } catch (e) { /* ignore */ }
@@ -2805,7 +3038,6 @@ var VideoEffects = (function () {
     }
     // Another scene (or the same one, picked again) starts its picture over.
     this.sceneAge = 0;
-    if (!this.sceneRenderers[id]) this.sceneRenderers[id] = VideoScenes.createRendererSync(gl, id, this.sceneOpts());
     this.sceneId = id;
     this.scene = want;
     // Each scene brings its own redraw rate; a new one starts at the top of
@@ -2877,11 +3109,32 @@ var VideoEffects = (function () {
     return !this.lastScene || (now - this.lastScene) >= 1000 / hz;
   };
 
+  // The scene's light, when the person chose one (sceneLight()): its exposure
+  // and tint replace the measured ones in the look this pipeline draws AND
+  // offers (keyedSnapshot() reads lookTarget), so a keyed peer draws the same
+  // choice. The first time, before the camera has measured anything, it is
+  // taken whole, so a pick does not fade in from the default day; a change in
+  // the middle of a call eases in like any change of light. Not for a keyed
+  // receiver (it has no fixLight): it draws the SENDER's look.
+  Processor.prototype.fixLight = function () {
+    var L = sceneLight();
+    if (!L) return;
+    var t = this.lookTarget;
+    t.exposure = L.exposure;
+    t.tint = L.tint.slice();
+    if (!this.look.measured && !this.lightTaken) {
+      this.look.exposure = L.exposure;
+      this.look.tint = L.tint.slice();
+      this.lightTaken = true;
+    }
+  };
+
   // Ease the look every frame; redraw the scene at its own, lower rate.
   Processor.prototype.drawScene = function (now) {
     var gl = this.gl;
     var dt = this.lastDraw ? (now - this.lastDraw) / 1000 : 0;
     this.lastDraw = now;
+    if (this.fixLight) this.fixLight();
     VideoScenes.easeLook(this.look, this.lookTarget, Math.min(dt, 0.5));
     var hz = this.sceneHzSteps[this.sceneStep];
     if (this.lastScene && (now - this.lastScene) < 1000 / hz) return;
@@ -2892,11 +3145,41 @@ var VideoEffects = (function () {
     // frame is the picture that was picked.
     var t = VideoScenes.THUMB_TIME + (now - this.sceneStart) / 1000;
     var at = this.texSceneOut ? VideoScenes.JITTER[this.sceneLook++ % VideoScenes.JITTER.length] : null;
+    // What a redraw costs, for sceneStats(): the GPU's own time where the
+    // browser can say (a query, read a few frames later), and the time this
+    // thread spends issuing it everywhere.
+    if (!this.sceneTimer || this.sceneTimer.gl !== gl) this.sceneTimer = gpuTimer(gl);
+    var timing = this.sceneTimer && this.sceneTimer.begin();
+    var c0 = performance.now();
     r.draw(this.fbScene, this.sceneW, this.sceneH, t, this.look,
            at ? { jitter: at, detail: this.canvas.height } : null, this.sceneView());
     gl.bindTexture(gl.TEXTURE_2D, this.texScene);
     gl.generateMipmap(gl.TEXTURE_2D);
     if (at) this.resolveScene(at);
+    if (timing) this.sceneTimer.end();
+    this.sceneCpuMs = easeMs(this.sceneCpuMs, performance.now() - c0);
+    if (this.sceneTimer) this.sceneGpuMs = this.sceneTimer.poll();
+  };
+
+  // What the scene costs this pipeline right now, for the settings' cost line
+  // (VideoEffects.sceneStats()). Null without a scene.
+  Processor.prototype.sceneStats = function () {
+    if (!this.sceneId || !this.scene) return null;
+    var hz = this.sceneHzSteps || [];
+    return {
+      id: this.sceneId,
+      buffer: [this.sceneW, this.sceneH],
+      picture: [this.canvas.width, this.canvas.height],
+      hz: hz[this.sceneStep] || 0,
+      hzTop: hz[0] || 0,
+      // Walked down by the governor (resolution or redraw rate) on a device
+      // that could not keep up.
+      stepped: !!(this.sceneScaleStep || this.sceneStep),
+      gpuMs: this.sceneGpuMs == null ? null : this.sceneGpuMs,
+      cpuMs: this.sceneCpuMs == null ? null : this.sceneCpuMs,
+      fps: this.achievedFps || null,
+      targetFps: this.targetFps()
+    };
   };
 
   // Add the redraw just made to the scene's picture at the camera's size: one
@@ -2944,6 +3227,7 @@ var VideoEffects = (function () {
       var stats = VideoScenes.measureSubject(rgba, pw, ph, grid, this.lookPrev);
       this.lookPrev = grid;
       this.lookTarget = VideoScenes.lookFromStats(stats, this.lookTarget);
+      this.fixLight();
       if (this.keyed) this.keyedLook(rgba, grid, pw * ph, now);
     } catch (e) { /* a frame that cannot be read leaves the last look standing */ }
   };
@@ -3501,6 +3785,8 @@ var VideoEffects = (function () {
     if (k && k.failed) return 'self-check';
     if (k && k.slow) return 'slow-copy';
     if (this.mode.indexOf('preset:') !== 0) return 'mode';
+    // A scene somebody added is a file only this device has.
+    if (this.scene && this.scene.custom) return 'custom';
     if (!this.sceneId) return this.sceneCompiling ? 'compiling' : 'mode';
     if (this.keyGreen) return 'green';
     if (this.keyCorner) return 'corner';
@@ -3699,6 +3985,7 @@ var VideoEffects = (function () {
     var achieved = this.frames * 1000 / elapsed;
     this.frames = 0;
     this.windowStart = now;
+    this.achievedFps = achieved;
 
     if (achieved >= this.targetFps() * 0.6) { this.slowWindows = 0; return; }
     this.slowWindows++;
@@ -4012,7 +4299,7 @@ var VideoEffects = (function () {
     this.sceneLook = 0;
     this.sceneHzSteps = SCENE_HZ.slice();
     this.sceneStep = 0;
-    this.sceneScaleSteps = KEYIN_SCENE_SCALE.slice();
+    this.sceneScaleSteps = KEYIN_SCENE_SCALE.slice();   // until the picture's size is known
     this.sceneScaleStep = 0;
     this.lastScene = 0;
     this.lastDraw = 0;
@@ -4176,6 +4463,8 @@ var VideoEffects = (function () {
     if (!gl) throw new Error('WebGL2 unavailable');
     this.gl = gl;
     fullScreenTriangle(gl, this);
+    this.softwareGL = softwareScenes(gl);
+    if (!this.sceneScaleStep) this.sceneScaleSteps = sceneScaleLadder(Math.max(out.w, out.h), KEYIN_SCENE_SCALE, this.softwareGL);
     this.pKeyMask = program(gl, FRAG_KEY_MASK);
     this.pKeyComp = program(gl, FRAG_KEYIN);
     this.pFeather = program(gl, FRAG_FEATHER);
@@ -4200,6 +4489,7 @@ var VideoEffects = (function () {
     var out = this.outputSize(w, h);
     this.canvas.width = out.w;
     this.canvas.height = out.h;
+    if (!this.sceneScaleStep) this.sceneScaleSteps = sceneScaleLadder(Math.max(out.w, out.h), KEYIN_SCENE_SCALE, this.softwareGL);
     var seg = segSizeFor(w, h);
     if (seg.width !== this.segW || seg.height !== this.segH) {
       this.segW = seg.width;
@@ -4884,6 +5174,11 @@ var VideoEffects = (function () {
   function onReferenceState(fn) { _onReference = fn; }
 
   function active() { return _active; }
+  // The camera pipeline's scene and what it costs (Processor.sceneStats()), or
+  // null when this document runs no camera with a scene.
+  function sceneStats() {
+    try { return _active && _active.sceneStats ? _active.sceneStats() : null; } catch (e) { return null; }
+  }
 
   function onOverload(fn) { _onOverload = fn; }
 
@@ -5028,6 +5323,53 @@ var VideoEffects = (function () {
     return b;
   }
 
+  // An exponential average of a cost in milliseconds; the first reading is
+  // taken whole.
+  function easeMs(prev, v) { return prev == null ? v : prev * 0.85 + v * 0.15; }
+
+  // Times GPU work where the browser lets a page do so
+  // (EXT_disjoint_timer_query_webgl2: Chromium on a computer; not Safari, and
+  // not most phones). A result is read a few frames after the work, never
+  // waited for, so begin()/end() cost nothing the frame would notice. Returns
+  // null where there is no such extension: the caller falls back to timing
+  // its own thread, and says so.
+  function gpuTimer(gl) {
+    var ext = null;
+    try { ext = gl.getExtension('EXT_disjoint_timer_query_webgl2'); } catch (e) { ext = null; }
+    if (!ext) return null;
+    var pending = [], open = null, ms = null;
+    return {
+      gl: gl,
+      begin: function () {
+        // One query at a time per target, and a few in flight at most: a GPU
+        // that falls behind is measured less often, not queued up.
+        if (open || pending.length >= 3) return false;
+        try { open = gl.createQuery(); gl.beginQuery(ext.TIME_ELAPSED_EXT, open); } catch (e) { open = null; return false; }
+        return true;
+      },
+      end: function () {
+        if (!open) return;
+        try { gl.endQuery(ext.TIME_ELAPSED_EXT); pending.push(open); } catch (e) { /* lost */ }
+        open = null;
+      },
+      poll: function () {
+        try {
+          // A disjoint event (the GPU's clock jumped: power state, another
+          // app) spoils every result in flight.
+          var disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT);
+          while (pending.length) {
+            var q = pending[0];
+            if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
+            pending.shift();
+            if (!disjoint) ms = easeMs(ms, gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6);
+            gl.deleteQuery(q);
+          }
+        } catch (e) { /* lost */ }
+        return ms;
+      }
+    };
+  }
+
   // --- Looking around a scene with the mouse ----------------------------------
   //
   // A phone turns its scene with the phone (setTilt()); a computer has no sensor,
@@ -5047,6 +5389,7 @@ var VideoEffects = (function () {
   var ORBIT_SLOP = 4;         // px of travel that makes a press a drag (a click still pins a tile)
   var ORBIT_KEY_STEP = 3 * Math.PI / 180;
   var ORBIT_RECENTRE_MS = 260;
+  var ORBIT_DOUBLE_TAP_MS = 320;   // a finger has no dblclick worth the name
 
   function orbitSoften(a, max) {
     var k = ORBIT_KNEE * max, m = Math.abs(a);
@@ -5074,6 +5417,7 @@ var VideoEffects = (function () {
     var swallow = 0;
     var anim = 0;
     var hover = false;
+    var lastTap = 0;
 
     function on() {
       try { return opts.enabled ? !!opts.enabled() : true; } catch (e) { return false; }
@@ -5151,10 +5495,17 @@ var VideoEffects = (function () {
       el.classList.remove('orbit-drag');
       try { if (drag) el.releasePointerCapture(drag.id); } catch (err) { /* already released */ }
     }
-    function onUp() {
+    function onUp(e) {
       var was = drag && drag.active;
       end();
       drag = null;
+      // Two taps of a finger in quick succession recentre, as a double-click
+      // does: mobile browsers do not reliably send dblclick to a page.
+      if (!was && e && e.pointerType === 'touch') {
+        var t = Date.now();
+        if (t - lastTap < ORBIT_DOUBLE_TAP_MS) { lastTap = 0; if (on()) reset(true); }
+        else lastTap = t;
+      }
       // The click that follows a drag belongs to the drag, not to whatever the
       // tile does with a click. It may never come (the pointer moved off), so
       // the flag expires on its own.
@@ -5224,22 +5575,70 @@ var VideoEffects = (function () {
 
   // --- The background on its own ----------------------------------------------
   //
-  // The picker shows five stills and the camera shows YOU in front of one; there
-  // was nowhere to just look at the room. This draws the chosen scene alone — no
-  // camera, no person, no segmentation — in Settings, and lets you turn it with
-  // the mouse (the same attachOrbit() the live camera uses), so a scene can be
-  // judged before a call and its look-around tried on its own.
+  // The picker shows small stills and the camera shows YOU in front of one;
+  // there was nowhere to just look at the room. This draws the chosen scene
+  // alone — no camera, no segmentation — in Settings, and lets you turn it with
+  // the mouse or a finger (the same attachOrbit() the live camera uses), so a
+  // scene can be judged before a call and its look-around tried on its own.
+  // The full-window button takes the picture out of the card and over the
+  // whole window, at the window's own shape — upright on a phone, as the
+  // camera would send it — with the scenes at the top right, one click each,
+  // and the scene light under them.
   //
-  // It works only while it is on screen: a scene is a ray-marched shader, and one
-  // that nobody can see is a GPU spent on nothing (Settings is also open over a
-  // running call). Its WebGL context is released the moment it stops — a page may
-  // hold only a handful, and the camera pipeline needs one.
+  // Under it: the scene's name, what is in it, and what it costs. Upload is
+  // the encoder's measured price (`kbps` in the catalogue); the cost on THIS
+  // device is measured here, every couple of seconds, by drawing one redraw at
+  // the size a 720p call draws it (see measure()); in a call, the camera
+  // pipeline's own numbers are shown as well (sceneStats(), and opts.live()).
+  //
+  // It works only while it is on screen: a scene that nobody can see is a GPU
+  // spent on nothing (Settings is also open over a running call). Its WebGL
+  // context is released the moment it stops — a page may hold only a handful,
+  // and the camera pipeline needs one.
   var PREVIEW_FPS = 20;
-  var PREVIEW_MAX_W = 960;
+  var PREVIEW_FULL_FPS = 30;
+  var PREVIEW_MAX_W = 960;          // device pixels, in the settings card
+  var PREVIEW_FULL_LONG = 2560;     // device pixels, the long side, full window
+  var PREVIEW_PROBE_MS = 2000;      // how often the cost on this device is re-measured
+  var PREVIEW_INFO_MS = 1000;
+  // The camera size the cost on this device is measured for: what a call
+  // sends without Full HD.
+  var PREVIEW_CALL_SIZE = [1280, 720];
 
-  // Returns { sync(), destroy(), orbit }.
-  function renderScenePreview(el) {
+  // The buffer a scene is redrawn into for a camera picture of cw x ch, at
+  // `scale` on the pipeline's ladder, by `engine` (the renderer's: 'three',
+  // or 'shader' for the ray-marched fallback, which is drawn at its catalogue
+  // `res`). ensureScene() allocates exactly this.
+  function sceneBufferSize(cw, ch, scale, sc, engine, software) {
+    var res = engine === 'shader' || software ? ((sc && sc.res) || 1) : 1;
+    var k = Math.min(1, SCENE_LONG * scale * res / Math.max(cw, ch));
+    return [Math.max(2, Math.round(cw * k)), Math.max(2, Math.round(ch * k))];
+  }
+
+  function fmtMs(v) { return v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toFixed(2); }
+  function fmtBps(bps) {
+    if (!(bps > 0)) return '0 kb/s';
+    return bps >= 1e6 ? (bps / 1e6).toFixed(1) + ' Mb/s' : Math.round(bps / 1000) + ' kb/s';
+  }
+  // A share of one second of a processor's time, from a cost per redraw and
+  // the redraws a second.
+  function fmtShare(ms, hz) {
+    var pct = ms * hz / 10;
+    return pct < 1 ? 'under 1%' : pct < 10 ? pct.toFixed(1) + '%' : Math.round(pct) + '%';
+  }
+
+  var EXPAND_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>';
+  var CLOSE_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" ' +
+    'stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+
+  // opts: { live()       — { sendingBps } of this window's call, or null
+  //         onPick(mode) — a scene picked in the full window (default: writeMode) }
+  // Returns { sync(), destroy(), orbit, setFull(on), isFull(), cost() }.
+  function renderScenePreview(el, opts) {
     if (!el) return null;
+    opts = opts || {};
     el.innerHTML = '';
     el.classList.add('scene-preview');
 
@@ -5255,53 +5654,158 @@ var VideoEffects = (function () {
 
     var hud = document.createElement('div');
     hud.className = 'scene-preview-hud hidden';
+    // The full window's line about the scene: its name and what it costs.
+    var hudText = document.createElement('span');
+    hudText.className = 'scene-preview-hud-text';
+    var title = document.createElement('span');
+    title.className = 'scene-preview-title hidden';
+    var titleName = document.createElement('strong');
+    var titleCost = document.createElement('span');
+    title.appendChild(titleName);
+    title.appendChild(titleCost);
     var hint = document.createElement('span');
     hint.className = 'scene-preview-hint';
-    // A finger on this card is a scroll, not a turn (a phone turns its camera
-    // scenes with its sensor), so only a pointer that can really drag says so.
+    hudText.appendChild(title);
+    hudText.appendChild(hint);
     var fine;
     try { fine = !window.matchMedia || window.matchMedia('(pointer: fine)').matches; } catch (e) { fine = true; }
-    hint.textContent = fine ? 'Drag to look around \u00b7 double-click to recentre' : 'Preview';
-    var recentre = document.createElement('button');
-    recentre.type = 'button';
-    recentre.className = 'scene-preview-recentre hidden';
-    recentre.textContent = 'Recentre';
-    hud.appendChild(hint);
-    hud.appendChild(recentre);
+    function hintText() {
+      return fine ? 'Drag to look around · double-click to recentre'
+                  : (full ? 'Drag to look around · double-tap to recentre' : 'Swipe sideways to look around');
+    }
+    var buttons = document.createElement('span');
+    buttons.className = 'scene-preview-buttons';
+    function hudButton(cls, text, label, host) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'scene-preview-btn ' + cls;
+      b.textContent = text;
+      if (label) { b.setAttribute('aria-label', label); b.title = label; }
+      // A real button inside the drag surface keeps its own press.
+      b.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+      (host || buttons).appendChild(b);
+      return b;
+    }
+    // A panorama you added: make the way you are looking its starting view.
+    var keepView = hudButton('scene-preview-keep hidden', 'Keep this view', 'Start this panorama looking this way');
+    var fullBtn = hudButton('scene-preview-icon scene-preview-full', '', 'Show the scene over the whole window');
+    fullBtn.innerHTML = EXPAND_SVG;
+    hud.appendChild(hudText);
+    hud.appendChild(buttons);
+
+    // The full window's top: a close button on the left; on the right the
+    // scenes, one click each, and the scene light under them (the same
+    // setting as Settings → Video → Scene light, out of reach from here).
+    var closeBtn = hudButton('scene-preview-icon scene-preview-close hidden', '', 'Back to Settings', stage);
+    closeBtn.innerHTML = CLOSE_SVG;
+    var side = document.createElement('div');
+    side.className = 'scene-preview-side hidden';
+    side.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+    var pickHost = document.createElement('div');
+    pickHost.className = 'scene-preview-scenes';
+    var lightHost = document.createElement('div');
+    lightHost.className = 'scene-preview-light';
+    side.appendChild(pickHost);
+    side.appendChild(lightHost);
+    var lightView = renderSceneLight(lightHost, { compact: true });
+    var picker = null;   // built the first time the full window opens
 
     stage.appendChild(note);
     stage.appendChild(hud);
+    stage.appendChild(side);
     el.appendChild(stage);
 
+    // The name, what is in it, and what it costs.
+    var info = document.createElement('div');
+    info.className = 'scene-preview-info hidden';
+    var nameEl = document.createElement('p');
+    nameEl.className = 'scene-preview-name';
+    var blurbEl = document.createElement('p');
+    blurbEl.className = 'scene-preview-blurb';
+    var costEl = document.createElement('dl');
+    costEl.className = 'scene-preview-cost';
+    function costRow(cls, label) {
+      var row = document.createElement('div');
+      row.className = cls;
+      var dt = document.createElement('dt');
+      dt.textContent = label;
+      var dd = document.createElement('dd');
+      row.appendChild(dt);
+      row.appendChild(dd);
+      costEl.appendChild(row);
+      return { row: row, dd: dd };
+    }
+    var upRow = costRow('scene-cost-upload', 'Upload in a call');
+    var devRow = costRow('scene-cost-device', 'On this device');
+    var liveRow = costRow('scene-cost-live hidden', 'In your call now');
+    info.appendChild(nameEl);
+    info.appendChild(blurbEl);
+    info.appendChild(costEl);
+    el.appendChild(info);
+
     var canvas = null, gl = null, prog = null, progId = null;
-    var raf = 0, loadToken = 0, lastDraw = 0, t0 = 0;
+    var raf = 0, loadToken = 0, lastDraw = 0, t0 = 0, lastInfo = 0;
     var visible = false, destroyed = false, failed = '';
-    var view = null;
+    var view = null, full = false, placeholder = null, prevFocus = null;
+    // The cost on this device: one redraw at a call's size, every so often.
+    var probe = null, gpuMs = null, cpuMs = null, lastProbe = 0, samples = [], soft = false;
+    var px = new Uint8Array(4);
 
     var orbit = attachOrbit(stage, {
       keys: true,
+      // A finger turns it too: sideways in the card, where up and down is the
+      // page's scroll (touch-action: pan-y), every way in the full window.
+      touch: true,
+      ignore: '.scene-preview-btn, .scene-preview-side',
       enabled: function () { return !!prog; },
       onChange: function (v) {
         view = v;
-        recentre.classList.toggle('hidden', !v);
+        var sc = VideoScenes.byId(sceneId());
+        keepView.classList.toggle('hidden', !(v && sc && sc.custom && sc.kind === 'panorama'));
       }
     });
-    recentre.addEventListener('click', function () { orbit.reset(true); stage.focus(); });
-    // The Recentre button is a real button inside the drag surface.
-    recentre.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+    keepView.addEventListener('click', function () {
+      var id = sceneId(), sc = VideoScenes.byId(id);
+      if (!view || !sc || !sc.custom) return;
+      var o = sc.meta.options || {};
+      var deg = 180 / Math.PI;
+      // The engine's turn and the panorama's own yaw and pitch run opposite
+      // ways (checked by drawing both: unit-custom-scenes.spec.js).
+      updateCustomScene(id, { options: {
+        yaw: Math.round(((o.yaw || 0) - view.yaw * deg) * 10) / 10,
+        pitch: Math.max(-30, Math.min(30, Math.round(((o.pitch || 0) - view.pitch * deg) * 10) / 10))
+      } }).then(function () {
+        orbit.reset(false);
+        // Built again from the stored options.
+        try { if (prog) prog.dispose(); } catch (e) { /* lost */ }
+        prog = null; progId = null;
+        refresh();
+      });
+    });
+    fullBtn.addEventListener('click', function () { setFull(true); });
+    closeBtn.addEventListener('click', function () { setFull(false); });
 
     function sceneId() {
       var m = readMode();
-      return m.indexOf('preset:') === 0 ? m.slice(7) : null;
+      return m.indexOf('preset:') === 0 ? VideoScenes.resolveId(m.slice(7)) : null;
     }
     function say(text) {
       note.textContent = text || '';
       note.classList.toggle('hidden', !text);
     }
 
+    function freeProbe() {
+      if (probe && gl) {
+        try { gl.deleteFramebuffer(probe.fb); gl.deleteTexture(probe.tex); } catch (e) { /* lost */ }
+      }
+      probe = null;
+    }
+    function resetCost() { gpuMs = cpuMs = null; samples = []; lastProbe = 0; }
+
     function release() {
       if (raf) { cancelAnimationFrame(raf); raf = 0; }
       loadToken++;
+      freeProbe();
       if (gl) {
         try { if (prog) prog.dispose(); } catch (e) { /* lost */ }
         VideoScenes.releaseContext(gl);
@@ -5312,12 +5816,27 @@ var VideoEffects = (function () {
       progId = null;
     }
 
+    // The canvas follows the stage: 16:9 in the card, the window's own shape
+    // (and its pixels, up to a cap) in the full window.
+    function fit() {
+      if (!canvas) return;
+      var r = stage.getBoundingClientRect();
+      var dpr = Math.min(window.devicePixelRatio || 1, full ? 2 : 1.5);
+      var w, h;
+      if (full) {
+        w = Math.max(2, r.width * dpr); h = Math.max(2, r.height * dpr);
+        var k = Math.min(1, PREVIEW_FULL_LONG / Math.max(w, h));
+        w = Math.round(w * k); h = Math.round(h * k);
+      } else {
+        w = Math.max(2, Math.round(Math.min(PREVIEW_MAX_W, (r.width || 480) * dpr)));
+        h = Math.round(w * 9 / 16);
+      }
+      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    }
+
     function open() {
-      var w = Math.max(2, Math.round(Math.min(PREVIEW_MAX_W, (stage.clientWidth || 480) * Math.min(window.devicePixelRatio || 1, 1.5))));
       canvas = document.createElement('canvas');
       canvas.className = 'scene-preview-canvas';
-      canvas.width = w;
-      canvas.height = Math.round(w * 9 / 16);
       canvas.setAttribute('aria-hidden', 'true');
       try { gl = canvas.getContext('webgl2', { alpha: false, antialias: false }); } catch (e) { gl = null; }
       if (!gl) { failed = 'Couldn’t draw the preview on this device.'; canvas = null; return false; }
@@ -5329,6 +5848,8 @@ var VideoEffects = (function () {
         return false;
       }
       stage.insertBefore(canvas, stage.firstChild);
+      fit();
+      soft = softwareScenes(gl);
       var mine = canvas;
       canvas.addEventListener('webglcontextlost', function (e) {
         e.preventDefault();
@@ -5343,7 +5864,16 @@ var VideoEffects = (function () {
     // A neutral light and nobody in front of it: the subject box is put below
     // the picture, small, so there is no shadow or light wrap to explain.
     var look = VideoScenes.defaultLook();
-    look.dirX = 0.6; look.cx = 0.5; look.cy = 3; look.sx = 0.01; look.sy = 0.01;
+    look.cx = 0.5; look.cy = 3; look.sx = 0.01; look.sy = 0.01;
+    function previewLook() {
+      look.dirX = 0.6;
+      // The scene light chosen in Settings, or a neutral day for 'match my room'
+      // (there is no camera here to match).
+      var L = sceneLight();
+      look.exposure = L ? L.exposure : 1;
+      look.tint = L ? L.tint.slice() : [1, 1, 1];
+      return look;
+    }
 
     function load(id) {
       var token = ++loadToken;
@@ -5352,8 +5882,11 @@ var VideoEffects = (function () {
         // The old scene keeps being drawn until the new one is ready.
         try { if (prog) prog.dispose(); } catch (e) { /* lost */ }
         prog = p; progId = id;
+        resetCost();
+        lastProbe = performance.now();   // the first redraws warm caches: not a measurement
         say('');
         hud.classList.remove('hidden');
+        paintInfo();
         if (!raf) raf = requestAnimationFrame(frame);
       }, function () {
         if (destroyed || token !== loadToken) return;
@@ -5363,14 +5896,166 @@ var VideoEffects = (function () {
       });
     }
 
+    // One redraw of the scene at the size a 720p call draws it, into a buffer
+    // of its own, timed by waiting for it: gl.finish() first (nothing else of
+    // the preview's is still in flight), then the redraw and a one-pixel read.
+    // An upper bound — the issuing is included — and a median of the last
+    // few. Not the GPU's timer query: on ANGLE over Metal it also counted the
+    // preview's own full-window frame (11 ms for a redraw a fence puts at 1).
+    // Three redraws back to back, the fastest kept: a GPU that idles between
+    // the preview's light frames clocks down, and the first redraw of a burst
+    // paid for that (15 ms against 5 on an M5) — a call keeps it busy.
+    var PROBE_BURST = 3;
+    function measure(time) {
+      var sc = VideoScenes.byId(progId);
+      var size = sceneBufferSize(PREVIEW_CALL_SIZE[0], PREVIEW_CALL_SIZE[1],
+                                 sceneScaleLadder(Math.max(PREVIEW_CALL_SIZE[0], PREVIEW_CALL_SIZE[1]), null, soft)[0],
+                                 sc, prog.engine, soft);
+      if (!probe || probe.w !== size[0] || probe.h !== size[1]) {
+        freeProbe();
+        var tex = texture(gl, size[0], size[1], gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+        probe = { tex: tex, fb: framebuffer(gl, tex), w: size[0], h: size[1] };
+        gl.bindTexture(gl.TEXTURE_2D, null);
+      }
+      var lk = previewLook(probe.w, probe.h);
+      var frameInfo = { jitter: [0, 0], detail: PREVIEW_CALL_SIZE[1] };
+      var best = Infinity;
+      for (var i = 0; i < PROBE_BURST; i++) {
+        try { gl.finish(); } catch (e) { /* lost */ }
+        var c0 = performance.now();
+        prog.draw(probe.fb, probe.w, probe.h, time, lk, frameInfo, view);
+        var c1 = performance.now();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, probe.fb);
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        var ms = performance.now() - c0;
+        if (ms < best) { best = ms; cpuMs = c1 - c0; }
+      }
+      samples.push(best);
+      if (samples.length > 5) samples.shift();
+      var sorted = samples.slice().sort(function (a, b) { return a - b; });
+      gpuMs = sorted[sorted.length >> 1];
+    }
+
     function frame(now) {
       raf = 0;
       if (destroyed || !gl || !prog || !visible) return;
       raf = requestAnimationFrame(frame);
-      if (now - lastDraw < 1000 / PREVIEW_FPS) return;
+      if (now - lastDraw < 1000 / (full ? PREVIEW_FULL_FPS : PREVIEW_FPS)) return;
       lastDraw = now;
       var w = canvas.width, h = canvas.height;
-      prog.draw(null, w, h, VideoScenes.THUMB_TIME + (now - t0) / 1000, look, null, view);
+      var t = VideoScenes.THUMB_TIME + (now - t0) / 1000;
+      prog.draw(null, w, h, t, previewLook(w, h), null, view);
+      if (now - lastProbe >= PREVIEW_PROBE_MS) {
+        lastProbe = now;
+        try { measure(t); } catch (e) { /* the preview carries on unmeasured */ }
+      }
+      if (now - lastInfo >= PREVIEW_INFO_MS) paintInfo();
+    }
+
+    // The words under the picture, from what is known now.
+    function liveText(sc) {
+      var parts = [];
+      var st = sceneStats();
+      if (st && st.id === sc.id) {
+        var drawn = 'drawn at ' + st.buffer[0] + '×' + st.buffer[1] + ', ' + st.hz + ' times a second';
+        if (st.gpuMs != null) drawn += ', ' + fmtMs(st.gpuMs) + ' ms of graphics time each';
+        else if (st.cpuMs != null) drawn += ', ' + fmtMs(st.cpuMs) + ' ms of processor time each';
+        if (st.stepped) drawn += ' (stepped down to keep up)';
+        parts.push(drawn);
+        if (st.fps) parts.push('camera at ' + Math.round(st.fps) + ' fps');
+      }
+      var lv;
+      try { lv = opts.live ? opts.live() : null; } catch (e) { lv = null; }
+      if (lv && lv.sendingBps != null) parts.push('your camera is sending ' + fmtBps(lv.sendingBps));
+      return parts.join('; ');
+    }
+    function paintInfo() {
+      lastInfo = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      var id = sceneId(), sc = id && VideoScenes.byId(id);
+      info.classList.toggle('hidden', !sc);
+      title.classList.toggle('hidden', !(sc && full));
+      if (!sc) return;
+      nameEl.textContent = sc.name || sc.label;
+      blurbEl.textContent = sc.blurb || '';
+      titleName.textContent = sc.name || sc.label;
+      upRow.dd.textContent = sc.kbps
+        ? 'about ' + sc.kbps[0] + ' kb/s while you move, ' + sc.kbps[1] + ' kb/s while you hold still'
+        : sc.custom ? 'not measured: it depends on your file' : 'not measured yet';
+      var hz = (sc.hz || SCENE_HZ)[0];
+      var size = sceneBufferSize(PREVIEW_CALL_SIZE[0], PREVIEW_CALL_SIZE[1],
+                                 sceneScaleLadder(Math.max(PREVIEW_CALL_SIZE[0], PREVIEW_CALL_SIZE[1]), null, soft)[0],
+                                 sc, prog ? prog.engine : 'three', soft);
+      var dev;
+      if (progId === id && gpuMs != null) {
+        dev = fmtMs(gpuMs) + ' ms of graphics time per redraw at ' + size[0] + '×' + size[1] +
+              ', redrawn ' + hz + ' times a second in a call: ' + fmtShare(gpuMs, hz) + ' of the graphics processor';
+        if (cpuMs != null) dev += '; ' + fmtMs(cpuMs) + ' ms of it on the main processor';
+        titleCost.textContent = fmtMs(gpuMs) + ' ms a redraw here' + (sc.kbps ? ' · about ' + sc.kbps[0] + ' kb/s up' : '');
+      } else {
+        dev = progId === id ? 'measuring…' : failed ? 'not measured: the preview could not be drawn' : 'measured while the preview is drawn';
+        titleCost.textContent = sc.kbps ? 'about ' + sc.kbps[0] + ' kb/s up' : '';
+      }
+      devRow.dd.textContent = dev;
+      var live = liveText(sc);
+      liveRow.dd.textContent = live;
+      liveRow.row.classList.toggle('hidden', !live);
+    }
+
+    // --- the full window ---------------------------------------------------
+    function onFullKey(e) {
+      if (e.key !== 'Escape') return;
+      // Before the settings modal hears it: Escape closes the picture first.
+      e.preventDefault();
+      e.stopPropagation();
+      setFull(false);
+    }
+    function setFull(on) {
+      on = !!on;
+      if (on === full || destroyed) return;
+      if (on && !sceneId()) return;
+      full = on;
+      if (on) {
+        // Out of the card and onto the page: a settings modal may be
+        // transformed or clipped, and a fixed box inside it would be too.
+        prevFocus = document.activeElement;
+        placeholder = document.createElement('div');
+        placeholder.className = 'scene-preview-placeholder';
+        el.insertBefore(placeholder, stage);
+        document.body.appendChild(stage);
+        stage.classList.add('is-full');
+        document.documentElement.classList.add('scene-preview-open');
+        document.addEventListener('keydown', onFullKey, true);
+        window.addEventListener('resize', fit);
+        try { stage.focus({ preventScroll: true }); } catch (e) { stage.focus(); }
+      } else {
+        stage.classList.remove('is-full');
+        if (placeholder && placeholder.parentNode) placeholder.parentNode.replaceChild(stage, placeholder);
+        else el.insertBefore(stage, info);
+        placeholder = null;
+        document.documentElement.classList.remove('scene-preview-open');
+        document.removeEventListener('keydown', onFullKey, true);
+        window.removeEventListener('resize', fit);
+        try { if (prevFocus && prevFocus.focus) prevFocus.focus({ preventScroll: true }); } catch (e) { /* gone */ }
+        prevFocus = null;
+      }
+      if (on && !picker) {
+        picker = renderPicker(pickHost, {
+          scenesOnly: true,
+          onPick: function (mode) {
+            if (opts.onPick) opts.onPick(mode);
+            else writeMode(mode);
+          }
+        });
+      }
+      if (picker) picker.sync();
+      fullBtn.classList.toggle('hidden', on);
+      closeBtn.classList.toggle('hidden', !on);
+      side.classList.toggle('hidden', !on);
+      hint.textContent = hintText();
+      fit();
+      paintInfo();
+      setVisible(true);
     }
 
     // Level-triggered, like the rest of the settings controls: work out from
@@ -5379,7 +6064,10 @@ var VideoEffects = (function () {
       if (destroyed) return;
       var id = sceneId();
       var want = !!id && visible && !failed;
+      paintInfo();
+      if (picker) picker.sync();
       if (!id) {
+        if (full) setFull(false);
         release();
         hud.classList.add('hidden');
         orbit.reset(false);
@@ -5402,14 +6090,16 @@ var VideoEffects = (function () {
       }
     }
 
-    // On screen = the observer says so AND the page is not in a background tab.
+    // On screen = the observer says so (or the picture fills the window) AND
+    // the page is not in a background tab.
     var inView = true, io = null;
-    function setVisible() {
-      var v = inView && document.visibilityState !== 'hidden';
-      if (v === visible) return;
+    function setVisible(force) {
+      var v = (full || inView) && document.visibilityState !== 'hidden';
+      if (v === visible && force !== true) return;
+      var was = visible;
       visible = v;
       // Coming back is a fresh start: whatever stopped it last time may not hold.
-      if (v) failed = '';
+      if (v && !was) failed = '';
       refresh();
     }
     if (typeof IntersectionObserver === 'function') {
@@ -5421,6 +6111,7 @@ var VideoEffects = (function () {
       io.observe(el);
     }
     visible = inView && document.visibilityState !== 'hidden';
+    hint.textContent = hintText();
     document.addEventListener('visibilitychange', setVisible);
     var offMode = onModeWritten(function () { refresh(); });
     function onStorage(e) { if (e.key === STORAGE_KEY) refresh(); }
@@ -5431,7 +6122,22 @@ var VideoEffects = (function () {
     return {
       sync: refresh,
       orbit: orbit,
+      setFull: setFull,
+      isFull: function () { return full; },
+      // What the info line was built from: { gpuMs, cpuMs, timer } (tests).
+      cost: function () { return { gpuMs: gpuMs, cpuMs: cpuMs, probe: probe ? [probe.w, probe.h] : null }; },
+      // Test hook: n probes now, back to back; the samples they took.
+      measureNow: function (n) {
+        if (!prog || !gl) return null;
+        var out = [];
+        for (var i = 0; i < (n || 5); i++) {
+          measure(VideoScenes.THUMB_TIME);
+          out.push(samples[samples.length - 1]);
+        }
+        return out;
+      },
       destroy: function () {
+        if (full) setFull(false);
         destroyed = true;
         release();
         if (io) io.disconnect();
@@ -5439,13 +6145,137 @@ var VideoEffects = (function () {
         window.removeEventListener('storage', onStorage);
         offMode();
         orbit.destroy();
+        if (lightView) lightView.destroy();
+        if (pickHost._offCustomScenes) pickHost._offCustomScenes();
         el.innerHTML = '';
         el.classList.remove('scene-preview');
       }
     };
   }
 
-  // opts: { onPick(mode), allowCustom (default true) }
+  // What the picker says when a scene cannot be added (addCustomScene()).
+  function sceneErrorText(e) {
+    switch (e && e.code) {
+      case 'not-panorama': return 'That picture is not a 360° panorama: it should be twice as wide as it is tall. For a flat picture, use “Use my own image”.';
+      case 'not-glb': return 'That file is not a 3D model Voxal can read: export it as glTF binary (.glb).';
+      case 'too-big': return 'That model is over 64 MB: export it lighter (fewer polygons, smaller textures).';
+      case 'full': return 'You already have ' + VideoScenes.CUSTOM_MAX + ' scenes of your own: remove one first.';
+      case 'draw-failed': return 'This device could not draw that file. Compressed models (Draco, Meshopt, KTX2) are not supported.';
+      default: return 'Could not add that file as a scene.';
+    }
+  }
+
+  var CUBE_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" ' +
+    'stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 7.5v9L12 21l8-4.5v-9z"/>' +
+    '<path d="M4 7.5 12 12l8-4.5M12 12v9"/></svg>';
+
+  // --- a tooltip that also works on a phone ---------------------------------
+  //
+  // A `title` is a hover, and a phone has none. attachTip() shows one small
+  // card for the page: after a beat of hover, on keyboard focus, or on a
+  // touch screen after a long press — whose click is then swallowed, so a
+  // press that asked "what is this?" does not also do it.
+  var TIP_HOVER_MS = 400, TIP_PRESS_MS = 450, TIP_SLOP = 10, TIP_SHOW_MS = 6000;
+  var _tipEl = null, _tipFor = null, _tipTimer = 0;
+  function tipEl() {
+    if (_tipEl) return _tipEl;
+    _tipEl = document.createElement('div');
+    _tipEl.className = 've-tip hidden';
+    _tipEl.setAttribute('role', 'tooltip');
+    document.body.appendChild(_tipEl);
+    document.addEventListener('pointerdown', function (e) {
+      if (_tipFor && !_tipFor.contains(e.target)) hideTip();
+    }, true);
+    window.addEventListener('scroll', function () { hideTip(); }, true);
+    return _tipEl;
+  }
+  function hideTip(anchor) {
+    if (anchor && anchor !== _tipFor) return;
+    clearTimeout(_tipTimer);
+    _tipTimer = 0;
+    if (_tipEl) _tipEl.classList.add('hidden');
+    _tipFor = null;
+  }
+  function showTip(anchor, text) {
+    if (!text || !anchor.isConnected) return;
+    var t = tipEl();
+    t.textContent = text;
+    t.classList.remove('hidden');
+    _tipFor = anchor;
+    // Above the anchor, inside the window; below it when there is no room.
+    var r = anchor.getBoundingClientRect(), w = t.offsetWidth, h = t.offsetHeight;
+    var x = Math.max(8, Math.min(window.innerWidth - w - 8, r.left + r.width / 2 - w / 2));
+    var y = r.top - h - 8;
+    if (y < 8) y = Math.min(window.innerHeight - h - 8, r.bottom + 8);
+    t.style.left = Math.round(x) + 'px';
+    t.style.top = Math.round(y) + 'px';
+    clearTimeout(_tipTimer);
+    _tipTimer = setTimeout(function () { hideTip(anchor); }, TIP_SHOW_MS);
+  }
+  // text: a string, or a function returning one (read each time it shows).
+  // opts.click: a click (a tap) shows and hides it too — for an (i) that
+  // does nothing else.
+  function attachTip(el, text, opts) {
+    var get = typeof text === 'function' ? text : function () { return text; };
+    var hover = 0, press = null, swallow = false;
+    function txt() { try { return get() || ''; } catch (e) { return ''; } }
+    // The card replaces the browser's own: two at once would say it twice.
+    el.removeAttribute('title');
+    if (typeof text === 'string') el.setAttribute('aria-description', text);
+    function endPress() { if (press) { clearTimeout(press.timer); press = null; } }
+    el.addEventListener('pointerenter', function (e) {
+      if (e.pointerType !== 'mouse') return;
+      clearTimeout(hover);
+      hover = setTimeout(function () { showTip(el, txt()); }, TIP_HOVER_MS);
+    });
+    el.addEventListener('pointerleave', function (e) {
+      if (e.pointerType !== 'mouse') return;
+      clearTimeout(hover);
+      hideTip(el);
+    });
+    el.addEventListener('focus', function () {
+      try { if (el.matches(':focus-visible')) showTip(el, txt()); } catch (e) { /* no :focus-visible */ }
+    });
+    el.addEventListener('blur', function () { hideTip(el); });
+    el.addEventListener('pointerdown', function (e) {
+      clearTimeout(hover);
+      endPress();
+      if (e.pointerType === 'mouse') { hideTip(el); return; }
+      press = { x: e.clientX, y: e.clientY, timer: setTimeout(function () {
+        press = null;
+        swallow = true;
+        showTip(el, txt());
+      }, TIP_PRESS_MS) };
+    });
+    el.addEventListener('pointermove', function (e) {
+      if (press && (Math.abs(e.clientX - press.x) > TIP_SLOP || Math.abs(e.clientY - press.y) > TIP_SLOP)) endPress();
+    });
+    el.addEventListener('pointerup', function () {
+      endPress();
+      // The click a long press ends with, if the browser sends one at all.
+      if (swallow) setTimeout(function () { swallow = false; }, 400);
+    });
+    el.addEventListener('pointercancel', endPress);
+    el.addEventListener('click', function (e) {
+      if (!swallow) return;
+      swallow = false;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }, true);
+    // The platform's own long-press menu would land on top of the card.
+    el.addEventListener('contextmenu', function (e) { if (swallow || press) e.preventDefault(); });
+    if (opts && opts.click) {
+      el.addEventListener('click', function () {
+        clearTimeout(hover);
+        if (_tipFor === el) hideTip(el);
+        else showTip(el, txt());
+      });
+    }
+  }
+
+  // opts: { onPick(mode), onError(text), allowCustom (default true),
+  //         addScene (default true: the chip that adds a 360° photo or a 3D model),
+  //         scenesOnly (the scenes and nothing else: the preview's full window) }
   function renderPicker(el, opts) {
     if (!el) return null;
     opts = opts || {};
@@ -5455,23 +6285,28 @@ var VideoEffects = (function () {
     el.setAttribute('aria-label', 'Background');
 
     var chips = [];
+    // The scenes alone (the preview's full window): no "none", no blur, no
+    // flat picture, nothing to add.
+    var scenesOnly = !!opts.scenesOnly;
 
-    var none = chip('bg-chip-none', 'No background effect', 'off');
-    none.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" ' +
-      'stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/>' +
-      '<line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg>';
-    chips.push(none);
+    if (!scenesOnly) {
+      var none = chip('bg-chip-none', 'No background effect', 'off');
+      none.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" ' +
+        'stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/>' +
+        '<line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg>';
+      chips.push(none);
 
-    var blur = chip('bg-chip-blur', 'Blur my background', 'blur');
-    blur.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" ' +
-      'stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 8h16"/><path d="M4 12h16"/>' +
-      '<path d="M4 16h16"/></svg>';
-    chips.push(blur);
+      var blur = chip('bg-chip-blur', 'Blur my background', 'blur');
+      blur.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" ' +
+        'stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 8h16"/><path d="M4 12h16"/>' +
+        '<path d="M4 16h16"/></svg>';
+      chips.push(blur);
+    }
 
     // The scenes. Each chip shows a gradient swatch at once and its real
     // thumbnail — rendered from the scene's own shader — once that is ready.
     var sceneChips = PRESETS.map(function (p) {
-      var c = chip('bg-chip-image bg-chip-scene', p.label, 'preset:' + p.id);
+      var c = chip('bg-chip-image bg-chip-scene', p.name || p.label, 'preset:' + p.id);
       c.dataset.scene = p.id;
       c.style.backgroundImage = p.swatch;
       chips.push(c);
@@ -5511,11 +6346,34 @@ var VideoEffects = (function () {
       paintThumbs();
     }
 
+    // The chip that adds a scene of your own, and the input behind it.
+    var addScene = null, sceneInput = null;
+    if (opts.addScene !== false && !scenesOnly) {
+      addScene = document.createElement('button');
+      addScene.type = 'button';
+      addScene.className = 'bg-chip bg-chip-add-scene';
+      addScene.setAttribute('aria-label', 'Add a scene: a 360° photo or a 3D model (.glb)');
+      addScene.innerHTML = CUBE_SVG;
+      attachTip(addScene, 'Add a scene of your own: a 360° photo (twice as wide as it is tall) ' +
+        'or a 3D model (.glb). It stays on this device.');
+      sceneInput = document.createElement('input');
+      sceneInput.type = 'file';
+      sceneInput.accept = '.glb,model/gltf-binary,image/jpeg,image/png,image/webp';
+      sceneInput.className = 'bg-file-input bg-scene-input';
+    }
+
     var custom = null, clearBtn = null, fileInput = null;
-    if (opts.allowCustom !== false) {
+    if (opts.allowCustom !== false && !scenesOnly) {
       custom = chip('bg-chip-custom', 'Use my own image', 'custom');
       custom.innerHTML = '<span class="bg-chip-plus" aria-hidden="true">+</span>';
       chips.push(custom);
+      // What the "+" can do, and where the rest is.
+      attachTip(custom, function () {
+        if (hasCustom) return 'Your own picture, as a still background. ✕ removes it.';
+        return 'Use a photo of your own as a still background (JPEG, PNG or WebP). ' +
+          (addScene ? 'For a 360° photo or a 3D model, use the cube.'
+                    : 'For a 360° photo or a 3D model, add it in Settings → Video → Background.');
+      });
 
       clearBtn = document.createElement('button');
       clearBtn.type = 'button';
@@ -5544,6 +6402,69 @@ var VideoEffects = (function () {
       el.appendChild(wrap);
     });
     if (fileInput) el.appendChild(fileInput);
+
+    // Scenes people added (VideoScenes.customScenes()), after the built-in
+    // ones, each with a ✕ that removes it, then the chip that adds one. Built
+    // again whenever the list changes, here or in another window.
+    var customChips = [], customWraps = [];
+    var customAnchor = custom ? custom.parentNode : (fileInput || null);
+    if (addScene) el.insertBefore(addScene, customAnchor);
+    if (sceneInput) el.appendChild(sceneInput);
+    function allChips() { return chips.concat(customChips); }
+    function renderCustomScenes() {
+      customWraps.forEach(function (w) { if (w.parentNode) w.parentNode.removeChild(w); });
+      customWraps = [];
+      customChips = [];
+      VideoScenes.customScenes().forEach(function (m) {
+        var sc = VideoScenes.byId(m.id);
+        var c = chip('bg-chip-image bg-chip-scene bg-chip-own', m.name, 'preset:' + m.id);
+        c.dataset.scene = m.id;
+        c.style.backgroundImage = sc.swatch;
+        var x = document.createElement('button');
+        x.type = 'button';
+        x.className = 'bg-chip-clear';
+        x.title = 'Remove ' + m.name;
+        x.setAttribute('aria-label', x.title);
+        x.textContent = '✕';
+        x.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          var was = readMode() === 'preset:' + m.id;
+          removeCustomScene(m.id).then(function () { if (was) pick('blur'); });
+        });
+        c.addEventListener('click', function () { pick(c.dataset.mode); });
+        var wrap = document.createElement('span');
+        wrap.className = 'bg-chip-wrap';
+        wrap.appendChild(c);
+        wrap.appendChild(x);
+        el.insertBefore(wrap, addScene || customAnchor);
+        customChips.push(c);
+        customWraps.push(wrap);
+      });
+    }
+    renderCustomScenes();
+    if (el._offCustomScenes) el._offCustomScenes();
+    el._offCustomScenes = VideoScenes.onCustomChange(function () { renderCustomScenes(); sync(); });
+
+    if (addScene) {
+      addScene.addEventListener('click', function () {
+        // Synchronously, as for the image: a file dialog opens only inside the
+        // user's gesture.
+        sceneInput.click();
+      });
+      sceneInput.addEventListener('change', function () {
+        var file = sceneInput.files && sceneInput.files[0];
+        sceneInput.value = '';
+        if (!file) return;
+        addScene.classList.add('is-busy');
+        addCustomScene(file).then(function (meta) {
+          addScene.classList.remove('is-busy');
+          pick('preset:' + meta.id);
+        }, function (e) {
+          addScene.classList.remove('is-busy');
+          if (opts.onError) opts.onError(sceneErrorText(e));
+        });
+      });
+    }
 
     // Whether a custom image is stored, kept as a plain flag rather than read
     // from IndexedDB at click time. See the click handler: the read is async,
@@ -5575,13 +6496,13 @@ var VideoEffects = (function () {
 
     function sync(mode) {
       mode = normalizeMode(mode === undefined ? readMode() : mode);
-      chips.forEach(function (c) {
+      allChips().forEach(function (c) {
         var on = c.dataset.mode === mode;
         c.setAttribute('aria-checked', on ? 'true' : 'false');
         c.classList.toggle('is-active', on);
         c.tabIndex = on ? 0 : -1;
       });
-      if (!chips.some(function (c) { return c.dataset.mode === mode; })) none.tabIndex = 0;
+      if (!allChips().some(function (c) { return c.dataset.mode === mode; }) && allChips()[0]) allChips()[0].tabIndex = 0;
     }
 
     function pick(mode) {
@@ -5768,6 +6689,87 @@ var VideoEffects = (function () {
 
     sync();
     return { sync: sync, element: el, buttons: buttons };
+  }
+
+  // --- the scene light -------------------------------------------------------
+  //
+  // A select (nine choices do not fit a segmented row on a phone), with a line
+  // under it saying what 'clock' and 'screen' amount to right now. Rendered by
+  // both documents; a write here reaches the main window's pipeline through
+  // the `storage` event (see readSceneLight()), and every control on the page
+  // re-syncs from writeSceneLight(). opts: { id, compact (no line) }.
+  var SCENE_LIGHT_LABELS = {
+    auto: 'Match my room',
+    clock: 'Follow the clock',
+    screen: 'Follow light / dark mode'
+  };
+  function sceneLightLabel(m) {
+    if (SCENE_LIGHT_LABELS[m]) return SCENE_LIGHT_LABELS[m];
+    var L = VideoScenes.LIGHTS.filter(function (l) { return l.id === m; })[0];
+    return L ? L.label : m;
+  }
+  function renderSceneLight(el, opts) {
+    if (!el) return null;
+    opts = opts || {};
+    el.innerHTML = '';
+    el.classList.add('scene-light');
+    var sel = document.createElement('select');
+    sel.className = 'org-select scene-light-select';
+    if (opts.id) sel.id = opts.id;
+    sel.setAttribute('aria-label', 'Scene light');
+    SCENE_LIGHT_MODES.forEach(function (m) {
+      var o = document.createElement('option');
+      o.value = m;
+      o.textContent = sceneLightLabel(m);
+      sel.appendChild(o);
+    });
+    el.appendChild(sel);
+    var now = null;
+    if (!opts.compact) {
+      now = document.createElement('p');
+      now.className = 'settings-hint scene-light-now';
+      now.setAttribute('aria-live', 'polite');
+      el.appendChild(now);
+    }
+    // Pressed in the full-window preview, a key must not also turn the scene.
+    sel.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+    sel.addEventListener('keydown', function (e) { e.stopPropagation(); });
+    sel.addEventListener('change', function () {
+      var m = writeSceneLight(sel.value);
+      if (opts.onChange) opts.onChange(m);
+    });
+    function paintNow(m) {
+      if (!now) return;
+      var text = '';
+      if (m === 'clock') {
+        var d = new Date();
+        var name = VideoScenes.clockLightName(d.getHours() + d.getMinutes() / 60).split('>').map(sceneLightLabel);
+        var hhmm = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+        text = 'Now (' + hhmm + '): ' + (name.length > 1 ? 'between ' + name[0].toLowerCase() + ' and ' + name[1].toLowerCase()
+                                                            : name[0].toLowerCase()) + '.';
+      } else if (m === 'screen') {
+        text = screenIsDark() ? 'Now: dark mode, so the evening.' : 'Now: light mode, so the middle of the day.';
+      }
+      now.textContent = text;
+      now.classList.toggle('hidden', !text);
+    }
+    var view = {
+      element: el,
+      select: sel,
+      sync: function (m) {
+        m = normalizeSceneLight(m === undefined ? readSceneLight() : m);
+        sel.value = m;
+        paintNow(m);
+      },
+      destroy: function () {
+        var i = _sceneLightViews.indexOf(view);
+        if (i !== -1) _sceneLightViews.splice(i, 1);
+        el.innerHTML = '';
+      }
+    };
+    _sceneLightViews.push(view);
+    view.sync();
+    return view;
   }
 
   // --- the low-light toggle -------------------------------------------------
@@ -6026,10 +7028,22 @@ var VideoEffects = (function () {
     renderPicker: renderPicker,
     onModeWritten: onModeWritten,
     attachOrbit: attachOrbit,
+    attachTip: attachTip,
     renderScenePreview: renderScenePreview,
+    sceneStats: sceneStats,
+    SCENE_LIGHT_KEY: SCENE_LIGHT_KEY,
+    SCENE_LIGHT_MODES: SCENE_LIGHT_MODES,
+    readSceneLight: readSceneLight,
+    writeSceneLight: writeSceneLight,
+    sceneLight: sceneLight,
+    sceneLightLabel: sceneLightLabel,
+    renderSceneLight: renderSceneLight,
     ORBIT_LIMIT: ORBIT_LIMIT,
     getCustomImage: getCustomImage,
     setCustomImage: setCustomImage,
-    clearCustomImage: clearCustomImage
+    clearCustomImage: clearCustomImage,
+    addCustomScene: addCustomScene,
+    removeCustomScene: removeCustomScene,
+    updateCustomScene: updateCustomScene
   };
 })();

@@ -813,32 +813,66 @@ the water's edge, a cloud's rim: those pixels fall back to the single redraw
 the "standard definition" look in a call, and `make scene-preview ARGS='island
 --live'` shows it (the clock runs between redraws, as in a call; without
 `--live` the picture is a frozen moment, which is the best case and hides it).
-So the buffer **starts larger than `SCENE_LONG`**: `SCENE_SCALE`, `[1.5, 1]` on
-desktop (768 long, before a scene's own `res`) and `[1.25, 1]` on a phone. The
-governor walks it down in its own step: segmentation first, then the buffer
-back to `SCENE_LONG` (reallocated; the picture starts over), then the scene's
-redraw rate, then it gives up. The ladder belongs to the processor, so picking
-another scene does not undo a step that the device has already shown it needs.
-A keyed receiver draws at scale 1: it shares its GPU with every other peer.
+So on a GPU the buffer **starts at the picture's own size**, phone or computer
+(`sceneScaleLadder()`): the engine's scenes are multisampled (8 samples on a
+computer, 4 on a phone, `quality.samples` in `src/scenes/engine.js`) and cost
+1.2–3.3 ms a redraw at 1280x720 on an Apple M5, so nothing is gained by drawing
+them smaller where the device can afford it. The rungs below are `SCENE_SCALE`
+(`[2.25, 1.5, 1]` x `SCENE_LONG` on a computer, `[2, 1.25, 1]` on a phone), so
+a 720p picture's ladder is `[2.5, 2.25, 1.5, 1]`. The governor walks it down in
+its own step: segmentation first, then the buffer one rung at a time
+(reallocated; the picture starts over), then the scene's redraw rate, then it
+gives up. The ladder belongs to the processor, so picking another scene does
+not undo a step that the device has already shown it needs.
+
+A **software rasteriser** (SwiftShader in a VM or a blocklisted driver, and the
+tests) draws on the CPU the call also needs: there the scene starts where it
+always did, at `SCENE_SCALE_SOFT` (`[1.5, 1]`, `[1.25, 1]` on a phone) and the
+catalogue's `res`, without multisampling. `window.__voxalSceneHardware` lets a
+test take the GPU path anyway.
 
 **Full HD** (Settings → Video → *Full HD video*, desktop only, off by default,
 `video-resolution` = `fhd`). The effect canvas is the camera's size, so a Full
 HD picture starts with the capture: `cameraCaptureCap()` asks for 1920x1080 and
 `cameraMaxBitrate()` lifts the per-listener cap to 2.5 Mbps (the room-size
 `scaleResolutionDownBy` still applies on top). The scene ladder follows the
-picture (`sceneScaleLadder()`): about 0.6 of its long side at the top, so
-`[2.25, 1.5, 1]` for 1920 (1152 long, before a scene's `res`) and `[1.5, 1]`
-for 1280, stepped down by the same governor. Switching it restarts a running
+picture (`sceneScaleLadder()`): its own size at the top, so `[3.75, 2.25, 1.5,
+1]` for 1920 (on a software rasteriser, about 0.6 of its long side: `[2.25,
+1.5, 1]`), stepped down by the same governor. Switching it restarts a running
 camera: the canvas is sized once from the capture (`initGL()`), so there is no
 live swap. It is the dearest setting on the page: segmentation, the scene and
 the encoder all work on 2.25x the pixels.
 
+### Scene light
+
+By default a scene is lit to match you: exposure from your brightness, tint from
+the room's cast, and a dim enough room turns it to evening (above). Settings →
+Video → **Scene light** (`scene-light`, `VideoEffects.SCENE_LIGHT_KEY`) can
+choose instead: a fixed time of day (`morning`, `midday`, `afternoon`,
+`evening`, `night`: `VideoScenes.LIGHTS`), `clock` (the local hour, blended
+between those lights by `lightAtHour()`: night until 05:30, morning 07:30–10:00,
+mid-day 12:30–14:30, afternoon 17:00, evening 19:30, night from 21:30), or
+`screen` (the page in light mode is the middle of the day, in dark mode the
+evening — `data-theme`, or the system's when it follows it). A web page cannot
+read the screen's brightness itself; that would take native code per platform.
+
+Only the look's **exposure and tint** are chosen; the light's side and hardness,
+and where you are, still come from the camera. `Processor.fixLight()` writes them
+into `lookTarget` after every measurement and before every redraw, so the look a
+keyed peer is offered is the chosen one and the protocol needs nothing new. The
+first time, before the camera has measured anything, the look is taken whole
+(a pick never fades in from the default day); a change mid-call eases in like
+any change of light. A keyed receiver has no `fixLight()`: it draws the sender's
+light. The preview draws the chosen light too (a neutral day for *match my
+room*), and its full window has a copy of the select.
+
 ### Cost, and the step-down
 
-The scene is drawn into a buffer of at most 512 on its long side (384 on mobile;
-more at the start, see above) and resolved up to the camera's size (above). Each scene says how much of that
-buffer it needs (`res` in the catalogue) and how often it should be redrawn
-(`hz`, with the rate it falls to under load):
+The scene is drawn into its buffer (the picture's own size on a GPU, see above;
+`SCENE_LONG` x a rung on a software rasteriser) and resolved up to the camera's
+size (above). Each scene says how often it should be redrawn (`hz`, with the
+rate it falls to under load) and how much of the buffer its ray-marched
+fallback needs (`res`; an engine scene ignores it on a GPU):
 
 | Scene | `res` | `hz` | Why |
 |---|---|---|---|
@@ -858,8 +892,8 @@ image, the same rule that makes **off** free. Under load the scene is redrawn
 less often, and a still room takes that much longer to sharpen.
 
 Under load, the existing ladder runs first (segmentation steps down), then the
-scene's buffer drops back to `SCENE_LONG`, then the scene drops to the lower
-rate of its own ladder, and only then does the effect give up.
+scene's buffer steps down its rungs to `SCENE_LONG`, then the scene drops to
+the lower rate of its own ladder, and only then does the effect give up.
 
 Picking a scene compiles its shader, once per scene per camera. The compile goes
 through `KHR_parallel_shader_compile` where the driver has it, and whatever was
@@ -996,9 +1030,10 @@ upload of a frame against a 2D probe of the same frame, then a keyed and an
 unmarked synthetic frame through the real passes) and 30 warm-up frames with a
 median draw under 6 ms. Running, a rolling median over 8 ms for five seconds is
 a give-up. The scene is drawn in high definition — its buffer at the top of the
-ladder (`SCENE_SCALE_MAX`, phone or not, so ~1152 long against the 1280 canvas)
-— and over either budget it first steps down (`KEYIN_SCENE_SCALE`: 2.25x, then
-the sender's own starting scale, then `SCENE_LONG`), the warm-up restarting
+ladder (the canvas's own size on a GPU, phone or not; `SCENE_SCALE_MAX`, ~1152
+long, on a software rasteriser) — and over either budget it first steps down
+(`KEYIN_SCENE_SCALE`: 2.25x, then 1.5x — 1.25x on a phone — then `SCENE_LONG`),
+the warm-up restarting
 its count each time; only at the bottom does a miss give up. Every frame:
 
 * **Is it keyed?** The shader asks, from a few taps in each zone, so an unkeyed
@@ -1106,9 +1141,12 @@ background goes off and the peers get the plain camera — rather than freeze.
 
 The switch alone says nothing about whether it is doing anything, and in a
 default room of three, or with blur picked, it is not. `keyedStatus()` decides,
-and two lines say it: under the switch in Settings and in the background
-popover ("In use for 1 of 2 people", "Not in use: video goes through the relay
-in this room").
+and two lines say it. Under the switch in Settings, every state ("In use for 1
+of 2 people", "Not in use: video goes through the relay in this room"). In the
+background popover of a call, only while it is in use, in words that say what
+it means ("2 of 3 people draw this scene on their own device; the others see
+your usual picture.", `keyedPopoverText()`), with an (i) whose tooltip says the
+rest: a call is not told about a feature that is doing nothing.
 
 **Not verified**: receiving on WebKit (Safari, every iOS browser, the iOS app —
 `canKeyIn()` says no there), a sender encoding H.264 (Playwright's Chromium
@@ -1209,9 +1247,10 @@ frame**, which also makes it exactly synchronous with the person it belongs to.
   the check rejects them (the room holds its last turn) and the fix is fewer,
   wider cells.
 
-## The room turns with the mouse, and can be looked at alone
+## The room turns with the hand, and can be looked at alone
 
-A computer has no motion sensor, so the same turn comes from the hand.
+A computer has no motion sensor, so the same turn comes from the hand; a phone
+has both.
 `VideoEffects.attachOrbit(el, opts)` is the one implementation, used twice.
 
 * **On your own picture, in a call** (`wireBackgroundOrbit()` in `main.js`, from
@@ -1219,8 +1258,12 @@ A computer has no motion sensor, so the same turn comes from the hand.
   double-click to recentre. It publishes the same `{ yaw, pitch, roll }` as the
   sensor, through the same `setTilt()`, so every local pipeline and the keyed
   frame's tilt strip take it unchanged. Not the minimised self-view badge (its drag
-  moves the badge), not phones (`IS_MOBILE_DEVICE`: the sensor does it, and a
-  finger on a tile is a scroll or a pin), and only with an animated scene on.
+  moves the badge), and only with an animated scene on. On a phone a finger
+  does it too (`touch: IS_MOBILE_DEVICE`; the tile takes `.orbit-touch`,
+  `touch-action: none`, only while a scene runs) and the drag is **added** to
+  the sensor's turn (`applyBackgroundTurn()`, clamped to `DeviceTilt.LIMIT`):
+  the hand moves the room from wherever the phone has it. A tap still toggles
+  the room's chrome, since a drag's click is swallowed.
 * **The sign is the room following the hand.** Positive yaw is the camera turned
   right (the room slides left, as when a phone is turned that way), so pulling the
   picture right is a *smaller* yaw; pulling down is a larger pitch. The self-view is
@@ -1236,7 +1279,7 @@ A computer has no motion sensor, so the same turn comes from the hand.
   is turned now** (`_backgroundOrbitEngaged`, read by `backgroundTiltFlowing()` next
   to `DeviceTilt.ready()`). `keyedOffer.tilt` flipping is a new epoch for every
   receiver, so a recentre must not flip it. It is dropped when the scene or camera
-  goes (`syncBackgroundOrbit()`, run from `syncBackgroundTilt()` on a computer).
+  goes (`syncBackgroundOrbit()`, run from `syncBackgroundTilt()`).
 * **A drag is not a click.** Capture starts only after `ORBIT_SLOP` (4 px), and the
   click that ends a drag is swallowed (capture phase, expires on its own), so it
   never pins the tile.
@@ -1244,7 +1287,11 @@ A computer has no motion sensor, so the same turn comes from the hand.
 **The scene on its own** (Settings → Video → *Preview*,
 `VideoEffects.renderScenePreview()`, in both `settings.html` and the in-page
 modal): the chosen scene drawn alone, no camera, no person, no segmentation, at
-~20 fps with the same drag, arrow keys (Home recentres) and a Recentre button. It
+~20 fps with the same drag, arrow keys (Home recentres) and double-click (two taps
+on a phone) to recentre. Its full-window button (an icon) puts it over the whole
+window at the window's shape, with an icon to close it at the top left and, at
+the top right, the scenes alone (`renderPicker({ scenesOnly: true })`, one click
+each, applied through the caller's `onPick`) and the scene light under them. It
 is a single-sample draw (no jitter accumulation: it is for judging a room and
 trying the look-around, not for measuring sharpness) with a neutral light and the
 subject box put below the picture so there is no shadow to explain.

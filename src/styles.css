@@ -4732,7 +4732,8 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
   pointer-events: none;
 }
 .scene-preview-hud.hidden { display: none; }
-.scene-preview-recentre {
+.scene-preview-buttons { display: inline-flex; gap: 6px; flex: 0 0 auto; }
+.scene-preview-btn {
   pointer-events: auto;
   padding: 3px 10px;
   border: 1px solid rgba(255, 255, 255, 0.35);
@@ -4742,12 +4743,124 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
   font-size: 11.5px;
   cursor: pointer;
 }
-.scene-preview-recentre:hover { border-color: rgba(255, 255, 255, 0.6); }
-.scene-preview-recentre.hidden { display: none; }
+.scene-preview-btn:hover { border-color: rgba(255, 255, 255, 0.6); }
+.scene-preview-btn.hidden { display: none; }
+/* The full-window and close buttons: an icon in a round glass button. */
+.scene-preview-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+.scene-preview-icon svg { display: block; }
+.scene-preview-close {
+  position: absolute;
+  z-index: 2;
+  top: max(14px, env(safe-area-inset-top));
+  left: max(14px, env(safe-area-inset-left));
+}
+/* A finger turns the scene sideways in the card; up and down stays the page's
+   scroll. In the full window it turns every way. */
+.scene-preview-stage { touch-action: pan-y; }
+
+/* Full window (setFull()): the stage is moved to <body>, above the settings
+   modal (400) and below the toast and dev log. */
+html.scene-preview-open, html.scene-preview-open body { overflow: hidden; }
+.scene-preview-stage.is-full {
+  position: fixed;
+  inset: 0;
+  z-index: 9050;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  touch-action: none;
+}
+.scene-preview-stage.is-full .scene-preview-hud {
+  padding: 28px max(14px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+  font-size: 13px;
+}
+.scene-preview-stage.is-full .scene-preview-btn { padding: 7px 14px; font-size: 13px; }
+.scene-preview-stage.is-full .scene-preview-icon { width: 40px; height: 40px; padding: 0; }
+/* Top right of the full window: the scenes, one click each, and the scene
+   light under them. The strip scrolls sideways when the window is narrow; its
+   padding leaves the selected chip's ring (drawn outside the chip) unclipped. */
+.scene-preview-side {
+  position: absolute;
+  z-index: 2;
+  top: max(14px, env(safe-area-inset-top));
+  right: max(14px, env(safe-area-inset-right));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: calc(100% - 88px);
+}
+.scene-preview-side.hidden { display: none; }
+/* The host is the picker itself (renderPicker() adds .bg-picker to it). */
+.scene-preview-scenes.bg-picker {
+  max-width: 100%;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 30px;
+  background: rgba(16, 16, 20, 0.55);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+.scene-preview-scenes.bg-picker::-webkit-scrollbar { display: none; }
+.scene-preview-scenes .bg-chip { border-color: rgba(255, 255, 255, 0.3); }
+.scene-preview-placeholder {
+  aspect-ratio: 16 / 9;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+}
+/* The HUD's words: in the full window the scene's name and cost, then the hint. */
+.scene-preview-hud-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.scene-preview-title { display: flex; flex-direction: column; gap: 2px; color: #fff; }
+.scene-preview-title strong { font-size: 16px; font-weight: 600; }
+.scene-preview-title span { font-size: 12px; opacity: 0.85; }
+.scene-preview-title.hidden { display: none; }
+
+/* Settings → Video → Scene light, and its copy in the full window. */
+.scene-light-select { max-width: 320px; }
+.scene-light-now { margin-top: 6px; }
+.scene-light-now.hidden { display: none; }
+.scene-preview-light { display: flex; }
+.scene-preview-light .org-select {
+  pointer-events: auto;
+  width: auto;
+  padding: 6px 28px 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 999px;
+  background-color: rgba(16, 16, 20, 0.55);
+  color: #fff;
+  font-size: 13px;
+}
+
+/* The scene's name, what is in it, and what it costs. */
+.scene-preview-info { margin-top: 10px; }
+.scene-preview-info.hidden { display: none; }
+.scene-preview-name { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--text); }
+.scene-preview-blurb { margin: 2px 0 8px; font-size: 12.5px; color: var(--text-muted); }
+.scene-preview-cost { margin: 0; display: grid; gap: 4px; font-size: 12px; }
+.scene-preview-cost > div { display: grid; grid-template-columns: 8.5em 1fr; gap: 8px; }
+.scene-preview-cost > div.hidden { display: none; }
+.scene-preview-cost dt { color: var(--text-muted); }
+.scene-preview-cost dd { margin: 0; color: var(--text); }
+@media (max-width: 420px) {
+  .scene-preview-cost > div { grid-template-columns: 1fr; gap: 0; }
+}
 /* Anything the mouse can turn: an open hand over it, a closed one while it does. */
 .orbit-ready { cursor: grab; }
 .orbit-drag, .orbit-drag * { cursor: grabbing !important; }
 .video-tile.orbit-ready, .video-tile.orbit-drag { user-select: none; -webkit-user-select: none; }
+/* A phone turns the scene with a finger on your own picture: that drag is
+   ours, not a pan (syncBackgroundOrbit() sets it only while a scene runs). */
+.video-tile.orbit-touch { touch-action: none; -webkit-user-select: none; user-select: none; }
 
 /* First run only: the segmentation runtime is not bundled, so say what is
    being downloaded, how far along it is, and offer a way out. */
@@ -4778,8 +4891,8 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
 }
 .video-bg-progress .btn { align-self: flex-start; }
 
-/* "Let others draw my scene": one line under the chips saying whether it is in
-   use in this room. Only present while the setting is on. */
+/* What is at work on your picture, under the chips: "Let others draw my
+   scene" while it is in use (only then), and how to turn the scene. */
 .video-bg-subject-only {
   margin: 10px 0 0;
   max-width: 320px;
@@ -4787,6 +4900,26 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
   color: var(--text-muted);
 }
 .video-bg-subject-only.hidden { display: none; }
+/* The (i) after a line: its tooltip says the rest (attachTip()). */
+.video-bg-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 4px;
+  padding: 0;
+  vertical-align: -4px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  font: italic 600 11px/1 Georgia, serif;
+  cursor: help;
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+.video-bg-info:hover, .video-bg-info:focus-visible { color: var(--text); border-color: var(--accent); }
 
 /* Fixed camera: the empty-room reference, under the chips. Only present while
    the setting is on (the default) and an effect is running. */
@@ -4954,6 +5087,10 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
   color: #fff;
 }
 .bg-chip-image { background-color: var(--bg-raised); }
+/* The chip that adds a scene of your own; a scene you added keeps a dashed
+   ring until picked, so it reads as yours. */
+.bg-chip-add-scene.is-busy { opacity: 0.5; pointer-events: none; }
+.bg-chip-own:not(.is-active) { border-style: dashed; }
 .bg-chip-plus {
   font-size: 22px;
   line-height: 1;
@@ -4987,6 +5124,25 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
 }
 .bg-chip-clear:hover { color: var(--text); border-color: var(--accent); }
 .bg-chip-clear.hidden { display: none; }
+/* A long press on a chip asks what it is (attachTip()): no text selection or
+   platform menu on the way. */
+.bg-chip { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+
+/* The card attachTip() shows: above everything, the full-window preview too. */
+.ve-tip {
+  position: fixed;
+  z-index: 9999;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.4;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
 
 /* Rendered, but invisible and out of the way. `display: none` would be simpler
    and would stop WKWebView opening the file dialog at all. */

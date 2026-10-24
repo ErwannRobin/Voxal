@@ -1090,17 +1090,6 @@ function buildOutside(B, r) {
   }
 }
 
-// How many samples the room's target can have: up to 8 (measured: 4 cost a
-// still room 239 kb/s, 8 cost 216), as many as the colour format allows here.
-function msaaSamples(k, float) {
-  const gl = k.renderer.getContext();
-  try {
-    const fmt = float ? gl.RGBA16F : gl.RGBA8;
-    const list = gl.getInternalformatParameter(gl.RENDERBUFFER, fmt, gl.SAMPLES);
-    const max = list && list.length ? Math.max(...list) : 0;
-    return Math.min(8, max, k.renderer.capabilities.maxSamples || 0);
-  } catch (e) { return 0; }
-}
 
 // --- the scene -----------------------------------------------------------------------------------------
 
@@ -1313,54 +1302,10 @@ export default {
     };
     st.bakeEnv(0);
 
-    // --- the room, drawn with 4x multisampling into its own target, then
-    // copied as it is into the engine's. Every edge a redraw draws is then an
-    // average of four looks across its pixel, not one, so the jittered redraws
-    // disagree far less about it, and that disagreement is what a room that
-    // holds still costs the encoder (each redraw's change is added to the
-    // picture): measured, 435 -> 240 kb/s frozen. The room lives on layer 1,
-    // which the engine's camera does not see (it sees the copy, layer 0); the
-    // lights are on every layer, so the engine's compile() builds the room's
-    // programs with the right lights, off the frame's path. The copy sits 1 m
-    // away, inside the nearness range, so the subject's shadow weight is the
-    // room's own alpha.
-    S.traverse((o) => { if (o.isLight) o.layers.enableAll(); else o.layers.set(1); });
-    {
-      const float = !!(k.renderer.extensions.has('EXT_color_buffer_float') || k.renderer.extensions.has('EXT_color_buffer_half_float'));
-      const rt = k.track(new THREE.WebGLRenderTarget(2, 2, {
-        type: float ? THREE.HalfFloatType : THREE.UnsignedByteType, depthBuffer: true,
-        samples: k.quality.name === 'thumb' ? 0 : msaaSamples(k, float), minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false
-      }));
-      const tri = new THREE.BufferGeometry();
-      tri.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
-      const copyM = k.shader({
-        uniforms: { uRoom: { value: rt.texture } },
-        vertexShader: k.GLSL_VERTEX + 'void main() { gl_Position = vec4(position.xy, 0.8, 1.0); }',
-        fragmentShader: k.GLSL_FRAGMENT + 'uniform sampler2D uRoom;\nvoid main() { gl_FragColor = texelFetch(uRoom, ivec2(gl_FragCoord.xy), 0); }'
-      });
-      const copy = new THREE.Mesh(tri, copyM);
-      copy.frustumCulled = false;
-      const cam = new THREE.PerspectiveCamera();
-      let busy = false;
-      copy.onBeforeRender = (renderer, scene, camera) => {
-        if (busy) return;
-        const cur = renderer.getRenderTarget();
-        const w = cur ? cur.width : 512, h = cur ? cur.height : 288;
-        if (rt.width !== w || rt.height !== h) rt.setSize(w, h);
-        cam.copy(camera);
-        cam.projectionMatrix.copy(camera.projectionMatrix);
-        cam.projectionMatrixInverse.copy(camera.projectionMatrixInverse);
-        cam.layers.set(1);
-        busy = true;
-        renderer.setRenderTarget(rt);
-        renderer.clear();
-        renderer.render(S, cam);
-        renderer.setRenderTarget(cur);
-        busy = false;
-      };
-      k.scene.add(copy);
-      st.rt = rt;
-    }
+    // The room is multisampled by the engine's own target (quality.samples):
+    // every edge is an average of several looks across its pixel, so the
+    // jittered redraws disagree far less about it, which is what a room that
+    // holds still costs the encoder.
 
     k.shadowsChanged();
     st.tmp = new THREE.Color();

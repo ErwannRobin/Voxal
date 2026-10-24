@@ -317,7 +317,12 @@
                 <label id="settings-bg-preview-label">Preview</label>
               </div>
               <div id="settings-bg-preview" aria-labelledby="settings-bg-preview-label"></div>
-              <p class="settings-hint">The chosen scene on its own, drawn on this device: no camera, no one in front of it. On a computer, drag it to look around the room, or do the same on your own picture during a call.</p>
+              <p class="settings-hint">The chosen scene on its own, drawn on this device. Drag it, or swipe on a phone, to look around the room (in a call you can do the same on your own picture). The full-screen button at its bottom right shows it over the whole screen, at its own shape, with the scenes and the light at the top right.</p>
+              <div class="settings-device-head" style="margin-top:12px">
+                <label for="select-scene-light">Scene light</label>
+              </div>
+              <div id="settings-scene-light"></div>
+              <p class="settings-hint">How an animated scene is lit. <strong>Match my room</strong> lights it like the light your camera sees on you, so a dim room gets an evening with the lamps on. A time of day, the clock or your screen’s light or dark mode keeps it that way whatever your room. People who draw your scene themselves see the same light.</p>
               <div class="settings-field settings-inline-toggle" style="margin-top:12px">
                 <label for="btn-subject-only" style="flex:1">Let others draw my scene</label>
                 <div id="settings-subject-only"></div>
@@ -751,9 +756,10 @@
         <!-- "Let others draw my scene": whether it is doing anything in this
              room. Shown only while the setting is on — see renderKeyedStatus(). -->
         <p id="video-bg-subject-only" class="video-bg-subject-only hidden" aria-live="polite"></p>
-        <!-- Computers: the scene turns when your own picture is dragged. Shown by
-             syncBackgroundOrbit() only while a scene is running. -->
-        <p id="video-bg-orbit-hint" class="video-bg-subject-only video-bg-orbit-hint hidden">Drag your own picture to look around the background · double-click to recentre.</p>
+        <!-- How to turn the scene: drag your own picture (and, on a phone, turn
+             it). Written and shown by syncBackgroundOrbit() only while a scene
+             is running. -->
+        <p id="video-bg-orbit-hint" class="video-bg-subject-only video-bg-orbit-hint hidden">Drag your own picture to look around the scene · double-click to recentre.</p>
         <!-- Fixed camera: the empty-room reference. Shown only while the
              setting is on and an effect is running — see
              renderVideoBackgroundReference(). -->

@@ -309,21 +309,94 @@ test.describe('turning your own scene in a call', () => {
   test('the hint in the background popover shows only while a scene can be turned', async ({ page }) => {
     await page.evaluate(() => syncBackgroundOrbit());
     expect(await page.evaluate(() => document.getElementById('video-bg-orbit-hint').classList.contains('hidden'))).toBe(false);
+    expect(await page.evaluate(() => document.getElementById('video-bg-orbit-hint').textContent))
+      .toBe('Drag your own picture to look around the scene \u00b7 double-click to recentre.');
     await page.evaluate(() => { VideoEffects.writeMode('off'); syncBackgroundOrbit(); });
     expect(await page.evaluate(() => document.getElementById('video-bg-orbit-hint').classList.contains('hidden'))).toBe(true);
   });
 });
 
-test.describe('on a phone the sensor does it, not the mouse', () => {
-  test('no orbit is attached to the self tile', async ({ page }) => {
+test.describe('on a phone a finger turns it too, on top of the sensor', () => {
+  test.beforeEach(async ({ page }) => {
     await stubNative(page);
     await page.goto('/');
-    const attached = await page.evaluate(() => {
+    await page.evaluate(() => {
+      localStorage.setItem(VideoEffects.STORAGE_KEY, 'preset:office');
+      localVideoActive = true;
+      localVideoStream = { _effectsProcessor: {}, getVideoTracks: () => [], getTracks: () => [] };
+      window.__refreshes = 0;
+      refreshKeyedSend = function () { window.__refreshes++; };
       const tile = _buildVideoTile({ key: 'camera:self', kind: 'camera', self: true });
+      tile.style.cssText = 'position:fixed;left:20px;top:100px;width:300px;height:400px';
       document.body.appendChild(tile);
-      return !!_backgroundOrbit;
+      window.__tile = tile;
+      syncBackgroundOrbit();
     });
-    expect(attached).toBe(false);
+  });
+  test.afterEach(async ({ page }) => {
+    await page.evaluate(() => { try { VideoEffects.setTilt(null); } catch (e) { /* ignore */ } });
+  });
+
+  // A finger's drag across the tile (the pointer events a touch screen sends).
+  const swipe = (page, dx) => page.evaluate((d) => {
+    const el = window.__tile;
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width / 2, y = r.top + r.height / 2;
+    const at = (type, px) => new PointerEvent(type, { pointerType: 'touch', pointerId: 11, isPrimary: true,
+      button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX: px, clientY: y, bubbles: true, cancelable: true });
+    el.dispatchEvent(at('pointerdown', x));
+    for (let i = 1; i <= 6; i++) window.dispatchEvent(at('pointermove', x + i * d / 6));
+    window.dispatchEvent(at('pointerup', x + d));
+    return VideoEffects.getTilt();
+  }, dx);
+
+  test('a swipe on your own picture turns the scene, and the picture is not the page\'s to pan', async ({ page }) => {
+    expect(await page.evaluate(() => !!_backgroundOrbit)).toBe(true);
+    expect(await page.evaluate(() => getComputedStyle(window.__tile).touchAction)).toBe('none');
+    const t = await swipe(page, -80);
+    expect(t).not.toBeNull();
+    expect(Math.abs(t.yaw)).toBeGreaterThan(0.01);
+    expect(await page.evaluate(() => backgroundTiltFlowing())).toBe(true);
+    expect(await page.evaluate(() => window.__refreshes)).toBe(1);
+    expect(await page.evaluate(() => document.getElementById('video-bg-orbit-hint').textContent))
+      .toBe('Drag your own picture to look around the scene \u00b7 double-tap to recentre.');
+  });
+
+  test('the drag is added to the phone\'s own turn, never past the sensor\'s limits', async ({ page }) => {
+    const drag = await swipe(page, -80);
+    const both = await page.evaluate(() => {
+      _sensorTurn = { yaw: 0.05, pitch: 0.02, roll: 0.04 };
+      applyBackgroundTurn();
+      const a = VideoEffects.getTilt();
+      _sensorTurn = { yaw: 10, pitch: -10, roll: 10 };
+      applyBackgroundTurn();
+      const far = VideoEffects.getTilt();
+      _sensorTurn = null;
+      applyBackgroundTurn();
+      return { a, far, lim: DeviceTilt.LIMIT, alone: VideoEffects.getTilt() };
+    });
+    expect(both.a.yaw).toBeCloseTo(drag.yaw + 0.05, 5);
+    expect(both.a.pitch).toBeCloseTo(drag.pitch + 0.02, 5);
+    expect(both.a.roll).toBeCloseTo(0.04, 5);
+    expect(both.far.yaw).toBeCloseTo(both.lim.yaw, 5);
+    expect(both.far.pitch).toBeCloseTo(-both.lim.pitch, 5);
+    expect(both.far.roll).toBeCloseTo(both.lim.roll, 5);
+    expect(both.alone.yaw).toBeCloseTo(drag.yaw, 5);
+  });
+
+  test('not on the self-view badge, and not without a scene', async ({ page }) => {
+    await page.evaluate(() => {
+      const badge = document.createElement('div');
+      badge.id = 'video-stage-self';
+      document.body.appendChild(badge);
+      badge.appendChild(window.__tile);
+      syncBackgroundOrbit();
+    });
+    expect(await page.evaluate(() => window.__tile.classList.contains('orbit-touch'))).toBe(false);
+    expect(await swipe(page, -80)).toBeNull();
+    await page.evaluate(() => { document.body.appendChild(window.__tile); VideoEffects.writeMode('blur'); syncBackgroundOrbit(); });
+    expect(await page.evaluate(() => window.__tile.classList.contains('orbit-touch'))).toBe(false);
+    expect(await swipe(page, -80)).toBeNull();
   });
 });
 
@@ -357,7 +430,7 @@ test.describe('scene preview', () => {
     expect(await page.locator('#pv canvas').count()).toBe(0);
   });
 
-  test('draws the chosen scene and turns it when dragged, with a way back', async ({ page }) => {
+  test('draws the chosen scene and turns it when dragged; a double-click recentres', async ({ page }) => {
     // The waits below budget up to 30 s + 60 s before the drag even starts;
     // the screenshot comparison after it needs headroom of its own.
     test.setTimeout(150_000);
@@ -372,7 +445,8 @@ test.describe('scene preview', () => {
     // The shader compiles in its own time (seconds on a software GPU).
     await expect(page.locator('#pv .scene-preview-note')).toBeHidden({ timeout: 60_000 });
     await expect(page.locator('#pv .scene-preview-hud')).toBeVisible();
-    await expect(page.locator('#pv .scene-preview-recentre')).toBeHidden();
+    // No Recentre button: a double-click (two taps on a phone) does it.
+    await expect(page.locator('#pv .scene-preview-recentre')).toHaveCount(0);
 
     const box = await stage.boundingBox();
     const before = await page.screenshot({ clip: box });
@@ -381,7 +455,7 @@ test.describe('scene preview', () => {
     await page.mouse.move(box.x + box.width / 2 + 90, box.y + box.height / 2 + 20, { steps: 8 });
     await page.mouse.up();
 
-    await expect(page.locator('#pv .scene-preview-recentre')).toBeVisible({ timeout: 30_000 });
+    await expect.poll(() => page.evaluate(() => window.__pv.orbit.view()), { timeout: 30_000 }).not.toBeNull();
     const view = await page.evaluate(() => window.__pv.orbit.view());
     expect(view.yaw).toBeLessThan(0);
     expect(view.pitch).toBeGreaterThan(0);
@@ -392,9 +466,8 @@ test.describe('scene preview', () => {
     const shot = async () => page.screenshot({ clip: box, timeout: 20_000 });
     await expect.poll(async () => !(await shot()).equals(before), { timeout: 40_000 }).toBe(true);
 
-    await page.locator('#pv .scene-preview-recentre').click();
+    await stage.dblclick({ position: { x: 40, y: 40 } });
     await expect.poll(() => page.evaluate(() => window.__pv.orbit.view())).toBeNull();
-    await expect(page.locator('#pv .scene-preview-recentre')).toBeHidden();
   });
 
   test('follows the mode written in this window and gives its GPU context back when stopped', async ({ page }) => {
@@ -421,6 +494,151 @@ test.describe('scene preview', () => {
     await expect(page.locator('#pv canvas')).toHaveCount(0, { timeout: 30_000 });
   });
 
+  test('names the scene, says what is in it and what it costs, and measures it on this device', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.evaluate(() => {
+      VideoEffects.writeMode('preset:office');
+      window.__pv = VideoEffects.renderScenePreview(document.getElementById('pv'));
+    });
+    const info = page.locator('#pv .scene-preview-info');
+    await expect(info).toBeVisible();
+    const office = await page.evaluate(() => VideoScenes.byId('office'));
+    await expect(info.locator('.scene-preview-name')).toHaveText(office.name);
+    await expect(info.locator('.scene-preview-blurb')).toHaveText(office.blurb);
+    await expect(info.locator('.scene-cost-upload dd')).toContainText(office.kbps[0] + ' kb/s while you move');
+    // Measured by drawing one redraw at a 720p call's size, a couple of
+    // seconds after the scene is ready (its first redraws warm caches).
+    await expect(info.locator('.scene-cost-device dd')).toContainText('ms of graphics time per redraw at', { timeout: 60_000 });
+    const cost = await page.evaluate(() => window.__pv.cost());
+    expect(cost.gpuMs).toBeGreaterThan(0);
+    expect(cost.probe[0] / cost.probe[1]).toBeCloseTo(16 / 9, 1);
+    // No call in this window: nothing to say about one.
+    await expect(info.locator('.scene-cost-live')).toBeHidden();
+
+    // Another pick, another name; no scene, no info.
+    await page.evaluate(() => VideoEffects.writeMode('preset:penthouse'));
+    await expect(info.locator('.scene-preview-name')).toHaveText('Neon rain');
+    await page.evaluate(() => VideoEffects.writeMode('blur'));
+    await expect(info).toBeHidden();
+  });
+
+  test('a call in progress is described from the pipeline and the live() hook', async ({ page }) => {
+    await page.evaluate(() => {
+      VideoEffects.writeMode('preset:island');
+      // What the camera pipeline would report, without running one.
+      VideoEffects.sceneStats = () => null;
+      window.__pv = VideoEffects.renderScenePreview(document.getElementById('pv'), {
+        live: () => ({ sendingBps: 640000 })
+      });
+    });
+    const live = page.locator('#pv .scene-cost-live');
+    await expect(live).toBeVisible();
+    await expect(live.locator('dd')).toHaveText('your camera is sending 640 kb/s');
+  });
+
+  test('a finger turns it: sideways in the card, and two taps recentre', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.evaluate(() => {
+      VideoEffects.writeMode('preset:office');
+      window.__pv = VideoEffects.renderScenePreview(document.getElementById('pv'));
+    });
+    await expect(page.locator('#pv .scene-preview-note')).toBeHidden({ timeout: 60_000 });
+    expect(await page.locator('#pv .scene-preview-stage').evaluate((e) => getComputedStyle(e).touchAction)).toBe('pan-y');
+    const turned = await page.evaluate(() => {
+      const st = document.querySelector('#pv .scene-preview-stage');
+      const r = st.getBoundingClientRect();
+      const at = (type, x, y) => new PointerEvent(type, { pointerType: 'touch', pointerId: 7, isPrimary: true,
+        button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX: x, clientY: y, bubbles: true, cancelable: true });
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      st.dispatchEvent(at('pointerdown', x, y));
+      for (let i = 1; i <= 6; i++) window.dispatchEvent(at('pointermove', x + i * 15, y));
+      window.dispatchEvent(at('pointerup', x + 90, y));
+      return window.__pv.orbit.view();
+    });
+    expect(turned.yaw).toBeLessThan(0);
+    const back = await page.evaluate(async () => {
+      const st = document.querySelector('#pv .scene-preview-stage');
+      const r = st.getBoundingClientRect();
+      const x = r.left + 40, y = r.top + 40;
+      const at = (type) => new PointerEvent(type, { pointerType: 'touch', pointerId: 8, isPrimary: true,
+        button: 0, clientX: x, clientY: y, bubbles: true, cancelable: true });
+      for (let i = 0; i < 2; i++) { st.dispatchEvent(at('pointerdown')); window.dispatchEvent(at('pointerup')); }
+      await new Promise((r2) => setTimeout(r2, 600));
+      return window.__pv.orbit.view();
+    });
+    expect(back).toBeNull();
+  });
+
+  test('full window: over the page at the window\'s shape, icons for open and close, and Escape brings it back', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.evaluate(() => {
+      VideoEffects.writeMode('preset:countryside');
+      window.__pv = VideoEffects.renderScenePreview(document.getElementById('pv'));
+    });
+    await expect(page.locator('#pv .scene-preview-note')).toBeHidden({ timeout: 60_000 });
+    // An icon, not a word.
+    const open = page.locator('#pv .scene-preview-full');
+    await expect(open).toHaveText('');
+    await expect(open.locator('svg')).toHaveCount(1);
+    await expect(open).toHaveAttribute('aria-label', 'Show the scene over the whole window');
+    await open.click();
+    const stage = page.locator('body > .scene-preview-stage.is-full');
+    await expect(stage).toBeVisible();
+    await expect(page.locator('#pv .scene-preview-placeholder')).toHaveCount(1);
+    await expect(stage.locator('.scene-preview-full')).toBeHidden();
+    const vp = page.viewportSize();
+    const box = await stage.boundingBox();
+    expect(box.width).toBe(vp.width);
+    expect(box.height).toBe(vp.height);
+    const c = await stage.locator('canvas').evaluate((e) => [e.width, e.height]);
+    expect(c[0] / c[1]).toBeCloseTo(vp.width / vp.height, 2);
+    await expect(stage.locator('.scene-preview-title strong')).toHaveText("Val d’Orcia");
+    expect(await stage.evaluate((e) => getComputedStyle(e).touchAction)).toBe('none');
+    // No "You" button and no outline of a person any more.
+    await expect(stage.locator('.scene-preview-person, .scene-preview-outline')).toHaveCount(0);
+
+    // Top left, an icon that closes it; top right, the scenes, then the light.
+    const close = stage.locator('.scene-preview-close');
+    await expect(close).toBeVisible();
+    await expect(close).toHaveText('');
+    await expect(close).toHaveAttribute('aria-label', 'Back to Settings');
+    const side = stage.locator('.scene-preview-side');
+    await expect(side).toBeVisible();
+    const at = await page.evaluate(() => {
+      const r = (s) => document.querySelector('body > .scene-preview-stage ' + s).getBoundingClientRect();
+      return { close: r('.scene-preview-close'), scenes: r('.scene-preview-scenes'), light: r('.scene-preview-light select'), w: innerWidth };
+    });
+    expect(at.close.left).toBeLessThan(40);
+    expect(at.close.top).toBeLessThan(40);
+    expect(at.scenes.right).toBeGreaterThan(at.w - 40);
+    expect(at.scenes.top).toBeLessThan(40);
+    expect(at.light.top).toBeGreaterThanOrEqual(at.scenes.bottom);
+    expect(at.light.right).toBeGreaterThan(at.w - 40);
+
+    // The scenes only (no "none", no blur, no picture of your own), the
+    // current one checked; one click changes it.
+    const modes = await side.locator('.bg-chip').evaluateAll((cs) => cs.map((c) => c.dataset.mode));
+    expect(modes).toEqual(['preset:office', 'preset:island', 'preset:cybercafe', 'preset:mountain',
+      'preset:countryside', 'preset:penthouse']);
+    await expect(side.locator('.bg-chip[data-mode="preset:countryside"]')).toHaveAttribute('aria-checked', 'true');
+    await side.locator('.bg-chip[data-mode="preset:island"]').click();
+    expect(await page.evaluate(() => VideoEffects.readMode())).toBe('preset:island');
+    await expect(side.locator('.bg-chip[data-mode="preset:island"]')).toHaveAttribute('aria-checked', 'true');
+    await expect(stage.locator('.scene-preview-title strong')).toHaveText(await page.evaluate(() => VideoScenes.byId('island').name));
+    await expect(stage).toBeVisible();
+
+    // Closed with the icon, opened again, then with Escape.
+    await close.click();
+    await expect(page.locator('.scene-preview-stage.is-full')).toHaveCount(0);
+    await open.click();
+    await expect(stage).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#pv > .scene-preview-stage')).toHaveCount(1);
+    await expect(page.locator('.scene-preview-stage.is-full')).toHaveCount(0);
+    await expect(page.locator('#pv .scene-preview-placeholder')).toHaveCount(0);
+    expect(await page.locator('#pv canvas').evaluate((e) => e.width / e.height)).toBeCloseTo(16 / 9, 1);
+  });
+
   test('without graphics acceleration it says so instead of freezing the page', async ({ page }) => {
     await page.addInitScript(() => { window.__voxalThumbsOnSoftwareGL = false; });
     await page.goto('/');
@@ -433,6 +651,33 @@ test.describe('scene preview', () => {
     });
     await expect(page.locator('#pv .scene-preview-note')).toContainText('graphics acceleration');
     expect(await page.locator('#pv canvas').count()).toBe(0);
+  });
+});
+
+test.describe('scene preview on a phone', () => {
+  test.use({ viewport: { width: 390, height: 800 }, hasTouch: true, isMobile: true });
+
+  test('the full window is upright, as the camera would send it, and Escape leaves Settings open', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.addInitScript(() => { window.__voxalThumbsOnSoftwareGL = true; });
+    await page.goto('/');
+    await page.evaluate(() => localStorage.setItem(VideoEffects.STORAGE_KEY, 'preset:office'));
+    await page.click('#btn-open-settings');
+    // A phone's settings are an accordion, not the side nav.
+    await page.locator('#modal-settings').getByRole('button', { name: /Video/ }).first().click();
+    const card = page.locator('#settings-bg-preview');
+    await card.scrollIntoViewIfNeeded();
+    await expect(card.locator('.scene-preview-note')).toBeHidden({ timeout: 60_000 });
+    await expect(card.locator('.scene-preview-hint')).toHaveText('Swipe sideways to look around');
+    await card.locator('.scene-preview-full').click();
+    const stage = page.locator('body > .scene-preview-stage.is-full');
+    await expect(stage).toBeVisible();
+    const c = await stage.locator('canvas').evaluate((e) => [e.width, e.height]);
+    expect(c[1]).toBeGreaterThan(c[0]);
+    await expect(stage.locator('.scene-preview-hint')).toHaveText('Drag to look around \u00b7 double-tap to recentre');
+    await page.keyboard.press('Escape');
+    await expect(stage).toHaveCount(0);
+    await expect(page.locator('#modal-settings')).toBeVisible();
   });
 });
 

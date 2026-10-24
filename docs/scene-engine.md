@@ -86,6 +86,8 @@ transparent layers (rain, glass, glows) keep the alpha below them.
 
 ## Writing a scene
 
+A scene a user adds from a file (a 360° panorama or a `.glb` model) is not written this way: `src/scenes/custom.js` builds its definition from the file. See [`docs/custom-scenes.md`](custom-scenes.md).
+
 ```js
 // src/scenes/example.js
 import { THREE } from './engine.js';
@@ -111,7 +113,13 @@ Then set `module: true` on its catalogue entry in `src/video-scenes.js`.
 ### The kit object `k`
 
 - `k.THREE`, `k.scene`, `k.camera`, `k.U` (shared uniforms), `k.rng(seed)`,
-  `k.quality` (`shadow` map size, `mirror` scale, `particles` share).
+  `k.quality` (`shadow` map size, `mirror` scale, `particles` share,
+  `samples` of the engine target's multisampling, `software` for a software
+  rasteriser). Everything but a thumbnail gets the best: shadow 2048, mirror
+  0.5, particles 1; samples 8 on a computer, 4 on a phone, 0 on a software
+  rasteriser. Do not build a multisampled target of your own: the engine's is
+  (office and café used to, and paid a reallocation whenever a context drew
+  at a second size).
 - `k.std(p)`, `k.phys(p)`, `k.lambert(p)`, `k.basic(p)`: Three materials with the
   engine patch. Extra keys: `receiver`, `additive`, `defines`, and `patch`
   (`{ key, uniforms, vertexHead, fragmentHead, vertex: {chunk: code},
@@ -173,6 +181,27 @@ Then set `module: true` on its catalogue entry in `src/video-scenes.js`.
 | countryside | Three.js | 343 / 292 vs 381 / 330 |
 | office | Three.js | 248 / 216 vs 299 / 159 (frozen above old: detail, by choice) |
 | cybercafe | Three.js | 268 / 246 vs 696 / 569 (421 while the tram arrives) |
+
+Those were measured at the old 512 buffer (`--long 512`). What a call on a GPU
+now draws — the picture's own size, multisampled — and what it costs
+(`--gpu --long 1280 --bits --person` / `--still`, res 1, Apple M5), against the
+768 buffer a desktop call started at before:
+
+| scene | 768 buffer, no engine MSAA | 1280x720, MSAA 8 |
+|---|---|---|
+| office | 339 / 290 | 420 / 337 |
+| island | 774 / 588 | 1023 / 671 |
+| cybercafe | 367 / 350 | 432 / 422 |
+| mountain | 203 / 264 | 130 / 164 |
+| countryside | 475 / 387 | 415 / 223 |
+| penthouse | 902 / 644 | 885 / 496 |
+
+The sharper picture costs more where something fine moves everywhere (the
+island's water, +32% moving); where the multisampling calms edges that used to
+flicker between redraws it costs less (mountain, countryside held still). The
+catalogue's `kbps` (shown under the Settings preview) are the right-hand
+column. A redraw at 1280x720, fenced: 1.2–1.9 ms without samples, 1.5–2.6 with
+4, 2.0–3.3 with 8 (M5).
 
 ### Measured against the old shaders (`scripts/scene-bench.mjs --compare`)
 
