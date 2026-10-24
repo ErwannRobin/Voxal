@@ -14740,6 +14740,14 @@ function initVideoBackgroundUI() {
     });
   }
 
+  // Scene light (Settings → Video, under the preview). The control stores it;
+  // the camera pipeline reads it on every redraw (VideoEffects.sceneLight()),
+  // so nothing here applies it, and a change in the preferences window arrives
+  // through the `storage` event video-effects.js listens to itself.
+  if (keyedApi('renderSceneLight')) {
+    VideoEffects.renderSceneLight(document.getElementById('settings-scene-light'), { id: 'select-scene-light' });
+  }
+
   // Blur strength (Settings → Video, under the picker). Unlike the mode, this
   // never crosses the off↔on boundary, so it is a uniform change inside a pass
   // that is already running: no replaceTrack, no renegotiation, nothing

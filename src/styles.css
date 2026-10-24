@@ -4802,6 +4802,23 @@ html.scene-preview-open, html.scene-preview-open body { overflow: hidden; }
 .scene-preview-outline svg { display: block; width: 100%; height: 100%; fill: rgba(8, 8, 12, 0.78); }
 .scene-preview-outline.hidden { display: none; }
 
+/* Settings → Video → Scene light, and its copy in the full window's HUD. */
+.scene-light-select { max-width: 320px; }
+.scene-light-now { margin-top: 6px; }
+.scene-light-now.hidden { display: none; }
+.scene-preview-light { display: inline-flex; }
+.scene-preview-light.hidden { display: none; }
+.scene-preview-light .org-select {
+  pointer-events: auto;
+  width: auto;
+  padding: 6px 28px 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 999px;
+  background-color: rgba(16, 16, 20, 0.55);
+  color: #fff;
+  font-size: 13px;
+}
+
 /* The scene's name, what is in it, and what it costs. */
 .scene-preview-info { margin-top: 10px; }
 .scene-preview-info.hidden { display: none; }

@@ -843,6 +843,29 @@ camera: the canvas is sized once from the capture (`initGL()`), so there is no
 live swap. It is the dearest setting on the page: segmentation, the scene and
 the encoder all work on 2.25x the pixels.
 
+### Scene light
+
+By default a scene is lit to match you: exposure from your brightness, tint from
+the room's cast, and a dim enough room turns it to evening (above). Settings →
+Video → **Scene light** (`scene-light`, `VideoEffects.SCENE_LIGHT_KEY`) can
+choose instead: a fixed time of day (`morning`, `midday`, `afternoon`,
+`evening`, `night`: `VideoScenes.LIGHTS`), `clock` (the local hour, blended
+between those lights by `lightAtHour()`: night until 05:30, morning 07:30–10:00,
+mid-day 12:30–14:30, afternoon 17:00, evening 19:30, night from 21:30), or
+`screen` (the page in light mode is the middle of the day, in dark mode the
+evening — `data-theme`, or the system's when it follows it). A web page cannot
+read the screen's brightness itself; that would take native code per platform.
+
+Only the look's **exposure and tint** are chosen; the light's side and hardness,
+and where you are, still come from the camera. `Processor.fixLight()` writes them
+into `lookTarget` after every measurement and before every redraw, so the look a
+keyed peer is offered is the chosen one and the protocol needs nothing new. The
+first time, before the camera has measured anything, the look is taken whole
+(a pick never fades in from the default day); a change mid-call eases in like
+any change of light. A keyed receiver has no `fixLight()`: it draws the sender's
+light. The preview draws the chosen light too (a neutral day for *match my
+room*), and its full window has a copy of the select.
+
 ### Cost, and the step-down
 
 The scene is drawn into its buffer (the picture's own size on a GPU, see above;

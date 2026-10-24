@@ -736,6 +736,77 @@ var VideoEffects = (function () {
     return q;
   }
 
+  // --- the scene's light ------------------------------------------------------
+  //
+  // Settings → Video → Scene light: 'auto' (absent: match my room, the light
+  // the camera measures on you — what scenes have always done), a fixed time of
+  // day (VideoScenes.LIGHTS), 'clock' (the light of the local hour) or 'screen'
+  // (light mode a bright day, dark mode the evening). Only the look's exposure
+  // and tint are chosen (VideoScenes.chosenLight()); the camera pipeline puts
+  // them into the look it draws and offers (fixLight()), and the preview draws
+  // with them too. Read on every redraw, so it is cached here and refreshed by
+  // the `storage` event a write in another window raises.
+  var SCENE_LIGHT_KEY = 'scene-light';
+  var SCENE_LIGHT_MODES = ['auto'].concat(VideoScenes.LIGHTS.map(function (l) { return l.id; }), ['clock', 'screen']);
+  var _sceneLight = null;            // the stored mode, once read
+  var _sceneLightViews = [];         // renderSceneLight() controls, to re-sync
+  var _sceneLightCache = { at: 0, mode: null, dark: null, light: null };
+
+  function normalizeSceneLight(m) {
+    return SCENE_LIGHT_MODES.indexOf(m) === -1 ? 'auto' : m;
+  }
+  function readSceneLight() {
+    if (_sceneLight === null) {
+      try { _sceneLight = normalizeSceneLight(localStorage.getItem(SCENE_LIGHT_KEY)); }
+      catch (e) { _sceneLight = 'auto'; }
+    }
+    return _sceneLight;
+  }
+  function writeSceneLight(m) {
+    m = normalizeSceneLight(m);
+    _sceneLight = m;
+    _sceneLightCache.at = 0;
+    try {
+      if (m === 'auto') localStorage.removeItem(SCENE_LIGHT_KEY);
+      else localStorage.setItem(SCENE_LIGHT_KEY, m);
+    } catch (e) { /* private mode — it still applies for this session */ }
+    _sceneLightViews.forEach(function (v) { try { v.sync(m); } catch (e) { /* gone */ } });
+    return m;
+  }
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('storage', function (e) {
+      if (e.key !== SCENE_LIGHT_KEY && e.key !== null) return;
+      _sceneLight = null;
+      _sceneLightCache.at = 0;
+      var m = readSceneLight();
+      _sceneLightViews.forEach(function (v) { try { v.sync(m); } catch (err) { /* gone */ } });
+    });
+  }
+  // Whether the page is in dark mode: the app's own theme (`data-theme` on
+  // <html>, dark by default), or the system's where it is set to follow it.
+  function screenIsDark() {
+    try {
+      var t = document.documentElement.getAttribute('data-theme') || 'dark';
+      if (t === 'system') return !(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+      return t !== 'light';
+    } catch (e) { return true; }
+  }
+  // The chosen { exposure, tint }, or null to match the camera. Worked out at
+  // most once a second (the clock and the theme change slowly); `now` is a
+  // performance.now()-style time, `date` a Date (both optional, for tests).
+  function sceneLight(now, date) {
+    var mode = readSceneLight();
+    if (mode === 'auto') return null;
+    var c = _sceneLightCache;
+    now = now == null ? Date.now() : now;
+    var dark = mode === 'screen' ? screenIsDark() : null;
+    if (c.mode !== mode || c.dark !== dark || date || !c.light || now - c.at > 1000 || now < c.at) {
+      c.mode = mode; c.dark = dark; c.at = now;
+      c.light = VideoScenes.chosenLight(mode, date || new Date(), dark);
+    }
+    return c.light;
+  }
+
   // A copy, always: the returned array becomes a processor's mutable ladder
   // position, and handing out the shared constant would let one call's
   // step-down rewrite the table for every later one.
@@ -2903,11 +2974,32 @@ var VideoEffects = (function () {
     return !this.lastScene || (now - this.lastScene) >= 1000 / hz;
   };
 
+  // The scene's light, when the person chose one (sceneLight()): its exposure
+  // and tint replace the measured ones in the look this pipeline draws AND
+  // offers (keyedSnapshot() reads lookTarget), so a keyed peer draws the same
+  // choice. The first time, before the camera has measured anything, it is
+  // taken whole, so a pick does not fade in from the default day; a change in
+  // the middle of a call eases in like any change of light. Not for a keyed
+  // receiver (it has no fixLight): it draws the SENDER's look.
+  Processor.prototype.fixLight = function () {
+    var L = sceneLight();
+    if (!L) return;
+    var t = this.lookTarget;
+    t.exposure = L.exposure;
+    t.tint = L.tint.slice();
+    if (!this.look.measured && !this.lightTaken) {
+      this.look.exposure = L.exposure;
+      this.look.tint = L.tint.slice();
+      this.lightTaken = true;
+    }
+  };
+
   // Ease the look every frame; redraw the scene at its own, lower rate.
   Processor.prototype.drawScene = function (now) {
     var gl = this.gl;
     var dt = this.lastDraw ? (now - this.lastDraw) / 1000 : 0;
     this.lastDraw = now;
+    if (this.fixLight) this.fixLight();
     VideoScenes.easeLook(this.look, this.lookTarget, Math.min(dt, 0.5));
     var hz = this.sceneHzSteps[this.sceneStep];
     if (this.lastScene && (now - this.lastScene) < 1000 / hz) return;
@@ -3000,6 +3092,7 @@ var VideoEffects = (function () {
       var stats = VideoScenes.measureSubject(rgba, pw, ph, grid, this.lookPrev);
       this.lookPrev = grid;
       this.lookTarget = VideoScenes.lookFromStats(stats, this.lookTarget);
+      this.fixLight();
       if (this.keyed) this.keyedLook(rgba, grid, pw * ph, now);
     } catch (e) { /* a frame that cannot be read leaves the last look standing */ }
   };
@@ -5465,6 +5558,12 @@ var VideoEffects = (function () {
     var personBtn = hudButton('scene-preview-person hidden', 'You', 'Show where you would stand');
     personBtn.setAttribute('aria-pressed', 'true');
     var fullBtn = hudButton('scene-preview-full', 'Full window', 'Show the scene over the whole window');
+    // The scene light, at hand in the full window, where Settings is out of
+    // reach: the same setting as Settings → Video → Scene light.
+    var lightHost = document.createElement('span');
+    lightHost.className = 'scene-preview-light hidden';
+    buttons.insertBefore(lightHost, buttons.firstChild);
+    var lightView = renderSceneLight(lightHost, { compact: true });
     hud.appendChild(hint);
     hud.appendChild(buttons);
 
@@ -5615,6 +5714,11 @@ var VideoEffects = (function () {
     var look = VideoScenes.defaultLook();
     function previewLook(w, h) {
       look.dirX = 0.6;
+      // The scene light chosen in Settings, or a neutral day for 'match my room'
+      // (there is no camera here to match).
+      var L = sceneLight();
+      look.exposure = L ? L.exposure : 1;
+      look.tint = L ? L.tint.slice() : [1, 1, 1];
       if (full && showPerson) outlineSubject(look, w, h);
       else { look.cx = 0.5; look.cy = 3; look.sx = 0.01; look.sy = 0.01; }
       return look;
@@ -5786,6 +5890,7 @@ var VideoEffects = (function () {
       fullBtn.setAttribute('aria-label', on ? 'Back to Settings' : 'Show the scene over the whole window');
       fullBtn.title = fullBtn.getAttribute('aria-label');
       personBtn.classList.toggle('hidden', !on);
+      lightHost.classList.toggle('hidden', !on);
       outline.classList.toggle('hidden', !(on && showPerson));
       hint.textContent = hintText();
       fit();
@@ -5869,6 +5974,7 @@ var VideoEffects = (function () {
         window.removeEventListener('storage', onStorage);
         offMode();
         orbit.destroy();
+        if (lightView) lightView.destroy();
         el.innerHTML = '';
         el.classList.remove('scene-preview');
       }
@@ -6200,6 +6306,87 @@ var VideoEffects = (function () {
     return { sync: sync, element: el, buttons: buttons };
   }
 
+  // --- the scene light -------------------------------------------------------
+  //
+  // A select (nine choices do not fit a segmented row on a phone), with a line
+  // under it saying what 'clock' and 'screen' amount to right now. Rendered by
+  // both documents; a write here reaches the main window's pipeline through
+  // the `storage` event (see readSceneLight()), and every control on the page
+  // re-syncs from writeSceneLight(). opts: { id, compact (no line) }.
+  var SCENE_LIGHT_LABELS = {
+    auto: 'Match my room',
+    clock: 'Follow the clock',
+    screen: 'Follow light / dark mode'
+  };
+  function sceneLightLabel(m) {
+    if (SCENE_LIGHT_LABELS[m]) return SCENE_LIGHT_LABELS[m];
+    var L = VideoScenes.LIGHTS.filter(function (l) { return l.id === m; })[0];
+    return L ? L.label : m;
+  }
+  function renderSceneLight(el, opts) {
+    if (!el) return null;
+    opts = opts || {};
+    el.innerHTML = '';
+    el.classList.add('scene-light');
+    var sel = document.createElement('select');
+    sel.className = 'org-select scene-light-select';
+    if (opts.id) sel.id = opts.id;
+    sel.setAttribute('aria-label', 'Scene light');
+    SCENE_LIGHT_MODES.forEach(function (m) {
+      var o = document.createElement('option');
+      o.value = m;
+      o.textContent = sceneLightLabel(m);
+      sel.appendChild(o);
+    });
+    el.appendChild(sel);
+    var now = null;
+    if (!opts.compact) {
+      now = document.createElement('p');
+      now.className = 'settings-hint scene-light-now';
+      now.setAttribute('aria-live', 'polite');
+      el.appendChild(now);
+    }
+    // Pressed in the full-window preview, a key must not also turn the scene.
+    sel.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+    sel.addEventListener('keydown', function (e) { e.stopPropagation(); });
+    sel.addEventListener('change', function () {
+      var m = writeSceneLight(sel.value);
+      if (opts.onChange) opts.onChange(m);
+    });
+    function paintNow(m) {
+      if (!now) return;
+      var text = '';
+      if (m === 'clock') {
+        var d = new Date();
+        var name = VideoScenes.clockLightName(d.getHours() + d.getMinutes() / 60).split('>').map(sceneLightLabel);
+        var hhmm = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+        text = 'Now (' + hhmm + '): ' + (name.length > 1 ? 'between ' + name[0].toLowerCase() + ' and ' + name[1].toLowerCase()
+                                                            : name[0].toLowerCase()) + '.';
+      } else if (m === 'screen') {
+        text = screenIsDark() ? 'Now: dark mode, so the evening.' : 'Now: light mode, so the middle of the day.';
+      }
+      now.textContent = text;
+      now.classList.toggle('hidden', !text);
+    }
+    var view = {
+      element: el,
+      select: sel,
+      sync: function (m) {
+        m = normalizeSceneLight(m === undefined ? readSceneLight() : m);
+        sel.value = m;
+        paintNow(m);
+      },
+      destroy: function () {
+        var i = _sceneLightViews.indexOf(view);
+        if (i !== -1) _sceneLightViews.splice(i, 1);
+        el.innerHTML = '';
+      }
+    };
+    _sceneLightViews.push(view);
+    view.sync();
+    return view;
+  }
+
   // --- the low-light toggle -------------------------------------------------
 
   var _onBackgroundTilt = null;
@@ -6458,6 +6645,13 @@ var VideoEffects = (function () {
     attachOrbit: attachOrbit,
     renderScenePreview: renderScenePreview,
     sceneStats: sceneStats,
+    SCENE_LIGHT_KEY: SCENE_LIGHT_KEY,
+    SCENE_LIGHT_MODES: SCENE_LIGHT_MODES,
+    readSceneLight: readSceneLight,
+    writeSceneLight: writeSceneLight,
+    sceneLight: sceneLight,
+    sceneLightLabel: sceneLightLabel,
+    renderSceneLight: renderSceneLight,
     ORBIT_LIMIT: ORBIT_LIMIT,
     getCustomImage: getCustomImage,
     setCustomImage: setCustomImage,

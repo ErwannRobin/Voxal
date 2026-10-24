@@ -317,6 +317,84 @@ var VideoScenes = (function () {
     return cur;
   }
 
+  // --- the scene's light, chosen rather than measured -----------------------
+  //
+  // By default the scene is lit to match YOU (lookFromStats() above): a dim
+  // room gets an evening. The person can choose instead (Settings → Video →
+  // Scene light, video-effects.js): a fixed time of day, the clock, or the
+  // screen's light or dark mode. What is chosen is only the look's exposure
+  // and tint — the light's side, its hardness and where you are still come
+  // from the camera — so a keyed peer, who draws the scene from the look in
+  // the offer, sees the same choice with nothing added to the protocol.
+  //
+  // Exposure is what the scenes already key their evening on (night =
+  // smoothstep(0.62, 0.28, exposure) in the engine): 0.42 is dusk, half lit;
+  // 0.25 is night, every lamp on. Tints are colours, renormalised to unit
+  // luma, inside the measured range (LOOK_TINT_MIN..MAX).
+  var LIGHTS = [
+    { id: 'morning',   label: 'Morning',   exposure: 0.95, tint: [0.97, 1.0, 1.07] },
+    { id: 'midday',    label: 'Mid-day',   exposure: 1.2,  tint: [1.0, 1.0, 1.0] },
+    { id: 'afternoon', label: 'Afternoon', exposure: 1.0,  tint: [1.07, 1.0, 0.9] },
+    { id: 'evening',   label: 'Evening',   exposure: 0.42, tint: [1.13, 0.98, 0.84] },
+    { id: 'night',     label: 'Night',     exposure: 0.25, tint: [0.92, 0.98, 1.13] }
+  ];
+  // The light of the day by the local clock: these hours hold the named
+  // light, and the hours between blend from one to the next.
+  var CLOCK = [[0, 'night'], [5.5, 'night'], [7.5, 'morning'], [10, 'morning'],
+               [12.5, 'midday'], [14.5, 'midday'], [17, 'afternoon'],
+               [19.5, 'evening'], [21.5, 'night'], [24, 'night']];
+
+  function lightById(id) {
+    for (var i = 0; i < LIGHTS.length; i++) if (LIGHTS[i].id === id) return LIGHTS[i];
+    return null;
+  }
+  function unitTint(t) {
+    var y = 0.2126 * t[0] + 0.7152 * t[1] + 0.0722 * t[2];
+    return [t[0] / y, t[1] / y, t[2] / y];
+  }
+  // The light at `hour` (0..24, fractional) of the clock: exposure blended in
+  // log space (a stop is a stop at noon and at dusk), tint linearly.
+  function lightAtHour(hour) {
+    hour = ((hour % 24) + 24) % 24;
+    for (var i = 1; i < CLOCK.length; i++) {
+      if (hour > CLOCK[i][0]) continue;
+      var a = lightById(CLOCK[i - 1][1]), b = lightById(CLOCK[i][1]);
+      var span = CLOCK[i][0] - CLOCK[i - 1][0];
+      var k = span > 0 ? (hour - CLOCK[i - 1][0]) / span : 0;
+      k = k * k * (3 - 2 * k);
+      return {
+        exposure: Math.exp(Math.log(a.exposure) * (1 - k) + Math.log(b.exposure) * k),
+        tint: unitTint([0, 1, 2].map(function (c) { return a.tint[c] * (1 - k) + b.tint[c] * k; }))
+      };
+    }
+    return { exposure: LIGHTS[4].exposure, tint: unitTint(LIGHTS[4].tint) };
+  }
+  // What the clock's light is called at `hour`: one light's id, or the two it
+  // is between ('afternoon>evening').
+  function clockLightName(hour) {
+    hour = ((hour % 24) + 24) % 24;
+    for (var i = 1; i < CLOCK.length; i++) {
+      if (hour > CLOCK[i][0]) continue;
+      var a = CLOCK[i - 1][1], b = CLOCK[i][1];
+      return a === b ? a : a + '>' + b;
+    }
+    return 'night';
+  }
+  // The chosen light as { exposure, tint }, or null for 'auto' (match the
+  // camera). `date` is the clock's now; `dark` whether the screen is in dark
+  // mode (for 'screen': a light screen is the middle of the day, a dark one
+  // the evening — the scene follows the screen it is shown beside).
+  function chosenLight(mode, date, dark) {
+    var L = lightById(mode);
+    if (L) return { exposure: L.exposure, tint: unitTint(L.tint) };
+    if (mode === 'clock') {
+      var d = date || new Date();
+      return lightAtHour(d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600);
+    }
+    if (mode === 'screen') return chosenLight(dark ? 'evening' : 'midday');
+    return null;
+  }
+
   // --- the shaders ----------------------------------------------------------
   //
   // GLSL ES 3.00, highp (guaranteed in a WebGL2 fragment shader — and needed:
@@ -4345,6 +4423,10 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     isSoftwareGL: isSoftwareGL,
     THUMB_TIME: THUMB_TIME,
     defaultLook: defaultLook,
+    LIGHTS: LIGHTS,
+    lightAtHour: lightAtHour,
+    clockLightName: clockLightName,
+    chosenLight: chosenLight,
     measureSubject: measureSubject,
     lookFromStats: lookFromStats,
     easeLook: easeLook,
