@@ -145,6 +145,12 @@ Work happens in worktree `../voxal-engine-wt`, branch `feat/scene-engine-v2-int`
   SwiftShader first frame 1.0-1.3 s (old 5.8 s), 5 programs, 229k tris. Weak: backlit
   casale/cypresses dark, pine crown low in portrait, distant wheat flat.
   Kit requests: shadow fade by footprint; `vertexHead` on `k.shader`.
-- Next: office, cybercafe; then refinement, bench old vs new
+- Office on the engine: Copenhagen studio at 10:30, per-pixel sun through the window,
+  rectangle window light, baked room bounce. 248/216 kb/s vs 299/159 (frozen 1.36x old,
+  accepted for the detail), GPU ~2 ms, SwiftShader first 1.5 s, 6 programs, 41k tris.
+  Local 4-8x MSAA target (frozen 435 -> 216 kb/s): candidate for the engine. Smooth alpha
+  by position (617 -> 515 kb/s): try on penthouse. Test fix: the camera-size resolve test
+  compiles the module before `ensureScene()` and reads age/look before awaiting the ref.
+- Next: cybercafe; then refinement, bench old vs new
   (`scripts/scene-bench.mjs --compare`), full suite.
 

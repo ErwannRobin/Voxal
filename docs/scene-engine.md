@@ -171,7 +171,8 @@ Then set `module: true` on its catalogue entry in `src/video-scenes.js`.
 | island | Three.js | 509 / 382 vs 1171 / 751 |
 | mountain | Three.js | 167 / 217 vs 706 / 593 |
 | countryside | Three.js | 343 / 292 vs 381 / 330 |
-| office, cybercafe | old shader (behind the same interface) | — |
+| office | Three.js | 248 / 216 vs 299 / 159 (frozen above old: detail, by choice) |
+| cybercafe | old shader (behind the same interface) | — |
 
 ## Looking at a scene
 

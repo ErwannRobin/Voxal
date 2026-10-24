@@ -1183,6 +1183,9 @@ test.describe('in the camera pipeline', () => {
       // small enough that the larger buffer would be the camera's own size,
       // and there would be no detail left to gain.
       p.sceneScaleStep = p.sceneScaleSteps.length - 1;
+      // Compiled first, as a pick does: a scene built on the engine loads its
+      // module asynchronously, and ensureScene() only takes a ready renderer.
+      if (!p.sceneRenderers.office) p.sceneRenderers.office = await VideoScenes.createRenderer(gl, 'office', p.sceneOpts());
       // Synchronously, so no other frame can be drawn in between.
       p.ensureScene('office');
       const first = mean(read(p.fbSceneOut[p.sceneOut], W, H));
@@ -1222,10 +1225,13 @@ test.describe('in the camera pipeline', () => {
       bctx.imageSmoothingEnabled = true;
       bctx.drawImage(sc, 0, 0, W, H);
       const stretched = bctx.getImageData(0, 0, W, H).data;
+      // Read before the reference is awaited: the camera keeps drawing (and
+      // measuring the light) while it compiles.
+      const age = p.sceneAge, look = { ...p.look };
       // The same moment, in the same light, drawn straight at the camera's size.
-      const ref = (await window.__renderScene('office', { w: W, h: H, times: [t], look: p.look })).frames[0];
+      const ref = (await window.__renderScene('office', { w: W, h: H, times: [t], look })).frames[0];
       return {
-        size: [W, H], buffer: [p.sceneW, p.sceneH], first, age: p.sceneAge, showsResolved, churn,
+        size: [W, H], buffer: [p.sceneW, p.sceneH], first, age, showsResolved, churn,
         settled: window.__rms(settled, ref, W, H), stretched: window.__rms(stretched, ref, W, H),
       };
     });

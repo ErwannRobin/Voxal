@@ -84,7 +84,7 @@ var VideoScenes = (function () {
   // swatch: what the chip shows until its real thumbnail has been rendered,
   //         and where WebGL2 is not available to render one at all.
   var SCENES = [
-    { id: 'office', label: 'Office', shadow: 0.55, wrap: 0.22, res: 0.85, hz: [12, 6],
+    { id: 'office', label: 'Office', shadow: 0.55, wrap: 0.22, res: 0.85, hz: [12, 6], module: true,
       swatch: 'linear-gradient(120deg,#d9d0c3 0%,#e8e1d6 55%,#a9c3da 100%)' },
     { id: 'island', label: 'Island', shadow: 0.30, wrap: 0.36, res: 0.80, hz: [10, 5], module: true,
       swatch: 'linear-gradient(180deg,#7fb2df 0%,#cfe6ef 48%,#3fa3a6 52%,#e9dcbc 100%)' },
