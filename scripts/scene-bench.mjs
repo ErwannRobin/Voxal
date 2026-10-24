@@ -752,7 +752,7 @@ const withTimeout = (p, ms, what) => {
   return Promise.race([p, timer]).finally(() => clearTimeout(t));
 };
 const loads = () => os.loadavg().map((v) => +v.toFixed(2));
-const r1 = (v) => (v == null ? '-' : v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2));
+function r1(v) { return v == null ? '-' : v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2); }
 
 function git(...a) { try { return execFileSync('git', a, { cwd: ROOT, encoding: 'utf8' }).trim(); } catch (e) { return null; } }
 
