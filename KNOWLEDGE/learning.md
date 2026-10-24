@@ -445,3 +445,19 @@ Design: `docs/video-effects.md`. Preview any scene/look headlessly with `make sc
 - The scene spec's "night scene must be a picture" floor (mean luma > 25, crushed < 25%) applies to a dark scene too: lift the mist and the floor rather than the exposure.
 - Adding a chip widens the picker: the popover is one nowrap strip (`max-width` now 492 px for nine chips); a tenth needs a different layout.
 - `make cap-sync` output (`ios/…/public`, `android/…/public`) is not tracked, so a `src/` change needs no committed mirror.
+
+## Scene engine (Three.js on the pipeline's context; design in `docs/scene-engine.md`)
+
+- **`renderer.resetState()` before every Three draw, and the pipeline's own state put back after** (`restoreState()` in `engine.js`). Three's cache knows nothing of the Processor's draws (stale cache = GL errors, wrong picture); and what Three leaves — `UNPACK_ALIGNMENT 4` (`resetState()` sets 4 too), `UNPACK_FLIP_Y` on after any image texture, `CULL_FACE`/`FRONT_FACE CW` after a negatively scaled mesh — breaks the odd-width mask upload, flips the camera, culls the full-screen triangle. Inside `draw()` a PMREM re-bake (an evening `envFollower`) needs `resetState()` again, not `restoreState()` (`k.environment` handles it via `drawing`).
+- `compileAsync()` must see the same render target as `render()` (output colour space is in the program key; otherwise every material compiles twice). `setRenderTarget(null)` before disposing a target, or the next PMREM/render re-allocates it.
+- Three's renderer makes 3 framebuffers and a few placeholder textures in its constructor and never frees them: they die with the context (the leak test allows for them; it pins *growth*).
+- r186 removed `PCFSoftShadowMap` (warns, uses `PCFShadowMap` with a Vogel disk + IGN per pixel: stable under the jitter). `material.envMapIntensity` is ignored once `scene.environment` is set — use `scene.environmentIntensity`.
+- A single huge ground/sea quad misdraws on SwiftShader: use a grid whose cells grow with distance.
+- **Filter facade windows by the buffer's pixel, not the picture's**: picture-pixel filtering (`footprint()`) kept windows the jittered redraws disagree about — 1050 vs 556 kb/s frozen on the penthouse. `facadePatch()` defaults to the buffer.
+- Thin bright lines (neon strips) alias into blocks through a half-size planar mirror: draw their floor reflections as projected geometry instead.
+- A scene module that fails to load silently falls back to its old shader (by design, for users) — the scene spec checks `renderer.engine` so a broken module cannot pass the tests on the old picture.
+- `scene-preview.mjs --gpu` (ANGLE Metal) gives the same pictures as SwiftShader at ~20× the speed; `--module <id>` draws a scene from its module before the catalogue says so.
+- **A scene's first frame is now its JavaScript, not its shaders**: building terrain/grass/books blocks the page 40–420 ms on an M5 with a warm shader cache (countryside worst; the old shaders took 22–41 ms). Cold, the two are level (~0.5–1 s). Generate heavy geometry lazily or in chunks; never per redraw.
+- **Multisample the scene's own target** (office, café): a 4–8× MSAA room halved the frozen VP9 cost (435 → 216 kb/s) — edges the jittered redraws disagreed about stop reading as motion. Turn it off on software GL (SwiftShader: +40 % per redraw).
+- A test that awaited `__renderScene` after reading pipeline state must read that state first: an engine scene's `compileAsync()` yields through `setTimeout`, and the camera keeps drawing (and measuring the light) meanwhile. `ensureScene()` takes only a compiled renderer — compile with `createRenderer()` first.
+

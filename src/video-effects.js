@@ -2151,7 +2151,7 @@ var VideoEffects = (function () {
     // "you do not pay for what you did not pick" rule as off. See ensureScene().
     this.sceneId = null;
     this.scene = null;
-    this.sceneProgs = {};
+    this.sceneRenderers = {};
     this.pResolve = undefined; // compiled with the first scene, null if it failed (see resolveScene())
     this.texSceneOut = null;   // [2]: the scene at the camera's size, taking turns
     this.fbSceneOut = null;
@@ -2707,11 +2707,11 @@ var VideoEffects = (function () {
       // Read by keyedReason(): with nothing drawn yet, the keyed stream says
       // "compiling" rather than "not a scene".
       this.sceneCompiling = true;
-      var ready = this.sceneProgs[id] ? Promise.resolve(this.sceneProgs[id])
-                                      : VideoScenes.compileProgramAsync(gl, id);
-      return ready.then(function (prog) {
-        if (self.stopped || self.gl !== gl) return;
-        self.sceneProgs[id] = prog;
+      var ready = this.sceneRenderers[id] ? Promise.resolve(this.sceneRenderers[id])
+                                      : VideoScenes.createRenderer(gl, id, this.sceneOpts());
+      return ready.then(function (r) {
+        if (self.stopped || self.gl !== gl) { if (r !== self.sceneRenderers[id]) r.dispose(); return; }
+        self.sceneRenderers[id] = r;
         if (self.mode !== want) return;          // a later pick won
         self.ensureScene(id);
       }).catch(function (e) {
@@ -2805,7 +2805,7 @@ var VideoEffects = (function () {
     }
     // Another scene (or the same one, picked again) starts its picture over.
     this.sceneAge = 0;
-    if (!this.sceneProgs[id]) this.sceneProgs[id] = VideoScenes.compileProgram(gl, id);
+    if (!this.sceneRenderers[id]) this.sceneRenderers[id] = VideoScenes.createRendererSync(gl, id, this.sceneOpts());
     this.sceneId = id;
     this.scene = want;
     // Each scene brings its own redraw rate; a new one starts at the top of
@@ -2867,6 +2867,10 @@ var VideoEffects = (function () {
   // drawing the scene for this device's camera.
   Processor.prototype.sceneView = function () { return _tilt; };
 
+  // What a scene engine may spend on this pipeline's scene (shadow map size,
+  // reflections, particles): see quality in src/scenes/engine.js.
+  Processor.prototype.sceneOpts = function () { return { quality: 'full', mobile: IS_MOBILE }; };
+
   // Whether drawScene() will redraw on this frame (its own rate gate).
   Processor.prototype.sceneDue = function (now) {
     var hz = this.sceneHzSteps[this.sceneStep];
@@ -2882,15 +2886,14 @@ var VideoEffects = (function () {
     var hz = this.sceneHzSteps[this.sceneStep];
     if (this.lastScene && (now - this.lastScene) < 1000 / hz) return;
     this.lastScene = now;
-    var prog = this.sceneProgs[this.sceneId];
-    if (!prog) return;
+    var r = this.sceneRenderers[this.sceneId];
+    if (!r) return;
     // The clock starts where the chip's thumbnail was taken, so the first
     // frame is the picture that was picked.
     var t = VideoScenes.THUMB_TIME + (now - this.sceneStart) / 1000;
     var at = this.texSceneOut ? VideoScenes.JITTER[this.sceneLook++ % VideoScenes.JITTER.length] : null;
-    VideoScenes.setUniforms(gl, prog, this.sceneW, this.sceneH, t, this.look,
-                            at ? { jitter: at, detail: this.canvas.height } : null, this.sceneView());
-    this.drawQuad(this.fbScene, this.sceneW, this.sceneH);
+    r.draw(this.fbScene, this.sceneW, this.sceneH, t, this.look,
+           at ? { jitter: at, detail: this.canvas.height } : null, this.sceneView());
     gl.bindTexture(gl.TEXTURE_2D, this.texScene);
     gl.generateMipmap(gl.TEXTURE_2D);
     if (at) this.resolveScene(at);
@@ -3819,11 +3822,12 @@ var VideoEffects = (function () {
     });
     if (this.pResolve) try { gl.deleteProgram(this.pResolve); } catch (e) { /* ignore */ }
     this.pResolve = undefined;
-    var progs = this.sceneProgs;
-    Object.keys(progs).forEach(function (k) {
-      try { gl.deleteProgram(progs[k].program); } catch (e) { /* ignore */ }
+    var made = this.sceneRenderers;
+    Object.keys(made).forEach(function (k) {
+      try { made[k].dispose(); } catch (e) { /* ignore */ }
     });
-    this.sceneProgs = {};
+    VideoScenes.releaseContext(gl);
+    this.sceneRenderers = {};
     // A rebuilt context compiles its scene again (applyBackground); until it
     // lands, the blur shows rather than a scene with no program behind it.
     this.sceneId = null;
@@ -3999,7 +4003,7 @@ var VideoEffects = (function () {
     // The scene, kept exactly as Processor keeps it: its methods are borrowed.
     this.sceneId = null;
     this.scene = null;
-    this.sceneProgs = {};
+    this.sceneRenderers = {};
     this.pResolve = undefined;
     this.texSceneOut = null;
     this.fbSceneOut = null;
@@ -4072,6 +4076,9 @@ var VideoEffects = (function () {
   // The scene turns the way the sender's phone has, as the strip on the
   // frame says; none when it does not carry one.
   KeyInProcessor.prototype.sceneView = function () { return this.view; };
+  // A peer's scene: drawn on this device for someone else's picture, so it
+  // spends less (smaller shadow map and reflections).
+  KeyInProcessor.prototype.sceneOpts = function () { return { quality: 'receiver', mobile: IS_MOBILE }; };
 
   // Read the strip off the newest frame: 32 cells along the top edge, sampled
   // at their centres into a 32x1 canvas. Called only when the scene is about
@@ -4261,11 +4268,12 @@ var VideoEffects = (function () {
         self.check();
         var s = self.sizeFor(self.video.videoWidth, self.video.videoHeight);
         self.initGL(s.w, s.h);
-        return VideoScenes.compileProgramAsync(self.gl, id);
+        return VideoScenes.createRenderer(self.gl, id, self.sceneOpts());
       })
-      .then(function (prog) {
+      .then(function (r) {
+        if (self.stopped || self.dead) r.dispose();
         self.check();
-        self.sceneProgs[id] = prog;
+        self.sceneRenderers[id] = r;
         self.wantScene = id;
         self.ensureScene(id);
         self.openOutput();
@@ -4665,10 +4673,13 @@ var VideoEffects = (function () {
     if (this.stopped || this.dead || !this.gl) return Promise.reject(new Error('key-in is not running'));
     this.wantScene = id;
     var gl = this.gl;
-    var ready = this.sceneProgs[id] ? Promise.resolve(this.sceneProgs[id]) : VideoScenes.compileProgramAsync(gl, id);
-    return ready.then(function (prog) {
-      if (self.stopped || self.gl !== gl) throw new Error('key-in went away');
-      self.sceneProgs[id] = prog;
+    var ready = this.sceneRenderers[id] ? Promise.resolve(this.sceneRenderers[id]) : VideoScenes.createRenderer(gl, id, this.sceneOpts());
+    return ready.then(function (r) {
+      if (self.stopped || self.gl !== gl) {
+        if (r !== self.sceneRenderers[id]) r.dispose();
+        throw new Error('key-in went away');
+      }
+      self.sceneRenderers[id] = r;
       if (self.wantScene !== id) return self.sceneId;   // a later offer won
       self.ensureScene(id);
       return self.sceneId;
@@ -4710,13 +4721,14 @@ var VideoEffects = (function () {
     [this.pKeyMask, this.pKeyComp, this.pFeather, this.pResolve].forEach(function (p) {
       if (p) try { gl.deleteProgram(p); } catch (e) { /* ignore */ }
     });
-    var progs = this.sceneProgs;
-    Object.keys(progs).forEach(function (k) {
-      try { gl.deleteProgram(progs[k].program); } catch (e) { /* ignore */ }
+    var made = this.sceneRenderers;
+    Object.keys(made).forEach(function (k) {
+      try { made[k].dispose(); } catch (e) { /* ignore */ }
     });
+    VideoScenes.releaseContext(gl);
     if (this.quad) try { gl.deleteBuffer(this.quad); } catch (e) { /* ignore */ }
     if (this.vao) try { gl.deleteVertexArray(this.vao); } catch (e) { /* ignore */ }
-    this.sceneProgs = {};
+    this.sceneRenderers = {};
     this.pResolve = undefined;
     this.sceneId = null;
     this.scene = null;
@@ -5261,7 +5273,7 @@ var VideoEffects = (function () {
     stage.appendChild(hud);
     el.appendChild(stage);
 
-    var canvas = null, gl = null, buf = null, prog = null, progId = null;
+    var canvas = null, gl = null, prog = null, progId = null;
     var raf = 0, loadToken = 0, lastDraw = 0, t0 = 0;
     var visible = false, destroyed = false, failed = '';
     var view = null;
@@ -5291,12 +5303,12 @@ var VideoEffects = (function () {
       if (raf) { cancelAnimationFrame(raf); raf = 0; }
       loadToken++;
       if (gl) {
-        try { if (prog) gl.deleteProgram(prog.program); } catch (e) { /* lost */ }
-        try { if (buf) gl.deleteBuffer(buf); } catch (e) { /* lost */ }
+        try { if (prog) prog.dispose(); } catch (e) { /* lost */ }
+        VideoScenes.releaseContext(gl);
         try { var lose = gl.getExtension('WEBGL_lose_context'); if (lose) lose.loseContext(); } catch (e) { /* lost */ }
       }
       if (canvas) { canvas.width = canvas.height = 0; if (canvas.parentNode) canvas.parentNode.removeChild(canvas); }
-      canvas = gl = buf = prog = null;
+      canvas = gl = prog = null;
       progId = null;
     }
 
@@ -5317,11 +5329,6 @@ var VideoEffects = (function () {
         return false;
       }
       stage.insertBefore(canvas, stage.firstChild);
-      buf = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-      gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
       var mine = canvas;
       canvas.addEventListener('webglcontextlost', function (e) {
         e.preventDefault();
@@ -5340,10 +5347,10 @@ var VideoEffects = (function () {
 
     function load(id) {
       var token = ++loadToken;
-      VideoScenes.compileProgramAsync(gl, id).then(function (p) {
-        if (destroyed || token !== loadToken || !gl) { try { if (gl) gl.deleteProgram(p.program); } catch (e) { /* lost */ } return; }
+      VideoScenes.createRenderer(gl, id, { quality: 'preview', mobile: IS_MOBILE }).then(function (p) {
+        if (destroyed || token !== loadToken || !gl) { try { p.dispose(); } catch (e) { /* lost */ } return; }
         // The old scene keeps being drawn until the new one is ready.
-        try { if (prog) gl.deleteProgram(prog.program); } catch (e) { /* lost */ }
+        try { if (prog) prog.dispose(); } catch (e) { /* lost */ }
         prog = p; progId = id;
         say('');
         hud.classList.remove('hidden');
@@ -5363,10 +5370,7 @@ var VideoEffects = (function () {
       if (now - lastDraw < 1000 / PREVIEW_FPS) return;
       lastDraw = now;
       var w = canvas.width, h = canvas.height;
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.viewport(0, 0, w, h);
-      VideoScenes.setUniforms(gl, prog, w, h, VideoScenes.THUMB_TIME + (now - t0) / 1000, look, null, view);
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      prog.draw(null, w, h, VideoScenes.THUMB_TIME + (now - t0) / 1000, look, null, view);
     }
 
     // Level-triggered, like the rest of the settings controls: work out from

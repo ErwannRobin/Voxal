@@ -393,8 +393,8 @@ test.describe('staying out of the user\'s own pipeline', () => {
       // scene fails to compile — the start rejects and must release what it
       // made. Without loseContext() Chromium evicts the oldest context at the
       // seventeenth: the user's camera.
-      const real = VideoScenes.compileProgramAsync;
-      VideoScenes.compileProgramAsync = () => Promise.reject(new Error('no scene for you'));
+      const real = VideoScenes.createRenderer;
+      VideoScenes.createRenderer = () => Promise.reject(new Error('no scene for you'));
       const src = window.__mkSource();
       window.__src = src;
       const errors = [];
@@ -408,7 +408,7 @@ test.describe('staying out of the user\'s own pipeline', () => {
         try { await VideoEffects.keyIn(src, window.__offer()); } catch (e) { errors.push(e.message); }
       }
       HTMLCanvasElement.prototype.getContext = realGet;
-      VideoScenes.compileProgramAsync = real;
+      VideoScenes.createRenderer = real;
       let localDraws = 0;
       const localDraw = lp.draw;
       lp.draw = function (now) { localDraws++; return localDraw.call(this, now); };
@@ -476,12 +476,12 @@ test.describe('a running receiver', () => {
       const moved = await h.setOffer(window.__offer({ scene: 'mountain', look }));
       const afterMove = { got: moved, scene: h.scene(), target: p.lookTarget.exposure };
 
-      const real = VideoScenes.compileProgramAsync;
-      VideoScenes.compileProgramAsync = (gl, id) => id === 'island' ? Promise.reject(new Error('cannot draw an island'))
-        : real(gl, id);
+      const real = VideoScenes.createRenderer;
+      VideoScenes.createRenderer = (gl, id, o) => id === 'island' ? Promise.reject(new Error('cannot draw an island'))
+        : real(gl, id, o);
       let failed = null;
       try { await h.setOffer(window.__offer({ scene: 'island' })); } catch (e) { failed = e.message; }
-      VideoScenes.compileProgramAsync = real;
+      VideoScenes.createRenderer = real;
       const t = p.lastDraw;
       await window.__waitFor(() => p.lastDraw > t, 5000);
       const nullOffer = await h.setOffer(window.__offer({ scene: null }));
@@ -542,7 +542,7 @@ test.describe('a running receiver', () => {
     const seen = await page.evaluate(async () => {
       const h = await window.__start();
       const p = window.__p;
-      const progs = [p.pKeyComp, p.pKeyMask, p.sceneProgs.office];
+      const progs = [p.pKeyComp, p.pKeyMask, p.sceneRenderers.office];
       const gl = p.gl;
       // Twice the size, same shape: the picture arriving bigger is not news.
       const bigger = window.__mkSource(320, 240);
@@ -555,7 +555,7 @@ test.describe('a running receiver', () => {
       await window.__waitFor(() => p.canvas.height === 90, 5000);
       await window.__nextDraw();
       const newShape = [p.canvas.width, p.canvas.height];
-      const kept = progs[0] === p.pKeyComp && progs[1] === p.pKeyMask && progs[2] === p.sceneProgs.office && gl === p.gl;
+      const kept = progs[0] === p.pKeyComp && progs[1] === p.pKeyMask && progs[2] === p.sceneRenderers.office && gl === p.gl;
       const sceneSize = [p.texSceneOut ? 1 : 0, p.sceneW <= 160];
       const out = h.stream.getVideoTracks()[0].readyState;
       p.applyOffer({ size: [1920, 1080] });

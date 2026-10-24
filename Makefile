@@ -3,7 +3,7 @@
         coverage-api coverage-summary coverage-badge bench bench-app bench-audio bench-video \
         bench-report bench-publish bench-history \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
-        seg-assets emoji-data promo-assets scene-preview
+        seg-assets emoji-data promo-assets scene-preview three-vendor
 
 # Default target
 help:
@@ -20,6 +20,7 @@ help:
 	@echo "  seg-assets   Stage the background-effects runtime into src/assets/seg"
 	@echo "  promo-assets Re-embed the icon and fonts in docs/promo.html (the 30 s film)"
 	@echo "  scene-preview Render the animated backgrounds to PNG (scene-previews/); ARGS=... passes options"
+	@echo "  three-vendor Rebuild src/assets/three/three.min.js from the pinned three version"
 	@echo "  cap-sync     Sync web assets to iOS & Android"
 	@echo "  cap-ios      Open Xcode (iOS)"
 	@echo "  cap-android  Open Android Studio"
@@ -131,12 +132,21 @@ emoji-data:
 promo-assets:
 	@node scripts/promo-assets.mjs
 
-# Renders the five animated background scenes to PNG files (and a contact sheet)
+# Renders the six animated background scenes to PNG files (and a contact sheet)
 # in scene-previews/, so a change to src/video-scenes.js can be looked at.
 # Options go through ARGS, e.g.  make scene-preview ARGS="mountain --person"
 # (see the header of scripts/scene-preview.mjs).
 scene-preview:
 	@node scripts/scene-preview.mjs $(ARGS)
+
+# Rebuilds src/assets/three/three.min.js, the Three.js the animated backgrounds
+# load, from the version pinned in package.json plus the addons named in
+# scripts/three-entry.mjs (one file: the app has no import map). Committed,
+# like peerjs.min.js; run it only when that version or that list changes.
+three-vendor:
+	@npx --yes esbuild@0.25.10 scripts/three-entry.mjs --bundle --minify --format=esm \
+	  --legal-comments=inline --outfile=src/assets/three/three.min.js --log-level=warning
+	@cp node_modules/three/LICENSE src/assets/three/LICENSE
 
 # Stages the ~12 MB MediaPipe vision runtime into src/assets/seg/. The copy
 # itself lives in seg-assets.sh so this target and the Vercel deploy

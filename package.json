@@ -25,7 +25,8 @@
     "eslint": "^10.13.0",
     "globals": "^17.13.0",
     "monocart-coverage-reports": "^2.13.2",
-    "peer": "^1.0.2"
+    "peer": "^1.0.2",
+    "three": "0.186.1"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.3",

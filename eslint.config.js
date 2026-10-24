@@ -22,6 +22,7 @@ export default [
       // Vendored / generated — not ours to lint.
       'src/assets/peerjs.min.js',
       'src/assets/seg/**',
+      'src/assets/three/**',
       'src/emoji-data.js',
       'src/build-info.js',
     ],
@@ -86,6 +87,15 @@ export default [
       }],
     },
   },
+  // The animated backgrounds' engine and scenes: ES modules, loaded with
+  // import() by video-scenes.js when a scene is first drawn (see
+  // src/scenes/engine.js). They import three by relative path and declare no
+  // globals.
+  {
+    files: ['src/scenes/**/*.js'],
+    languageOptions: { sourceType: 'module' },
+  },
+
   {
     files: ['src/assets/rnnoise-processor.js'],
     languageOptions: {
