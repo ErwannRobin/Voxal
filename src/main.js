@@ -14730,7 +14730,14 @@ function initVideoBackgroundUI() {
   // whenever the mode is written (VideoEffects.writeMode tells it), and only
   // while it is on screen.
   if (keyedApi('renderScenePreview')) {
-    _videoBgPreview = VideoEffects.renderScenePreview(document.getElementById('settings-bg-preview'));
+    _videoBgPreview = VideoEffects.renderScenePreview(document.getElementById('settings-bg-preview'), {
+      // What the cost line says about the call in progress: this window owns
+      // the bandwidth samples (_collectBandwidthSample, every few seconds).
+      live: function() {
+        if (!inRoom || !localVideoStream || !_bandwidthCurrent) return null;
+        return { sendingBps: _bandwidthCurrent.out.camera };
+      }
+    });
   }
 
   // Blur strength (Settings → Video, under the picker). Unlike the mode, this

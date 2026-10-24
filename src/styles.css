@@ -4732,7 +4732,8 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
   pointer-events: none;
 }
 .scene-preview-hud.hidden { display: none; }
-.scene-preview-recentre {
+.scene-preview-buttons { display: inline-flex; gap: 6px; flex: 0 0 auto; }
+.scene-preview-btn {
   pointer-events: auto;
   padding: 3px 10px;
   border: 1px solid rgba(255, 255, 255, 0.35);
@@ -4742,8 +4743,78 @@ html[data-theme="light"] .log-consent-text strong { color: #b45309; }
   font-size: 11.5px;
   cursor: pointer;
 }
-.scene-preview-recentre:hover { border-color: rgba(255, 255, 255, 0.6); }
-.scene-preview-recentre.hidden { display: none; }
+.scene-preview-btn:hover { border-color: rgba(255, 255, 255, 0.6); }
+.scene-preview-btn.hidden { display: none; }
+.scene-preview-person[aria-pressed="false"] { opacity: 0.6; }
+/* A finger turns the scene sideways in the card; up and down stays the page's
+   scroll. In the full window it turns every way. */
+.scene-preview-stage { touch-action: pan-y; }
+
+/* Full window (setFull()): the stage is moved to <body>, above the settings
+   modal (400) and below the toast and dev log. */
+html.scene-preview-open, html.scene-preview-open body { overflow: hidden; }
+.scene-preview-stage.is-full {
+  position: fixed;
+  inset: 0;
+  z-index: 9050;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  touch-action: none;
+}
+.scene-preview-stage.is-full .scene-preview-hud {
+  padding: 28px max(14px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+  font-size: 13px;
+}
+.scene-preview-stage.is-full .scene-preview-btn { padding: 7px 14px; font-size: 13px; }
+.scene-preview-placeholder {
+  aspect-ratio: 16 / 9;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+}
+.scene-preview-title {
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: max(14px, env(safe-area-inset-top)) 16px 28px;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0));
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+.scene-preview-title strong { font-size: 16px; font-weight: 600; }
+.scene-preview-title span { font-size: 12px; opacity: 0.85; }
+.scene-preview-title.hidden { display: none; }
+/* Where you would stand: a head and shoulders in shadow, at most the bottom
+   62% of the picture, and never wider than it (an upright phone). */
+.scene-preview-outline {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  height: 62%;
+  aspect-ratio: 1;
+  max-width: 100%;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.scene-preview-outline svg { display: block; width: 100%; height: 100%; fill: rgba(8, 8, 12, 0.78); }
+.scene-preview-outline.hidden { display: none; }
+
+/* The scene's name, what is in it, and what it costs. */
+.scene-preview-info { margin-top: 10px; }
+.scene-preview-info.hidden { display: none; }
+.scene-preview-name { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--text); }
+.scene-preview-blurb { margin: 2px 0 8px; font-size: 12.5px; color: var(--text-muted); }
+.scene-preview-cost { margin: 0; display: grid; gap: 4px; font-size: 12px; }
+.scene-preview-cost > div { display: grid; grid-template-columns: 8.5em 1fr; gap: 8px; }
+.scene-preview-cost > div.hidden { display: none; }
+.scene-preview-cost dt { color: var(--text-muted); }
+.scene-preview-cost dd { margin: 0; color: var(--text); }
+@media (max-width: 420px) {
+  .scene-preview-cost > div { grid-template-columns: 1fr; gap: 0; }
+}
 /* Anything the mouse can turn: an open hand over it, a closed one while it does. */
 .orbit-ready { cursor: grab; }
 .orbit-drag, .orbit-drag * { cursor: grabbing !important; }

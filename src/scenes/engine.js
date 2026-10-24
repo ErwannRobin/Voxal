@@ -300,23 +300,33 @@ class Engine {
     this.float = !!(gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'));
     this.hdrScale = this.float ? 1 : 4;
     this.rt = null;
+    this.rts = [];
     this.out = null;
     this.dead = false;
     restoreState(gl);
   }
 
+  // The HDR target for a w x h draw. Two sizes are kept: a context that draws
+  // the same scene at two sizes (the settings preview and its cost probe, a
+  // pipeline whose buffer the governor just stepped) would otherwise free and
+  // reallocate a half-float target and its depth on every alternation.
   target(w, h) {
-    if (!this.rt) {
-      this.rt = new THREE.WebGLRenderTarget(w, h, {
+    let rt = null;
+    for (let i = 0; i < this.rts.length; i++) {
+      if (this.rts[i].width === w && this.rts[i].height === h) { rt = this.rts.splice(i, 1)[0]; break; }
+    }
+    if (!rt) {
+      if (this.rts.length >= 2) { const old = this.rts.shift(); old.depthTexture.dispose(); old.dispose(); }
+      rt = new THREE.WebGLRenderTarget(w, h, {
         type: this.float ? THREE.HalfFloatType : THREE.UnsignedByteType,
         format: THREE.RGBAFormat, depthBuffer: true,
         depthTexture: new THREE.DepthTexture(w, h),
         minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false
       });
-    } else if (this.rt.width !== w || this.rt.height !== h) {
-      this.rt.setSize(w, h);
     }
-    return this.rt;
+    this.rts.push(rt);
+    this.rt = rt;
+    return rt;
   }
 
   outputPass(fb, w, h, o) {
@@ -367,7 +377,7 @@ class Engine {
     const gl = this.gl;
     try {
       this.renderer.setRenderTarget(null);
-      if (this.rt) { this.rt.depthTexture.dispose(); this.rt.dispose(); }
+      this.rts.forEach((rt) => { rt.depthTexture.dispose(); rt.dispose(); });
       this.renderer.renderLists.dispose();
       this.renderer.dispose();
     } catch (e) { /* a lost context */ }
@@ -375,6 +385,7 @@ class Engine {
       try { gl.deleteProgram(this.out.p); gl.deleteVertexArray(this.out.vao); gl.deleteBuffer(this.out.buf); } catch (e) { /* lost */ }
     }
     this.rt = this.out = null;
+    this.rts = [];
     try { restoreState(gl); } catch (e) { /* lost */ }
   }
 }

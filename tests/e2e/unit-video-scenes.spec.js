@@ -209,13 +209,15 @@ test.afterEach(async ({ page }) => {
 });
 
 test.describe('the catalogue', () => {
-  test('six scenes, each with a label, a swatch and its own shader', async ({ page }) => {
+  test('six scenes, each with a label, a name, a blurb, a measured cost, a swatch and its own shader', async ({ page }) => {
     const seen = await page.evaluate(() => VideoScenes.SCENES.map((s) => ({
-      id: s.id, label: !!s.label, swatch: /gradient/.test(s.swatch),
+      id: s.id, label: !!s.label, name: !!s.name, blurb: !!s.blurb && s.blurb.length < 200,
+      kbps: Array.isArray(s.kbps) && s.kbps.length === 2 && s.kbps.every((v) => v > 0),
+      swatch: /gradient/.test(s.swatch),
       source: !!VideoScenes.fragmentSource(s.id),
     })));
     expect(seen.map((s) => s.id)).toEqual(SCENES);
-    for (const s of seen) expect(s).toMatchObject({ label: true, swatch: true, source: true });
+    for (const s of seen) expect(s).toMatchObject({ label: true, name: true, blurb: true, kbps: true, swatch: true, source: true });
   });
 
   // "Purely generated, no assets": nothing a scene draws is fetched. The one
@@ -1454,6 +1456,7 @@ test.describe('the picker', () => {
         .filter((c) => /url\("(blob|data):/.test(c.style.backgroundImage)).length), { timeout: 100_000 })
       .toBe(SCENES.length);
     const labels = await chips.evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')));
-    expect(labels).toEqual(['Office', 'Island', 'Cyber café', 'Mountain', 'Countryside', 'Neon rain']);
+    // Named by the place, not the kind of place.
+    expect(labels).toEqual(['Copenhagen studio', 'Lagoon deck', 'Lisbon espresso bar', 'Dolomites lake', 'Val d’Orcia', 'Neon rain']);
   });
 });

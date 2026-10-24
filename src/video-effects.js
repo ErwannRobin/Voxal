@@ -2762,8 +2762,8 @@ var VideoEffects = (function () {
     var want = VideoScenes.byId(id);
     var cw = this.canvas.width, ch = this.canvas.height;
     var scale = this.sceneScaleSteps ? this.sceneScaleSteps[this.sceneScaleStep] : 1;
-    var k = Math.min(1, SCENE_LONG * scale * (want.res || 1) / Math.max(cw, ch));
-    var nw = Math.max(2, Math.round(cw * k)), nh = Math.max(2, Math.round(ch * k));
+    var size = sceneBufferSize(cw, ch, scale, want);
+    var nw = size[0], nh = size[1];
     if (this.texScene && (nw !== this.sceneW || nh !== this.sceneH)) {
       // Another scene, another size: the buffers follow it.
       try { gl.deleteTexture(this.texScene); } catch (e) { /* ignore */ }
@@ -2892,11 +2892,41 @@ var VideoEffects = (function () {
     // frame is the picture that was picked.
     var t = VideoScenes.THUMB_TIME + (now - this.sceneStart) / 1000;
     var at = this.texSceneOut ? VideoScenes.JITTER[this.sceneLook++ % VideoScenes.JITTER.length] : null;
+    // What a redraw costs, for sceneStats(): the GPU's own time where the
+    // browser can say (a query, read a few frames later), and the time this
+    // thread spends issuing it everywhere.
+    if (!this.sceneTimer || this.sceneTimer.gl !== gl) this.sceneTimer = gpuTimer(gl);
+    var timing = this.sceneTimer && this.sceneTimer.begin();
+    var c0 = performance.now();
     r.draw(this.fbScene, this.sceneW, this.sceneH, t, this.look,
            at ? { jitter: at, detail: this.canvas.height } : null, this.sceneView());
     gl.bindTexture(gl.TEXTURE_2D, this.texScene);
     gl.generateMipmap(gl.TEXTURE_2D);
     if (at) this.resolveScene(at);
+    if (timing) this.sceneTimer.end();
+    this.sceneCpuMs = easeMs(this.sceneCpuMs, performance.now() - c0);
+    if (this.sceneTimer) this.sceneGpuMs = this.sceneTimer.poll();
+  };
+
+  // What the scene costs this pipeline right now, for the settings' cost line
+  // (VideoEffects.sceneStats()). Null without a scene.
+  Processor.prototype.sceneStats = function () {
+    if (!this.sceneId || !this.scene) return null;
+    var hz = this.sceneHzSteps || [];
+    return {
+      id: this.sceneId,
+      buffer: [this.sceneW, this.sceneH],
+      picture: [this.canvas.width, this.canvas.height],
+      hz: hz[this.sceneStep] || 0,
+      hzTop: hz[0] || 0,
+      // Walked down by the governor (resolution or redraw rate) on a device
+      // that could not keep up.
+      stepped: !!(this.sceneScaleStep || this.sceneStep),
+      gpuMs: this.sceneGpuMs == null ? null : this.sceneGpuMs,
+      cpuMs: this.sceneCpuMs == null ? null : this.sceneCpuMs,
+      fps: this.achievedFps || null,
+      targetFps: this.targetFps()
+    };
   };
 
   // Add the redraw just made to the scene's picture at the camera's size: one
@@ -3699,6 +3729,7 @@ var VideoEffects = (function () {
     var achieved = this.frames * 1000 / elapsed;
     this.frames = 0;
     this.windowStart = now;
+    this.achievedFps = achieved;
 
     if (achieved >= this.targetFps() * 0.6) { this.slowWindows = 0; return; }
     this.slowWindows++;
@@ -4884,6 +4915,11 @@ var VideoEffects = (function () {
   function onReferenceState(fn) { _onReference = fn; }
 
   function active() { return _active; }
+  // The camera pipeline's scene and what it costs (Processor.sceneStats()), or
+  // null when this document runs no camera with a scene.
+  function sceneStats() {
+    try { return _active && _active.sceneStats ? _active.sceneStats() : null; } catch (e) { return null; }
+  }
 
   function onOverload(fn) { _onOverload = fn; }
 
@@ -5028,6 +5064,53 @@ var VideoEffects = (function () {
     return b;
   }
 
+  // An exponential average of a cost in milliseconds; the first reading is
+  // taken whole.
+  function easeMs(prev, v) { return prev == null ? v : prev * 0.85 + v * 0.15; }
+
+  // Times GPU work where the browser lets a page do so
+  // (EXT_disjoint_timer_query_webgl2: Chromium on a computer; not Safari, and
+  // not most phones). A result is read a few frames after the work, never
+  // waited for, so begin()/end() cost nothing the frame would notice. Returns
+  // null where there is no such extension: the caller falls back to timing
+  // its own thread, and says so.
+  function gpuTimer(gl) {
+    var ext = null;
+    try { ext = gl.getExtension('EXT_disjoint_timer_query_webgl2'); } catch (e) { ext = null; }
+    if (!ext) return null;
+    var pending = [], open = null, ms = null;
+    return {
+      gl: gl,
+      begin: function () {
+        // One query at a time per target, and a few in flight at most: a GPU
+        // that falls behind is measured less often, not queued up.
+        if (open || pending.length >= 3) return false;
+        try { open = gl.createQuery(); gl.beginQuery(ext.TIME_ELAPSED_EXT, open); } catch (e) { open = null; return false; }
+        return true;
+      },
+      end: function () {
+        if (!open) return;
+        try { gl.endQuery(ext.TIME_ELAPSED_EXT); pending.push(open); } catch (e) { /* lost */ }
+        open = null;
+      },
+      poll: function () {
+        try {
+          // A disjoint event (the GPU's clock jumped: power state, another
+          // app) spoils every result in flight.
+          var disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT);
+          while (pending.length) {
+            var q = pending[0];
+            if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
+            pending.shift();
+            if (!disjoint) ms = easeMs(ms, gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6);
+            gl.deleteQuery(q);
+          }
+        } catch (e) { /* lost */ }
+        return ms;
+      }
+    };
+  }
+
   // --- Looking around a scene with the mouse ----------------------------------
   //
   // A phone turns its scene with the phone (setTilt()); a computer has no sensor,
@@ -5047,6 +5130,7 @@ var VideoEffects = (function () {
   var ORBIT_SLOP = 4;         // px of travel that makes a press a drag (a click still pins a tile)
   var ORBIT_KEY_STEP = 3 * Math.PI / 180;
   var ORBIT_RECENTRE_MS = 260;
+  var ORBIT_DOUBLE_TAP_MS = 320;   // a finger has no dblclick worth the name
 
   function orbitSoften(a, max) {
     var k = ORBIT_KNEE * max, m = Math.abs(a);
@@ -5074,6 +5158,7 @@ var VideoEffects = (function () {
     var swallow = 0;
     var anim = 0;
     var hover = false;
+    var lastTap = 0;
 
     function on() {
       try { return opts.enabled ? !!opts.enabled() : true; } catch (e) { return false; }
@@ -5151,10 +5236,17 @@ var VideoEffects = (function () {
       el.classList.remove('orbit-drag');
       try { if (drag) el.releasePointerCapture(drag.id); } catch (err) { /* already released */ }
     }
-    function onUp() {
+    function onUp(e) {
       var was = drag && drag.active;
       end();
       drag = null;
+      // Two taps of a finger in quick succession recentre, as a double-click
+      // does: mobile browsers do not reliably send dblclick to a page.
+      if (!was && e && e.pointerType === 'touch') {
+        var t = Date.now();
+        if (t - lastTap < ORBIT_DOUBLE_TAP_MS) { lastTap = 0; if (on()) reset(true); }
+        else lastTap = t;
+      }
       // The click that follows a drag belongs to the drag, not to whatever the
       // tile does with a click. It may never come (the pointer moved off), so
       // the flag expires on its own.
@@ -5224,22 +5316,71 @@ var VideoEffects = (function () {
 
   // --- The background on its own ----------------------------------------------
   //
-  // The picker shows five stills and the camera shows YOU in front of one; there
-  // was nowhere to just look at the room. This draws the chosen scene alone — no
-  // camera, no person, no segmentation — in Settings, and lets you turn it with
-  // the mouse (the same attachOrbit() the live camera uses), so a scene can be
-  // judged before a call and its look-around tried on its own.
+  // The picker shows small stills and the camera shows YOU in front of one;
+  // there was nowhere to just look at the room. This draws the chosen scene
+  // alone — no camera, no segmentation — in Settings, and lets you turn it with
+  // the mouse or a finger (the same attachOrbit() the live camera uses), so a
+  // scene can be judged before a call and its look-around tried on its own.
+  // "Full window" takes the picture out of the card and over the whole window,
+  // at the window's own shape — upright on a phone, as the camera would send it
+  // — with an outline of where you would stand.
   //
-  // It works only while it is on screen: a scene is a ray-marched shader, and one
-  // that nobody can see is a GPU spent on nothing (Settings is also open over a
-  // running call). Its WebGL context is released the moment it stops — a page may
-  // hold only a handful, and the camera pipeline needs one.
+  // Under it: the scene's name, what is in it, and what it costs. Upload is
+  // the encoder's measured price (`kbps` in the catalogue); the cost on THIS
+  // device is measured here, every couple of seconds, by drawing one redraw at
+  // the size a 720p call draws it (see measure()); in a call, the camera
+  // pipeline's own numbers are shown as well (sceneStats(), and opts.live()).
+  //
+  // It works only while it is on screen: a scene that nobody can see is a GPU
+  // spent on nothing (Settings is also open over a running call). Its WebGL
+  // context is released the moment it stops — a page may hold only a handful,
+  // and the camera pipeline needs one.
   var PREVIEW_FPS = 20;
-  var PREVIEW_MAX_W = 960;
+  var PREVIEW_FULL_FPS = 30;
+  var PREVIEW_MAX_W = 960;          // device pixels, in the settings card
+  var PREVIEW_FULL_LONG = 2560;     // device pixels, the long side, full window
+  var PREVIEW_PROBE_MS = 2000;      // how often the cost on this device is re-measured
+  var PREVIEW_INFO_MS = 1000;
+  // The camera size the cost on this device is measured for: what a call
+  // sends without Full HD.
+  var PREVIEW_CALL_SIZE = [1280, 720];
 
-  // Returns { sync(), destroy(), orbit }.
-  function renderScenePreview(el) {
+  // The buffer a scene is redrawn into for a camera picture of cw x ch, at
+  // `scale` on the pipeline's ladder. ensureScene() allocates exactly this.
+  function sceneBufferSize(cw, ch, scale, sc) {
+    var k = Math.min(1, SCENE_LONG * scale * ((sc && sc.res) || 1) / Math.max(cw, ch));
+    return [Math.max(2, Math.round(cw * k)), Math.max(2, Math.round(ch * k))];
+  }
+
+  function fmtMs(v) { return v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toFixed(2); }
+  function fmtBps(bps) {
+    if (!(bps > 0)) return '0 kb/s';
+    return bps >= 1e6 ? (bps / 1e6).toFixed(1) + ' Mb/s' : Math.round(bps / 1000) + ' kb/s';
+  }
+  // A share of one second of a processor's time, from a cost per redraw and
+  // the redraws a second.
+  function fmtShare(ms, hz) {
+    var pct = ms * hz / 10;
+    return pct < 1 ? 'under 1%' : pct < 10 ? pct.toFixed(1) + '%' : Math.round(pct) + '%';
+  }
+
+  // Where a person sits in the full-window preview's outline, as a look's
+  // subject box (see measureSubject()): centred, the bottom 62% of the height.
+  function outlineSubject(look, w, h) {
+    look.cx = 0.5; look.cy = 0.7;
+    look.sx = Math.min(0.48, 0.3 * h / Math.max(1, w)); look.sy = 0.3;
+  }
+
+  var OUTLINE_SVG = '<svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMax meet" aria-hidden="true">' +
+    '<path d="M0 100 C0 81 12 71 30 67 C38 65 41 61 41 56 L41 51 C34 47 30 39 30 31 ' +
+    'C30 18 39 9 50 9 C61 9 70 18 70 31 C70 39 66 47 59 51 L59 56 C59 61 62 65 70 67 ' +
+    'C88 71 100 81 100 100 Z"/></svg>';
+
+  // opts: { live() — { sendingBps } of this window's call, or null }
+  // Returns { sync(), destroy(), orbit, setFull(on), isFull(), cost() }.
+  function renderScenePreview(el, opts) {
     if (!el) return null;
+    opts = opts || {};
     el.innerHTML = '';
     el.classList.add('scene-preview');
 
@@ -5253,33 +5394,96 @@ var VideoEffects = (function () {
     note.className = 'scene-preview-note';
     note.setAttribute('aria-live', 'polite');
 
+    var outline = document.createElement('div');
+    outline.className = 'scene-preview-outline hidden';
+    outline.innerHTML = OUTLINE_SVG;
+
+    // What the full window shows of the info below the card.
+    var title = document.createElement('div');
+    title.className = 'scene-preview-title hidden';
+    var titleName = document.createElement('strong');
+    var titleCost = document.createElement('span');
+    title.appendChild(titleName);
+    title.appendChild(titleCost);
+
     var hud = document.createElement('div');
     hud.className = 'scene-preview-hud hidden';
     var hint = document.createElement('span');
     hint.className = 'scene-preview-hint';
-    // A finger on this card is a scroll, not a turn (a phone turns its camera
-    // scenes with its sensor), so only a pointer that can really drag says so.
     var fine;
     try { fine = !window.matchMedia || window.matchMedia('(pointer: fine)').matches; } catch (e) { fine = true; }
-    hint.textContent = fine ? 'Drag to look around \u00b7 double-click to recentre' : 'Preview';
-    var recentre = document.createElement('button');
-    recentre.type = 'button';
-    recentre.className = 'scene-preview-recentre hidden';
-    recentre.textContent = 'Recentre';
+    function hintText() {
+      return fine ? 'Drag to look around · double-click to recentre'
+                  : (full ? 'Drag to look around · double-tap to recentre' : 'Swipe sideways to look around');
+    }
+    var buttons = document.createElement('span');
+    buttons.className = 'scene-preview-buttons';
+    function hudButton(cls, text, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'scene-preview-btn ' + cls;
+      b.textContent = text;
+      if (label) { b.setAttribute('aria-label', label); b.title = label; }
+      // A real button inside the drag surface keeps its own press.
+      b.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+      buttons.appendChild(b);
+      return b;
+    }
+    var recentre = hudButton('scene-preview-recentre hidden', 'Recentre');
+    var personBtn = hudButton('scene-preview-person hidden', 'You', 'Show where you would stand');
+    personBtn.setAttribute('aria-pressed', 'true');
+    var fullBtn = hudButton('scene-preview-full', 'Full window', 'Show the scene over the whole window');
     hud.appendChild(hint);
-    hud.appendChild(recentre);
+    hud.appendChild(buttons);
 
     stage.appendChild(note);
+    stage.appendChild(outline);
+    stage.appendChild(title);
     stage.appendChild(hud);
     el.appendChild(stage);
 
+    // The name, what is in it, and what it costs.
+    var info = document.createElement('div');
+    info.className = 'scene-preview-info hidden';
+    var nameEl = document.createElement('p');
+    nameEl.className = 'scene-preview-name';
+    var blurbEl = document.createElement('p');
+    blurbEl.className = 'scene-preview-blurb';
+    var costEl = document.createElement('dl');
+    costEl.className = 'scene-preview-cost';
+    function costRow(cls, label) {
+      var row = document.createElement('div');
+      row.className = cls;
+      var dt = document.createElement('dt');
+      dt.textContent = label;
+      var dd = document.createElement('dd');
+      row.appendChild(dt);
+      row.appendChild(dd);
+      costEl.appendChild(row);
+      return { row: row, dd: dd };
+    }
+    var upRow = costRow('scene-cost-upload', 'Upload in a call');
+    var devRow = costRow('scene-cost-device', 'On this device');
+    var liveRow = costRow('scene-cost-live hidden', 'In your call now');
+    info.appendChild(nameEl);
+    info.appendChild(blurbEl);
+    info.appendChild(costEl);
+    el.appendChild(info);
+
     var canvas = null, gl = null, prog = null, progId = null;
-    var raf = 0, loadToken = 0, lastDraw = 0, t0 = 0;
+    var raf = 0, loadToken = 0, lastDraw = 0, t0 = 0, lastInfo = 0;
     var visible = false, destroyed = false, failed = '';
-    var view = null;
+    var view = null, full = false, showPerson = true, placeholder = null, prevFocus = null;
+    // The cost on this device: one redraw at a call's size, every so often.
+    var probe = null, timer = null, gpuMs = null, cpuMs = null, lastProbe = 0, samples = [];
+    var px = new Uint8Array(4);
 
     var orbit = attachOrbit(stage, {
       keys: true,
+      // A finger turns it too: sideways in the card, where up and down is the
+      // page's scroll (touch-action: pan-y), every way in the full window.
+      touch: true,
+      ignore: '.scene-preview-btn',
       enabled: function () { return !!prog; },
       onChange: function (v) {
         view = v;
@@ -5287,21 +5491,35 @@ var VideoEffects = (function () {
       }
     });
     recentre.addEventListener('click', function () { orbit.reset(true); stage.focus(); });
-    // The Recentre button is a real button inside the drag surface.
-    recentre.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+    personBtn.addEventListener('click', function () {
+      showPerson = !showPerson;
+      personBtn.setAttribute('aria-pressed', showPerson ? 'true' : 'false');
+      outline.classList.toggle('hidden', !(full && showPerson));
+    });
+    fullBtn.addEventListener('click', function () { setFull(!full); });
 
     function sceneId() {
       var m = readMode();
-      return m.indexOf('preset:') === 0 ? m.slice(7) : null;
+      return m.indexOf('preset:') === 0 ? VideoScenes.resolveId(m.slice(7)) : null;
     }
     function say(text) {
       note.textContent = text || '';
       note.classList.toggle('hidden', !text);
     }
 
+    function freeProbe() {
+      if (probe && gl) {
+        try { gl.deleteFramebuffer(probe.fb); gl.deleteTexture(probe.tex); } catch (e) { /* lost */ }
+      }
+      probe = null;
+    }
+    function resetCost() { gpuMs = cpuMs = null; samples = []; lastProbe = 0; }
+
     function release() {
       if (raf) { cancelAnimationFrame(raf); raf = 0; }
       loadToken++;
+      freeProbe();
+      timer = null;
       if (gl) {
         try { if (prog) prog.dispose(); } catch (e) { /* lost */ }
         VideoScenes.releaseContext(gl);
@@ -5312,12 +5530,27 @@ var VideoEffects = (function () {
       progId = null;
     }
 
+    // The canvas follows the stage: 16:9 in the card, the window's own shape
+    // (and its pixels, up to a cap) in the full window.
+    function fit() {
+      if (!canvas) return;
+      var r = stage.getBoundingClientRect();
+      var dpr = Math.min(window.devicePixelRatio || 1, full ? 2 : 1.5);
+      var w, h;
+      if (full) {
+        w = Math.max(2, r.width * dpr); h = Math.max(2, r.height * dpr);
+        var k = Math.min(1, PREVIEW_FULL_LONG / Math.max(w, h));
+        w = Math.round(w * k); h = Math.round(h * k);
+      } else {
+        w = Math.max(2, Math.round(Math.min(PREVIEW_MAX_W, (r.width || 480) * dpr)));
+        h = Math.round(w * 9 / 16);
+      }
+      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    }
+
     function open() {
-      var w = Math.max(2, Math.round(Math.min(PREVIEW_MAX_W, (stage.clientWidth || 480) * Math.min(window.devicePixelRatio || 1, 1.5))));
       canvas = document.createElement('canvas');
       canvas.className = 'scene-preview-canvas';
-      canvas.width = w;
-      canvas.height = Math.round(w * 9 / 16);
       canvas.setAttribute('aria-hidden', 'true');
       try { gl = canvas.getContext('webgl2', { alpha: false, antialias: false }); } catch (e) { gl = null; }
       if (!gl) { failed = 'Couldn’t draw the preview on this device.'; canvas = null; return false; }
@@ -5329,6 +5562,9 @@ var VideoEffects = (function () {
         return false;
       }
       stage.insertBefore(canvas, stage.firstChild);
+      fit();
+      // Test hook: measure by waiting even where the GPU's clock is readable.
+      timer = window.__voxalPreviewSyncCost ? null : gpuTimer(gl);
       var mine = canvas;
       canvas.addEventListener('webglcontextlost', function (e) {
         e.preventDefault();
@@ -5341,9 +5577,15 @@ var VideoEffects = (function () {
     }
 
     // A neutral light and nobody in front of it: the subject box is put below
-    // the picture, small, so there is no shadow or light wrap to explain.
+    // the picture, small, so there is no shadow or light wrap to explain. The
+    // full window's outline moves it to where the outline stands.
     var look = VideoScenes.defaultLook();
-    look.dirX = 0.6; look.cx = 0.5; look.cy = 3; look.sx = 0.01; look.sy = 0.01;
+    function previewLook(w, h) {
+      look.dirX = 0.6;
+      if (full && showPerson) outlineSubject(look, w, h);
+      else { look.cx = 0.5; look.cy = 3; look.sx = 0.01; look.sy = 0.01; }
+      return look;
+    }
 
     function load(id) {
       var token = ++loadToken;
@@ -5352,8 +5594,11 @@ var VideoEffects = (function () {
         // The old scene keeps being drawn until the new one is ready.
         try { if (prog) prog.dispose(); } catch (e) { /* lost */ }
         prog = p; progId = id;
+        resetCost();
+        lastProbe = performance.now();   // the first redraws warm caches: not a measurement
         say('');
         hud.classList.remove('hidden');
+        paintInfo();
         if (!raf) raf = requestAnimationFrame(frame);
       }, function () {
         if (destroyed || token !== loadToken) return;
@@ -5363,14 +5608,154 @@ var VideoEffects = (function () {
       });
     }
 
+    // One redraw of the scene at the size a 720p call draws it, into a buffer
+    // of its own, timed: by the GPU's own clock where the browser exposes one,
+    // otherwise by waiting for it (gl.finish(), then a one-pixel read) — an
+    // upper bound, the issuing included. A median of the last few.
+    function measure(time) {
+      var sc = VideoScenes.byId(progId);
+      var size = sceneBufferSize(PREVIEW_CALL_SIZE[0], PREVIEW_CALL_SIZE[1],
+                                 sceneScaleLadder(Math.max(PREVIEW_CALL_SIZE[0], PREVIEW_CALL_SIZE[1]))[0], sc);
+      if (!probe || probe.w !== size[0] || probe.h !== size[1]) {
+        freeProbe();
+        var tex = texture(gl, size[0], size[1], gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+        probe = { tex: tex, fb: framebuffer(gl, tex), w: size[0], h: size[1] };
+        gl.bindTexture(gl.TEXTURE_2D, null);
+      }
+      var lk = previewLook(probe.w, probe.h);
+      var frameInfo = { jitter: [0, 0], detail: PREVIEW_CALL_SIZE[1] };
+      var c0;
+      if (timer) {
+        var on = timer.begin();
+        c0 = performance.now();
+        prog.draw(probe.fb, probe.w, probe.h, time, lk, frameInfo, view);
+        cpuMs = easeMs(cpuMs, performance.now() - c0);
+        if (on) timer.end();
+        return;
+      }
+      try { gl.finish(); } catch (e) { /* lost */ }
+      c0 = performance.now();
+      prog.draw(probe.fb, probe.w, probe.h, time, lk, frameInfo, view);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, probe.fb);
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      samples.push(performance.now() - c0);
+      if (samples.length > 5) samples.shift();
+      var sorted = samples.slice().sort(function (a, b) { return a - b; });
+      gpuMs = sorted[sorted.length >> 1];
+    }
+
     function frame(now) {
       raf = 0;
       if (destroyed || !gl || !prog || !visible) return;
       raf = requestAnimationFrame(frame);
-      if (now - lastDraw < 1000 / PREVIEW_FPS) return;
+      if (now - lastDraw < 1000 / (full ? PREVIEW_FULL_FPS : PREVIEW_FPS)) return;
       lastDraw = now;
       var w = canvas.width, h = canvas.height;
-      prog.draw(null, w, h, VideoScenes.THUMB_TIME + (now - t0) / 1000, look, null, view);
+      var t = VideoScenes.THUMB_TIME + (now - t0) / 1000;
+      prog.draw(null, w, h, t, previewLook(w, h), null, view);
+      if (timer) { var g = timer.poll(); if (g != null) gpuMs = g; }
+      if (now - lastProbe >= PREVIEW_PROBE_MS) {
+        lastProbe = now;
+        try { measure(t); } catch (e) { /* the preview carries on unmeasured */ }
+      }
+      if (now - lastInfo >= PREVIEW_INFO_MS) paintInfo();
+    }
+
+    // The words under the picture, from what is known now.
+    function liveText(sc) {
+      var parts = [];
+      var st = sceneStats();
+      if (st && st.id === sc.id) {
+        var drawn = 'drawn at ' + st.buffer[0] + '×' + st.buffer[1] + ', ' + st.hz + ' times a second';
+        if (st.gpuMs != null) drawn += ', ' + fmtMs(st.gpuMs) + ' ms of graphics time each';
+        else if (st.cpuMs != null) drawn += ', ' + fmtMs(st.cpuMs) + ' ms of processor time each';
+        if (st.stepped) drawn += ' (stepped down to keep up)';
+        parts.push(drawn);
+        if (st.fps) parts.push('camera at ' + Math.round(st.fps) + ' fps');
+      }
+      var lv;
+      try { lv = opts.live ? opts.live() : null; } catch (e) { lv = null; }
+      if (lv && lv.sendingBps != null) parts.push('your camera is sending ' + fmtBps(lv.sendingBps));
+      return parts.join('; ');
+    }
+    function paintInfo() {
+      lastInfo = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      var id = sceneId(), sc = id && VideoScenes.byId(id);
+      info.classList.toggle('hidden', !sc);
+      title.classList.toggle('hidden', !(sc && full));
+      if (!sc) return;
+      nameEl.textContent = sc.name || sc.label;
+      blurbEl.textContent = sc.blurb || '';
+      titleName.textContent = sc.name || sc.label;
+      upRow.dd.textContent = sc.kbps
+        ? 'about ' + sc.kbps[0] + ' kb/s while you move, ' + sc.kbps[1] + ' kb/s while you hold still'
+        : 'not measured yet';
+      var hz = (sc.hz || SCENE_HZ)[0];
+      var size = sceneBufferSize(PREVIEW_CALL_SIZE[0], PREVIEW_CALL_SIZE[1],
+                                 sceneScaleLadder(Math.max(PREVIEW_CALL_SIZE[0], PREVIEW_CALL_SIZE[1]))[0], sc);
+      var dev;
+      if (progId === id && gpuMs != null) {
+        dev = fmtMs(gpuMs) + ' ms of graphics time per redraw at ' + size[0] + '×' + size[1] +
+              ', redrawn ' + hz + ' times a second in a call: ' + fmtShare(gpuMs, hz) + ' of the graphics processor';
+        if (cpuMs != null) dev += '; ' + fmtMs(cpuMs) + ' ms of the main processor per redraw';
+        titleCost.textContent = fmtMs(gpuMs) + ' ms a redraw here · about ' + (sc.kbps ? sc.kbps[0] + ' kb/s' : '?') + ' up';
+      } else {
+        dev = progId === id ? 'measuring…' : failed ? 'not measured: the preview could not be drawn' : 'measured while the preview is drawn';
+        titleCost.textContent = sc.kbps ? 'about ' + sc.kbps[0] + ' kb/s up' : '';
+      }
+      devRow.dd.textContent = dev;
+      var live = liveText(sc);
+      liveRow.dd.textContent = live;
+      liveRow.row.classList.toggle('hidden', !live);
+    }
+
+    // --- the full window ---------------------------------------------------
+    function onFullKey(e) {
+      if (e.key !== 'Escape') return;
+      // Before the settings modal hears it: Escape closes the picture first.
+      e.preventDefault();
+      e.stopPropagation();
+      setFull(false);
+    }
+    function setFull(on) {
+      on = !!on;
+      if (on === full || destroyed) return;
+      if (on && !sceneId()) return;
+      full = on;
+      if (on) {
+        // Out of the card and onto the page: a settings modal may be
+        // transformed or clipped, and a fixed box inside it would be too.
+        prevFocus = document.activeElement;
+        placeholder = document.createElement('div');
+        placeholder.className = 'scene-preview-placeholder';
+        el.insertBefore(placeholder, stage);
+        document.body.appendChild(stage);
+        stage.classList.add('is-full');
+        document.documentElement.classList.add('scene-preview-open');
+        document.addEventListener('keydown', onFullKey, true);
+        window.addEventListener('resize', fit);
+        try { stage.focus({ preventScroll: true }); } catch (e) { stage.focus(); }
+      } else {
+        stage.classList.remove('is-full');
+        if (placeholder && placeholder.parentNode) placeholder.parentNode.replaceChild(stage, placeholder);
+        else el.insertBefore(stage, info);
+        placeholder = null;
+        document.documentElement.classList.remove('scene-preview-open');
+        document.removeEventListener('keydown', onFullKey, true);
+        window.removeEventListener('resize', fit);
+        try { if (prevFocus && prevFocus.focus) prevFocus.focus({ preventScroll: true }); } catch (e) { /* gone */ }
+        prevFocus = null;
+      }
+      fullBtn.textContent = on ? 'Close' : 'Full window';
+      fullBtn.setAttribute('aria-label', on ? 'Back to Settings' : 'Show the scene over the whole window');
+      fullBtn.title = fullBtn.getAttribute('aria-label');
+      personBtn.classList.toggle('hidden', !on);
+      outline.classList.toggle('hidden', !(on && showPerson));
+      hint.textContent = hintText();
+      fit();
+      paintInfo();
+      setVisible(true);
     }
 
     // Level-triggered, like the rest of the settings controls: work out from
@@ -5379,7 +5764,9 @@ var VideoEffects = (function () {
       if (destroyed) return;
       var id = sceneId();
       var want = !!id && visible && !failed;
+      paintInfo();
       if (!id) {
+        if (full) setFull(false);
         release();
         hud.classList.add('hidden');
         orbit.reset(false);
@@ -5402,14 +5789,16 @@ var VideoEffects = (function () {
       }
     }
 
-    // On screen = the observer says so AND the page is not in a background tab.
+    // On screen = the observer says so (or the picture fills the window) AND
+    // the page is not in a background tab.
     var inView = true, io = null;
-    function setVisible() {
-      var v = inView && document.visibilityState !== 'hidden';
-      if (v === visible) return;
+    function setVisible(force) {
+      var v = (full || inView) && document.visibilityState !== 'hidden';
+      if (v === visible && force !== true) return;
+      var was = visible;
       visible = v;
       // Coming back is a fresh start: whatever stopped it last time may not hold.
-      if (v) failed = '';
+      if (v && !was) failed = '';
       refresh();
     }
     if (typeof IntersectionObserver === 'function') {
@@ -5421,6 +5810,7 @@ var VideoEffects = (function () {
       io.observe(el);
     }
     visible = inView && document.visibilityState !== 'hidden';
+    hint.textContent = hintText();
     document.addEventListener('visibilitychange', setVisible);
     var offMode = onModeWritten(function () { refresh(); });
     function onStorage(e) { if (e.key === STORAGE_KEY) refresh(); }
@@ -5431,7 +5821,12 @@ var VideoEffects = (function () {
     return {
       sync: refresh,
       orbit: orbit,
+      setFull: setFull,
+      isFull: function () { return full; },
+      // What the info line was built from: { gpuMs, cpuMs, timer } (tests).
+      cost: function () { return { gpuMs: gpuMs, cpuMs: cpuMs, timer: !!timer, probe: probe ? [probe.w, probe.h] : null }; },
       destroy: function () {
+        if (full) setFull(false);
         destroyed = true;
         release();
         if (io) io.disconnect();
@@ -5471,7 +5866,7 @@ var VideoEffects = (function () {
     // The scenes. Each chip shows a gradient swatch at once and its real
     // thumbnail — rendered from the scene's own shader — once that is ready.
     var sceneChips = PRESETS.map(function (p) {
-      var c = chip('bg-chip-image bg-chip-scene', p.label, 'preset:' + p.id);
+      var c = chip('bg-chip-image bg-chip-scene', p.name || p.label, 'preset:' + p.id);
       c.dataset.scene = p.id;
       c.style.backgroundImage = p.swatch;
       chips.push(c);
@@ -6027,6 +6422,7 @@ var VideoEffects = (function () {
     onModeWritten: onModeWritten,
     attachOrbit: attachOrbit,
     renderScenePreview: renderScenePreview,
+    sceneStats: sceneStats,
     ORBIT_LIMIT: ORBIT_LIMIT,
     getCustomImage: getCustomImage,
     setCustomImage: setCustomImage,

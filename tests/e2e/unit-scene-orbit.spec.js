@@ -421,6 +421,114 @@ test.describe('scene preview', () => {
     await expect(page.locator('#pv canvas')).toHaveCount(0, { timeout: 30_000 });
   });
 
+  test('names the scene, says what is in it and what it costs, and measures it on this device', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.evaluate(() => {
+      VideoEffects.writeMode('preset:office');
+      window.__pv = VideoEffects.renderScenePreview(document.getElementById('pv'));
+    });
+    const info = page.locator('#pv .scene-preview-info');
+    await expect(info).toBeVisible();
+    const office = await page.evaluate(() => VideoScenes.byId('office'));
+    await expect(info.locator('.scene-preview-name')).toHaveText(office.name);
+    await expect(info.locator('.scene-preview-blurb')).toHaveText(office.blurb);
+    await expect(info.locator('.scene-cost-upload dd')).toContainText(office.kbps[0] + ' kb/s while you move');
+    // Measured by drawing one redraw at a 720p call's size, a couple of
+    // seconds after the scene is ready (its first redraws warm caches).
+    await expect(info.locator('.scene-cost-device dd')).toContainText('ms of graphics time per redraw at', { timeout: 60_000 });
+    const cost = await page.evaluate(() => window.__pv.cost());
+    expect(cost.gpuMs).toBeGreaterThan(0);
+    expect(cost.probe[0] / cost.probe[1]).toBeCloseTo(16 / 9, 1);
+    // No call in this window: nothing to say about one.
+    await expect(info.locator('.scene-cost-live')).toBeHidden();
+
+    // Another pick, another name; no scene, no info.
+    await page.evaluate(() => VideoEffects.writeMode('preset:penthouse'));
+    await expect(info.locator('.scene-preview-name')).toHaveText('Neon rain');
+    await page.evaluate(() => VideoEffects.writeMode('blur'));
+    await expect(info).toBeHidden();
+  });
+
+  test('a call in progress is described from the pipeline and the live() hook', async ({ page }) => {
+    await page.evaluate(() => {
+      VideoEffects.writeMode('preset:island');
+      // What the camera pipeline would report, without running one.
+      VideoEffects.sceneStats = () => null;
+      window.__pv = VideoEffects.renderScenePreview(document.getElementById('pv'), {
+        live: () => ({ sendingBps: 640000 })
+      });
+    });
+    const live = page.locator('#pv .scene-cost-live');
+    await expect(live).toBeVisible();
+    await expect(live.locator('dd')).toHaveText('your camera is sending 640 kb/s');
+  });
+
+  test('a finger turns it: sideways in the card, and two taps recentre', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.evaluate(() => {
+      VideoEffects.writeMode('preset:office');
+      window.__pv = VideoEffects.renderScenePreview(document.getElementById('pv'));
+    });
+    await expect(page.locator('#pv .scene-preview-note')).toBeHidden({ timeout: 60_000 });
+    expect(await page.locator('#pv .scene-preview-stage').evaluate((e) => getComputedStyle(e).touchAction)).toBe('pan-y');
+    const turned = await page.evaluate(() => {
+      const st = document.querySelector('#pv .scene-preview-stage');
+      const r = st.getBoundingClientRect();
+      const at = (type, x, y) => new PointerEvent(type, { pointerType: 'touch', pointerId: 7, isPrimary: true,
+        button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX: x, clientY: y, bubbles: true, cancelable: true });
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      st.dispatchEvent(at('pointerdown', x, y));
+      for (let i = 1; i <= 6; i++) window.dispatchEvent(at('pointermove', x + i * 15, y));
+      window.dispatchEvent(at('pointerup', x + 90, y));
+      return window.__pv.orbit.view();
+    });
+    expect(turned.yaw).toBeLessThan(0);
+    const back = await page.evaluate(async () => {
+      const st = document.querySelector('#pv .scene-preview-stage');
+      const r = st.getBoundingClientRect();
+      const x = r.left + 40, y = r.top + 40;
+      const at = (type) => new PointerEvent(type, { pointerType: 'touch', pointerId: 8, isPrimary: true,
+        button: 0, clientX: x, clientY: y, bubbles: true, cancelable: true });
+      for (let i = 0; i < 2; i++) { st.dispatchEvent(at('pointerdown')); window.dispatchEvent(at('pointerup')); }
+      await new Promise((r2) => setTimeout(r2, 600));
+      return window.__pv.orbit.view();
+    });
+    expect(back).toBeNull();
+  });
+
+  test('full window: over the page at the window\'s shape, with an outline, and Escape brings it back', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.evaluate(() => {
+      VideoEffects.writeMode('preset:countryside');
+      window.__pv = VideoEffects.renderScenePreview(document.getElementById('pv'));
+    });
+    await expect(page.locator('#pv .scene-preview-note')).toBeHidden({ timeout: 60_000 });
+    await page.locator('#pv .scene-preview-full').click();
+    const stage = page.locator('body > .scene-preview-stage.is-full');
+    await expect(stage).toBeVisible();
+    await expect(page.locator('#pv .scene-preview-placeholder')).toHaveCount(1);
+    const vp = page.viewportSize();
+    const box = await stage.boundingBox();
+    expect(box.width).toBe(vp.width);
+    expect(box.height).toBe(vp.height);
+    const c = await stage.locator('canvas').evaluate((e) => [e.width, e.height]);
+    expect(c[0] / c[1]).toBeCloseTo(vp.width / vp.height, 2);
+    await expect(stage.locator('.scene-preview-outline')).toBeVisible();
+    await expect(stage.locator('.scene-preview-title strong')).toHaveText("Val d’Orcia");
+    expect(await stage.evaluate((e) => getComputedStyle(e).touchAction)).toBe('none');
+
+    // The outline can be put away.
+    await stage.locator('.scene-preview-person').click();
+    await expect(stage.locator('.scene-preview-outline')).toBeHidden();
+    await expect(stage.locator('.scene-preview-person')).toHaveAttribute('aria-pressed', 'false');
+
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#pv > .scene-preview-stage')).toHaveCount(1);
+    await expect(page.locator('.scene-preview-stage.is-full')).toHaveCount(0);
+    await expect(page.locator('#pv .scene-preview-placeholder')).toHaveCount(0);
+    expect(await page.locator('#pv canvas').evaluate((e) => e.width / e.height)).toBeCloseTo(16 / 9, 1);
+  });
+
   test('without graphics acceleration it says so instead of freezing the page', async ({ page }) => {
     await page.addInitScript(() => { window.__voxalThumbsOnSoftwareGL = false; });
     await page.goto('/');
@@ -433,6 +541,33 @@ test.describe('scene preview', () => {
     });
     await expect(page.locator('#pv .scene-preview-note')).toContainText('graphics acceleration');
     expect(await page.locator('#pv canvas').count()).toBe(0);
+  });
+});
+
+test.describe('scene preview on a phone', () => {
+  test.use({ viewport: { width: 390, height: 800 }, hasTouch: true, isMobile: true });
+
+  test('the full window is upright, as the camera would send it, and Escape leaves Settings open', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.addInitScript(() => { window.__voxalThumbsOnSoftwareGL = true; });
+    await page.goto('/');
+    await page.evaluate(() => localStorage.setItem(VideoEffects.STORAGE_KEY, 'preset:office'));
+    await page.click('#btn-open-settings');
+    // A phone's settings are an accordion, not the side nav.
+    await page.locator('#modal-settings').getByRole('button', { name: /Video/ }).first().click();
+    const card = page.locator('#settings-bg-preview');
+    await card.scrollIntoViewIfNeeded();
+    await expect(card.locator('.scene-preview-note')).toBeHidden({ timeout: 60_000 });
+    await expect(card.locator('.scene-preview-hint')).toHaveText('Swipe sideways to look around');
+    await card.locator('.scene-preview-full').click();
+    const stage = page.locator('body > .scene-preview-stage.is-full');
+    await expect(stage).toBeVisible();
+    const c = await stage.locator('canvas').evaluate((e) => [e.width, e.height]);
+    expect(c[1]).toBeGreaterThan(c[0]);
+    await expect(stage.locator('.scene-preview-hint')).toHaveText('Drag to look around \u00b7 double-tap to recentre');
+    await page.keyboard.press('Escape');
+    await expect(stage).toHaveCount(0);
+    await expect(page.locator('#modal-settings')).toBeVisible();
   });
 });
 
