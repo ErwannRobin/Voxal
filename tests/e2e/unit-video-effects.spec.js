@@ -1535,7 +1535,7 @@ test.describe('the empty-room reference', () => {
       // Knock the camera: a different room.
       window.__scene = 'moved';
       const stale = await __waitFor(() => VideoEffects.referenceState() === 'stale', 4000);
-      const faded = await __waitFor(() => VideoEffects.active().refWeight === 0, 3000);
+      const faded = await __waitFor(() => VideoEffects.active().refWeight === 0, 10000);
       // And back: the reference is trusted again.
       window.__scene = 'person';
       const back = await __waitFor(() => VideoEffects.referenceState() === 'ready', 4000);

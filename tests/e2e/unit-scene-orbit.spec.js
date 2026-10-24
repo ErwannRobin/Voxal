@@ -374,8 +374,8 @@ test.describe('scene preview', () => {
     await expect(page.locator('#pv .scene-preview-hud')).toBeVisible();
     await expect(page.locator('#pv .scene-preview-recentre')).toBeHidden();
 
-    const before = await stage.screenshot();
     const box = await stage.boundingBox();
+    const before = await page.screenshot({ clip: box });
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
     await page.mouse.move(box.x + box.width / 2 + 90, box.y + box.height / 2 + 20, { steps: 8 });
@@ -386,7 +386,11 @@ test.describe('scene preview', () => {
     expect(view.yaw).toBeLessThan(0);
     expect(view.pitch).toBeGreaterThan(0);
     // The picture is another one: compare what is on screen, not the state.
-    await expect.poll(async () => !(await stage.screenshot({ timeout: 20_000 })).equals(before), { timeout: 40_000 }).toBe(true);
+    // A clip of the page, not an element screenshot: the element form waits for
+    // the box to be "stable" across animation frames, which a software GPU busy
+    // redrawing the scene never lets it be.
+    const shot = async () => page.screenshot({ clip: box, timeout: 20_000 });
+    await expect.poll(async () => !(await shot()).equals(before), { timeout: 40_000 }).toBe(true);
 
     await page.locator('#pv .scene-preview-recentre').click();
     await expect.poll(() => page.evaluate(() => window.__pv.orbit.view())).toBeNull();
