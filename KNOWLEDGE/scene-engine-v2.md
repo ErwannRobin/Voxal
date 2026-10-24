@@ -151,6 +151,12 @@ Work happens in worktree `../voxal-engine-wt`, branch `feat/scene-engine-v2-int`
   Local 4-8x MSAA target (frozen 435 -> 216 kb/s): candidate for the engine. Smooth alpha
   by position (617 -> 515 kb/s): try on penthouse. Test fix: the camera-size resolve test
   compiles the module before `ensureScene()` and reads age/look before awaiting the ref.
-- Next: cybercafe; then refinement, bench old vs new
+- Cyber café on the engine: Lisbon half-basement under a brick vault, zinc bar, neon cup,
+  arched window onto a climbing street, beige CRTs turned away, tram every 120 s.
+  268/246 kb/s vs 696/569, M5 1.0 ms, SwiftShader first 1.0-1.1 s, 4 programs, 36k tris.
+  MSAA off on software GPUs (sniffs the renderer: wants `k.quality.software`).
+  All six scenes now on the engine. Video/scene specs: 582 passed, 2 failed (the two
+  pre-existing keyed "slow-copy" tests).
+- Next: refinement, bench old vs new
   (`scripts/scene-bench.mjs --compare`), full suite.
 
