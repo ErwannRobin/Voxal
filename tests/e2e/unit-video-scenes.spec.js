@@ -22,34 +22,31 @@ test.beforeEach(async ({ page }) => {
     };
 
     // Render one scene, synchronously, and hand back its pixels.
-    window.__renderScene = (id, opts = {}) => {
+    window.__renderScene = async (id, opts = {}) => {
       const W = opts.w || 160, H = opts.h || 90;
       const c = document.createElement('canvas');
       c.width = W; c.height = H;
       const gl = c.getContext('webgl2', { alpha: false, preserveDrawingBuffer: true });
-      const buf = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-      gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-      const prog = VideoScenes.compileProgram(gl, id);
+      const r = await VideoScenes.createRenderer(gl, id);
       const look = Object.assign(VideoScenes.defaultLook(), opts.look || {});
       const out = [];
       const ms = [];
       let glError = 0;
       for (const t of opts.times || [37]) {
-        gl.viewport(0, 0, W, H);
         const t0 = performance.now();
-        VideoScenes.setUniforms(gl, prog, W, H, t, look, null, opts.view || null);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        r.draw(null, W, H, t, look, null, opts.view || null);
         const px = new Uint8Array(W * H * 4);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px);
         ms.push(performance.now() - t0);
         glError = glError || gl.getError();
         out.push(Array.from(px));
       }
+      const engine = r.engine;
+      r.dispose();
+      VideoScenes.releaseContext(gl);
       gl.getExtension('WEBGL_lose_context')?.loseContext();
-      return { w: W, h: H, frames: out, ms, glError };
+      return { w: W, h: H, frames: out, ms, glError, engine };
     };
     window.__luma = (px, i) => 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
 
@@ -251,9 +248,19 @@ test.describe('the catalogue', () => {
 
 test.describe('every scene', () => {
   for (const id of SCENES) {
+    test(`${id} is drawn by the engine its catalogue entry names`, async ({ page }) => {
+      const seen = await page.evaluate(async (id) => {
+        const r = (await window.__renderScene(id, { w: 32, h: 18 }));
+        return { engine: r.engine, module: !!VideoScenes.byId(id).module };
+      }, id);
+      // A module scene that silently fell back to its old shader would pass
+      // every other test here on the old picture.
+      expect(seen.engine).toBe(seen.module ? 'three' : 'shader');
+    });
+
     test(`${id} compiles and draws a picture, not a flat field`, async ({ page }) => {
-      const stats = await page.evaluate((id) => {
-        const r = window.__renderScene(id);
+      const stats = await page.evaluate(async (id) => {
+        const r = (await window.__renderScene(id));
         const px = r.frames[0];
         let sum = 0, sum2 = 0;
         const n = r.w * r.h;
@@ -270,8 +277,8 @@ test.describe('every scene', () => {
     // busy background would be a distraction in a working call and a bitrate
     // cost for everyone receiving it.
     test(`${id} moves, but only a little`, async ({ page }) => {
-      const d = await page.evaluate((id) => {
-        const r = window.__renderScene(id, { times: [37, 38] });
+      const d = await page.evaluate(async (id) => {
+        const r = (await window.__renderScene(id, { times: [37, 38] }));
         const [a, b] = r.frames;
         let sum = 0, big = 0;
         const n = r.w * r.h;
@@ -292,9 +299,9 @@ test.describe('every scene', () => {
     // call changes the jitter point with every redraw and adds them up; what
     // that costs a still room is pinned in 'sharp at the size it is shown'.)
     test(`${id} draws the same picture twice`, async ({ page }) => {
-      const diff = await page.evaluate((id) => {
-        const a = window.__renderScene(id, { times: [37] }).frames[0];
-        const b = window.__renderScene(id, { times: [37] }).frames[0];
+      const diff = await page.evaluate(async (id) => {
+        const a = (await window.__renderScene(id, { times: [37] })).frames[0];
+        const b = (await window.__renderScene(id, { times: [37] })).frames[0];
         let n = 0;
         for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) n++;
         return n;
@@ -306,8 +313,8 @@ test.describe('every scene', () => {
     // no scene is a wash of flat white (or a hole of flat black) at its
     // default light.
     test(`${id} is exposed like a photograph, not clipped`, async ({ page }) => {
-      const share = await page.evaluate((id) => {
-        const r = window.__renderScene(id);
+      const share = await page.evaluate(async (id) => {
+        const r = (await window.__renderScene(id));
         const px = r.frames[0];
         let hi = 0, lo = 0;
         const n = r.w * r.h;
@@ -325,9 +332,9 @@ test.describe('every scene', () => {
     // The layout is authored with the light on the right and mirrored when
     // it is on the left — exactly mirrored, subject and all.
     test(`${id} puts its light on the subject's light side`, async ({ page }) => {
-      const err = await page.evaluate((id) => {
-        const right = window.__renderScene(id, { look: { dirX: 0.8, sideMix: 1, cx: 0.4 } });
-        const left = window.__renderScene(id, { look: { dirX: -0.8, sideMix: 0, cx: 0.6 } });
+      const err = await page.evaluate(async (id) => {
+        const right = (await window.__renderScene(id, { look: { dirX: 0.8, sideMix: 1, cx: 0.4 } }));
+        const left = (await window.__renderScene(id, { look: { dirX: -0.8, sideMix: 0, cx: 0.6 } }));
         const a = right.frames[0], b = left.frames[0];
         const W = right.w, H = right.h;
         let sum = 0;
@@ -346,7 +353,7 @@ test.describe('every scene', () => {
   // What makes these worlds and not wallpaper is that things in them obey the
   // light. Each of these pins one such behaviour.
   test('the office is lit through its window: a soft light leaves the sun patch dimmer', async ({ page }) => {
-    const seen = await page.evaluate(() => {
+    const seen = await page.evaluate(async () => {
       const region = (r) => {
         // Where the sun lands on the back wall, right of centre and low.
         let s = 0, n = 0;
@@ -357,15 +364,15 @@ test.describe('every scene', () => {
         }
         return s / n;
       };
-      const hard = window.__renderScene('office', { w: 256, h: 144, look: { dirX: 0.95 } });
-      const soft = window.__renderScene('office', { w: 256, h: 144, look: { dirX: 0.05 } });
+      const hard = (await window.__renderScene('office', { w: 256, h: 144, look: { dirX: 0.95 } }));
+      const soft = (await window.__renderScene('office', { w: 256, h: 144, look: { dirX: 0.05 } }));
       return { hard: region(hard), soft: region(soft) };
     });
     expect(seen.hard).toBeGreaterThan(seen.soft * 1.1);
   });
 
   test('at night the sun has set over the island: the sky is warm, not blue', async ({ page }) => {
-    const seen = await page.evaluate(() => {
+    const seen = await page.evaluate(async () => {
       const sky = (r) => {
         // The band just above the horizon, away from the palm.
         let red = 0, blue = 0;
@@ -378,8 +385,8 @@ test.describe('every scene', () => {
         return red / blue;
       };
       return {
-        day: sky(window.__renderScene('island', { w: 256, h: 144 })),
-        night: sky(window.__renderScene('island', { w: 256, h: 144, look: { exposure: 0.25 } })),
+        day: sky((await window.__renderScene('island', { w: 256, h: 144 }))),
+        night: sky((await window.__renderScene('island', { w: 256, h: 144, look: { exposure: 0.25 } }))),
       };
     });
     expect(seen.night).toBeGreaterThan(seen.day * 1.4);
@@ -389,8 +396,8 @@ test.describe('every scene', () => {
   // upside down, so a row of the water follows the same ups and downs along x
   // as the row of sky and ridge the same distance above the horizon.
   test('the mountain lake mirrors the range', async ({ page }) => {
-    const corr = await page.evaluate(() => {
-      const r = window.__renderScene('mountain', { w: 320, h: 180 });
+    const corr = await page.evaluate(async () => {
+      const r = (await window.__renderScene('mountain', { w: 320, h: 180 }));
       const row = (y) => {
         const v = [];
         for (let x = 0; x < r.w; x++) v.push(window.__luma(r.frames[0], ((r.h - 1 - y) * r.w + x) * 4));
@@ -416,8 +423,8 @@ test.describe('every scene', () => {
   // Regression: at dusk a few skyline pixels used to come out pure white (a
   // negative near-miss was taken for "no hit", and shaded at minus a kilometre).
   test('the mountain at dusk has no white fringe on its ridges', async ({ page }) => {
-    const white = await page.evaluate(() => {
-      const r = window.__renderScene('mountain', { w: 320, h: 180, look: { exposure: 0.25 } });
+    const white = await page.evaluate(async () => {
+      const r = (await window.__renderScene('mountain', { w: 320, h: 180, look: { exposure: 0.25 } }));
       let n = 0;
       for (let y = 0; y < Math.floor(r.h * 0.5); y++) {
         for (let x = 0; x < r.w; x++) {
@@ -432,9 +439,9 @@ test.describe('every scene', () => {
 
   // Things near you answer your movement: the palm's fronds sway more.
   test('the palm stirs when you move', async ({ page }) => {
-    const seen = await page.evaluate(() => {
-      const change = (motion) => {
-        const r = window.__renderScene('island', { w: 160, h: 90, times: [37, 37.7], look: { motion } });
+    const seen = await page.evaluate(async () => {
+      const change = async (motion) => {
+        const r = (await window.__renderScene('island', { w: 160, h: 90, times: [37, 37.7], look: { motion } }));
         const [a, b] = r.frames;
         let sum = 0, n = 0;
         // The upper right, where the crown is.
@@ -446,33 +453,33 @@ test.describe('every scene', () => {
         }
         return sum / n;
       };
-      return { still: change(0), moving: change(1) };
+      return { still: await change(0), moving: await change(1) };
     });
     expect(seen.moving).toBeGreaterThan(seen.still * 1.5);
   });
 
   test('a dim subject gets a dim scene', async ({ page }) => {
-    const ratio = await page.evaluate(() => {
+    const ratio = await page.evaluate(async () => {
       const mean = (r) => {
         let s = 0;
         for (let i = 0; i < r.frames[0].length; i += 4) s += window.__luma(r.frames[0], i);
         return s / (r.frames[0].length / 4);
       };
-      return mean(window.__renderScene('countryside', { look: { exposure: 0.35 } })) /
-             mean(window.__renderScene('countryside', { look: { exposure: 1 } }));
+      return mean((await window.__renderScene('countryside', { look: { exposure: 0.35 } }))) /
+             mean((await window.__renderScene('countryside', { look: { exposure: 1 } })));
     });
     expect(ratio).toBeLessThan(0.8);
   });
 
   test('a warm room gets a warm scene', async ({ page }) => {
-    const shift = await page.evaluate(() => {
-      const rb = (r) => {
+    const shift = await page.evaluate(async () => {
+      const rb = async (r) => {
         let red = 0, blue = 0;
         for (let i = 0; i < r.frames[0].length; i += 4) { red += r.frames[0][i]; blue += r.frames[0][i + 2]; }
         return red / blue;
       };
-      return rb(window.__renderScene('office', { look: { tint: [1.15, 0.98, 0.82] } })) /
-             rb(window.__renderScene('office', { look: { tint: [1, 1, 1] } }));
+      return await rb((await window.__renderScene('office', { look: { tint: [1.15, 0.98, 0.82] } }))) /
+             await rb((await window.__renderScene('office', { look: { tint: [1, 1, 1] } })));
     });
     expect(shift).toBeGreaterThan(1.05);
   });
@@ -480,8 +487,8 @@ test.describe('every scene', () => {
   // A dark enough room turns the office to evening: the lamp comes on, so the
   // scene is not just the daytime picture scaled down.
   test('in a dark room the lights come on', async ({ page }) => {
-    const seen = await page.evaluate(() => {
-      const r = window.__renderScene('office', { look: { exposure: 0.25 }, w: 320, h: 180 });
+    const seen = await page.evaluate(async () => {
+      const r = (await window.__renderScene('office', { look: { exposure: 0.25 }, w: 320, h: 180 }));
       const px = r.frames[0];
       // The lamp sits on the top shelf near the left edge; find the brightest
       // pixel in the left quarter against the median of that quarter.
@@ -504,7 +511,7 @@ test.describe('the penthouse', () => {
   // The mean luma and the horizontal detail (mean absolute step to the next
   // pixel) of a rectangle given in fractions of the picture, top row first.
   test.beforeEach(async ({ page }) => {
-    await page.evaluate(() => {
+    await page.evaluate(async () => {
       window.__region = (r, x0, y0, x1, y1) => {
         let s = 0, d = 0, n = 0;
         for (let y = Math.floor(y0 * r.h); y < Math.floor(y1 * r.h); y++) {
@@ -521,14 +528,14 @@ test.describe('the penthouse', () => {
 
   test('it draws without a GL error, at every shape a camera has', async ({ page }) => {
     test.setTimeout(90_000);
-    const seen = await page.evaluate(() => [[160, 90], [90, 160], [256, 256], [480, 270]].map(([w, h]) => {
-      const r = window.__renderScene('penthouse', { w, h });
+    const seen = await page.evaluate(async () => Promise.all([[160, 90], [90, 160], [256, 256], [480, 270]].map(async ([w, h]) => {
+      const r = (await window.__renderScene('penthouse', { w, h }));
       const px = r.frames[0];
       let sum = 0, sum2 = 0;
       for (let i = 0; i < w * h; i++) { const l = window.__luma(px, i * 4); sum += l; sum2 += l * l; }
       const mean = sum / (w * h);
       return { w, h, mean, sd: Math.sqrt(sum2 / (w * h) - mean * mean), glError: r.glError };
-    }));
+    })));
     for (const s of seen) {
       expect(s.glError, `${s.w}x${s.h}`).toBe(0);
       expect(s.mean, `${s.w}x${s.h}`).toBeGreaterThan(18);
@@ -541,8 +548,8 @@ test.describe('the penthouse', () => {
   // person's head must not be against anything busy: the middle of the glass
   // (where a head is) holds less detail than the towers on either side of it.
   test('the middle of the glass is calm, the towers are at its sides', async ({ page }) => {
-    const seen = await page.evaluate(() => {
-      const r = window.__renderScene('penthouse', { w: 480, h: 270 });
+    const seen = await page.evaluate(async () => {
+      const r = (await window.__renderScene('penthouse', { w: 480, h: 270 }));
       const a = { px: r.frames[0], w: r.w, h: r.h };
       // Frames are bottom row first: the glass is the upper-middle band in the picture, y from 0.12 to 0.56.
       const flip = (y) => 1 - y;
@@ -556,14 +563,14 @@ test.describe('the penthouse', () => {
   // The calm follows the person, not the middle of the picture: with the
   // subject far to the right, the same patch of glass is the city again.
   test('the calm follows the subject', async ({ page }) => {
-    const seen = await page.evaluate(() => {
+    const seen = await page.evaluate(async () => {
       const look = (cx) => ({ cx, cy: 0.55, sx: 0.12, sy: 0.3, dirX: 0.35, sideMix: 1 });
-      const grab = (cx) => {
-        const r = window.__renderScene('penthouse', { w: 480, h: 270, look: look(cx) });
+      const grab = async (cx) => {
+        const r = (await window.__renderScene('penthouse', { w: 480, h: 270, look: look(cx) }));
         const a = { px: r.frames[0], w: r.w, h: r.h };
         return window.__region(a, 0.70, 1 - 0.56, 0.84, 1 - 0.14);
       };
-      return { there: grab(0.78), away: grab(0.30) };
+      return { there: await grab(0.78), away: await grab(0.30) };
     });
     // The patch of glass where a head is, against the same patch with nobody in it.
     expect(seen.there.detail).toBeLessThan(seen.away.detail * 0.85);
@@ -572,8 +579,8 @@ test.describe('the penthouse', () => {
   // No post, no line, no edge of a tower stands straight through where a head
   // is: the columns across the middle of the glass are all about as bright.
   test('nothing runs vertically through the middle of the picture', async ({ page }) => {
-    const seen = await page.evaluate(() => {
-      const r = window.__renderScene('penthouse', { w: 480, h: 270 });
+    const seen = await page.evaluate(async () => {
+      const r = (await window.__renderScene('penthouse', { w: 480, h: 270 }));
       const cols = [];
       for (let x = Math.floor(r.w * 0.44); x < Math.floor(r.w * 0.56); x++) {
         let s = 0, n = 0;
@@ -589,9 +596,9 @@ test.describe('the penthouse', () => {
   // near ones against the far ones: the scene honours the phone's turn (the
   // tilt strip a receiver reads), and an upright camera is not a still one.
   test('a turned view moves the room and the city by different amounts', async ({ page }) => {
-    const seen = await page.evaluate(() => {
-      const a = window.__renderScene('penthouse', { w: 320, h: 180 });
-      const b = window.__renderScene('penthouse', { w: 320, h: 180, view: { yaw: 0.25, pitch: 0, roll: 0 } });
+    const seen = await page.evaluate(async () => {
+      const a = (await window.__renderScene('penthouse', { w: 320, h: 180 }));
+      const b = (await window.__renderScene('penthouse', { w: 320, h: 180, view: { yaw: 0.25, pitch: 0, roll: 0 } }));
       let sum = 0;
       for (let i = 0; i < a.frames[0].length; i += 4) sum += Math.abs(window.__luma(a.frames[0], i) - window.__luma(b.frames[0], i));
       return { diff: sum / (a.w * a.h), glError: b.glError };
@@ -605,12 +612,12 @@ test.describe('the penthouse', () => {
   // of a stroke the sky is clearly brighter than before it and after it.
   test('a far flash lights the sky, rarely and briefly', async ({ page }) => {
     test.setTimeout(90_000);
-    const seen = await page.evaluate(() => {
+    const seen = await page.evaluate(async () => {
       // A stroke is due 35.46 s in (see stormFlash(): 21 s windows, a hash
       // decides which have one). The sample just after it, and the ones around.
       const times = [34.5, 35.52, 37.0];
       for (let t = 40; t < 100; t += 1) times.push(t);
-      const r = window.__renderScene('penthouse', { w: 160, h: 90, times });
+      const r = (await window.__renderScene('penthouse', { w: 160, h: 90, times }));
       const sky = (px) => { let s = 0, n = 0; for (let y = 60; y < 85; y++) for (let x = 40; x < 120; x++) { s += window.__luma(px, (y * 160 + x) * 4); n++; } return s / n; };
       const lum = r.frames.map(sky);
       const rest = lum.slice(3);
@@ -628,9 +635,9 @@ test.describe('the penthouse', () => {
   // that jumps. (Three seconds with no stroke due.)
   test('between two redraws nothing flickers', async ({ page }) => {
     test.setTimeout(90_000);
-    const seen = await page.evaluate(() => {
+    const seen = await page.evaluate(async () => {
       const times = Array.from({ length: 12 }, (_, i) => 40 + i / 12);
-      const r = window.__renderScene('penthouse', { w: 320, h: 180, times });
+      const r = (await window.__renderScene('penthouse', { w: 320, h: 180, times }));
       const out = [];
       for (let k = 1; k < times.length; k++) {
         let sum = 0, big = 0;
@@ -653,8 +660,8 @@ test.describe('the penthouse', () => {
   // The rain is on the glass and in the air in front of the city, not on the
   // floor: what moves between two redraws is in the glass band.
   test('the rain falls on the glass, not on the room', async ({ page }) => {
-    const seen = await page.evaluate(() => {
-      const r = window.__renderScene('penthouse', { w: 480, h: 270, times: [40, 40.5] });
+    const seen = await page.evaluate(async () => {
+      const r = (await window.__renderScene('penthouse', { w: 480, h: 270, times: [40, 40.5] }));
       const move = (x0, y0, x1, y1) => {
         let s = 0, n = 0;
         for (let y = Math.floor(y0 * r.h); y < Math.floor(y1 * r.h); y++) {
@@ -675,8 +682,8 @@ test.describe('the penthouse', () => {
   // The city's windows are many, lit in several colours, and the lit share
   // changes only a little, a window at a time, over minutes.
   test('the windows are lit in several colours and change one at a time', async ({ page }) => {
-    const seen = await page.evaluate(() => {
-      const r = window.__renderScene('penthouse', { w: 640, h: 360, times: [40, 100] });
+    const seen = await page.evaluate(async () => {
+      const r = (await window.__renderScene('penthouse', { w: 640, h: 360, times: [40, 100] }));
       const px = r.frames[0];
       let warm = 0, cool = 0, accent = 0;
       for (let y = Math.floor(r.h * 0.45); y < Math.floor(r.h * 0.82); y++) {
@@ -709,8 +716,8 @@ test.describe('the penthouse', () => {
 
   // The floor is polished: it holds the city and the strips as a mirror.
   test('the floor mirrors the lights', async ({ page }) => {
-    const seen = await page.evaluate(() => {
-      const r = window.__renderScene('penthouse', { w: 480, h: 270 });
+    const seen = await page.evaluate(async () => {
+      const r = (await window.__renderScene('penthouse', { w: 480, h: 270 }));
       const px = r.frames[0];
       // Under the left LED strip (cyan), on the floor: much brighter than the floor in the middle.
       const at = (fx, fy) => {
@@ -731,14 +738,14 @@ test.describe('the penthouse', () => {
   // (Software GL here, so only the ratio means anything; the bound is loose.)
   test('it does not cost much more than the café', async ({ page }) => {
     test.setTimeout(90_000);
-    const seen = await page.evaluate(() => {
+    const seen = await page.evaluate(async () => {
       const times = [37, 38, 39, 40, 41, 42, 43];
-      const cost = (id) => {
-        const r = window.__renderScene(id, { w: 320, h: 180, times });
+      const cost = async (id) => {
+        const r = (await window.__renderScene(id, { w: 320, h: 180, times }));
         const ms = r.ms.slice(2).sort((a, b) => a - b);
         return ms[Math.floor(ms.length / 2)];
       };
-      return { penthouse: cost('penthouse'), cafe: cost('cybercafe') };
+      return { penthouse: await cost('penthouse'), cafe: await cost('cybercafe') };
     });
     expect(seen.penthouse).toBeLessThan(seen.cafe * 4);
   });
@@ -1176,6 +1183,9 @@ test.describe('in the camera pipeline', () => {
       // small enough that the larger buffer would be the camera's own size,
       // and there would be no detail left to gain.
       p.sceneScaleStep = p.sceneScaleSteps.length - 1;
+      // Compiled first, as a pick does: a scene built on the engine loads its
+      // module asynchronously, and ensureScene() only takes a ready renderer.
+      if (!p.sceneRenderers.office) p.sceneRenderers.office = await VideoScenes.createRenderer(gl, 'office', p.sceneOpts());
       // Synchronously, so no other frame can be drawn in between.
       p.ensureScene('office');
       const first = mean(read(p.fbSceneOut[p.sceneOut], W, H));
@@ -1200,8 +1210,7 @@ test.describe('in the camera pipeline', () => {
       // The same moment drawn once with no jitter, as it is when the resolve
       // is missing, and stretched to the same size.
       const t = VideoScenes.THUMB_TIME + (T - p.sceneStart) / 1000;
-      VideoScenes.setUniforms(gl, p.sceneProgs.office, p.sceneW, p.sceneH, t, p.look, null);
-      p.drawQuad(p.fbScene, p.sceneW, p.sceneH);
+      p.sceneRenderers.office.draw(p.fbScene, p.sceneW, p.sceneH, t, p.look, null);
       const small = read(p.fbScene, p.sceneW, p.sceneH);
       // Opaque: a 2D canvas would premultiply by the nearness otherwise.
       for (let i = 3; i < small.length; i += 4) small[i] = 255;
@@ -1216,10 +1225,13 @@ test.describe('in the camera pipeline', () => {
       bctx.imageSmoothingEnabled = true;
       bctx.drawImage(sc, 0, 0, W, H);
       const stretched = bctx.getImageData(0, 0, W, H).data;
+      // Read before the reference is awaited: the camera keeps drawing (and
+      // measuring the light) while it compiles.
+      const age = p.sceneAge, look = { ...p.look };
       // The same moment, in the same light, drawn straight at the camera's size.
-      const ref = window.__renderScene('office', { w: W, h: H, times: [t], look: p.look }).frames[0];
+      const ref = (await window.__renderScene('office', { w: W, h: H, times: [t], look })).frames[0];
       return {
-        size: [W, H], buffer: [p.sceneW, p.sceneH], first, age: p.sceneAge, showsResolved, churn,
+        size: [W, H], buffer: [p.sceneW, p.sceneH], first, age, showsResolved, churn,
         settled: window.__rms(settled, ref, W, H), stretched: window.__rms(stretched, ref, W, H),
       };
     });

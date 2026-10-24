@@ -76,23 +76,25 @@ var VideoScenes = (function () {
   // hz:     how often it is redrawn, and what that falls to under load. Its
   //         motion is slow, so a dear scene is redrawn less often, not made
   //         to look less.
+  // module: (optional) the scene is a Three.js world in src/scenes/<id>.js
+  //         (see docs/scene-engine.md), not a fragment shader in this file.
   // bloom:  (optional) how much of the picture's own glow the resolve adds back:
   //         the lit parts of the redraw, blurred through its coarse mip levels.
   //         Absent or 0: none, and the resolve is byte-for-byte what it was.
   // swatch: what the chip shows until its real thumbnail has been rendered,
   //         and where WebGL2 is not available to render one at all.
   var SCENES = [
-    { id: 'office', label: 'Office', shadow: 0.55, wrap: 0.22, res: 0.85, hz: [12, 6],
+    { id: 'office', label: 'Office', shadow: 0.55, wrap: 0.22, res: 0.85, hz: [12, 6], module: true,
       swatch: 'linear-gradient(120deg,#d9d0c3 0%,#e8e1d6 55%,#a9c3da 100%)' },
-    { id: 'island', label: 'Island', shadow: 0.30, wrap: 0.36, res: 0.80, hz: [10, 5],
+    { id: 'island', label: 'Island', shadow: 0.30, wrap: 0.36, res: 0.80, hz: [10, 5], module: true,
       swatch: 'linear-gradient(180deg,#7fb2df 0%,#cfe6ef 48%,#3fa3a6 52%,#e9dcbc 100%)' },
     { id: 'cybercafe', label: 'Cyber café', shadow: 0.45, wrap: 0.42, res: 1.0, hz: [15, 8],
       swatch: 'linear-gradient(120deg,#2a1714 0%,#5a2a3c 50%,#1d3550 100%)' },
-    { id: 'mountain', label: 'Mountain', shadow: 0, wrap: 0.28, res: 0.70, hz: [10, 5],
+    { id: 'mountain', label: 'Mountain', shadow: 0, wrap: 0.28, res: 0.70, hz: [10, 5], module: true,
       swatch: 'linear-gradient(180deg,#8fb4d9 0%,#e6eef5 45%,#5f7387 70%,#2f4a35 100%)' },
-    { id: 'countryside', label: 'Countryside', shadow: 0, wrap: 0.28, res: 0.80, hz: [10, 5],
+    { id: 'countryside', label: 'Countryside', shadow: 0, wrap: 0.28, res: 0.80, hz: [10, 5], module: true,
       swatch: 'linear-gradient(180deg,#9cc4e6 0%,#dceaf2 45%,#86a957 65%,#4f7a2c 100%)' },
-    { id: 'penthouse', label: 'Neon rain', shadow: 0.40, wrap: 0.40, res: 1.0, hz: [12, 6], bloom: 0.45,
+    { id: 'penthouse', label: 'Neon rain', shadow: 0.40, wrap: 0.40, res: 1.0, hz: [12, 6], bloom: 0.45, module: true,
       swatch: 'linear-gradient(120deg,#0b1020 0%,#3a1a45 45%,#0f4a66 100%)' }
   ];
 
@@ -3939,6 +3941,155 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     });
   }
 
+  // --- renderers ------------------------------------------------------------
+  //
+  // What the camera pipeline, a keyed receiver, the preview and the thumbnails
+  // hold for a scene: an object that draws it, whatever it is drawn with.
+  //
+  //   draw(fb, w, h, time, look, frame, view)
+  //       Into framebuffer fb (null = the canvas), w x h, with the arguments
+  //       setUniforms() takes. Writes every pixel: rgb display-referred, alpha
+  //       the nearness the subject's shadow reads. Leaves the context as the
+  //       pipeline expects it: no blending, depth test, culling or scissor,
+  //       no vertex array bound, UNPACK_ALIGNMENT 1, fb still bound.
+  //   dispose()
+  //       Gives back everything it allocated in gl.
+  //
+  // A scene with an engine registered for it (register()) is built by that
+  // engine; any other is its fragment shader, wrapped (wrapProgram()). The
+  // pipeline cannot tell the two apart, which is what lets the catalogue move
+  // to another engine one scene at a time.
+  var ENGINES = {};
+  var TRI = typeof Float32Array === 'function' ? new Float32Array([-1, -1, 3, -1, -1, 3]) : null;
+
+  // impl: { create(gl, opts) -> Promise<renderer>, createSync(gl, opts) -> renderer }
+  // createSync may throw when what it needs has not been loaded yet; it is
+  // only asked for once create() has succeeded on some context.
+  function register(id, impl) { ENGINES[id] = impl; }
+
+  function wrapProgram(gl, prog) {
+    var vao = null, buf = null;
+    return {
+      id: prog.id,
+      engine: 'shader',
+      program: prog.program,
+      loc: prog.loc,
+      draw: function (fb, w, h, time, look, frame, view) {
+        if (!vao) {
+          vao = gl.createVertexArray();
+          buf = gl.createBuffer();
+          gl.bindVertexArray(vao);
+          gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+          gl.bufferData(gl.ARRAY_BUFFER, TRI, gl.STATIC_DRAW);
+          gl.enableVertexAttribArray(0);
+          gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+        }
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb || null);
+        gl.viewport(0, 0, w, h);
+        setUniforms(gl, prog, w, h, time, look, frame, view);
+        gl.bindVertexArray(vao);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.bindVertexArray(null);
+      },
+      dispose: function () {
+        try { gl.deleteProgram(prog.program); } catch (e) { /* lost */ }
+        try { if (vao) gl.deleteVertexArray(vao); } catch (e) { /* lost */ }
+        try { if (buf) gl.deleteBuffer(buf); } catch (e) { /* lost */ }
+        vao = buf = null;
+      }
+    };
+  }
+
+  // --- scene modules ----------------------------------------------------------
+  //
+  // A scene marked `module: true` in the catalogue is a 3D world built with
+  // Three.js (src/scenes/<id>.js, on src/scenes/engine.js), loaded with
+  // import() the first time it is drawn: nothing is fetched until a scene is
+  // picked, and a page that never shows one never parses Three. Each module
+  // is fetched once per page and kept, so a second context (a keyed receiver,
+  // the preview) builds its renderer synchronously.
+  var _mods = {};
+  function moduleUrl(rel) {
+    var base = (typeof document !== 'undefined' && document.baseURI) || (typeof location !== 'undefined' ? location.href : '');
+    return new URL(rel, base).href;
+  }
+  function loadModule(rel) {
+    var u = moduleUrl(rel);
+    var e = _mods[u];
+    if (!e) {
+      e = _mods[u] = { m: null, p: null };
+      e.p = import(u).then(function (m) { e.m = m; return m; }, function (err) {
+        delete _mods[u];   // a failed fetch may be retried
+        throw err;
+      });
+    }
+    return e.p;
+  }
+  function loadedModule(rel) {
+    var e = _mods[moduleUrl(rel)];
+    return e && e.m;
+  }
+  function sceneModulePath(id) { return 'scenes/' + id + '.js'; }
+
+  // Off the page's thread where the platform allows (see compileProgramAsync).
+  function createRenderer(gl, id, opts) {
+    var rid = resolveId(id);
+    if (!rid) return Promise.reject(new Error('unknown scene ' + id));
+    if (ENGINES[rid]) {
+      try { return Promise.resolve(ENGINES[rid].create(gl, opts || {})); } catch (e) { return Promise.reject(e); }
+    }
+    if (useModule(rid)) {
+      return Promise.all([loadModule('scenes/engine.js'), loadModule(sceneModulePath(rid))]).then(function (ms) {
+        if (gl.isContextLost && gl.isContextLost()) throw new Error('context lost');
+        var r = ms[0].createRenderer(gl, ms[1].default, opts || {});
+        return r.compile().then(function () { return r; }, function (e) { r.dispose(); throw e; });
+      }).catch(function (e) {
+        // A module that cannot load or build (an old engine, a failed fetch, a
+        // driver that rejects a program) falls back to the scene's old shader
+        // where it still has one, rather than to no scene at all.
+        if (!SOURCES[rid] || (gl.isContextLost && gl.isContextLost())) throw e;
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn('[VideoScenes] ' + rid + ': engine scene unavailable (' + (e && e.message ? e.message : e) + '), drawing the shader instead');
+        }
+        _moduleFailed[rid] = true;
+        return compileProgramAsync(gl, rid).then(function (p) { return wrapProgram(gl, p); });
+      });
+    }
+    return compileProgramAsync(gl, rid).then(function (p) { return wrapProgram(gl, p); });
+  }
+
+  // Whether scene `id` is drawn by its engine module. `scene-engine` =
+  // 'legacy' in localStorage draws every scene with its old shader instead —
+  // a diagnosis switch, read at each creation, never written by the app.
+  var _moduleFailed = {};
+  function useModule(id) {
+    var s = byId(id);
+    if (!s || !s.module || _moduleFailed[id]) return false;
+    if (!SOURCES[id]) return true;
+    try { return localStorage.getItem('scene-engine') !== 'legacy'; } catch (e) { return true; }
+  }
+
+  // Blocking; throws on failure — and for a module scene whose module has not
+  // been loaded yet (createRenderer() has never succeeded for it on this page).
+  function createRendererSync(gl, id, opts) {
+    var rid = resolveId(id);
+    if (!rid) throw new Error('unknown scene ' + id);
+    if (ENGINES[rid]) return ENGINES[rid].createSync(gl, opts || {});
+    if (useModule(rid)) {
+      var eng = loadedModule('scenes/engine.js'), mod = loadedModule(sceneModulePath(rid));
+      if (!eng || !mod) throw new Error('scene ' + rid + ' is not loaded yet');
+      return eng.createRenderer(gl, mod.default, opts || {});
+    }
+    return wrapProgram(gl, compileProgram(gl, rid));
+  }
+
+  // Before a context is lost on purpose (WEBGL_lose_context): whatever the
+  // scene engine keeps for it (Three's renderer, its programs, its targets).
+  function releaseContext(gl) {
+    var eng = loadedModule('scenes/engine.js');
+    if (eng && gl) { try { eng.releaseContext(gl); } catch (e) { /* a lost context */ } }
+  }
+
   // --- the noise table --------------------------------------------------------
   //
   // Every scene is built from noise, and hashing four lattice corners per
@@ -4111,11 +4262,6 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
         resolve(_thumbs);
         return;
       }
-      var buf = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-      gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
       var look = defaultLook();
       look.dirX = 0.6; look.cx = 0.5; look.cy = 0.7; look.sx = 0.25; look.sy = 0.35;
       // Where the driver compiles on its own threads, all five start at once;
@@ -4127,28 +4273,25 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
       // back over the next one's draw.
       var parallel = false;
       try { parallel = !!gl.getExtension('KHR_parallel_shader_compile'); } catch (e) { parallel = false; }
-      var progs = SCENES.map(function (s) {
-        return parallel ? compileProgramAsync(gl, s.id).catch(function () { return null; }) : null;
+      var made = SCENES.map(function (s) {
+        return parallel ? createRenderer(gl, s.id, { thumbnail: true }).catch(function () { return null; }) : null;
       });
       function turn(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
       var chain = Promise.resolve();
       SCENES.forEach(function (s, i) {
         chain = chain.then(function () {
-          if (progs[i]) return progs[i];
+          if (made[i]) return made[i];
           return turn(30).then(function () {
-            return compileProgramAsync(gl, s.id).catch(function () { return null; });
+            return createRenderer(gl, s.id, { thumbnail: true }).catch(function () { return null; });
           });
-        }).then(function (prog) {
-          if (!prog) return null;   // the swatch stays
-          gl.viewport(0, 0, THUMB_W, THUMB_H);
-          setUniforms(gl, prog, THUMB_W, THUMB_H, THUMB_TIME, look);
-          gl.drawArrays(gl.TRIANGLES, 0, 3);
-          gl.deleteProgram(prog.program);
+        }).then(function (r) {
+          if (!r) return null;   // the swatch stays
+          try { r.draw(null, THUMB_W, THUMB_H, THUMB_TIME, look); } finally { r.dispose(); }
           return snapshot(t.canvas).then(function (url) { _thumbs[s.id] = url; });
         }).catch(function () { /* the swatch stays */ });
       });
       chain.then(function () {
-        try { gl.deleteBuffer(buf); } catch (e) { /* ignore */ }
+        releaseContext(gl);
         var lose = gl.getExtension('WEBGL_lose_context');
         if (lose) lose.loseContext();
         resolve(_thumbs);
@@ -4169,6 +4312,10 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }
     _resolveConfig: RESOLVE,
     compileProgram: compileProgram,
     compileProgramAsync: compileProgramAsync,
+    createRenderer: createRenderer,
+    createRendererSync: createRendererSync,
+    releaseContext: releaseContext,
+    register: register,
     setUniforms: setUniforms,
     viewMatrix: viewMatrix,
     decomposeView: decomposeView,
