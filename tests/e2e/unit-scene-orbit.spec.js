@@ -358,7 +358,9 @@ test.describe('scene preview', () => {
   });
 
   test('draws the chosen scene and turns it when dragged, with a way back', async ({ page }) => {
-    test.setTimeout(90_000);
+    // The waits below budget up to 30 s + 60 s before the drag even starts;
+    // the screenshot comparison after it needs headroom of its own.
+    test.setTimeout(150_000);
     await page.evaluate(() => {
       VideoEffects.writeMode('preset:office');
       window.__pv = VideoEffects.renderScenePreview(document.getElementById('pv'));
@@ -384,7 +386,7 @@ test.describe('scene preview', () => {
     expect(view.yaw).toBeLessThan(0);
     expect(view.pitch).toBeGreaterThan(0);
     // The picture is another one: compare what is on screen, not the state.
-    await expect.poll(async () => !(await stage.screenshot()).equals(before), { timeout: 15_000 }).toBe(true);
+    await expect.poll(async () => !(await stage.screenshot({ timeout: 20_000 })).equals(before), { timeout: 40_000 }).toBe(true);
 
     await page.locator('#pv .scene-preview-recentre').click();
     await expect.poll(() => page.evaluate(() => window.__pv.orbit.view())).toBeNull();
