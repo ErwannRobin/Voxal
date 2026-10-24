@@ -70,9 +70,11 @@ var VideoScenes = (function () {
   // shadow: how dark your shadow gets on the scene's near surfaces (0 = the
   //         scene has none — everything in it is far away).
   // wrap:   how much of the scene's light spills onto your outline.
-  // res:    the scene's buffer, as a fraction of the pipeline's (see
-  //         SCENE_LONG in video-effects.js). The ray-marched landscapes are
-  //         the dearest scenes to draw and the softest to look at.
+  // res:    the ray-marched fallback's buffer, as a fraction of the
+  //         pipeline's (see sceneBufferSize() in video-effects.js): those
+  //         landscapes are the dearest to draw and the softest to look at. A
+  //         scene drawn by the engine (`module`) ignores it and is drawn at
+  //         the picture's own size.
   // hz:     how often it is redrawn, and what that falls to under load. Its
   //         motion is slow, so a dear scene is redrawn less often, not made
   //         to look less.
@@ -87,32 +89,34 @@ var VideoScenes = (function () {
   //         the kind of place, kept for anything that names it shortly.
   // blurb:  one sentence on what is in it, under the preview.
   // kbps:   what it costs to send, measured: [moving, still] kb/s of VP9 at
-  //         1280x720 and a fixed quality, with a stand-in person moving in
-  //         front of it / holding still (scripts/scene-preview.mjs --bits).
+  //         1280x720 and a fixed quality (q32), drawn as a call on a GPU draws
+  //         it (the picture's own size, multisampled), with a stand-in person
+  //         moving in front of it / holding still: scripts/scene-preview.mjs
+  //         --gpu --long 1280 --bits --person | --still, on an Apple M5.
   var SCENES = [
     { id: 'office', label: 'Office', name: 'Copenhagen studio',
       blurb: 'An architect’s studio in an old Copenhagen flat on an October morning: low sun through a tall window, oak shelves, a linden turning gold outside.',
-      kbps: [248, 216], shadow: 0.55, wrap: 0.22, res: 0.85, hz: [12, 6], module: true,
+      kbps: [420, 337], shadow: 0.55, wrap: 0.22, res: 0.85, hz: [12, 6], module: true,
       swatch: 'linear-gradient(120deg,#d9d0c3 0%,#e8e1d6 55%,#a9c3da 100%)' },
     { id: 'island', label: 'Island', name: 'Lagoon deck',
       blurb: 'The shaded deck of an overwater bungalow on a Polynesian lagoon: turquoise shallows, a reef, a volcanic peak in the haze, a leaning palm.',
-      kbps: [509, 382], shadow: 0.30, wrap: 0.36, res: 0.80, hz: [10, 5], module: true,
+      kbps: [1023, 671], shadow: 0.30, wrap: 0.36, res: 0.80, hz: [10, 5], module: true,
       swatch: 'linear-gradient(180deg,#7fb2df 0%,#cfe6ef 48%,#3fa3a6 52%,#e9dcbc 100%)' },
     { id: 'cybercafe', label: 'Cyber café', name: 'Lisbon espresso bar',
       blurb: 'A 90s internet café under a brick vault in Lisbon, now an espresso bar: azulejos, a zinc bar, old terminals, a tram going by outside.',
-      kbps: [268, 246], shadow: 0.45, wrap: 0.42, res: 1.0, hz: [15, 8], module: true,
+      kbps: [432, 422], shadow: 0.45, wrap: 0.42, res: 1.0, hz: [15, 8], module: true,
       swatch: 'linear-gradient(120deg,#2a1714 0%,#5a2a3c 50%,#1d3550 100%)' },
     { id: 'mountain', label: 'Mountain', name: 'Dolomites lake',
       blurb: 'A glassy emerald lake under limestone spires on a September morning: golden larches, a boathouse on stilts, mist on the far water.',
-      kbps: [167, 217], shadow: 0, wrap: 0.28, res: 0.70, hz: [10, 5], module: true,
+      kbps: [130, 164], shadow: 0, wrap: 0.28, res: 0.70, hz: [10, 5], module: true,
       swatch: 'linear-gradient(180deg,#8fb4d9 0%,#e6eef5 45%,#5f7387 70%,#2f4a35 100%)' },
     { id: 'countryside', label: 'Countryside', name: 'Val d’Orcia',
       blurb: 'Golden wheat on rolling Tuscan hills on a June evening: cypresses up to a stone farmhouse, an umbrella pine, hill towns in the haze.',
-      kbps: [343, 292], shadow: 0, wrap: 0.28, res: 0.80, hz: [10, 5], module: true,
+      kbps: [415, 223], shadow: 0, wrap: 0.28, res: 0.80, hz: [10, 5], module: true,
       swatch: 'linear-gradient(180deg,#9cc4e6 0%,#dceaf2 45%,#86a957 65%,#4f7a2c 100%)' },
     { id: 'penthouse', label: 'Neon rain', name: 'Neon rain',
       blurb: 'A penthouse high over a harbour city at night under a storm: rain on the glass, neon, a floor polished to a mirror.',
-      kbps: [721, 556], shadow: 0.40, wrap: 0.40, res: 1.0, hz: [12, 6], bloom: 0.45, module: true,
+      kbps: [885, 496], shadow: 0.40, wrap: 0.40, res: 1.0, hz: [12, 6], bloom: 0.45, module: true,
       swatch: 'linear-gradient(120deg,#0b1020 0%,#3a1a45 45%,#0f4a66 100%)' }
   ];
 

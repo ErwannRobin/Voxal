@@ -280,6 +280,24 @@ function compileRaw(gl, vs, fs) {
 
 const ENGINES = new WeakMap();
 
+function softwareRenderer(gl) {
+  try {
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    const name = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER));
+    return /swiftshader|llvmpipe|softpipe|software|basic render|warp/i.test(name);
+  } catch (e) { return false; }
+}
+
+// The most samples the HDR target's colour format can be multisampled with
+// here (a driver may allow fewer for half-float than for 8 bits), up to 8.
+function samplesFor(gl, float, max) {
+  try {
+    const list = gl.getInternalformatParameter(gl.RENDERBUFFER, float ? gl.RGBA16F : gl.RGBA8, gl.SAMPLES);
+    const fmt = list && list.length ? Math.max(...list) : 0;
+    return Math.min(8, fmt, max);
+  } catch (e) { return 0; }
+}
+
 class Engine {
   constructor(gl) {
     this.gl = gl;
@@ -299,6 +317,10 @@ class Engine {
     // quarter of the light, scaled back up in the output pass.
     this.float = !!(gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'));
     this.hdrScale = this.float ? 1 : 4;
+    // A software rasteriser (the tests' SwiftShader, a VM, a blocklisted
+    // driver) pays for every sample on the CPU: no multisampling there.
+    this.software = softwareRenderer(gl);
+    this.maxSamples = this.software ? 0 : samplesFor(gl, this.float, r.capabilities.maxSamples || 0);
     this.rt = null;
     this.rts = [];
     this.out = null;
@@ -310,10 +332,19 @@ class Engine {
   // the same scene at two sizes (the settings preview and its cost probe, a
   // pipeline whose buffer the governor just stepped) would otherwise free and
   // reallocate a half-float target and its depth on every alternation.
-  target(w, h) {
+  //
+  // Multisampled where the scene's quality asks for it (`samples`): every edge
+  // a redraw draws is then the average of several looks across its pixel, so
+  // the jittered redraws the resolve adds up disagree far less about it — a
+  // sharper edge, and less of what a room that holds still costs the encoder
+  // (office: 435 -> 216 kb/s frozen with 8). Three resolves colour and depth
+  // into the target's textures at the end of each render.
+  target(w, h, samples) {
+    samples = samples || 0;
     let rt = null;
     for (let i = 0; i < this.rts.length; i++) {
-      if (this.rts[i].width === w && this.rts[i].height === h) { rt = this.rts.splice(i, 1)[0]; break; }
+      const c = this.rts[i];
+      if (c.width === w && c.height === h && c.samples === samples) { rt = this.rts.splice(i, 1)[0]; break; }
     }
     if (!rt) {
       if (this.rts.length >= 2) { const old = this.rts.shift(); old.depthTexture.dispose(); old.dispose(); }
@@ -321,6 +352,7 @@ class Engine {
         type: this.float ? THREE.HalfFloatType : THREE.UnsignedByteType,
         format: THREE.RGBAFormat, depthBuffer: true,
         depthTexture: new THREE.DepthTexture(w, h),
+        samples,
         minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false
       });
     }
@@ -491,13 +523,25 @@ class SceneRenderer {
       uFog: { value: new THREE.Vector4(0, 0, 0, 1) }
     };
     const q = this.opts.quality || 'full';
+    const thumb = q === 'thumb';
+    // Everything but a thumbnail (160 px wide) is drawn at the scene's best:
+    // the camera's own pipeline, a keyed peer's scene drawn here, the
+    // settings preview, on a phone as on a computer. A device that cannot
+    // keep up is walked down by the pipeline's governor (buffer size, then
+    // redraw rate), which costs less to look at than a coarser scene.
     this.quality = {
       name: q,
       // The shadow map's side, and whether planar reflections and the costlier
-      // layers are drawn at all: a thumbnail is 160 px wide.
-      shadow: q === 'thumb' ? 512 : q === 'receiver' || this.opts.mobile ? 1024 : 2048,
-      mirror: q === 'thumb' ? 0 : q === 'receiver' || this.opts.mobile ? 0.35 : 0.5,
-      particles: q === 'thumb' ? 0.4 : this.opts.mobile ? 0.6 : 1
+      // layers are drawn at all.
+      shadow: thumb ? 512 : 2048,
+      mirror: thumb ? 0 : 0.5,
+      particles: thumb ? 0.4 : 1,
+      // Multisampling of the HDR target (see Engine.target()): 8 where the
+      // GPU allows it, 4 on a phone (its memory bandwidth is the limit), none
+      // on a software rasteriser or for a thumbnail.
+      samples: thumb ? 0 : Math.min(this.opts.mobile ? 4 : 8, eng.maxSamples),
+      // A software rasteriser: a scene may leave out its dearest layers.
+      software: eng.software
     };
     this.k = this.kit();
     this.state = def.build(this.k) || {};
@@ -717,7 +761,7 @@ void main() {
     cam.quaternion.copy(this.baseQuat).multiply(viewQuat(view, L.m, this._q));
     cam.updateMatrixWorld();
     if (this.shadowDirty) { r.shadowMap.needsUpdate = true; this.shadowDirty = false; }
-    const rt = eng.target(w, h);
+    const rt = eng.target(w, h, this.quality.samples);
     r.setRenderTarget(rt);
     r.render(this.scene, cam);
     r.setRenderTarget(null);
@@ -737,7 +781,7 @@ void main() {
     const saved = saveBindings(eng.gl);
     r.resetState();
     this.prepare(w || 512, h || 288, 37, defaultLook(), null);
-    r.setRenderTarget(eng.target(w || 512, h || 288));
+    r.setRenderTarget(eng.target(w || 512, h || 288, this.quality.samples));
     let done;
     try { done = r.compileAsync(this.scene, this.camera, this.scene); } catch (e) { done = Promise.reject(e); }
     // Synchronous work (and Three's bindings) happened above: hand the

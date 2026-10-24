@@ -312,25 +312,48 @@ var VideoEffects = (function () {
   // landscapes are the most expensive thing the page draws, and sixty per cent
   // of the pixels of a backdrop nobody is looking at closely is plenty.
   var SCENE_LONG = IS_MOBILE ? 384 : 512;
-  // …and how much bigger than that it starts. Whatever moves in a scene (a
-  // palm, the water's edge) is not added up over redraws (see resolveScene()),
-  // so it shows exactly as sharp as one redraw is: at 512 that is a third of a
-  // 720p picture, stretched, and it reads as standard definition. So the
-  // buffer starts above SCENE_LONG and the governor walks it down, after
-  // segmentation and before the scene's redraw rate, on a device that cannot
-  // keep up. A phone starts nearer to SCENE_LONG: it has less to spend.
-  var SCENE_SCALE = IS_MOBILE ? [1.25, 1] : [1.5, 1];
-  var SCENE_SCALE_MAX = 2.25;   // 1152 long: what a 1920 picture asks for
-  function sceneScaleLadder(long) {
-    if (IS_MOBILE) return SCENE_SCALE.slice();
-    var top = Math.min(SCENE_SCALE_MAX, Math.max(SCENE_SCALE[0], 0.6 * long / SCENE_LONG));
-    return top > SCENE_SCALE[0] + 0.01 ? [top, SCENE_SCALE[0], 1] : SCENE_SCALE.slice();
+  // …and the scene is drawn at the picture's OWN size to begin with, phone or
+  // computer. Whatever moves in a scene (a palm, the water's edge, the rain) is
+  // not added up over redraws (see resolveScene()), so it shows exactly as
+  // sharp as one redraw is; the engine's scenes are multisampled and cheap
+  // enough (about a millisecond a redraw on an M-series GPU) that nothing is
+  // gained by drawing them smaller where the device can afford it. Where it
+  // cannot, the governor walks the buffer down these rungs (multiples of
+  // SCENE_LONG), after segmentation and before the scene's redraw rate.
+  //
+  // A software rasteriser (SwiftShader in a VM, a blocklisted driver — and the
+  // tests) draws on the CPU the call also needs: there the scene starts where
+  // it always did, below the picture's size and at the catalogue's `res`
+  // (SCENE_SCALE_SOFT, and about 0.6 of a Full HD picture's long side).
+  var SCENE_SCALE = IS_MOBILE ? [2, 1.25, 1] : [2.25, 1.5, 1];
+  var SCENE_SCALE_SOFT = IS_MOBILE ? [1.25, 1] : [1.5, 1];
+  var SCENE_SCALE_MAX = 2.25;   // 1152 long: the first rung below a 1080p picture
+  // The ladder for a picture whose long side is `long`: its own size, then the
+  // rungs below it.
+  function sceneScaleLadder(long, rungs, software) {
+    if (software) {
+      if (rungs) return rungs.slice();
+      if (IS_MOBILE) return SCENE_SCALE_SOFT.slice();
+      var soft = Math.min(SCENE_SCALE_MAX, Math.max(SCENE_SCALE_SOFT[0], 0.6 * long / SCENE_LONG));
+      return soft > SCENE_SCALE_SOFT[0] + 0.01 ? [soft].concat(SCENE_SCALE_SOFT) : SCENE_SCALE_SOFT.slice();
+    }
+    var top = Math.max(1, long / SCENE_LONG);
+    var out = [top];
+    (rungs || SCENE_SCALE).forEach(function (r) { if (r < top - 0.01) out.push(r); });
+    return out;
   }
-  // A keyed peer's scene, drawn here (KeyInProcessor), always starts at the
-  // top, phone or not: it is somebody's whole background on this screen, and
-  // drawn small it reads as standard definition behind a person in HD. Only
-  // the receiver's own frame budget walks it down (noteDraw()).
-  var KEYIN_SCENE_SCALE = [SCENE_SCALE_MAX, SCENE_SCALE[0], 1];
+  // A keyed peer's scene, drawn here (KeyInProcessor), starts at the top too:
+  // it is somebody's whole background on this screen. Only the receiver's own
+  // frame budget walks it down (noteDraw()). On a software rasteriser, from
+  // these rungs alone.
+  var KEYIN_SCENE_SCALE = [SCENE_SCALE_MAX, SCENE_SCALE_SOFT[0], 1];
+  // Whether a pipeline's context is a software rasteriser, for the ladders
+  // above and sceneBufferSize(). The tests run on one: __voxalSceneHardware
+  // lets them take the hardware path anyway.
+  function softwareScenes(gl) {
+    if (typeof window !== 'undefined' && window.__voxalSceneHardware) return false;
+    try { return VideoScenes.isSoftwareGL(gl); } catch (e) { return false; }
+  }
   // How often the scene itself is redrawn. Its motion is slow by design, and a
   // background that changes on every frame is one the encoder pays for on every
   // frame — so it runs well under the camera's rate, and halves under load
@@ -2269,11 +2292,6 @@ var VideoEffects = (function () {
     var size = this.sizeFromTrack();
     this.canvas.width = size.w;
     this.canvas.height = size.h;
-    // The scene buffer's ladder follows the picture: about 0.6 of its long
-    // side at the top, so a Full HD camera gets a bigger buffer than a 720p
-    // one, then 1.5x and SCENE_LONG as the governor steps down. Only while
-    // nothing has been stepped (a rotation rebuilds this and must not forget).
-    if (!this.sceneScaleStep) this.sceneScaleSteps = sceneScaleLadder(Math.max(size.w, size.h));
 
     // Not desynchronized: the canvas is never in the DOM, so the low-latency
     // path has nothing to make faster, and the keyed copy (keyedTrack()) reads
@@ -2290,6 +2308,12 @@ var VideoEffects = (function () {
     if (!gl) throw new Error('WebGL2 unavailable');
     this.gl = gl;
     fullScreenTriangle(gl, this);
+    // The scene buffer's ladder follows the picture: its own size at the top
+    // (on a GPU), then SCENE_SCALE's rungs as the governor steps down. Only
+    // while nothing has been stepped (a rotation rebuilds this and must not
+    // forget).
+    this.softwareGL = softwareScenes(gl);
+    if (!this.sceneScaleStep) this.sceneScaleSteps = sceneScaleLadder(Math.max(size.w, size.h), null, this.softwareGL);
 
     this.pDown = program(gl, FRAG_DOWNSAMPLE);
     this.pBlur = program(gl, FRAG_BLUR);
@@ -2761,8 +2785,11 @@ var VideoEffects = (function () {
     if (!id) throw new Error('unknown scene');
     var want = VideoScenes.byId(id);
     var cw = this.canvas.width, ch = this.canvas.height;
+    // The renderer first: what draws the scene decides its buffer (an engine
+    // scene is drawn whole; the ray-marched fallback at its `res`).
+    if (!this.sceneRenderers[id]) this.sceneRenderers[id] = VideoScenes.createRendererSync(gl, id, this.sceneOpts());
     var scale = this.sceneScaleSteps ? this.sceneScaleSteps[this.sceneScaleStep] : 1;
-    var size = sceneBufferSize(cw, ch, scale, want);
+    var size = sceneBufferSize(cw, ch, scale, want, this.sceneRenderers[id].engine, this.softwareGL);
     var nw = size[0], nh = size[1];
     if (this.texScene && (nw !== this.sceneW || nh !== this.sceneH)) {
       // Another scene, another size: the buffers follow it.
@@ -2805,7 +2832,6 @@ var VideoEffects = (function () {
     }
     // Another scene (or the same one, picked again) starts its picture over.
     this.sceneAge = 0;
-    if (!this.sceneRenderers[id]) this.sceneRenderers[id] = VideoScenes.createRendererSync(gl, id, this.sceneOpts());
     this.sceneId = id;
     this.scene = want;
     // Each scene brings its own redraw rate; a new one starts at the top of
@@ -4043,7 +4069,7 @@ var VideoEffects = (function () {
     this.sceneLook = 0;
     this.sceneHzSteps = SCENE_HZ.slice();
     this.sceneStep = 0;
-    this.sceneScaleSteps = KEYIN_SCENE_SCALE.slice();
+    this.sceneScaleSteps = KEYIN_SCENE_SCALE.slice();   // until the picture's size is known
     this.sceneScaleStep = 0;
     this.lastScene = 0;
     this.lastDraw = 0;
@@ -4207,6 +4233,8 @@ var VideoEffects = (function () {
     if (!gl) throw new Error('WebGL2 unavailable');
     this.gl = gl;
     fullScreenTriangle(gl, this);
+    this.softwareGL = softwareScenes(gl);
+    if (!this.sceneScaleStep) this.sceneScaleSteps = sceneScaleLadder(Math.max(out.w, out.h), KEYIN_SCENE_SCALE, this.softwareGL);
     this.pKeyMask = program(gl, FRAG_KEY_MASK);
     this.pKeyComp = program(gl, FRAG_KEYIN);
     this.pFeather = program(gl, FRAG_FEATHER);
@@ -4231,6 +4259,7 @@ var VideoEffects = (function () {
     var out = this.outputSize(w, h);
     this.canvas.width = out.w;
     this.canvas.height = out.h;
+    if (!this.sceneScaleStep) this.sceneScaleSteps = sceneScaleLadder(Math.max(out.w, out.h), KEYIN_SCENE_SCALE, this.softwareGL);
     var seg = segSizeFor(w, h);
     if (seg.width !== this.segW || seg.height !== this.segH) {
       this.segW = seg.width;
@@ -5346,9 +5375,12 @@ var VideoEffects = (function () {
   var PREVIEW_CALL_SIZE = [1280, 720];
 
   // The buffer a scene is redrawn into for a camera picture of cw x ch, at
-  // `scale` on the pipeline's ladder. ensureScene() allocates exactly this.
-  function sceneBufferSize(cw, ch, scale, sc) {
-    var k = Math.min(1, SCENE_LONG * scale * ((sc && sc.res) || 1) / Math.max(cw, ch));
+  // `scale` on the pipeline's ladder, by `engine` (the renderer's: 'three',
+  // or 'shader' for the ray-marched fallback, which is drawn at its catalogue
+  // `res`). ensureScene() allocates exactly this.
+  function sceneBufferSize(cw, ch, scale, sc, engine, software) {
+    var res = engine === 'shader' || software ? ((sc && sc.res) || 1) : 1;
+    var k = Math.min(1, SCENE_LONG * scale * res / Math.max(cw, ch));
     return [Math.max(2, Math.round(cw * k)), Math.max(2, Math.round(ch * k))];
   }
 
@@ -5475,7 +5507,7 @@ var VideoEffects = (function () {
     var visible = false, destroyed = false, failed = '';
     var view = null, full = false, showPerson = true, placeholder = null, prevFocus = null;
     // The cost on this device: one redraw at a call's size, every so often.
-    var probe = null, timer = null, gpuMs = null, cpuMs = null, lastProbe = 0, samples = [];
+    var probe = null, timer = null, gpuMs = null, cpuMs = null, lastProbe = 0, samples = [], soft = false;
     var px = new Uint8Array(4);
 
     var orbit = attachOrbit(stage, {
@@ -5563,6 +5595,7 @@ var VideoEffects = (function () {
       }
       stage.insertBefore(canvas, stage.firstChild);
       fit();
+      soft = softwareScenes(gl);
       // Test hook: measure by waiting even where the GPU's clock is readable.
       timer = window.__voxalPreviewSyncCost ? null : gpuTimer(gl);
       var mine = canvas;
@@ -5615,7 +5648,8 @@ var VideoEffects = (function () {
     function measure(time) {
       var sc = VideoScenes.byId(progId);
       var size = sceneBufferSize(PREVIEW_CALL_SIZE[0], PREVIEW_CALL_SIZE[1],
-                                 sceneScaleLadder(Math.max(PREVIEW_CALL_SIZE[0], PREVIEW_CALL_SIZE[1]))[0], sc);
+                                 sceneScaleLadder(Math.max(PREVIEW_CALL_SIZE[0], PREVIEW_CALL_SIZE[1]), null, soft)[0],
+                                 sc, prog.engine, soft);
       if (!probe || probe.w !== size[0] || probe.h !== size[1]) {
         freeProbe();
         var tex = texture(gl, size[0], size[1], gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
@@ -5693,7 +5727,8 @@ var VideoEffects = (function () {
         : 'not measured yet';
       var hz = (sc.hz || SCENE_HZ)[0];
       var size = sceneBufferSize(PREVIEW_CALL_SIZE[0], PREVIEW_CALL_SIZE[1],
-                                 sceneScaleLadder(Math.max(PREVIEW_CALL_SIZE[0], PREVIEW_CALL_SIZE[1]))[0], sc);
+                                 sceneScaleLadder(Math.max(PREVIEW_CALL_SIZE[0], PREVIEW_CALL_SIZE[1]), null, soft)[0],
+                                 sc, prog ? prog.engine : 'three', soft);
       var dev;
       if (progId === id && gpuMs != null) {
         dev = fmtMs(gpuMs) + ' ms of graphics time per redraw at ' + size[0] + '×' + size[1] +
