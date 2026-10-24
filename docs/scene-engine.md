@@ -174,6 +174,33 @@ Then set `module: true` on its catalogue entry in `src/video-scenes.js`.
 | office | Three.js | 248 / 216 vs 299 / 159 (frozen above old: detail, by choice) |
 | cybercafe | Three.js | 268 / 246 vs 696 / 569 (421 while the tram arrives) |
 
+### Measured against the old shaders (`scripts/scene-bench.mjs --compare`)
+
+Same machine (Apple M5, 2026-10-24), default bench options; baseline is the
+ray-marched library at `7152b33`.
+
+| scene | SwiftShader first frame, old → new | M5 first frame (warm cache), old → new | M5 redraw p95 720p from 512, old → new |
+|---|---|---|---|
+| office | 3.5 s → 1.7 s | 29 → 97 ms | 2.4 → 1.1 ms |
+| island | 6.0 s → 1.1 s | 26 → 82 ms | 1.6 → 0.9 ms |
+| cybercafe | 1.3 s → 1.1 s | 22 → 98 ms | 0.9 → 1.2 ms |
+| mountain | 11.9 s → 1.4 s | 27 → 264 ms | 1.8 → 1.4 ms |
+| countryside | 5.8 s → 1.7 s | 26 → 463 ms | 1.6 → 1.3 ms |
+| penthouse | 3.0 s → 1.6 s | 41 → 84 ms | 1.3 → 1.0 ms |
+
+- The GPU first frame is slower because a scene now builds its geometry in
+  JavaScript (terrain, grass, books) before the first draw; the page is
+  blocked 40–420 ms (countryside worst). With the driver's shader cache
+  busted (`--cold`, a first pick on a new machine) the two are level: new
+  0.53–1.07 s with the page blocked 0.21–0.66 s, old 0.48–1.01 s blocked
+  0.37–0.90 s.
+- SwiftShader redraws are mixed: island, countryside, penthouse faster;
+  cybercafe 1.4–3× and mountain up to 1.9× slower (more geometry, area light).
+  SwiftShader is the test and fallback GL, not what callers' devices run.
+- No growth over 30 acquire/draw/release cycles in one context. Releasing a
+  context leaves the shared Three renderer's targets until the context is lost,
+  which every release path in `video-effects.js` does right after.
+
 ## Looking at a scene
 
 ```sh

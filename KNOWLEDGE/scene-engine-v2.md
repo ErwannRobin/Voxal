@@ -157,6 +157,6 @@ Work happens in worktree `../voxal-engine-wt`, branch `feat/scene-engine-v2-int`
   MSAA off on software GPUs (sniffs the renderer: wants `k.quality.software`).
   All six scenes now on the engine. Video/scene specs: 582 passed, 2 failed (the two
   pre-existing keyed "slow-copy" tests).
-- Next: refinement, bench old vs new
-  (`scripts/scene-bench.mjs --compare`), full suite.
-
+- Bench old vs new (M5 + SwiftShader, warm and cold) in `docs/scene-engine.md`.
+  Full unit suite: 1925 passed, 1 failed (keyed "slow-copy", fails the same on `7152b33`).
+- Next: visual refinement of the weak points (see PR), real devices, mesh suite.

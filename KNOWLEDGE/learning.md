@@ -457,4 +457,7 @@ Design: `docs/video-effects.md`. Preview any scene/look headlessly with `make sc
 - Thin bright lines (neon strips) alias into blocks through a half-size planar mirror: draw their floor reflections as projected geometry instead.
 - A scene module that fails to load silently falls back to its old shader (by design, for users) — the scene spec checks `renderer.engine` so a broken module cannot pass the tests on the old picture.
 - `scene-preview.mjs --gpu` (ANGLE Metal) gives the same pictures as SwiftShader at ~20× the speed; `--module <id>` draws a scene from its module before the catalogue says so.
+- **A scene's first frame is now its JavaScript, not its shaders**: building terrain/grass/books blocks the page 40–420 ms on an M5 with a warm shader cache (countryside worst; the old shaders took 22–41 ms). Cold, the two are level (~0.5–1 s). Generate heavy geometry lazily or in chunks; never per redraw.
+- **Multisample the scene's own target** (office, café): a 4–8× MSAA room halved the frozen VP9 cost (435 → 216 kb/s) — edges the jittered redraws disagreed about stop reading as motion. Turn it off on software GL (SwiftShader: +40 % per redraw).
+- A test that awaited `__renderScene` after reading pipeline state must read that state first: an engine scene's `compileAsync()` yields through `setTimeout`, and the camera keeps drawing (and measuring the light) meanwhile. `ensureScene()` takes only a compiled renderer — compile with `createRenderer()` first.
 
