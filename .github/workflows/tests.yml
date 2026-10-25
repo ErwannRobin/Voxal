@@ -92,15 +92,15 @@ jobs:
             libxdo-dev \
             libssl-dev
 
+      # Dependencies only (rust-cache prunes the workspace's own artifacts), and
+      # saved from `main` alone: a raw `src-tauri/target` was ~1.9 GB per
+      # Cargo.lock change and ate the repository's cache quota.
       - name: Cache Rust build
-        uses: actions/cache@v6
+        uses: Swatinem/rust-cache@v2.7.8
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-test-
+          workspaces: src-tauri
+          shared-key: test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run Rust tests
         run: cd src-tauri && cargo test
@@ -119,16 +119,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
-
-      - name: Cache Rust build
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-test-
 
       - name: Run Rust tests
         run: cd src-tauri && cargo test
@@ -316,15 +306,15 @@ jobs:
             libxdo-dev \
             libssl-dev
 
+      # Dependencies only (rust-cache prunes the workspace's own artifacts), and
+      # saved from `main` alone: a raw `src-tauri/target` was ~1.9 GB per
+      # Cargo.lock change and ate the repository's cache quota.
       - name: Cache Rust build
-        uses: actions/cache@v6
+        uses: Swatinem/rust-cache@v2.7.8
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-cargo-llvm-cov-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-llvm-cov-
+          workspaces: src-tauri
+          shared-key: llvm-cov
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Rust coverage
         continue-on-error: true
