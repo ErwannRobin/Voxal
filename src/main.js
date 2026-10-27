@@ -10503,7 +10503,26 @@ function initModalSettingsSidebar() {
 
   function setActive(id) {
     buttons.forEach(function(btn) {
-      btn.classList.toggle('active', btn.dataset.target === id);
+      var on = btn.dataset.target === id;
+      btn.classList.toggle('active', on);
+      // Narrow: the menu is a horizontal strip, so keep the active chip in view.
+      if (on && !mq.matches) {
+        sidebar.scrollLeft = btn.offsetLeft - (sidebar.clientWidth - btn.offsetWidth) / 2;
+      }
+    });
+  }
+
+  // Narrow only: bring a section to the top of the scroller. Runs a frame late
+  // because opening one card collapses the others and moves everything.
+  function scrollToCard(id) {
+    var card = document.getElementById(id);
+    if (!card) return;
+    requestAnimationFrame(function() {
+      var top = scrollRoot.scrollTop
+        + card.getBoundingClientRect().top - scrollRoot.getBoundingClientRect().top
+        - parseFloat(getComputedStyle(scrollRoot).paddingTop || '0');
+      var calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      scrollRoot.scrollTo({ top: Math.max(0, top), behavior: calm ? 'auto' : 'smooth' });
     });
   }
 
@@ -10634,6 +10653,7 @@ function initModalSettingsSidebar() {
             collapseNonAdvancedCards(activeId);
             if (advancedDetails) advancedDetails.open = false;
           }
+          scrollToCard(activeId);
         }
       });
     });
