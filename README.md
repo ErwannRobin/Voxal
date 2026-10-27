@@ -19,7 +19,7 @@ Instant push-to-talk voice rooms.
 | Dark | <img src="docs/voxal-screenshot-dark.png" width="260" alt="Voxal home (dark)"> | <img src="docs/voxal-screenshot-call-dark.png" width="260" alt="Voxal audio call (dark)"> |
 | Light | <img src="docs/voxal-screenshot-light.png" width="260" alt="Voxal home (light)"> | <img src="docs/voxal-screenshot-call-light.png" width="260" alt="Voxal audio call (light)"> |
 
-Video call with a virtual background (animated scene) and the chat drawer:
+Video call with an animated virtual background (the Lagoon deck, lit by night or by day):
 
 | Dark | Light |
 |---|---|

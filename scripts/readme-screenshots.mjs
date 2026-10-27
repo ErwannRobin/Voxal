@@ -111,7 +111,8 @@ for (const theme of ['dark', 'light']) {
   // ── Video call with a virtual background ──
   {
     const size = { width: 1100, height: 680 };
-    const bg = { 'video-background': 'preset:office' };
+    // Lagoon deck, lit night for dark mode and day for light; chat folded away.
+    const bg = { 'video-background': 'preset:island', 'scene-light': theme === 'dark' ? 'night' : 'midday', 'chat-collapsed': '1' };
     const me = await peerPage('Erwann', theme, size, bg);
     const code = await createRoom(me);
     const a = await peerPage('Maya', theme, size, {});
