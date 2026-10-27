@@ -1,10 +1,5 @@
 # Virtual backgrounds: technical overview
 
-Status: describes the shipped behavior. Implementation details live in
-[`video-effects.md`](video-effects.md), [`scene-engine.md`](scene-engine.md) and
-[`custom-scenes.md`](custom-scenes.md); this page is the map between them.
-Measurements are from [`benchmarks.md`](benchmarks.md) and the docs above.
-
 ## 1. Summary
 
 Voxal replaces the room behind a person with one of: nothing, a blur, a flat
@@ -12,7 +7,7 @@ picture, one of six animated 3D scenes, or a user-supplied 360° panorama or
 `.glb` model. Everything is computed on the sender's device. No frame goes to a
 server.
 
-What sets it apart from a "cut-out over a picture" design:
+Compared with a plain cut-out over a picture:
 
 | Property | Mechanism |
 |---|---|
@@ -128,7 +123,7 @@ swatch }` to `SCENES` in `src/video-scenes.js`. The shared kit (`kit.js`) provid
 sky and image-based light, planar mirror, terrain, facade windows, rain, glass
 and foliage.
 
-Rules every scene follows (and why):
+Rules every scene follows:
 
 | Rule | Reason |
 |---|---|
@@ -255,7 +250,7 @@ quoted as such. See `benchmarking.md`.
 The segmentation step is not unique to Voxal: Google Meet runs MediaPipe
 models in the browser with WebAssembly and WebGL. The difference is what
 happens after the cut-out. "Not found" means the feature was not found in
-public documentation reviewed in October 2026; it is not proof of absence.
+public documentation; it is not proof of absence.
 
 | | Voxal | Google Meet | Zoom | Microsoft Teams |
 |---|---|---|---|---|
@@ -295,8 +290,10 @@ cost are in section 8.2.
 
 ## 11. References
 
-- Voxal: `video-effects.md`, `scene-engine.md`, `custom-scenes.md`,
-  `benchmarks.md`, `benchmarking.md`, `video-routing.md`
+- Voxal: [`video-effects.md`](video-effects.md),
+  [`scene-engine.md`](scene-engine.md), [`custom-scenes.md`](custom-scenes.md),
+  [`benchmarks.md`](benchmarks.md), [`benchmarking.md`](benchmarking.md),
+  [`video-routing.md`](video-routing.md)
 - [Background Features in Google Meet, Powered by Web ML (Google Research, 2020)](https://research.google/blog/background-features-in-google-meet-powered-by-web-ml/)
 - [Zoom Community: virtual background](https://community.zoom.com/meetings-2/virtual-background-11682)
 - [Zoom macOS virtual background minimum requirements (Zoom dev forum)](https://devforum.zoom.us/t/macos-virtual-background-minimum-requirements/15904.md)
