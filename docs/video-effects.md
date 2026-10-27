@@ -1,13 +1,13 @@
 # Camera background effects (blur & virtual backgrounds)
 
-Voxal can blur what is behind you, or replace it with one of five animated
+Voxal can blur what is behind you, or replace it with one of six animated
 scenes or an image of your own. This document covers how the pipeline is built,
 why it is built that way, where the assets come from, and what happens on a
 device that cannot keep up. The scenes have [their own section](#animated-scenes).
 
 The whole feature is `src/video-effects.js` plus a handful of integration points
 in `src/main.js`. It applies to **your camera only** — never to screen-share,
-and never to audio. With a scene picked, an opt-in setting lets the people you
+and never to audio. With a scene picked, a setting that is on by default lets the people you
 call draw it themselves, from a picture of just you
 ([Keyed sending and receiving](#keyed-sending-and-receiving)).
 
@@ -1535,7 +1535,7 @@ apps.
 |---|---|
 | `src/video-effects.js` | The whole pipeline, the shaders (generated from `gaussianHalfKernel`), the mode/strength/sharpness/accuracy/low-light/keyed storage, the picker and the controls under it; the keyed output (`keyedTrack()`, `setKeyedDemand()`, `keyedState()`) and the receiving end (`canKeyIn()`, `KeyInProcessor` behind `keyIn()`, the CPU-only `keyProbe()`) |
 | `src/device-tilt.js` | The phone's turn for the scene's camera: `deviceorientation` -> a rotation since a slowly following baseline -> yaw/pitch/roll, per camera and screen rotation |
-| `src/video-scenes.js` | The five animated scenes (one shader each), measuring how you are lit (`measureSubject()` / `lookFromStats()` / `easeLook()`), the async compile and the chip thumbnails |
+| `src/video-scenes.js` | The six animated scenes (one shader each), measuring how you are lit (`measureSubject()` / `lookFromStats()` / `easeLook()`), the async compile and the chip thumbnails |
 | `src/main.js` | `maybeApplyVideoEffects()`, `applyVideoBackground()`, `swapLocalVideoTrack()`, the unwrap in `stopStreamTracks()`, the effects branches in `flipCamera()` and `setLocalCameraSuspended()`, the tile button in `_buildVideoTile()`, and `positionVideoBackgroundPopover()` / `renderVideoBackgroundProgress()`. The keyed camera: `localCaps()`, `currentOffer()`, `keyedFor()`, `refreshKeyedSend()` and the reconcile behind `queueVideoSenderMutation()`, the receivers (`reconcileKeyedReceivers()`, `displayVideoStreamFor()`), `keyedStatus()`, and `keyedVideoBitrate()` |
 | `tests/e2e/unit-video-effects.spec.js` | Coverage, with inference stubbed via `window.__voxalSegStub` |
 | `tests/e2e/unit-video-scenes.spec.js` | The scenes: every one renders, moves only a little, mirrors to the light; the measurement; shadow, light wrap and motion through the real pipeline |
