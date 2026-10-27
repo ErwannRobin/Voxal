@@ -3,7 +3,8 @@ import { test, expect } from './fixtures.js';
 // The settings modal has two layouts driven by one piece of state.
 //
 // Wide (≥ 861px): a sidebar picks one card and the rest are hidden outright.
-// Narrow: the sidebar has nowhere to go, so the same cards become an accordion —
+// Narrow: the sidebar becomes a chip row above the scroller (tapping a chip opens
+// that card and scrolls it to the top) and the same cards become an accordion —
 // each group title is replaced by a toggle button, and opening one closes the
 // others. "Advanced" is deliberately outside the accordion (it is a <details>
 // of its own) but still has to close the accordion when it opens, or the two
@@ -139,6 +140,36 @@ test.describe('narrow layout — the accordion', () => {
     const states = await cardStates(page);
     expect(states[target].collapsed).toBe(false);
     expect(ids.filter((id) => !states[id].collapsed)).toEqual([target]);
+  });
+
+  test('the section menu is a visible strip above the scroller, not inside it', async ({ page }) => {
+    const nav = page.locator('#modal-settings-sidebar');
+    await expect(nav).toBeVisible();
+    const geometry = await page.evaluate(() => {
+      const n = document.getElementById('modal-settings-sidebar').getBoundingClientRect();
+      const s = document.querySelector('#modal-settings .modal-settings-scrollable').getBoundingClientRect();
+      return { navBottom: n.bottom, scrollTop: s.top, navWidth: n.width, navHeight: n.height };
+    });
+    expect(geometry.navBottom).toBeLessThanOrEqual(geometry.scrollTop + 1);
+    // A strip, not the 190px desktop column.
+    expect(geometry.navWidth).toBeGreaterThan(geometry.navHeight);
+  });
+
+  test('tapping a menu chip opens that section and scrolls it to the top', async ({ page }) => {
+    await page.setViewportSize({ width: 600, height: 500 });
+    const ids = await toggleIds(page);
+    const target = ids[ids.length - 1];
+
+    await page.click(`#modal-settings-sidebar .prefs-nav-btn[data-target="${target}"]`);
+    await page.waitForFunction((id) => {
+      const root = document.querySelector('#modal-settings .modal-settings-scrollable');
+      const card = document.getElementById(id);
+      return Math.abs(card.getBoundingClientRect().top - root.getBoundingClientRect().top) < 24;
+    }, target);
+
+    const states = await cardStates(page);
+    expect(ids.filter((id) => !states[id].collapsed)).toEqual([target]);
+    expect(await activeNavTarget(page)).toBe(target);
   });
 
   test('opening Advanced collapses the accordion instead of stacking with it', async ({ page }) => {

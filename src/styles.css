@@ -3525,11 +3525,26 @@ input[type="password"]:focus { border-color: var(--accent); }
   gap: 6px;
 }
 
+/* Narrow: the section menu is a chip row above the scroller (it sits outside
+   .modal-settings-scrollable, so it stays put while the sections scroll).
+   ≥ 861px turns it back into the sidebar column — see the media query below. */
 .modal-settings-sidebar {
-  display: none;
-  flex: 0 0 190px;
-  border-right: 1px solid var(--border);
-  padding: 18px 10px;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: row;
+  gap: 6px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--border);
+  padding: 8px 12px;
+}
+.modal-settings-sidebar::-webkit-scrollbar { display: none; }
+
+.modal-settings-sidebar .prefs-nav-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding: 8px 12px;
 }
 
 .prefs-nav-btn {
@@ -3581,7 +3596,19 @@ input[type="password"]:focus { border-color: var(--accent); }
   }
 
   .modal-settings-sidebar {
-    display: flex;
+    flex: 0 0 190px;
+    flex-direction: column;
+    gap: 6px;
+    overflow-x: visible;
+    border-bottom: none;
+    border-right: 1px solid var(--border);
+    padding: 18px 10px;
+  }
+
+  .modal-settings-sidebar .prefs-nav-btn {
+    flex: 0 1 auto;
+    white-space: normal;
+    padding: 8px 10px;
   }
 }
 
