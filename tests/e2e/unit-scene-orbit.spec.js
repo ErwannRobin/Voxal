@@ -494,7 +494,7 @@ test.describe('scene preview', () => {
     await expect(page.locator('#pv canvas')).toHaveCount(0, { timeout: 30_000 });
   });
 
-  test('names the scene, says what is in it and what it costs, and measures it on this device', async ({ page }) => {
+  test('names the scene, says what is in it and what it costs', async ({ page }) => {
     test.setTimeout(90_000);
     await page.evaluate(() => {
       VideoEffects.writeMode('preset:office');
@@ -506,12 +506,10 @@ test.describe('scene preview', () => {
     await expect(info.locator('.scene-preview-name')).toHaveText(office.name);
     await expect(info.locator('.scene-preview-blurb')).toHaveText(office.blurb);
     await expect(info.locator('.scene-cost-upload dd')).toContainText(office.kbps[0] + ' kb/s while you move');
-    // Measured by drawing one redraw at a 720p call's size, a couple of
-    // seconds after the scene is ready (its first redraws warm caches).
-    await expect(info.locator('.scene-cost-device dd')).toContainText('ms of graphics time per redraw at', { timeout: 60_000 });
-    const cost = await page.evaluate(() => window.__pv.cost());
-    expect(cost.gpuMs).toBeGreaterThan(0);
-    expect(cost.probe[0] / cost.probe[1]).toBeCloseTo(16 / 9, 1);
+    // The measured figure itself is @slow-gl (below): a software GPU never
+    // measures, and says so instead of leaving "measuring…" up.
+    await expect(info.locator('.scene-cost-device dd')).toContainText(
+      /ms of graphics time per redraw at|not measured: this device draws scenes in software/, { timeout: 60_000 });
     // No call in this window: nothing to say about one.
     await expect(info.locator('.scene-cost-live')).toBeHidden();
 
@@ -520,6 +518,20 @@ test.describe('scene preview', () => {
     await expect(info.locator('.scene-preview-name')).toHaveText('Neon rain');
     await page.evaluate(() => VideoEffects.writeMode('blur'));
     await expect(info).toBeHidden();
+  });
+
+  test('measures one redraw at a 720p call\'s size on this device @slow-gl', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.evaluate(() => {
+      VideoEffects.writeMode('preset:office');
+      window.__pv = VideoEffects.renderScenePreview(document.getElementById('pv'));
+    });
+    const dd = page.locator('#pv .scene-preview-info .scene-cost-device dd');
+    // A couple of seconds after the scene is ready (its first redraws warm caches).
+    await expect(dd).toContainText('ms of graphics time per redraw at', { timeout: 60_000 });
+    const cost = await page.evaluate(() => window.__pv.cost());
+    expect(cost.gpuMs).toBeGreaterThan(0);
+    expect(cost.probe[0] / cost.probe[1]).toBeCloseTo(16 / 9, 1);
   });
 
   test('a call in progress is described from the pipeline and the live() hook', async ({ page }) => {
