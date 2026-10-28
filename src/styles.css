@@ -2011,6 +2011,15 @@ body.video-stage-immersive #screen-room.active {
   max-width: none;
   border-left: none;
   border-right: none;
+  /* Pinned to the screen's four edges instead of sized with `100dvh`: in an
+     iOS home-screen PWA the dynamic viewport unit can come up short of the
+     physical screen (and only corrects itself after a rotation), leaving a band
+     of app background under the picture and the talk button. `inset: 0` on a
+     fixed box has no unit to get wrong. */
+  position: fixed;
+  inset: 0;
+  width: auto;
+  height: auto;
 }
 
 /* ── The immersive stage on a phone held sideways ─────────────────
@@ -2136,12 +2145,15 @@ body.video-stage-immersive #screen-room.active {
    only ever IN the grid while it is the thing at the top of the stage, so
    clearing the header clears them. The offset is zero while the chrome is away,
    which is exactly when there is no header to clear, so they ride back up with
-   it rather than floating in the middle of nothing. */
+   it rather than floating in the middle of nothing. The floor is the status bar
+   / Dynamic Island (`--stage-safe-top`): with the header gone the picture runs to
+   the top of the screen, and a control at 6px there is under the system bar,
+   where the touch never reaches the page. */
 body.video-stage-immersive #screen-room #video-stage-grid .video-tile-flip,
 body.video-stage-immersive #screen-room #video-stage-grid .video-tile-bg,
 body.video-stage-immersive #screen-room #video-stage-focus .video-tile-flip,
 body.video-stage-immersive #screen-room #video-stage-focus .video-tile-bg {
-  top: calc(var(--stage-inset-top, 0px) + 6px);
+  top: calc(max(var(--stage-inset-top, 0px), var(--stage-safe-top)) + 6px);
   transition: top 0.25s ease;
 }
 /* The tile is mirrored on the front camera — the control on top of it must not
@@ -2156,7 +2168,7 @@ body.video-stage-immersive #screen-room #video-stage-focus .video-tile-bg {
    along an edge rather than at one of these corners. */
 body.video-stage-immersive #video-stage-self[data-corner="tl"],
 body.video-stage-immersive #video-stage-self[data-corner="tr"] {
-  top: calc(var(--stage-inset-top, 0px) + 12px);
+  top: calc(max(var(--stage-inset-top, 0px), var(--stage-safe-top)) + 12px);
 }
 body.video-stage-immersive #video-stage-self[data-corner="bl"],
 body.video-stage-immersive #video-stage-self[data-corner="br"] {

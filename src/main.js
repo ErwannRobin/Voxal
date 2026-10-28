@@ -12556,6 +12556,18 @@ function noteStageSpeaker(peerId, active) {
 // IS measured from it is `--stage-inset-top`, which places the self-view badge's
 // top corners clear of the header while the header is on screen.
 
+// `--stage-safe-top` resolved to pixels (it is a calc() of env(), which only a
+// laid-out element can turn into a number).
+function stageSafeTopPx() {
+  var probe = document.createElement('div');
+  probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;' +
+    'top:0;left:0;width:0;height:var(--stage-safe-top, 0px)';
+  document.body.appendChild(probe);
+  var h = probe.getBoundingClientRect().height;
+  probe.remove();
+  return Math.round(h) || 0;
+}
+
 function applyImmersiveStageInsets(gridEl) {
   if (!gridEl) return;
   var stage = document.getElementById('video-stage');
@@ -12594,9 +12606,11 @@ function applyImmersiveStageInsets(gridEl) {
   var headerBottom = !headerBox ? 0
     : getComputedStyle(header).position === 'fixed' ? header.offsetHeight
     : headerBox.bottom;
+  // Header away: the picture runs to the top of the screen, so what is left to
+  // clear is the status bar / Dynamic Island (`--stage-safe-top`).
   var insetTop = (headerBox && chromeUp)
     ? Math.max(0, Math.round(headerBottom - stageBox.top))
-    : 0;
+    : stageSafeTopPx();
   // …and the control stack costs it the band it stands in at the bottom, in
   // both orientations: sideways the talk button leaves the landscape room's
   // talk column and takes the centre line, because the picture is the whole
