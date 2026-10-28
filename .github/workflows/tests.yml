@@ -232,6 +232,9 @@ jobs:
       - name: Run mesh E2E (mesh project)
         run: npm run test:mesh
 
+      - name: Run slow-GL scene preview E2E (gl project)
+        run: npm run test:gl
+
   # Coverage: reported, never gating. It runs the same three suites the other
   # jobs do, but only to measure them — a drop in coverage is information for
   # the reviewer, not a reason to block a merge, so this is continue-on-error

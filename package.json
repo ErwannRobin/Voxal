@@ -9,6 +9,7 @@
     "test": "npm run test:rust && npm run test:api && npm run test:e2e",
     "test:rust": "cd src-tauri && cargo test",
     "test:e2e": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test --project=unit",
+    "test:gl": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test --project=gl",
     "test:mesh": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test --project=mesh",
     "test:bench": "NODE_OPTIONS=--disable-warning=DEP0205 playwright test --project=bench --workers=1",
     "test:api": "node --test \"api/*.test.js\"",

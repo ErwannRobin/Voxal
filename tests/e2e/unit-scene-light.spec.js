@@ -169,7 +169,7 @@ test.describe('in the camera pipeline', () => {
 });
 
 test.describe('in the preview', () => {
-  test('the preview is drawn in the chosen light, and the full window can change it', async ({ page }) => {
+  test('the preview is drawn in the chosen light, and the full window can change it @slow-gl', async ({ page }) => {
     test.setTimeout(120_000);
     await page.addInitScript(() => { window.__voxalThumbsOnSoftwareGL = true; });
     await page.goto('/');

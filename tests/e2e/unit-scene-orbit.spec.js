@@ -430,7 +430,7 @@ test.describe('scene preview', () => {
     expect(await page.locator('#pv canvas').count()).toBe(0);
   });
 
-  test('draws the chosen scene and turns it when dragged; a double-click recentres', async ({ page }) => {
+  test('draws the chosen scene and turns it when dragged; a double-click recentres @slow-gl', async ({ page }) => {
     // The waits below budget up to 30 s + 60 s before the drag even starts;
     // the screenshot comparison after it needs headroom of its own.
     test.setTimeout(150_000);
@@ -569,7 +569,7 @@ test.describe('scene preview', () => {
     expect(back).toBeNull();
   });
 
-  test('full window: over the page at the window\'s shape, icons for open and close, and Escape brings it back', async ({ page }) => {
+  test('full window: over the page at the window\'s shape, icons for open and close, and Escape brings it back @slow-gl', async ({ page }) => {
     test.setTimeout(90_000);
     await page.evaluate(() => {
       VideoEffects.writeMode('preset:countryside');
@@ -657,7 +657,7 @@ test.describe('scene preview', () => {
 test.describe('scene preview on a phone', () => {
   test.use({ viewport: { width: 390, height: 800 }, hasTouch: true, isMobile: true });
 
-  test('the full window is upright, as the camera would send it, and Escape leaves Settings open', async ({ page }) => {
+  test('the full window is upright, as the camera would send it, and Escape leaves Settings open @slow-gl', async ({ page }) => {
     test.setTimeout(90_000);
     await page.addInitScript(() => { window.__voxalThumbsOnSoftwareGL = true; });
     await page.goto('/');
