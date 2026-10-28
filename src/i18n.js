@@ -114,12 +114,23 @@ var I18N = (function() {
     var o = el._i18n || (el._i18n = {});
     var slot = o[kind] || (o[kind] = { orig: null, wrote: null });
     var now = kind === 'text' ? getText(el) : kind === 'html' ? el.innerHTML : el.getAttribute(kind);
-    if (slot.orig === null) slot.orig = now;
+    if (slot.orig === null) {
+      slot.orig = now;
+      if (kind === 'html') slot.nodes = Array.prototype.map.call(el.childNodes, function(n) { return n.cloneNode(true); });
+    }
     else if (slot.wrote !== null && now !== slot.wrote) return;
-    var want = Object.prototype.hasOwnProperty.call(dict, key) ? dict[key] : slot.orig;
-    if (kind === 'text') setText(el, want);
-    else if (kind === 'html') el.innerHTML = want;
-    else el.setAttribute(kind, want);
+    var has = Object.prototype.hasOwnProperty.call(dict, key);
+    if (kind === 'html') {
+      // Only our own bundled markup/locale strings are ever parsed as HTML; the
+      // English original is put back as the very node tree it came from, never
+      // re-read from text.
+      if (has) el.innerHTML = dict[key];
+      else if (slot.nodes) el.replaceChildren.apply(el, slot.nodes.map(function(n) { return n.cloneNode(true); }));
+    } else {
+      var want = has ? dict[key] : slot.orig;
+      if (kind === 'text') setText(el, want);
+      else el.setAttribute(kind, want);
+    }
     slot.wrote = kind === 'text' ? getText(el) : kind === 'html' ? el.innerHTML : el.getAttribute(kind);
   }
 
