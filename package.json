@@ -25,7 +25,7 @@
     "@tauri-apps/cli": "^2",
     "eslint": "^10.13.0",
     "globals": "^17.13.0",
-    "monocart-coverage-reports": "^3.0.0",
+    "monocart-coverage-reports": "^3.1.0",
     "peer": "^1.0.2",
     "three": "0.186.1"
   },
@@ -37,7 +37,7 @@
     "@capacitor/haptics": "^8.0.2",
     "@capacitor/ios": "^8.5.3",
     "@capacitor/status-bar": "^8.0.4",
-    "@capgo/capacitor-updater": "^8.53.1"
+    "@capgo/capacitor-updater": "^8.54.0"
   },
   "overrides": {
     "uuid": "11.1.1"
