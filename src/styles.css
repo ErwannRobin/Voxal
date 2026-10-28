@@ -123,6 +123,19 @@ body {
   min-height: 100dvh;
 }
 
+/* A home-screen PWA on iOS can lay out SHORT: `100dvh`, `100svh`, `innerHeight`
+   and the root's client height all come up exactly `safe-area-inset-top` shy of
+   the screen (measured on an iPhone: 793 of 852), leaving a band under the room
+   that nothing pinned to the layout viewport can reach. `100lvh` still reports
+   the whole screen, and sizing the root and the rooms with it makes the page
+   use all of it — the bottom controls then sit on the screen's bottom edge.
+   Touch + standalone only: elsewhere `dvh` is the right unit (browser chrome). */
+@media (display-mode: standalone) and (pointer: coarse) {
+  html, body { height: 100lvh; }
+  .screen { height: 100lvh; }
+  #screen-home { height: auto; min-height: 100lvh; }
+}
+
 /* ── Home ───────────────────────────────────────────────────────── */
 
 .brand {
