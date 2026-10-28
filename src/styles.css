@@ -6259,3 +6259,14 @@ html[data-text-dir="rtl"] :is(p, h1, h2, h3, li, label, button, .btn, .settings-
   unicode-bidi: plaintext;
   text-align: start;
 }
+
+/* Settings section icons: line art in the muted ink, never colour emoji */
+.prefs-ico {
+  flex: none;
+  color: var(--text-muted);
+  vertical-align: -3px;
+  margin-right: 6px;
+}
+.prefs-nav-btn .prefs-ico { margin-right: 0; }
+.prefs-nav-btn.active .prefs-ico { color: var(--text); }
+details.turn-section summary .prefs-ico { margin-right: 0; }
