@@ -342,6 +342,7 @@ never on `conn`, which the host copy-replaces.
 | `turn-fallback` | `TURN_FALLBACK_KEY` | Fallback relay override: JSON `RTCIceServer[]`, or `[]` to disable (Settings → Advanced → Fallback relay) |
 | `jitter-buffer` | `JITTER_BUFFER_KEY` | Playout jitter buffer: `auto` (adaptive) or 0–500 ms (Settings → Advanced → Jitter buffer) |
 | `anon-turn-url` | `ANON_TURN_URL_KEY` | Override for the anonymous TURN credential endpoint (default: same-origin `/api/ice-servers` on web) |
+| `viewport-readout` | `VIEWPORT_READOUT_KEY` | `true` shows the dev-mode viewport readout in a room (window / screen / `dvh` / safe-area measurements + a red bar at `bottom: 0`); absent = off. Needs Dev mode too. Settings → Advanced |
 | `peerjs-server` | — | PeerJS broker override (`peerServerOptions()`); test/self-host only |
 | `theme` | `THEME_KEY` | `dark` / `light` / `system` |
 | `mic-prompt-count` | `MIC_PROMPT_COUNT_KEY` | How many separate visits made the user answer a mic prompt (drives the persistence hint) |

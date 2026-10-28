@@ -215,6 +215,7 @@ const SERVICE_URL_KEY           = 'service-url';
 const PSEUDO_KEY                = 'pseudo';
 const PSEUDO_SESSION_KEY        = 'pseudo-session';
 const DEV_MODE_KEY              = 'dev-mode';
+const VIEWPORT_READOUT_KEY      = 'viewport-readout';
 const DEBUG_INFO_SHARE_KEY      = 'debug-share-device-info'; // opt-out for sharing device diagnostics in dev mode (default ON)
 const VIDEO_MODE_KEY            = 'video-mode-enabled';
 const SELF_VIDEO_CORNER_KEY     = 'self-video-corner'; // corner the minimized self-view badge was dragged to
@@ -12845,7 +12846,8 @@ var _vpDebugEl = null;
 var _vpDebugProbes = null;
 function updateViewportDebug() {
   var roomEl = document.getElementById('screen-room');
-  var on = isDevModeEnabled() && !!roomEl && roomEl.classList.contains('active');
+  var on = isDevModeEnabled() && localStorage.getItem(VIEWPORT_READOUT_KEY) === 'true' &&
+    !!roomEl && roomEl.classList.contains('active');
   if (!on) { if (_vpDebugEl) _vpDebugEl.style.display = 'none'; return; }
   if (!_vpDebugEl) {
     _vpDebugEl = document.createElement('pre');
@@ -20326,6 +20328,13 @@ window.addEventListener('DOMContentLoaded', function() {
       devBtn.classList.toggle('active', devOn);
       devBtn.textContent = devOn ? 'ON' : 'OFF';
     }
+    var vpBtn = document.getElementById('toggle-viewport-readout-modal');
+    if (vpBtn) {
+      var vpOn = localStorage.getItem(VIEWPORT_READOUT_KEY) === 'true';
+      vpBtn.setAttribute('aria-checked', String(vpOn));
+      vpBtn.classList.toggle('active', vpOn);
+      vpBtn.textContent = vpOn ? 'ON' : 'OFF';
+    }
     var shareBtn = document.getElementById('toggle-debug-share-modal');
     if (shareBtn) {
       var shareOn = isDeviceInfoSharingEnabled();
@@ -20591,6 +20600,18 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-disconnect').addEventListener('click', disconnectAccount);
   $('btn-connect-voxal').addEventListener('click', connectWithVoxalAccount);
 
+  var vpToggleModal = document.getElementById('toggle-viewport-readout-modal');
+  if (vpToggleModal) {
+    vpToggleModal.addEventListener('click', function() {
+      var on = localStorage.getItem(VIEWPORT_READOUT_KEY) !== 'true';
+      localStorage.setItem(VIEWPORT_READOUT_KEY, String(on));
+      vpToggleModal.setAttribute('aria-checked', String(on));
+      vpToggleModal.classList.toggle('active', on);
+      vpToggleModal.textContent = on ? 'ON' : 'OFF';
+      updateViewportDebug();
+    });
+  }
+
   var devToggleModal = document.getElementById('toggle-dev-mode-modal');
   if (devToggleModal) {
     devToggleModal.addEventListener('click', function() {
@@ -20766,7 +20787,7 @@ window.addEventListener('DOMContentLoaded', function() {
       return;
     }
     var relevantKeys = [PRESENCE_TOKEN_KEY, PRESENCE_ORG_KEY, METERED_APP_STORE_KEY,
-                          METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY,
+                          METERED_API_STORE_KEY, METERED_STATUS_STORE_KEY, DEV_MODE_KEY, VIEWPORT_READOUT_KEY,
                           SPEAKER_DEVICE_KEY, JITTER_BUFFER_KEY, ECHO_BRIDGE_REQUEST_KEY,
                           NOISE_SUPPRESSION_KEY, MIC_DEVICE_KEY, VIDEO_ROUTING_KEY,
                           NETWORK_USAGE_REQUEST_KEY, VIDEO_BACKGROUND_STORAGE_KEY,
@@ -20853,8 +20874,10 @@ window.addEventListener('DOMContentLoaded', function() {
       reconcileVideoTopology();
       return;
     }
+    if (e.key === VIEWPORT_READOUT_KEY) updateViewportDebug();
     if (e.key === DEV_MODE_KEY) {
       updateDevLogPanel();
+      updateViewportDebug();
       if (inRoom) {
         // Keep polling regardless of dev mode: the adaptive jitter buffer and
         // the peer dot's ICE colour both feed off these samples, and the poll
