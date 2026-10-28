@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Voxal — Preferences</title>
+    <title data-i18n="ui.voxal_preferences">Voxal — Preferences</title>
     <link rel="icon" href="assets/favicon.ico" sizes="any" />
     <link rel="stylesheet" href="styles.css" />
     <script src="version.js"></script>
@@ -13,6 +13,7 @@
          same background picker, which writes its preference for the main window
          to act on. video-scenes.js first: the picker's scene chips render
          their thumbnails from its shaders. -->
+    <script src="i18n.js"></script>
     <script src="net-usage.js"></script>
     <script src="video-scenes.js"></script>
     <script src="video-effects.js"></script>
@@ -154,65 +155,69 @@
     <div class="prefs-window">
       <div class="prefs-header">
         <span class="prefs-gear">⚙</span>
-        <p class="prefs-title">Preferences</p>
+        <p data-i18n="ui.preferences" class="prefs-title">Preferences</p>
       </div>
       <div class="prefs-content">
-      <nav id="prefs-sidebar" class="prefs-sidebar" aria-label="Settings sections">
-        <button type="button" class="prefs-nav-btn active" data-target="settings-profile">👤 Profile</button>
-        <button type="button" class="prefs-nav-btn" data-target="settings-audio">🎙 Audio</button>
-        <button type="button" class="prefs-nav-btn" data-target="settings-video">📹 Video</button>
-        <button type="button" class="prefs-nav-btn" data-target="settings-system">🖥 System</button>
-        <button type="button" class="prefs-nav-btn" data-target="settings-advanced">⚙️ Advanced</button>
+      <nav data-i18n-aria-label="ui.settings_sections" id="prefs-sidebar" class="prefs-sidebar" aria-label="Settings sections">
+        <button data-i18n="ui.profile" type="button" class="prefs-nav-btn active" data-target="settings-profile">👤 Profile</button>
+        <button data-i18n="ui.audio" type="button" class="prefs-nav-btn" data-target="settings-audio">🎙 Audio</button>
+        <button data-i18n="ui.video" type="button" class="prefs-nav-btn" data-target="settings-video">📹 Video</button>
+        <button data-i18n="ui.system" type="button" class="prefs-nav-btn" data-target="settings-system">🖥 System</button>
+        <button data-i18n="ui.advanced" type="button" class="prefs-nav-btn" data-target="settings-advanced">⚙️ Advanced</button>
       </nav>
       <div class="prefs-scrollable">
 
       <div id="settings-profile" class="settings-card">
-        <p class="settings-group-title">👤 Profile</p>
+        <p data-i18n="ui.profile" class="settings-group-title">👤 Profile</p>
         <div class="settings-field">
-          <label for="input-pseudo">Display name</label>
+          <label data-i18n="ui.display_name" for="input-pseudo">Display name</label>
           <div class="input-clearable">
-            <input id="input-pseudo" type="text" placeholder="Your name…" maxlength="20"
+            <input data-i18n-placeholder="ui.your_name" id="input-pseudo" type="text" placeholder="Your name…" maxlength="20"
                    spellcheck="false" autocomplete="off" />
-            <button class="input-clear" data-target="input-pseudo" aria-label="Clear">✕</button>
+            <button data-i18n-aria-label="ui.clear" class="input-clear" data-target="input-pseudo" aria-label="Clear">✕</button>
           </div>
-          <p class="field-helper">Shown to other people in rooms.</p>
+          <p data-i18n="ui.shown_to_other_people_in_rooms" class="field-helper">Shown to other people in rooms.</p>
         </div>
-        <p class="settings-desc">Connect to your organisation to access channels and presence.</p>
-        <button id="btn-connect-voxal" class="btn btn-primary btn-connect-voxal">Connect with Voxal</button>
+        <div class="settings-field">
+          <label data-i18n="ui.language" for="select-language">Language</label>
+          <select id="select-language" class="org-select"></select>
+        </div>
+        <p data-i18n="ui.connect_to_your_organisation_to_access_chann" class="settings-desc">Connect to your organisation to access channels and presence.</p>
+        <button data-i18n="ui.connect_with_voxal" id="btn-connect-voxal" class="btn btn-primary btn-connect-voxal">Connect with Voxal</button>
         <div id="account-org-section" class="settings-field hidden">
-          <label for="select-presence-org">Organisation</label>
+          <label data-i18n="ui.organisation" for="select-presence-org">Organisation</label>
           <select id="select-presence-org" class="org-select" disabled>
-            <option value="">— enter API token first —</option>
+            <option data-i18n="ui.enter_api_token_first" value="">— enter API token first —</option>
           </select>
           <span id="org-load-status" class="org-load-status"></span>
         </div>
         <details class="manual-token-details">
-          <summary>Advanced account options</summary>
+          <summary data-i18n="ui.advanced_account_options">Advanced account options</summary>
           <div class="settings-field" style="margin-top:8px">
-            <label for="input-presence-token">API token</label>
+            <label data-i18n="ui.api_token" for="input-presence-token">API token</label>
             <div class="input-clearable">
-              <input id="input-presence-token" type="password" placeholder="API token"
+              <input data-i18n-placeholder="ui.api_token" id="input-presence-token" type="password" placeholder="API token"
                      autocomplete="off" />
-              <button class="input-clear" data-target="input-presence-token" aria-label="Clear">✕</button>
+              <button data-i18n-aria-label="ui.clear" class="input-clear" data-target="input-presence-token" aria-label="Clear">✕</button>
             </div>
           </div>
         </details>
         <div class="settings-disconnect-row" id="disconnect-row">
-          <button id="btn-disconnect" class="btn btn-ghost btn-sm btn-danger">Disconnect</button>
+          <button data-i18n="ui.disconnect" id="btn-disconnect" class="btn btn-ghost btn-sm btn-danger">Disconnect</button>
         </div>
       </div>
 
       <div id="settings-audio" class="settings-card">
-        <p class="settings-group-title">🎙 Audio</p>
+        <p data-i18n="ui.audio" class="settings-group-title">🎙 Audio</p>
         <div class="settings-device-row">
           <div class="settings-device-head">
-            <label for="select-mic-device">Microphone</label>
+            <label data-i18n="ui.microphone" for="select-mic-device">Microphone</label>
           </div>
           <div class="settings-device-control">
             <select id="select-mic-device" class="org-select">
-              <option value="">System default</option>
+              <option data-i18n="ui.system_default" value="">System default</option>
             </select>
-            <button id="btn-test-mic" type="button" class="btn btn-primary btn-sm media-test-cta">Test</button>
+            <button data-i18n="ui.test" id="btn-test-mic" type="button" class="btn btn-primary btn-sm media-test-cta">Test</button>
           </div>
           <div class="settings-test-result">
             <span class="media-level hidden"><span id="mic-test-level-fill" class="media-level-fill"></span></span>
@@ -227,42 +232,42 @@
                an option: on desktop its settings gear is hidden, so there is no
                "⚙ → Audio" to go to and the test was simply unreachable. -->
           <div class="settings-test-row echo-test-row">
-            <button id="btn-test-echo" type="button" class="btn btn-secondary btn-sm">Test over network</button>
+            <button data-i18n="ui.test_over_network" id="btn-test-echo" type="button" class="btn btn-secondary btn-sm">Test over network</button>
           </div>
-          <p class="settings-hint">
+          <p data-i18n="ui.sends_your_voice_out_over_the_network_and_ba_2" class="settings-hint">
             Sends your voice out over the network and back through a relay, then
             replays what came back — so you hear what others actually hear, not
             just your raw microphone. Runs in the main Voxal window.
           </p>
           <div id="echo-test-status" class="echo-test-status hidden"></div>
         </div>
-        <p class="settings-subtitle">Noise suppression</p>
-        <div class="noise-card-group" id="noise-suppression-group" role="radiogroup" aria-label="Noise suppression mode">
+        <p data-i18n="ui.noise_suppression" class="settings-subtitle">Noise suppression</p>
+        <div data-i18n-aria-label="ui.noise_suppression_mode" class="noise-card-group" id="noise-suppression-group" role="radiogroup" aria-label="Noise suppression mode">
           <label class="noise-card">
             <input type="radio" name="noise-suppression-mode" value="rnnoise" />
-            <span class="noise-card-title">Best Quality <em>(Recommended)</em></span>
-            <span class="noise-card-desc">AI-powered RNNoise</span>
+            <span data-i18n="ui.best_quality" class="noise-card-title">Best Quality <em data-i18n="ui.recommended">(Recommended)</em></span>
+            <span data-i18n="ui.ai_powered_rnnoise" class="noise-card-desc">AI-powered RNNoise</span>
           </label>
           <label class="noise-card">
             <input type="radio" name="noise-suppression-mode" value="browser" />
-            <span class="noise-card-title">Standard</span>
-            <span class="noise-card-desc">System built-in suppression</span>
+            <span data-i18n="ui.standard" class="noise-card-title">Standard</span>
+            <span data-i18n="ui.system_built_in_suppression" class="noise-card-desc">System built-in suppression</span>
           </label>
           <label class="noise-card">
             <input type="radio" name="noise-suppression-mode" value="off" />
-            <span class="noise-card-title">Off</span>
+            <span data-i18n="ui.off" class="noise-card-title">Off</span>
           </label>
         </div>
-        <p class="settings-subtitle">Output</p>
+        <p data-i18n="ui.output" class="settings-subtitle">Output</p>
         <div class="settings-device-row">
           <div class="settings-device-head">
-            <label for="select-speaker-device">Speaker</label>
+            <label data-i18n="ui.speaker" for="select-speaker-device">Speaker</label>
           </div>
           <div class="settings-device-control">
             <select id="select-speaker-device" class="org-select">
-              <option value="">System default</option>
+              <option data-i18n="ui.system_default" value="">System default</option>
             </select>
-            <button id="btn-test-speaker" type="button" class="btn btn-primary btn-sm media-test-cta">Test</button>
+            <button data-i18n="ui.test" id="btn-test-speaker" type="button" class="btn btn-primary btn-sm media-test-cta">Test</button>
           </div>
           <div class="settings-test-result">
             <span id="speaker-test-status" class="settings-test-status"></span>
@@ -271,16 +276,16 @@
       </div>
 
       <div id="settings-video" class="settings-card">
-        <p class="settings-group-title">📹 Video</p>
+        <p data-i18n="ui.video" class="settings-group-title">📹 Video</p>
         <div class="settings-device-row">
           <div class="settings-device-head">
-            <label for="select-camera-device">Camera</label>
+            <label data-i18n="ui.camera" for="select-camera-device">Camera</label>
           </div>
           <div class="settings-device-control">
             <select id="select-camera-device" class="org-select">
-              <option value="">System default</option>
+              <option data-i18n="ui.system_default" value="">System default</option>
             </select>
-            <button id="btn-preview-camera" type="button" class="btn btn-primary btn-sm media-test-cta">Preview</button>
+            <button data-i18n="ui.preview" id="btn-preview-camera" type="button" class="btn btn-primary btn-sm media-test-cta">Preview</button>
           </div>
           <div class="settings-test-result">
             <video id="camera-preview-video" class="camera-preview hidden" autoplay playsinline muted></video>
@@ -288,25 +293,25 @@
         </div>
         <div class="settings-device-row">
           <div class="settings-device-head">
-            <label id="settings-bg-label">Background</label>
+            <label data-i18n="ui.background" id="settings-bg-label">Background</label>
           </div>
           <div id="settings-bg-picker" aria-labelledby="settings-bg-label"></div>
-          <p class="settings-hint">Blur what is behind you, or replace it. Applies to your camera only, and you are picked out of the picture on this device — no frame is ever sent to a server to do it.</p>
+          <p data-i18n="ui.blur_what_is_behind_you_or_replace_it_applie" class="settings-hint">Blur what is behind you, or replace it. Applies to your camera only, and you are picked out of the picture on this device — no frame is ever sent to a server to do it.</p>
           <div class="settings-device-head" style="margin-top:12px">
-            <label id="settings-bg-preview-label">Preview</label>
+            <label data-i18n="ui.preview" id="settings-bg-preview-label">Preview</label>
           </div>
           <div id="settings-bg-preview" aria-labelledby="settings-bg-preview-label"></div>
-          <p class="settings-hint">The chosen scene on its own, drawn on this device. Drag it, or swipe on a phone, to look around the room (in a call you can do the same on your own picture). The full-screen button at its bottom right shows it over the whole screen, at its own shape, with the scenes and the light at the top right.</p>
+          <p data-i18n="ui.the_chosen_scene_on_its_own_drawn_on_this_de" class="settings-hint">The chosen scene on its own, drawn on this device. Drag it, or swipe on a phone, to look around the room (in a call you can do the same on your own picture). The full-screen button at its bottom right shows it over the whole screen, at its own shape, with the scenes and the light at the top right.</p>
           <div class="settings-device-head" style="margin-top:12px">
-            <label for="select-scene-light">Scene light</label>
+            <label data-i18n="ui.scene_light" for="select-scene-light">Scene light</label>
           </div>
           <div id="settings-scene-light"></div>
-          <p class="settings-hint">How an animated scene is lit. <strong>Match my room</strong> lights it like the light your camera sees on you, so a dim room gets an evening with the lamps on. A time of day, the clock or your screen’s light or dark mode keeps it that way whatever your room. People who draw your scene themselves see the same light.</p>
+          <p data-i18n-html="html.how_an_animated_scene_is_lit_match_my_ro" class="settings-hint">How an animated scene is lit. <strong>Match my room</strong> lights it like the light your camera sees on you, so a dim room gets an evening with the lamps on. A time of day, the clock or your screen’s light or dark mode keeps it that way whatever your room. People who draw your scene themselves see the same light.</p>
           <div class="settings-field settings-inline-toggle" style="margin-top:12px">
-            <label for="btn-subject-only" style="flex:1">Let others draw my scene</label>
+            <label data-i18n="ui.let_others_draw_my_scene" for="btn-subject-only" style="flex:1">Let others draw my scene</label>
             <div id="settings-subject-only"></div>
           </div>
-          <p class="settings-hint">
+          <p data-i18n="ui.with_an_animated_scene_sends_just_you_and_a" class="settings-hint">
             With an animated scene, sends just you and a thin edge of your room; the
             people you call draw the same scene on their own device. Uses less upload
             in calls that go peer to peer. They may see the scene slightly differently,
@@ -315,10 +320,10 @@
           </p>
           <div id="settings-fullhd-card">
             <div class="settings-field settings-inline-toggle" style="margin-top:12px">
-              <label for="btn-fullhd" style="flex:1">Full HD video</label>
+              <label data-i18n="ui.full_hd_video" for="btn-fullhd" style="flex:1">Full HD video</label>
               <div id="settings-fullhd"></div>
             </div>
-            <p class="settings-hint">
+            <p data-i18n="ui.captures_your_camera_at_1080p_draws_the_back" class="settings-hint">
               Captures your camera at 1080p, draws the background at that size and
               sends it that way: sharper for you and for everyone you call, at the
               price of more work on this computer and about four times the upload
@@ -327,49 +332,49 @@
             </p>
           </div>
           <div class="settings-device-head" style="margin-top:12px">
-            <label id="settings-blur-strength-label">Blur strength</label>
+            <label data-i18n="ui.blur_strength" id="settings-blur-strength-label">Blur strength</label>
           </div>
           <div id="settings-blur-strength" aria-labelledby="settings-blur-strength-label"></div>
-          <p class="settings-hint">
+          <p data-i18n-html="html.how_far_the_blur_reaches_as_a_share_of_t_2" class="settings-hint">
             How far the blur reaches, as a share of the picture — so it looks
             the same whatever your camera's resolution. Applies while the
             background is set to <strong>Blur</strong>, and reaches the main
             window immediately, even mid-call.
           </p>
           <div class="settings-device-head" style="margin-top:12px">
-            <label id="settings-edge-sharpness-label">Edge sharpness</label>
+            <label data-i18n="ui.edge_sharpness" id="settings-edge-sharpness-label">Edge sharpness</label>
           </div>
           <div id="settings-edge-sharpness" aria-labelledby="settings-edge-sharpness-label"></div>
-          <p class="settings-hint">
+          <p data-i18n="ui.how_hard_the_cut_out_between_you_and_your_ba_2" class="settings-hint">
             How hard the cut-out between you and your background is. Softer hides
             the odd stray pixel and suits hair, glasses and a cluttered room;
             sharper keeps a crisp outline and suits a plain wall. Applies to the
             blur and to background images alike, reaching the main window immediately, even mid-call.
           </p>
           <div class="settings-device-head" style="margin-top:12px">
-            <label id="settings-detection-quality-label">Detection accuracy</label>
+            <label data-i18n="ui.detection_accuracy" id="settings-detection-quality-label">Detection accuracy</label>
           </div>
           <div id="settings-detection-quality" aria-labelledby="settings-detection-quality-label"></div>
-          <p class="settings-hint">
+          <p data-i18n-html="html.how_often_you_are_picked_out_of_the_pict" class="settings-hint">
             How often you are picked out of the picture again. <strong>High</strong>
             follows fast movement more closely and costs more battery;
             <strong>Battery</strong> does the opposite. A device that cannot keep up
             is stepped down on its own whatever you choose here.
           </p>
           <div class="settings-field settings-inline-toggle" style="margin-top:12px">
-            <label for="btn-light-adapt" style="flex:1">Adapt to low light</label>
+            <label data-i18n="ui.adapt_to_low_light" for="btn-light-adapt" style="flex:1">Adapt to low light</label>
             <div id="settings-light-adapt"></div>
           </div>
-          <p class="settings-hint">
+          <p data-i18n="ui.in_a_dim_or_backlit_room_brightens_the_copy" class="settings-hint">
             In a dim or backlit room, brightens the copy of the picture the detector
             looks at — never the picture anyone else sees — so it can still find
             your outline. Does nothing at all in ordinary light.
           </p>
           <div class="settings-field settings-inline-toggle" style="margin-top:12px">
-            <label for="btn-bg-reference" style="flex:1">Fixed camera</label>
+            <label data-i18n="ui.fixed_camera" for="btn-bg-reference" style="flex:1">Fixed camera</label>
             <div id="settings-bg-reference"></div>
           </div>
-          <p class="settings-hint">
+          <p data-i18n-html="html.for_a_camera_that_does_not_move_during_a" class="settings-hint">
             For a camera that does not move. During a call, open the background
             menu on your own video and choose <em>Capture empty room</em>: a countdown
             gives you time to step out of the picture, and a click tells you when you
@@ -383,98 +388,98 @@
       </div>
 
       <div id="settings-system" class="settings-card">
-        <p class="settings-group-title">🖥 System</p>
+        <p data-i18n="ui.system" class="settings-group-title">🖥 System</p>
         <div class="settings-field">
-          <label>Theme</label>
+          <label data-i18n="ui.theme">Theme</label>
           <div class="theme-toggle" id="theme-toggle">
-            <button data-theme="dark">Dark</button>
-            <button data-theme="light">Light</button>
-            <button data-theme="system">System</button>
+            <button data-i18n="ui.dark" data-theme="dark">Dark</button>
+            <button data-i18n="ui.light" data-theme="light">Light</button>
+            <button data-i18n="ui.system_2" data-theme="system">System</button>
           </div>
         </div>
         <!-- General (desktop only) -->
         <div id="section-general" class="settings-field settings-inline-toggle hidden">
-          <label for="toggle-launch-at-login" style="flex:1">Launch at login</label>
-          <button id="toggle-launch-at-login" class="toggle-btn" role="switch" aria-checked="false">OFF</button>
+          <label data-i18n="ui.launch_at_login" for="toggle-launch-at-login" style="flex:1">Launch at login</label>
+          <button data-i18n="ui.off_2" id="toggle-launch-at-login" class="toggle-btn" role="switch" aria-checked="false">OFF</button>
         </div>
       </div>
 
       <div id="settings-advanced" class="settings-card">
         <details class="turn-section" id="turn-details">
-          <summary>⚙️ Advanced</summary>
+          <summary data-i18n="ui.advanced">⚙️ Advanced</summary>
           <div class="turn-inner">
-            <p class="settings-warning">
+            <p data-i18n="ui.advanced_troubleshooting_self_hosted_deploym" class="settings-warning">
               Advanced troubleshooting &amp; self-hosted deployments.
             </p>
 
-            <p class="settings-sublabel">TURN relay credentials</p>
-            <p class="settings-hint">
+            <p data-i18n="ui.turn_relay_credentials" class="settings-sublabel">TURN relay credentials</p>
+            <p data-i18n-html="html.a_turn_server_relays_your_audio_when_a_f" class="settings-hint">
               A TURN server relays your audio when a firewall blocks a direct
               peer-to-peer connection. Get a free pair from
               <a href="https://www.metered.ca/" target="_blank" rel="noopener">metered.ca</a>
               → TURN Server (an app-name subdomain and an API key).
             </p>
             <div class="settings-field">
-              <label for="input-metered-app">metered.ca app name</label>
+              <label data-i18n="ui.metered_ca_app_name" for="input-metered-app">metered.ca app name</label>
               <div class="input-clearable">
                 <input id="input-metered-app" type="text" placeholder="yourapp"
                        spellcheck="false" autocomplete="off" />
-                <button class="input-clear" data-target="input-metered-app" aria-label="Clear">✕</button>
+                <button data-i18n-aria-label="ui.clear" class="input-clear" data-target="input-metered-app" aria-label="Clear">✕</button>
               </div>
             </div>
             <div class="settings-field">
-              <label for="input-metered-key">metered.ca API key</label>
+              <label data-i18n="ui.metered_ca_api_key" for="input-metered-key">metered.ca API key</label>
               <div class="input-clearable">
-                <input id="input-metered-key" type="password" placeholder="API key"
+                <input data-i18n-placeholder="ui.api_key" id="input-metered-key" type="password" placeholder="API key"
                        autocomplete="off" />
-                <button class="input-clear" data-target="input-metered-key" aria-label="Clear">✕</button>
+                <button data-i18n-aria-label="ui.clear" class="input-clear" data-target="input-metered-key" aria-label="Clear">✕</button>
               </div>
             </div>
             <div class="settings-test-row">
-              <button id="btn-test-turn" class="btn btn-ghost btn-sm">Test TURN</button>
+              <button data-i18n="ui.test_turn" id="btn-test-turn" class="btn btn-ghost btn-sm">Test TURN</button>
               <span id="turn-test-status" class="turn-test-status"></span>
             </div>
-            <p class="settings-sublabel" style="margin-top:16px">Fallback relay</p>
-            <p class="settings-hint">Used only when no credentials are set above, so peers behind strict firewalls can still connect.</p>
+            <p data-i18n="ui.fallback_relay" class="settings-sublabel" style="margin-top:16px">Fallback relay</p>
+            <p data-i18n="ui.used_only_when_no_credentials_are_set_above" class="settings-hint">Used only when no credentials are set above, so peers behind strict firewalls can still connect.</p>
             <div class="relay-modes">
               <label class="relay-opt">
                 <input type="radio" name="relay-mode" value="auto" />
-                <span>Automatic — free public relay <em>(recommended)</em></span>
+                <span data-i18n="ui.automatic_free_public_relay">Automatic — free public relay <em data-i18n="ui.recommended_2">(recommended)</em></span>
               </label>
               <label class="relay-opt">
                 <input type="radio" name="relay-mode" value="off" />
-                <span>Off — direct connection only</span>
+                <span data-i18n="ui.off_direct_connection_only">Off — direct connection only</span>
               </label>
               <label class="relay-opt">
                 <input type="radio" name="relay-mode" value="custom" />
-                <span>Custom relay server</span>
+                <span data-i18n="ui.custom_relay_server">Custom relay server</span>
               </label>
             </div>
             <div id="relay-custom" class="relay-custom hidden">
               <div class="settings-field">
-                <label for="input-relay-url">Server URL</label>
+                <label data-i18n="ui.server_url" for="input-relay-url">Server URL</label>
                 <div class="input-clearable">
                   <input id="input-relay-url" type="text" placeholder="turn:turn.example.com:443?transport=tcp" spellcheck="false" autocomplete="off" />
-                  <button class="input-clear" data-target="input-relay-url" aria-label="Clear">✕</button>
+                  <button data-i18n-aria-label="ui.clear" class="input-clear" data-target="input-relay-url" aria-label="Clear">✕</button>
                 </div>
               </div>
               <div class="settings-field">
-                <label for="input-relay-user">Username</label>
+                <label data-i18n="ui.username" for="input-relay-user">Username</label>
                 <div class="input-clearable">
                   <input id="input-relay-user" type="text" autocomplete="off" />
-                  <button class="input-clear" data-target="input-relay-user" aria-label="Clear">✕</button>
+                  <button data-i18n-aria-label="ui.clear" class="input-clear" data-target="input-relay-user" aria-label="Clear">✕</button>
                 </div>
               </div>
               <div class="settings-field">
-                <label for="input-relay-pass">Password</label>
+                <label data-i18n="ui.password" for="input-relay-pass">Password</label>
                 <div class="input-clearable">
                   <input id="input-relay-pass" type="password" autocomplete="off" />
-                  <button class="input-clear" data-target="input-relay-pass" aria-label="Clear">✕</button>
+                  <button data-i18n-aria-label="ui.clear" class="input-clear" data-target="input-relay-pass" aria-label="Clear">✕</button>
                 </div>
               </div>
             </div>
-            <p class="settings-sublabel" style="margin-top:16px">Video routing</p>
-            <p class="settings-hint">
+            <p data-i18n="ui.video_routing" class="settings-sublabel" style="margin-top:16px">Video routing</p>
+            <p data-i18n="ui.camera_and_screen_share_video_can_route_dire" class="settings-hint">
               Camera and screen-share video can route directly between
               participants (peer-to-peer) or, for large rooms, through
               Cloudflare's relay servers, which forward — and can technically
@@ -484,19 +489,19 @@
             <div class="relay-modes">
               <label class="relay-opt">
                 <input type="radio" name="video-routing-mode" value="prefer-p2p" />
-                <span>Prefer direct</span>
+                <span data-i18n="ui.prefer_direct">Prefer direct</span>
               </label>
               <label class="relay-opt">
                 <input type="radio" name="video-routing-mode" value="allow-sfu" />
-                <span>Allow relay for large rooms <em>(recommended)</em></span>
+                <span data-i18n="ui.allow_relay_for_large_rooms">Allow relay for large rooms <em data-i18n="ui.recommended_2">(recommended)</em></span>
               </label>
               <label class="relay-opt">
                 <input type="radio" name="video-routing-mode" value="p2p-only" />
-                <span>Direct only — never relay video</span>
+                <span data-i18n="ui.direct_only_never_relay_video">Direct only — never relay video</span>
               </label>
             </div>
-            <p class="settings-sublabel" style="margin-top:16px">Network usage</p>
-            <p class="settings-hint">
+            <p data-i18n="ui.network_usage" class="settings-sublabel" style="margin-top:16px">Network usage</p>
+            <p data-i18n="ui.how_much_data_voxal_is_moving_right_now_and_2" class="settings-hint">
               How much data Voxal is moving right now, and what it is carrying.
               Measured in the main window — this one has no connections of its
               own — so it only shows numbers while a call is live there.
@@ -511,15 +516,15 @@
             </button>
             <div id="net-usage-detail" class="net-usage-detail hidden"></div>
             <div class="settings-field" style="margin-top:12px">
-              <label for="input-service-url">Service URL</label>
+              <label data-i18n="ui.service_url" for="input-service-url">Service URL</label>
               <div class="input-clearable">
-                <input id="input-service-url" type="text" placeholder="https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session"
+                <input data-i18n-placeholder="ui.https_vybzjzwsqrggatcrnqxe_supabase_co_funct" id="input-service-url" type="text" placeholder="https://vybzjzwsqrggatcrnqxe.supabase.co/functions/v1/session"
                        spellcheck="false" autocomplete="off" />
-                <button class="input-clear" data-target="input-service-url" aria-label="Clear">✕</button>
+                <button data-i18n-aria-label="ui.clear" class="input-clear" data-target="input-service-url" aria-label="Clear">✕</button>
               </div>
             </div>
-            <p class="settings-sublabel" style="margin-top:16px">Jitter buffer</p>
-            <p class="settings-hint">
+            <p data-i18n="ui.jitter_buffer" class="settings-sublabel" style="margin-top:16px">Jitter buffer</p>
+            <p data-i18n="ui.how_much_incoming_audio_to_buffer_before_pla" class="settings-hint">
               How much incoming audio to buffer before playing it. Higher values
               smooth out choppy audio on a lossy or relayed connection, at the cost
               of a little delay. Automatic raises it on its own when a link starts
@@ -528,41 +533,41 @@
             <div class="relay-modes">
               <label class="relay-opt">
                 <input type="radio" name="jitter-mode" value="auto" />
-                <span>Automatic <em>(recommended)</em></span>
+                <span data-i18n="ui.automatic">Automatic <em data-i18n="ui.recommended_2">(recommended)</em></span>
               </label>
               <label class="relay-opt">
                 <input type="radio" name="jitter-mode" value="manual" />
-                <span>Manual</span>
+                <span data-i18n="ui.manual">Manual</span>
               </label>
             </div>
             <div id="jitter-manual" class="jitter-manual hidden">
               <div class="jitter-slider-row">
-                <input id="input-jitter-ms" type="range" min="0" max="500" step="10" value="80"
+                <input data-i18n-aria-label="ui.jitter_buffer_target_in_milliseconds" id="input-jitter-ms" type="range" min="0" max="500" step="10" value="80"
                        aria-label="Jitter buffer target in milliseconds" />
                 <output id="jitter-ms-value" for="input-jitter-ms">80 ms</output>
               </div>
-              <p class="settings-hint">
+              <p data-i18n="ui.0_ms_leaves_it_to_the_browser_while_dev_mode" class="settings-hint">
                 0 ms leaves it to the browser. While Dev mode is on and you are the
                 room host, this value is also pushed to everyone in the room (peers
                 who set their own value keep theirs).
               </p>
             </div>
             <div class="settings-field settings-inline-toggle" style="margin-top:16px">
-              <label for="toggle-dev-mode" style="flex:1">Dev mode</label>
-              <button id="toggle-dev-mode" class="toggle-btn" role="switch" aria-checked="false"
+              <label data-i18n="ui.dev_mode" for="toggle-dev-mode" style="flex:1">Dev mode</label>
+              <button data-i18n="ui.off_2" data-i18n-title="ui.show_peer_uuids_copy_buttons_and_host_deputy" id="toggle-dev-mode" class="toggle-btn" role="switch" aria-checked="false"
                       title="Show peer UUIDs, copy buttons, and Host/Deputy labels">OFF</button>
             </div>
             <div class="settings-field settings-inline-toggle" style="margin-top:12px">
-              <label for="toggle-viewport-readout" style="flex:1">Viewport readout in dev mode</label>
-              <button id="toggle-viewport-readout" class="toggle-btn" role="switch" aria-checked="false"
+              <label data-i18n="ui.viewport_readout_in_dev_mode" for="toggle-viewport-readout" style="flex:1">Viewport readout in dev mode</label>
+              <button data-i18n="ui.off_2" data-i18n-title="ui.overlay_the_window_screen_and_safe_area_meas" id="toggle-viewport-readout" class="toggle-btn" role="switch" aria-checked="false"
                       title="Overlay the window, screen and safe-area measurements in a room (diagnoses layout gaps on iOS)">OFF</button>
             </div>
             <div class="settings-field settings-inline-toggle" style="margin-top:12px">
-              <label for="toggle-debug-share" style="flex:1">Share device info in dev mode</label>
-              <button id="toggle-debug-share" class="toggle-btn" role="switch" aria-checked="false"
+              <label data-i18n="ui.share_device_info_in_dev_mode" for="toggle-debug-share" style="flex:1">Share device info in dev mode</label>
+              <button data-i18n="ui.off_2" data-i18n-title="ui.let_the_host_see_this_device_s_diagnostics_t" id="toggle-debug-share" class="toggle-btn" role="switch" aria-checked="false"
                       title="Let the host see this device's diagnostics (type, OS, audio, network) while debugging">OFF</button>
             </div>
-            <p class="settings-hint" style="margin-top:6px">When a room host has dev mode on, an “i” button appears next to each name showing device, audio &amp; network diagnostics. This is off until you accept — nothing is shared otherwise.</p>
+            <p data-i18n="ui.when_a_room_host_has_dev_mode_on_an_i_button" class="settings-hint" style="margin-top:6px">When a room host has dev mode on, an “i” button appears next to each name showing device, audio &amp; network diagnostics. This is off until you accept — nothing is shared otherwise.</p>
           </div>
         </details>
       </div>
@@ -573,12 +578,12 @@
       <!-- Footer — always visible, sticky at bottom -->
       <div class="prefs-footer">
         <span class="settings-footer-meta">
-          <span id="about-version-desktop">v—</span> · <span id="about-build-date-desktop">Built —</span> ·
+          <span id="about-version-desktop">v—</span> · <span data-i18n="ui.built" id="about-build-date-desktop">Built —</span> ·
           <a href="https://voxal.app" target="_blank" rel="noopener">voxal.app</a> ·
           <a href="https://github.com/ErwannRobin/Voxal" target="_blank" rel="noopener">GitHub</a> ·
-          <a href="https://github.com/ErwannRobin/Voxal/issues/new" target="_blank" rel="noopener">Report issue</a>
+          <a data-i18n="ui.report_issue" href="https://github.com/ErwannRobin/Voxal/issues/new" target="_blank" rel="noopener">Report issue</a>
         </span>
-        <button id="btn-done" class="btn btn-primary btn-sm" style="margin-left:auto">Close</button>
+        <button data-i18n="ui.close" id="btn-done" class="btn btn-primary btn-sm" style="margin-left:auto">Close</button>
       </div>
     </div>
 

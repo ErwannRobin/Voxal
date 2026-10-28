@@ -1,4 +1,4 @@
-.PHONY: help run run-web gen-build-info dev debug build build-debug build-signed build-web install clean lint hooks check test \
+.PHONY: help run run-web gen-build-info dev debug build build-debug build-signed build-web install clean lint i18n-check i18n-write hooks check test \
         test-rust test-api test-e2e test-e2e-changed test-mesh coverage coverage-rust coverage-e2e \
         coverage-api coverage-summary coverage-badge bench bench-app bench-audio bench-video \
         bench-report bench-publish bench-history \
@@ -357,9 +357,18 @@ sync-version:
 check:
 	cd src-tauri && cargo check
 
-lint:
+lint: i18n-check
 	npm run lint
 	cd src-tauri && cargo fmt --check
+
+# Every src/locales/*.json carries exactly en.json's keys and placeholders, and
+# en.json matches the tr('key', 'English') calls in the code.
+i18n-check:
+	@node scripts/i18n-check.mjs
+
+# Refresh en.json's js.* keys from the tr() calls after adding or editing one.
+i18n-write:
+	@node scripts/i18n-check.mjs --write
 
 hooks:
 	git config core.hooksPath .githooks

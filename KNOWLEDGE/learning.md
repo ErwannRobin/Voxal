@@ -225,6 +225,13 @@ export default { ...base, projects: base.projects.map((p) => ({ ...p,
 
 Then `npx playwright test --config=.pw-local.config.js` (`/opt/pw-browsers/chromium` is a symlink to the binary).
 
+## i18n
+
+- English stays in the markup/call sites (`tr('key', 'English')`), never only in `en.json`: a failed locale fetch must still leave a readable UI, and tests keep asserting English. `en.json` is the translators' copy, held equal by `scripts/i18n-check.mjs`.
+- `tr()` at top level of a classic script runs before `I18N` has loaded the locale and freezes English (`VIDEO_REF_TEXT` was one). Wrap such tables in a function.
+- Do not set `dir="rtl"` on `<html>`: the room/stage layout and drawer geometry are physical-pixel math (`padding-right`, self-badge edges). Arabic gets RTL *text* only.
+- A language switch must not overwrite text the page wrote itself (`applyEl` compares against what it last wrote), or a live status line reverts to its placeholder.
+
 ## Sync rule
 
 Every change to `src/` must be mirrored to `ios/App/App/public/` and `android/app/src/main/assets/public/` (`make cap-sync`).
