@@ -5996,7 +5996,7 @@ var VideoEffects = (function () {
         if (cpuMs != null) dev += '; ' + fmtMs(cpuMs) + ' ms of it on the main processor';
         titleCost.textContent = fmtMs(gpuMs) + ' ms a redraw here' + (sc.kbps ? ' · about ' + sc.kbps[0] + ' kb/s up' : '');
       } else {
-        dev = progId === id ? 'measuring…' : failed ? 'not measured: the preview could not be drawn' : 'measured while the preview is drawn';
+        dev = progId === id ? (soft ? 'not measured: this device draws scenes in software' : 'measuring…') : failed ? 'not measured: the preview could not be drawn' : 'measured while the preview is drawn';
         titleCost.textContent = sc.kbps ? 'about ' + sc.kbps[0] + ' kb/s up' : '';
       }
       devRow.dd.textContent = dev;
