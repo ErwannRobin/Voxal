@@ -5599,6 +5599,7 @@ var VideoEffects = (function () {
   var PREVIEW_FULL_FPS = 30;
   var PREVIEW_MAX_W = 960;          // device pixels, in the settings card
   var PREVIEW_FULL_LONG = 2560;     // device pixels, the long side, full window
+  var PREVIEW_SOFT_FPS = 2;         // a software rasteriser (only reachable by the tests): the page must stay responsive
   var PREVIEW_PROBE_MS = 2000;      // how often the cost on this device is re-measured
   var PREVIEW_INFO_MS = 1000;
   // The camera size the cost on this device is measured for: what a call
@@ -5941,12 +5942,14 @@ var VideoEffects = (function () {
       raf = 0;
       if (destroyed || !gl || !prog || !visible) return;
       raf = requestAnimationFrame(frame);
-      if (now - lastDraw < 1000 / (full ? PREVIEW_FULL_FPS : PREVIEW_FPS)) return;
+      if (now - lastDraw < 1000 / (soft ? PREVIEW_SOFT_FPS : full ? PREVIEW_FULL_FPS : PREVIEW_FPS)) return;
       lastDraw = now;
       var w = canvas.width, h = canvas.height;
       var t = VideoScenes.THUMB_TIME + (now - t0) / 1000;
       prog.draw(null, w, h, t, previewLook(w, h), null, view);
-      if (now - lastProbe >= PREVIEW_PROBE_MS) {
+      // The probe is three more redraws plus a gl.finish(): on a software GPU
+      // that is seconds of frozen page, for a number nobody is shown.
+      if (!soft && now - lastProbe >= PREVIEW_PROBE_MS) {
         lastProbe = now;
         try { measure(t); } catch (e) { /* the preview carries on unmeasured */ }
       }
