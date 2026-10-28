@@ -12835,6 +12835,61 @@ function scheduleStageRelayout() {
   });
 }
 window.addEventListener('resize', scheduleStageRelayout);
+
+// ── Viewport readout (dev mode) ────────────────────────────────────
+// A home-screen PWA on iOS can lay out shorter than the screen, and the unit that
+// is wrong (innerHeight, dvh, the safe-area inset) differs by iOS version. This
+// prints all of them, plus a red bar pinned to `bottom: 0` — where the layout
+// viewport ends — so a screenshot says which one comes up short. Tap to hide.
+var _vpDebugEl = null;
+var _vpDebugProbes = null;
+function updateViewportDebug() {
+  var roomEl = document.getElementById('screen-room');
+  var on = isDevModeEnabled() && !!roomEl && roomEl.classList.contains('active');
+  if (!on) { if (_vpDebugEl) _vpDebugEl.style.display = 'none'; return; }
+  if (!_vpDebugEl) {
+    _vpDebugEl = document.createElement('pre');
+    _vpDebugEl.style.cssText = 'position:fixed;left:6px;top:calc(var(--stage-safe-top,0px) + 64px);' +
+      'z-index:99999;margin:0;padding:6px 8px;font:11px/1.35 ui-monospace,monospace;' +
+      'color:#0f0;background:rgba(0,0,0,.78);border-radius:6px;white-space:pre';
+    _vpDebugEl.addEventListener('click', function() { _vpDebugEl.style.display = 'none'; });
+    var bar = document.createElement('div');
+    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;height:6px;z-index:99998;' +
+      'background:red;pointer-events:none';
+    document.body.appendChild(bar);
+    _vpDebugProbes = ['100vh', '100dvh', '100svh', '100lvh', 'env(safe-area-inset-top)',
+      'env(safe-area-inset-bottom)'].map(function(v) {
+      var d = document.createElement('div');
+      d.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;top:0;left:0;width:0;height:' + v;
+      document.body.appendChild(d);
+      return { v: v, el: d };
+    });
+    document.body.appendChild(_vpDebugEl);
+  }
+  _vpDebugEl.style.display = '';
+  var vv = window.visualViewport;
+  var room = document.getElementById('screen-room');
+  var rr = room ? room.getBoundingClientRect() : { top: 0, bottom: 0 };
+  var bb = document.body.getBoundingClientRect();
+  var lines = [
+    'inner   ' + innerWidth + 'x' + innerHeight,
+    'outer   ' + outerWidth + 'x' + outerHeight,
+    'screen  ' + screen.width + 'x' + screen.height + ' avail ' + screen.availHeight,
+    'docEl   ' + document.documentElement.clientWidth + 'x' + document.documentElement.clientHeight,
+    'visual  ' + (vv ? Math.round(vv.width) + 'x' + Math.round(vv.height) + ' top ' + Math.round(vv.offsetTop) : '-'),
+    'body    ' + Math.round(bb.top) + '..' + Math.round(bb.bottom),
+    'room    ' + Math.round(rr.top) + '..' + Math.round(rr.bottom)
+  ].concat(_vpDebugProbes.map(function(p) {
+    return (p.v + '        ').slice(0, 26) + Math.round(p.el.getBoundingClientRect().height);
+  })).concat([
+    'standalone ' + (navigator.standalone === true) + ' / ' +
+      matchMedia('(display-mode: standalone)').matches,
+    'dpr ' + devicePixelRatio
+  ]);
+  _vpDebugEl.textContent = lines.join('\n');
+}
+window.addEventListener('resize', updateViewportDebug);
+setInterval(updateViewportDebug, 1000);
 // A phone turned on its side does not settle in one frame: `resize` can fire
 // while innerWidth/innerHeight, the media queries and the safe-area insets still
 // describe the OLD orientation (iOS especially), so the one measurement above
