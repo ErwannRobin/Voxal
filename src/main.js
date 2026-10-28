@@ -12843,16 +12843,17 @@ window.addEventListener('resize', scheduleStageRelayout);
 // viewport ends — so a screenshot says which one comes up short. Tap to hide.
 var _vpDebugEl = null;
 var _vpDebugProbes = null;
+var _vpDebugRow = null;
 function updateViewportDebug() {
   var roomEl = document.getElementById('screen-room');
   var on = isDevModeEnabled() && !!roomEl && roomEl.classList.contains('active');
-  if (!on) { if (_vpDebugEl) _vpDebugEl.style.display = 'none'; return; }
+  if (!on) { if (_vpDebugEl) { _vpDebugEl.style.display = 'none'; _vpDebugRow.style.display = 'none'; } return; }
   if (!_vpDebugEl) {
     _vpDebugEl = document.createElement('pre');
     _vpDebugEl.style.cssText = 'position:fixed;left:6px;top:calc(var(--stage-safe-top,0px) + 64px);' +
       'z-index:99999;margin:0;padding:6px 8px;font:11px/1.35 ui-monospace,monospace;' +
       'color:#0f0;background:rgba(0,0,0,.78);border-radius:6px;white-space:pre';
-    _vpDebugEl.addEventListener('click', function() { _vpDebugEl.style.display = 'none'; });
+    _vpDebugEl.addEventListener('click', function() { _vpDebugEl.style.display = 'none'; _vpDebugRow.style.display = 'none'; });
     var bar = document.createElement('div');
     bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;height:6px;z-index:99998;' +
       'background:red;pointer-events:none';
@@ -12865,7 +12866,39 @@ function updateViewportDebug() {
       return { v: v, el: d };
     });
     document.body.appendChild(_vpDebugEl);
+    // Experiments for the short layout viewport. Each is a toggle; the readout
+    // above shows what it did to docEl / inner / the red bar.
+    var row = document.createElement('div');
+    row.style.cssText = 'position:fixed;left:6px;bottom:40px;z-index:99999;display:flex;gap:6px;flex-wrap:wrap;max-width:70vw';
+    var exp = document.createElement('style');
+    document.head.appendChild(exp);
+    var CSS = {
+      fill: 'html,body{height:-webkit-fill-available !important}',
+      lvh: 'html,body{height:100lvh !important}',
+      abs: 'body{overflow:visible !important;height:100lvh !important}' +
+           'body.video-stage-immersive #screen-room.active{position:absolute !important;top:0 !important;bottom:auto !important;height:100lvh !important}',
+      cover: 'html{min-height:100lvh !important;background:#f0f !important}'
+    };
+    var add = function(label, fn) {
+      var b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = 'font:12px ui-monospace,monospace;padding:6px 8px;border-radius:6px;border:1px solid #0f0;color:#0f0;background:#000';
+      b.addEventListener('click', function(e) { e.stopPropagation(); fn(); updateViewportDebug(); });
+      row.appendChild(b);
+    };
+    Object.keys(CSS).forEach(function(k) { add(k, function() { exp.textContent = CSS[k]; }); });
+    add('meta', function() {
+      var m = document.querySelector('meta[name="viewport"]');
+      var c = m.getAttribute('content');
+      m.setAttribute('content', 'width=device-width, viewport-fit=cover');
+      setTimeout(function() { m.setAttribute('content', c); updateViewportDebug(); }, 300);
+    });
+    add('scroll', function() { window.scrollTo(0, 1); });
+    add('off', function() { exp.textContent = ''; });
+    document.body.appendChild(row);
+    _vpDebugRow = row;
   }
+  if (_vpDebugRow) _vpDebugRow.style.display = '';
   _vpDebugEl.style.display = '';
   var vv = window.visualViewport;
   var room = document.getElementById('screen-room');
