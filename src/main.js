@@ -12568,8 +12568,32 @@ function stageSafeTopPx() {
   return Math.round(h) || 0;
 }
 
+// An iOS home-screen PWA can report (and lay a fixed box out against) a viewport
+// that stops short of the physical screen — the band the home indicator sits in —
+// until the phone is turned. `screen.height` is the whole glass, so when the
+// layout viewport is short of it by no more than that band, the immersive room is
+// sized from the screen instead (`--room-height`, read by styles.css).
+function syncStandaloneViewportGap() {
+  var root = document.documentElement.style;
+  var short = false;
+  if (document.body.classList.contains('video-stage-immersive') &&
+      window.matchMedia('(display-mode: standalone) and (pointer: coarse)').matches &&
+      window.screen) {
+    var long = Math.max(screen.width, screen.height);
+    var narrow = Math.min(screen.width, screen.height);
+    var portrait = window.innerHeight >= window.innerWidth;
+    var full = portrait ? long : narrow;
+    var gap = full - window.innerHeight;
+    // 80px: the home indicator's band with room to spare; more is a real
+    // difference (a keyboard, a split view), not this.
+    if (gap > 0 && gap <= 80) { root.setProperty('--room-height', full + 'px'); short = true; }
+  }
+  if (!short) root.removeProperty('--room-height');
+}
+
 function applyImmersiveStageInsets(gridEl) {
   if (!gridEl) return;
+  syncStandaloneViewportGap();
   var stage = document.getElementById('video-stage');
   var ribbonWrap = document.getElementById('video-stage-ribbon-wrap');
   var ribbonOpen = !!ribbonWrap && !ribbonWrap.classList.contains('hidden');
