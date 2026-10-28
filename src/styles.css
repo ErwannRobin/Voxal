@@ -6165,3 +6165,89 @@ html.is-desktop-app body.chat-side.chat-open:not(.embed-tiny) {
   background: rgba(0, 0, 0, 0.55); color: #fff; font-weight: 600; pointer-events: none;
 }
 .bg-drop-hint.show { display: flex; }
+
+/* ── Home footer + About modal ───────────────────────────────────── */
+
+/* Centered at the bottom of the home screen: `margin-top: auto` pushes it down
+   when the column is short, and it just follows the content when it is not. */
+.home-about {
+  margin-top: auto;
+  padding-top: 20px;
+  display: flex;
+  justify-content: center;
+}
+.home-about-link {
+  background: none;
+  border: none;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+  transition: color 0.15s, text-decoration-color 0.15s;
+}
+.home-about-link:hover,
+.home-about-link:focus-visible { color: var(--text); text-decoration-color: currentColor; }
+
+.about-content { max-width: 480px; }
+.about-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 20px 8px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+.about-body section { margin-top: 16px; }
+.about-body h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.about-body p { margin: 0; }
+.about-body ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.about-body strong { color: var(--text); font-weight: 600; }
+.about-body a,
+.about-credit a { color: var(--accent); text-decoration: none; }
+.about-body a:hover,
+.about-credit a:hover { text-decoration: underline; }
+.about-version { margin-top: 16px; font-size: 11px; opacity: 0.7; }
+.about-credit {
+  flex-shrink: 0;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+@media (max-width: 640px) {
+  #modal-about .modal-header {
+    padding-top: max(calc(var(--stage-safe-top) + 16px), 16px);
+  }
+  #modal-about .about-credit {
+    padding-bottom: max(calc(env(safe-area-inset-bottom) + 12px), 12px);
+  }
+}
+
+/* Landscape web home is a two-column grid: the footer gets a row of its own. */
+@media (orientation: landscape) and (max-height: 600px) {
+  html.is-web body:not(.embed-tiny) #screen-home.active {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "topbar topbar"
+      "brand  actions"
+      "about  about";
+  }
+  html.is-web body:not(.embed-tiny) #screen-home .home-about {
+    grid-area: about;
+    padding-top: 0;
+  }
+}
