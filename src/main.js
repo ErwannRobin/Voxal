@@ -20571,6 +20571,24 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-open-settings-room').addEventListener('click', function() {
     openSettings();
   });
+  // About: a plain modal, no state to load beyond the version line.
+  function setAboutOpen(open) {
+    var el = $('modal-about');
+    if (open) {
+      var v = $('about-version-home');
+      if (v) v.textContent = typeof VOXAL_VERSION !== 'undefined' ? 'v' + VOXAL_VERSION : '';
+    }
+    el.classList.toggle('hidden', !open);
+  }
+  $('btn-open-about').addEventListener('click', function() { setAboutOpen(true); });
+  $('btn-close-about').addEventListener('click', function() { setAboutOpen(false); });
+  $('about-backdrop').addEventListener('click', function() { setAboutOpen(false); });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && !$('modal-about').classList.contains('hidden')) {
+      e.preventDefault();
+      setAboutOpen(false);
+    }
+  });
   // On desktop the native menu handles settings — hide the gear icon,
   // but keep the button visible so the TURN status LED remains.
   if (window.__TAURI__) {

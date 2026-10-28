@@ -128,6 +128,9 @@
           <div id="recent-rooms-list" class="recent-rooms-list"></div>
         </div>
       </div>
+      <div class="home-about">
+        <button id="btn-open-about" class="home-about-link" type="button" aria-haspopup="dialog">About Voxal</button>
+      </div>
       <div id="dev-log-panel" class="dev-log-panel hidden">
         <div class="dev-log-header">
           <button id="btn-toggle-dev-log" class="btn-icon dev-log-toggle" title="Collapse / expand" aria-label="Collapse log">▾</button>
@@ -165,6 +168,49 @@
                  spellcheck="false" autocomplete="off" />
         </div>
         <button id="btn-cancel-invite-join" class="btn btn-secondary">Back</button>
+      </div>
+    </div>
+
+    <!-- About modal (opened from the home screen footer) -->
+    <div id="modal-about" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="about-modal-title">
+      <div class="modal-backdrop" id="about-backdrop"></div>
+      <div class="modal-content about-content">
+        <div class="modal-header">
+          <span class="modal-title" id="about-modal-title">🎙️ About Voxal</span>
+          <button id="btn-close-about" class="btn-icon" aria-label="Close">✕</button>
+        </div>
+        <div class="about-body">
+          <section>
+            <h3>What it does</h3>
+            <p>Voxal is an instant push-to-talk voice room. Create a room, share its code or link, and anyone who joins can talk to the others, like a walkie-talkie. Camera, screen sharing and chat are there when you want them. No account is needed.</p>
+          </section>
+          <section>
+            <h3>How it works</h3>
+            <ul>
+              <li><strong>Peer to peer.</strong> Voices travel directly between participants over WebRTC. Audio never goes through a media server.</li>
+              <li><strong>The room code is the host.</strong> The host helps everyone find each other, and if the host leaves, another participant takes over so the room stays alive.</li>
+              <li><strong>Push to talk.</strong> Hold the mic button (or your shortcut on desktop) to talk, or double-tap for hands-free.</li>
+              <li><strong>Firewalls.</strong> When a direct path is blocked, an encrypted relay forwards the traffic without being able to hear it.</li>
+            </ul>
+          </section>
+          <section>
+            <h3>Where to find it</h3>
+            <ul>
+              <li><a href="https://web.voxal.app" target="_blank" rel="noopener">web.voxal.app</a>: in any browser</li>
+              <li><a href="https://github.com/ErwannRobin/Voxal/releases/latest" target="_blank" rel="noopener">Desktop app</a>: macOS, Windows and Linux, with a global push-to-talk shortcut</li>
+              <li>iOS and Android apps</li>
+              <li><a href="https://github.com/ErwannRobin/Voxal" target="_blank" rel="noopener">Source code</a>: open source on GitHub</li>
+            </ul>
+          </section>
+          <section>
+            <h3>Voxal app and voxal.app</h3>
+            <p>This push-to-talk app and the <a href="https://voxal.app" target="_blank" rel="noopener">voxal.app</a> portal are two parts of one product. The app works fully on its own. The portal is optional: connect your account with <strong>Connect</strong> to see your organization's channels and who is in them, join a channel in one tap, and use your organization's relay for firewalled networks. The app does the talking; the portal knows who is around.</p>
+          </section>
+          <p class="about-version">Voxal <span id="about-version-home"></span></p>
+        </div>
+        <div class="about-credit">
+          vibe coded with ❤️ by <a href="https://erwann.app" target="_blank" rel="noopener">Erwann</a>
+        </div>
       </div>
     </div>
 
