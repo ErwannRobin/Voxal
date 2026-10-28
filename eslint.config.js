@@ -58,6 +58,8 @@ export default [
         Peer: 'readonly', // src/assets/peerjs.min.js
         VOXAL_VERSION: 'readonly', // src/version.js
         VOXAL_BUILD_DATE: 'readonly', // src/version.js / build-info.js
+        I18N: 'readonly', // src/i18n.js
+        tr: 'readonly', // src/i18n.js
         VideoEffects: 'readonly', // src/video-effects.js
         VideoScenes: 'readonly', // src/video-scenes.js
         DeviceTilt: 'readonly', // src/device-tilt.js

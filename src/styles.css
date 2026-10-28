@@ -6251,3 +6251,11 @@ html.is-desktop-app body.chat-side.chat-open:not(.embed-tiny) {
     padding-top: 0;
   }
 }
+
+/* Right-to-left languages: the page keeps its left-to-right geometry (the room
+   layout is measured in physical pixels), but each block of text takes the
+   direction of its own first strong character, and aligns with it. */
+html[data-text-dir="rtl"] :is(p, h1, h2, h3, li, label, button, .btn, .settings-hint, .field-helper, .modal-title, input, textarea, select, option) {
+  unicode-bidi: plaintext;
+  text-align: start;
+}

@@ -15,7 +15,9 @@ make install      # First-time setup: npm install + cargo fetch (with preflight 
 make dev          # Tauri desktop — hot reload (primary dev workflow)
 make run-web      # Serve src/ on http://localhost:8080 (web-only testing)
 make check        # Rust type-check without building (fast feedback, no tests)
-make lint         # ESLint (all JS) + cargo fmt --check — what the pre-commit hook runs on staged files
+make lint         # i18n-check + ESLint (all JS) + cargo fmt --check — what the pre-commit hook runs on staged files
+make i18n-check   # src/locales/*.json all carry en.json's keys + placeholders; en.json matches the tr() calls
+make i18n-write   # refresh en.json's js.* keys after adding/editing a tr() call
 make hooks        # (Re)enable the git hooks in .githooks/ — npm install already does it
 make test         # Full suite: Rust type-check + Rust unit tests + Playwright E2E
 make test-rust    # Rust unit tests only
@@ -147,6 +149,25 @@ After any `src/` change, run `make cap-sync` to mirror changes to `ios/App/App/p
 One Rust command: `update_ptt_shortcut` — re-registers the global shortcut. Emits three events to the frontend: `ptt-press`, `ptt-release`, `open-preferences`. Plugins: `tauri-plugin-global-shortcut`, `tauri-plugin-shell`, `tauri-plugin-deep-link`.
 
 Capabilities/permissions are declared in `src-tauri/capabilities/default.json`. macOS entitlements are in `src-tauri/entitlements.plist` and `src-tauri/Info.plist` (not inline JSON in `tauri.conf.json`).
+
+### Translations (`src/i18n.js`, `src/locales/`)
+
+12 languages (en, fr, es, de, pt, ro, ru, uk, id, zh = zh-CN, ja, ar). **English is the markup and the call sites**, so
+nothing is needed to render it and a failed locale fetch leaves a working English UI; every other language is
+`src/locales/<code>.json`, fetched on demand. Markup: `data-i18n="key"` (text; with child elements only the first text
+node changes), `data-i18n-html` (innerHTML, our own strings only), `data-i18n-title|placeholder|aria-label|alt`. Script:
+`tr('js.key', 'English default {name}', { name })`, or `tr(key, { one, other }, { n })` for plurals (`Intl.PluralRules`).
+A new `tr()` call or markup key needs its English in `en.json` (`make i18n-write` for the code ones; markup keys by hand)
+and a value in **every** locale file — `make i18n-check` (part of `make lint`) fails otherwise.
+
+- `tr()` must be called at use time, never at top level (a top-level `const` freezes English before the locale loads):
+  use a function (`pttHintMobile()`, `videoRefText()`).
+- A tagged element the page later rewrites itself (live status) is left alone by a language switch.
+- Language = `localStorage['language']` (absent = follow `navigator.languages`); other windows follow via `storage`.
+  `I18N.onChange(fn)` is where `main.js` rebuilds what it renders at runtime (talk hint, roster, rejoin bar).
+- Arabic: layout stays LTR (the room geometry is measured in physical px); text gets `html[data-text-dir="rtl"]` +
+  `unicode-bidi: plaintext`. Full mirroring is not done. Not translated: dev-mode diagnostics, `settings.html`'s inline
+  script messages, `about.html`, `devlog.html`, popups.
 
 ### Settings window
 

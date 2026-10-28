@@ -653,7 +653,7 @@ function buildConnectUrl() {
 async function connectWithVoxalAccount() {
   // A same-tab redirect leaves the page, which would tear down an active call.
   if (!authUsesDeepLink() && inRoom) {
-    showError('Leave the room before connecting your account — signing in reloads the page.');
+    showError(tr('js.leave_the_room_before_connecting_your_accoun', 'Leave the room before connecting your account — signing in reloads the page.'));
     return false;
   }
 
@@ -1899,7 +1899,7 @@ function applyAssignedSelfProfile(pseudo, pseudoColor) {
   var requestedManualPseudo = (myPseudo || '').trim();
   if (requestedManualPseudo) {
     if (assignedPseudo !== requestedManualPseudo) {
-      showCopyToast('Name already used in this room. You were renamed to "' + assignedPseudo + '".');
+      showCopyToast(tr('js.name_already_used', 'Name already used in this room. You were renamed to "{name}".', { name: assignedPseudo }));
       // Save original so we can restore it when leaving this room.
       if (_preRenameMyPseudo === null) _preRenameMyPseudo = requestedManualPseudo;
       setMyPseudo(assignedPseudo, { silentAnnounce: true });
@@ -1999,7 +1999,7 @@ function announcePseudoChange() {
     var uniqueHostPseudo = ensureUniquePseudoForRoom(hostProfile.pseudo, peer.id);
     if (uniqueHostPseudo !== hostProfile.pseudo) {
       if ((myPseudo || '').trim()) {
-        showCopyToast('Name already used in this room. You were renamed to "' + uniqueHostPseudo + '".');
+        showCopyToast(tr('js.name_already_used', 'Name already used in this room. You were renamed to "{name}".', { name: uniqueHostPseudo }));
         if (_preRenameMyPseudo === null) _preRenameMyPseudo = (myPseudo || '').trim();
         setMyPseudo(uniqueHostPseudo, { silentAnnounce: true });
       } else {
@@ -2513,19 +2513,19 @@ function showMicDeniedError(retryFn) {
   var ua = navigator.userAgent || '';
   if (window.Capacitor && window.Capacitor.isNativePlatform()) {
     if (/iPhone|iPad|iPod/i.test(ua)) {
-      hint = 'To allow access: open Settings → Voxal → Microphone.';
+      hint = tr('js.to_allow_access_open_settings_voxal_micropho', 'To allow access: open Settings → Voxal → Microphone.');
     } else {
-      hint = 'To allow access: open Settings → Apps → Voxal → Permissions → Microphone.';
+      hint = tr('js.to_allow_access_open_settings_apps_voxal_per', 'To allow access: open Settings → Apps → Voxal → Permissions → Microphone.');
     }
   } else if (/iPhone|iPad|iPod/i.test(ua) || /CriOS|FxiOS|Safari/i.test(ua)) {
-    hint = 'To allow access: tap the \u24b6 / \u2712 icon in the address bar → Website Settings → Microphone → Allow.';
+    hint = tr('js.to_allow_access_tap_the_u24b6_u2712_icon_in', 'To allow access: tap the \u24b6 / \u2712 icon in the address bar → Website Settings → Microphone → Allow.');
   } else if (/Android/i.test(ua)) {
-    hint = 'To allow access: tap the lock icon in the address bar → Site settings → Microphone → Allow.';
+    hint = tr('js.to_allow_access_tap_the_lock_icon_in_the_add', 'To allow access: tap the lock icon in the address bar → Site settings → Microphone → Allow.');
   } else {
-    hint = 'To allow access: click the microphone icon in the browser address bar and choose \u201cAllow\u201d.';
+    hint = tr('js.to_allow_access_click_the_microphone_icon_in', 'To allow access: click the microphone icon in the browser address bar and choose \u201cAllow\u201d.');
   }
 
-  $('error-message').textContent = 'Microphone access was denied.';
+  $('error-message').textContent = tr('js.microphone_access_was_denied', 'Microphone access was denied.');
   var hintEl   = $('error-recovery-hint');
   var retryBtn = $('btn-retry-mic');
   if (hintEl)   { hintEl.textContent = hint; hintEl.classList.remove('hidden'); }
@@ -2543,7 +2543,7 @@ var _copyToastTimer = null;
 function showCopyToast(message) {
   var toast = $('copy-toast');
   if (!toast) return;
-  toast.textContent = message || 'Copied!';
+  toast.textContent = message || tr('ui.copied', 'Copied!');
   toast.classList.add('visible');
   clearTimeout(_copyToastTimer);
   _copyToastTimer = setTimeout(function() { toast.classList.remove('visible'); }, 1500);
@@ -2566,19 +2566,19 @@ function copyTextToClipboard(text, toastMessage) {
 function shareInviteLink(url) {
   if (!url) return;
   if (!navigator.share) {
-    copyTextToClipboard(url, 'Invite link copied!');
+    copyTextToClipboard(url, tr('js.invite_link_copied', 'Invite link copied!'));
     return;
   }
-  navigator.share({ title: 'Join my Voxal room', url: url }).catch(function(err) {
+  navigator.share({ title: tr('js.join_my_voxal_room', 'Join my Voxal room'), url: url }).catch(function(err) {
     // AbortError is a user-cancelled share sheet; keep silent and avoid clipboard side effects.
     if (err && err.name === 'AbortError') return;
     // Common iframe/embed permission failures should gracefully fall back to copy.
     if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) {
-      copyTextToClipboard(url, 'Invite link copied!');
+      copyTextToClipboard(url, tr('js.invite_link_copied', 'Invite link copied!'));
       return;
     }
     console.warn('[Share]', err);
-    copyTextToClipboard(url, 'Invite link copied!');
+    copyTextToClipboard(url, tr('js.invite_link_copied', 'Invite link copied!'));
   });
 }
 
@@ -2675,7 +2675,7 @@ function popOutTinyEmbed() {
   if (!win) {
     // Blocked — e.g. an iframe sandbox without allow-popups. Keep the session.
     iframeEmit({ type: 'popout-blocked', url: url });
-    showCopyToast('Pop-out blocked by the browser');
+    showCopyToast(tr('js.pop_out_blocked_by_the_browser', 'Pop-out blocked by the browser'));
     return;
   }
   iframeEmit({ type: 'popout', url: url });
@@ -2818,12 +2818,12 @@ function friendlyPeerError(err) {
   var type = err && (err.type || '');
   var message = err && (err.message || String(err));
   if (type === 'network' || type === 'disconnected' || /network/i.test(message))
-    return 'Network error — please check your connection and try again.';
+    return tr('js.network_error_please_check_your_connection_a', 'Network error — please check your connection and try again.');
   if (type === 'server-error' || type === 'unavailable-id')
-    return 'Could not reach the signalling server. Try again in a moment.';
+    return tr('js.could_not_reach_the_signalling_server_try_ag', 'Could not reach the signalling server. Try again in a moment.');
   if (type === 'peer-unavailable' || /Could not connect to peer\b/.test(message))
-    return 'Room not found or host is unreachable.';
-  return message || 'An unexpected error occurred.';
+    return tr('js.room_not_found_or_host_is_unreachable', 'Room not found or host is unreachable.');
+  return message || tr('js.an_unexpected_error_occurred', 'An unexpected error occurred.');
 }
 
 function handlePeerRuntimeError(err, settled, reject) {
@@ -2926,11 +2926,32 @@ var _editShortcutIconHtml = '<button id="btn-edit-shortcut" class="btn-icon shor
 // no shortcut to edit, so the phone hint is a plain string rather than the
 // `Hold <kbd>Space</kbd> …` markup pttHintHtml() builds — and it names the thing
 // the finger is actually on, which is the mic itself.
-var PTT_HINT_MOBILE          = 'Hold the mic to talk · x2 for hands-free';
-var PTT_HINT_MOBILE_FREEHAND = 'Hands-free · tap to stop';
+function pttHintMobile()         { return tr('js.hint_mobile', 'Hold the mic to talk · x2 for hands-free'); }
+function pttHintMobileFreehand() { return tr('js.hint_mobile_freehand', 'Hands-free · tap to stop'); }
 
 function pttHintHtml(prefix, suffix) {
   return prefix + '<kbd id="shortcut-hint-kbd">' + displayShortcut(shortcutStr) + '</kbd>' + _editShortcutIconHtml + suffix;
+}
+
+// The talk hint is built here, not in the markup, so a language change has to
+// rebuild it. Until then the markup's English stands (and so does its note).
+var _pttHintBuilt = false;
+function refreshPttHint() {
+  var hint = $('ptt-hint');
+  if (!hint) return;
+  _pttHintBuilt = true;
+  if (IS_MOBILE_DEVICE) {
+    hint.textContent = freeHandMode ? pttHintMobileFreehand() : pttHintMobile();
+  } else if (freeHandMode) {
+    hint.innerHTML = pttHintHtml(tr('js.hint_handsfree_prefix', 'Hands-free · press '), tr('js.hint_handsfree_suffix', ' to stop'));
+  } else {
+    hint.innerHTML = pttHintHtml(tr('js.hint_hold_prefix', 'Hold '), tr('js.hint_hold_suffix', ' anywhere to talk · x2 for hands-free'));
+  }
+  if (!IS_MOBILE_DEVICE) {
+    hint.insertAdjacentHTML('beforeend', '<span id="shortcut-focused-note" class="shortcut-focused-note hidden"> ' +
+      tr('ui.works_when_app_is_focused_only', '· works when app is focused only') + '</span>');
+  }
+  updateShortcutDisplay();
 }
 
 function updateShortcutDisplay() {
@@ -2982,7 +3003,7 @@ function _tryNativeAppThenJoin(roomId) {
     startInviteRoomJoin(roomId);
     return;
   }
-  showInviteLoading(roomId, 'Opening Voxal…');
+  showInviteLoading(roomId, tr('js.opening_voxal', 'Opening Voxal…'));
 
   var appLaunched = false;
   var WAIT_MS = 2000;
@@ -2994,7 +3015,7 @@ function _tryNativeAppThenJoin(roomId) {
     clearTimeout(timeout);
     cleanupSignals();
     // Native app took over — keep a web fallback CTA if the user comes back.
-    showInviteLoading(roomId, 'Redirected to the desktop app.');
+    showInviteLoading(roomId, tr('js.redirected_to_the_desktop_app', 'Redirected to the desktop app.'));
     setInviteLoadingSpinnerVisible(false);
     _inviteWebFallbackRoomId = roomId;
     setInviteLoadingCtaMode('join-web');
@@ -3050,14 +3071,14 @@ function _tryNativeAppThenJoin(roomId) {
 function showInviteLoading(roomLabel, statusText) {
   if (IS_TINY_EMBED) {
     roomLabel = '';
-    statusText = 'Connecting …';
+    statusText = tr('js.connecting', 'Connecting …');
     var tinyScreen = $('screen-invite-loading');
     if (tinyScreen) tinyScreen.classList.add('tiny-connecting');
   }
   var roomCodeEl = $('invite-room-code');
   if (roomCodeEl) roomCodeEl.textContent = roomLabel || '';
   var statusEl = $('invite-join-status');
-  if (statusEl) statusEl.textContent = statusText || 'Connecting…';
+  if (statusEl) statusEl.textContent = statusText || tr('ui.connecting', 'Connecting…');
   setInviteLoadingSpinnerVisible(true);
   _inviteWebFallbackRoomId = '';
   setInviteLoadingCtaMode((!IS_TINY_EMBED && _prevScreen) ? 'back' : 'cancel');
@@ -3077,16 +3098,16 @@ function setInviteLoadingCtaMode(mode) {
   btn.classList.toggle('hidden', false);
   if (mode === 'join-web') {
     btn.dataset.action = 'join-web';
-    btn.textContent = 'Join on web';
+    btn.textContent = tr('js.join_on_web', 'Join on web');
     return;
   }
   if (mode === 'connect') {
     btn.dataset.action = 'connect';
-    btn.textContent = 'Start';
+    btn.textContent = tr('js.start', 'Start');
     return;
   }
   btn.dataset.action = mode === 'cancel' ? 'cancel' : 'back';
-  btn.textContent = mode === 'cancel' ? 'Cancel' : 'Back';
+  btn.textContent = mode === 'cancel' ? tr('ui.cancel', 'Cancel') : tr('ui.back', 'Back');
 }
 
 function setTinyInvitePeerCount(peerCount) {
@@ -3111,7 +3132,7 @@ function showTinyInviteConnect(roomId, peerCount) {
   var roomCodeEl = $('invite-room-code');
   if (roomCodeEl) roomCodeEl.textContent = '';
   var statusEl = $('invite-join-status');
-  if (statusEl) statusEl.textContent = 'Tap Start to join this room.';
+  if (statusEl) statusEl.textContent = tr('js.tap_start_to_join_this_room', 'Tap Start to join this room.');
   setInviteLoadingSpinnerVisible(false);
   setTinyInvitePeerCount(Number.isFinite(peerCount) ? peerCount : null);
   setInviteLoadingCtaMode('connect');
@@ -3121,7 +3142,7 @@ function showTinyInviteConnect(roomId, peerCount) {
   if (invitePseudoEl) {
     var _prof = selfPseudoProfile();
     invitePseudoEl.value = _prof.anonymous ? '' : (_prof.pseudo || '');
-    invitePseudoEl.placeholder = 'Your Name';
+    invitePseudoEl.placeholder = tr('js.your_name', 'Your Name');
   }
   showScreen('invite-loading');
   lookupRoomInfo(normalized).then(function(info) {
@@ -4031,8 +4052,8 @@ function renderChatMessage(m, opts) {
   if (m.editedAt) {
     var edited = document.createElement('span');
     edited.className = 'chat-msg-edited';
-    edited.textContent = ' (edited)';
-    edited.title = 'Edited ' + chatFullTimeLabel(m.editedAt);
+    edited.textContent = tr('js.edited', ' (edited)');
+    edited.title = tr('js.edited_at', 'Edited {time}', { time: chatFullTimeLabel(m.editedAt) });
     line.appendChild(edited);
   }
   row.appendChild(line);
@@ -4056,7 +4077,7 @@ function renderChatMessage(m, opts) {
   // No stamp on the row: the separator above it already says when this stretch
   // of conversation happened, and repeating that per message is what made the
   // column mostly chrome. The exact time stays one hover away.
-  row.title = pending ? 'Not acknowledged by the host yet' : chatFullTimeLabel(m.at);
+  row.title = pending ? tr('js.not_acknowledged_by_the_host_yet', 'Not acknowledged by the host yet') : chatFullTimeLabel(m.at);
 
   // The hover strip. Absolute, so the button costs neither a line of height nor
   // a column of width while you are just reading.
@@ -4067,8 +4088,8 @@ function renderChatMessage(m, opts) {
     reply.type = 'button';
     reply.className = 'chat-reply-open';
     reply.dataset.msgId = m.id;
-    reply.title = 'Reply';
-    reply.setAttribute('aria-label', 'Reply to this message');
+    reply.title = tr('js.reply', 'Reply');
+    reply.setAttribute('aria-label', tr('js.reply_to_this_message', 'Reply to this message'));
     reply.innerHTML = ICON_REPLY;
     tools.appendChild(reply);
     // Yours, and still inside the window: the line is open to correction. The
@@ -4079,8 +4100,8 @@ function renderChatMessage(m, opts) {
       edit.type = 'button';
       edit.className = 'chat-edit-open';
       edit.dataset.msgId = m.id;
-      edit.title = 'Edit';
-      edit.setAttribute('aria-label', 'Edit this message');
+      edit.title = tr('js.edit', 'Edit');
+      edit.setAttribute('aria-label', tr('js.edit_this_message', 'Edit this message'));
       edit.innerHTML = ICON_EDIT_MESSAGE;
       tools.appendChild(edit);
     }
@@ -4088,8 +4109,8 @@ function renderChatMessage(m, opts) {
     add.type = 'button';
     add.className = 'chat-react-open';
     add.dataset.msgId = m.id;
-    add.title = 'React';
-    add.setAttribute('aria-label', 'React to this message');
+    add.title = tr('js.react', 'React');
+    add.setAttribute('aria-label', tr('js.react_to_this_message', 'React to this message'));
     // An icon, not an emoji: a literal ☺ on the button reads as "insert this
     // one" next to a row of emoji that do exactly that.
     add.innerHTML = ICON_ADD_REACTION;
@@ -4110,7 +4131,7 @@ function renderChatQuote(replyTo) {
   if (!src) {
     el.classList.add('chat-quote-gone');
     el.disabled = true;
-    el.textContent = 'Message no longer available';
+    el.textContent = tr('js.message_no_longer_available', 'Message no longer available');
     return el;
   }
   var who = document.createElement('span');
@@ -4123,7 +4144,7 @@ function renderChatQuote(replyTo) {
   body.textContent = chatQuoteText(src);
   el.appendChild(who);
   el.appendChild(body);
-  el.title = 'Go to this message';
+  el.title = tr('js.go_to_this_message', 'Go to this message');
   return el;
 }
 
@@ -4205,7 +4226,7 @@ function renderChat() {
   if (!chatLog.length && !_chatPending.size) {
     var empty = document.createElement('p');
     empty.className = 'chat-empty';
-    empty.textContent = 'No messages yet.';
+    empty.textContent = tr('js.no_messages_yet', 'No messages yet.');
     list.appendChild(empty);
   }
   var prev = null;
@@ -4325,16 +4346,16 @@ function renderChatEditBar() {
   bar.innerHTML = '';
   var label = document.createElement('span');
   label.className = 'chat-edit-bar-label';
-  label.textContent = 'Editing your message';
+  label.textContent = tr('js.editing_your_message', 'Editing your message');
   var hint = document.createElement('span');
   hint.className = 'chat-edit-bar-hint';
-  hint.textContent = 'Esc to cancel';
+  hint.textContent = tr('js.esc_to_cancel', 'Esc to cancel');
   var drop = document.createElement('button');
   drop.type = 'button';
   drop.id = 'btn-chat-edit-cancel';
   drop.className = 'btn-icon chat-edit-bar-cancel';
-  drop.title = 'Cancel edit';
-  drop.setAttribute('aria-label', 'Cancel edit');
+  drop.title = tr('js.cancel_edit', 'Cancel edit');
+  drop.setAttribute('aria-label', tr('js.cancel_edit', 'Cancel edit'));
   drop.textContent = '✕';
   bar.appendChild(label);
   bar.appendChild(hint);
@@ -4358,7 +4379,7 @@ function renderChatReplyBar() {
   bar.innerHTML = '';
   var label = document.createElement('span');
   label.className = 'chat-reply-bar-label';
-  label.textContent = 'Replying to ';
+  label.textContent = tr('js.replying_to', 'Replying to ');
   var who = document.createElement('span');
   who.className = 'chat-reply-bar-author';
   who.textContent = chatAuthorName(src.peerId);
@@ -4371,8 +4392,8 @@ function renderChatReplyBar() {
   drop.type = 'button';
   drop.id = 'btn-chat-reply-cancel';
   drop.className = 'btn-icon chat-reply-bar-cancel';
-  drop.title = 'Cancel reply';
-  drop.setAttribute('aria-label', 'Cancel reply');
+  drop.title = tr('js.cancel_reply', 'Cancel reply');
+  drop.setAttribute('aria-label', tr('js.cancel_reply', 'Cancel reply'));
   drop.textContent = '\u2715';
   bar.appendChild(label);
   bar.appendChild(who);
@@ -4389,7 +4410,7 @@ function renderChatTyping() {
   var text;
   if (names.length === 1) text = names[0] + ' is typing…';
   else if (names.length === 2) text = names[0] + ' and ' + names[1] + ' are typing…';
-  else text = 'Several people are typing…';
+  else text = tr('js.several_people_are_typing', 'Several people are typing…');
   el.textContent = text;
   el.classList.remove('hidden');
 }
@@ -5372,7 +5393,7 @@ function openChatMessageMenu(msgId) {
   // long press for a menu takes the selection gesture that used to do it. So
   // the sheet hands it back — one message rather than a dragged range, which is
   // what a finger was picking out anyway.
-  add('Copy text', ICON_COPY_MESSAGE, function() { copyTextToClipboard(m.text, 'Message copied!'); });
+  add('Copy text', ICON_COPY_MESSAGE, function() { copyTextToClipboard(m.text, tr('js.message_copied', 'Message copied!')); });
 }
 
 // Who reacted, which on a desktop is the chip's tooltip and on a phone was
@@ -5547,7 +5568,7 @@ function renderEmojiGrid(query) {
   if (!items.length) {
     var none = document.createElement('p');
     none.className = 'emoji-none';
-    none.textContent = 'No emoji match that.';
+    none.textContent = tr('js.no_emoji_match_that', 'No emoji match that.');
     grid.appendChild(none);
     return;
   }
@@ -6306,7 +6327,7 @@ function commandPaletteActions() {
   if (roomActionAvailable('btn-share-camera')) {
     out.push({
       id: 'camera',
-      label: localVideoActive ? 'Turn camera off' : 'Turn camera on',
+      label: localVideoActive ? tr('js.turn_camera_off', 'Turn camera off') : tr('js.turn_camera_on', 'Turn camera on'),
       hint: 'Camera',
       on: localVideoActive,
       keys: shortcutLabelFor('camera'),
@@ -6316,7 +6337,7 @@ function commandPaletteActions() {
   if (roomActionAvailable('btn-share-screen')) {
     out.push({
       id: 'screen',
-      label: localScreenActive ? 'Stop sharing your screen' : 'Share your screen',
+      label: localScreenActive ? tr('js.stop_sharing_your_screen', 'Stop sharing your screen') : tr('ui.share_your_screen', 'Share your screen'),
       hint: 'Screen',
       on: localScreenActive,
       keys: shortcutLabelFor('screen'),
@@ -6325,7 +6346,7 @@ function commandPaletteActions() {
   }
   out.push({
     id: 'chat',
-    label: chatPanelOpen() ? 'Hide the chat' : 'Show the chat',
+    label: chatPanelOpen() ? tr('js.hide_the_chat', 'Hide the chat') : tr('ui.show_the_chat', 'Show the chat'),
     hint: 'Chat',
     on: chatPanelOpen(),
     keys: shortcutLabelFor('chat'),
@@ -6337,7 +6358,7 @@ function commandPaletteActions() {
   if (videoStageMode() === 'immersive') {
     out.push({
       id: 'roster',
-      label: stagePanelOpen('roster') ? 'Hide the participants' : 'Show the participants',
+      label: stagePanelOpen('roster') ? tr('js.hide_the_participants', 'Hide the participants') : tr('js.show_the_participants', 'Show the participants'),
       hint: 'Participants',
       on: stagePanelOpen('roster'),
       run: function() { setStagePanel('roster', !stagePanelOpen('roster')); }
@@ -6347,7 +6368,7 @@ function commandPaletteActions() {
   // own group: the palette is where you find out they exist.
   out.push({
     id: 'freehand',
-    label: freeHandMode ? 'Stop hands-free' : 'Go hands-free',
+    label: freeHandMode ? tr('js.stop_hands_free', 'Stop hands-free') : tr('js.go_hands_free', 'Go hands-free'),
     hint: 'Audio',
     on: freeHandMode,
     keys: 'Enter',
@@ -6356,7 +6377,7 @@ function commandPaletteActions() {
   });
   out.push({
     id: 'talk',
-    label: 'Hold to talk',
+    label: tr('js.hold_to_talk', 'Hold to talk'),
     hint: 'Audio',
     keys: displayShortcut(shortcutStr) || 'Space',
     group: 'audio',
@@ -6418,7 +6439,7 @@ function renderCommandPalette(query) {
   if (!_paletteItems.length) {
     var none = document.createElement('p');
     none.className = 'command-palette-none';
-    none.textContent = 'Nothing matches that.';
+    none.textContent = tr('js.nothing_matches_that', 'Nothing matches that.');
     list.appendChild(none);
     return;
   }
@@ -7405,7 +7426,7 @@ function _refreshOpenStatsPopover() {
   if (!body) return;
   body.innerHTML = '';
   if (!conn || !conn.webrtcStats || !Object.keys(conn.webrtcStats).filter(function(k) { return k[0] !== '_'; }).length) {
-    body.textContent = 'No stats yet…';
+    body.textContent = tr('js.no_stats_yet', 'No stats yet…');
     return;
   }
   body.appendChild(_buildStatsBadge(conn.webrtcStats));
@@ -7490,7 +7511,7 @@ function _buildLossDetail(stats) {
     var srcLabel = { manual: 'manual', host: 'set by host', auto: 'auto' }[stats.playoutDelaySource] || 'auto';
     var head = document.createElement('div');
     head.className = 'stats-detail-head';
-    head.textContent = 'Jitter buffer';
+    head.textContent = tr('ui.jitter_buffer', 'Jitter buffer');
     wrap.appendChild(head);
     wrap.appendChild(_lossDetailRow('Target', stats.playoutDelayMs + ' ms (' + srcLabel + ')'));
   }
@@ -7553,7 +7574,7 @@ function showStatsPopover(peerId, anchorEl) {
 
   var body = document.createElement('div');
   body.className = 'stats-popover-body';
-  body.textContent = 'Loading…';
+  body.textContent = tr('js.loading', 'Loading…');
   popover.appendChild(body);
 
   document.body.appendChild(popover);
@@ -8659,7 +8680,7 @@ function _buildRemoteLogSection(peerId) {
 
   var head = document.createElement('div');
   head.className = 'di-section';
-  head.textContent = '🪵 Debug logs';
+  head.textContent = tr('js.debug_logs', '🪵 Debug logs');
   wrap.appendChild(head);
 
   var session = _remoteLogSessions.get(peerId);
@@ -8669,7 +8690,7 @@ function _buildRemoteLogSection(peerId) {
   if (state === 'requesting') {
     var pending = document.createElement('div');
     pending.className = 'audio-check-pending';
-    pending.textContent = 'Waiting for them to allow it…';
+    pending.textContent = tr('js.waiting_for_them_to_allow_it', 'Waiting for them to allow it…');
     wrap.appendChild(pending);
     wrap.appendChild(_remoteLogButton('Cancel', function() { stopRemoteLogs(peerId); }));
     return wrap;
@@ -8742,8 +8763,8 @@ function _updateRemoteLogPanelStatus() {
   var session = _remoteLogViewPeerId ? _remoteLogSessions.get(_remoteLogViewPeerId) : null;
   if (!session) { status.textContent = ''; return; }
   var count = session.entries.length;
-  status.textContent = (session.state === 'active' ? '● live' : session.state === 'requesting' ? 'waiting' : 'ended')
-    + ' · ' + count + ' line' + (count === 1 ? '' : 's');
+  status.textContent = (session.state === 'active' ? tr('js.live', '● live') : session.state === 'requesting' ? tr('js.waiting', 'waiting') : tr('js.ended', 'ended'))
+    + ' · ' + tr('js.lines_count', { one: '{n} line', other: '{n} lines' }, { n: count });
   status.classList.toggle('live', session.state === 'active');
 }
 
@@ -8871,7 +8892,7 @@ function _refreshDeviceInfoPopover() {
       body.innerHTML = '';
       var off = document.createElement('div');
       off.className = 'di-empty';
-      off.textContent = 'Device sharing is off. Turn on “Share device info in dev mode” in Settings → Advanced to collect diagnostics.';
+      off.textContent = tr('js.device_sharing_is_off_turn_on_share_device_i', 'Device sharing is off. Turn on “Share device info in dev mode” in Settings → Advanced to collect diagnostics.');
       body.appendChild(off);
       return;
     }
@@ -8969,7 +8990,7 @@ function _buildAudioCheckSection(peerId) {
 
   var head = document.createElement('div');
   head.className = 'di-section';
-  head.textContent = '🔊 Can they hear me?';
+  head.textContent = tr('js.can_they_hear_me', '🔊 Can they hear me?');
   wrap.appendChild(head);
 
   var active = _audioCheck && _audioCheck.peerId === peerId;
@@ -8978,14 +8999,14 @@ function _buildAudioCheckSection(peerId) {
   if (active && !result) {
     var pending = document.createElement('div');
     pending.className = 'audio-check-pending';
-    pending.textContent = 'Speak now — testing…';
+    pending.textContent = tr('js.speak_now_testing', 'Speak now — testing…');
     wrap.appendChild(pending);
     return wrap;
   }
 
   var btn = document.createElement('button');
   btn.className = 'audio-check-btn';
-  btn.textContent = result ? 'Test again' : 'Run check';
+  btn.textContent = result ? tr('js.test_again', 'Test again') : tr('js.run_check', 'Run check');
   btn.addEventListener('click', function(e) {
     e.stopPropagation();
     startAudioCheck(peerId);
@@ -9157,7 +9178,7 @@ function updatePeerList() {
         div.appendChild(micWrapper);
         var acquiringLabel = document.createElement('span');
         acquiringLabel.className = 'acquiring-mic-label';
-        acquiringLabel.textContent = 'Acquiring mic…';
+        acquiringLabel.textContent = tr('js.acquiring_mic', 'Acquiring mic…');
         div.appendChild(acquiringLabel);
         div.addEventListener('pointerdown', function(e) {
           if (e.button !== undefined && e.button !== 0) return;
@@ -9190,7 +9211,7 @@ function updatePeerList() {
         input.rows = 2;
         input.maxLength = 20;
         input.className = 'peer-name-inline';
-        input.placeholder = 'Your name…';
+        input.placeholder = tr('ui.your_name', 'Your name…');
         input.value = myPseudo;
         input.addEventListener('click', function(e) { e.stopPropagation(); });
         input.addEventListener('pointerdown', function(e) { e.stopPropagation(); });
@@ -9223,7 +9244,7 @@ function updatePeerList() {
         if (self) {
           var editBtn = document.createElement('button');
           editBtn.className = 'btn-icon peer-edit-btn';
-          editBtn.title = 'Edit name';
+          editBtn.title = tr('js.edit_name', 'Edit name');
           editBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>';
           editBtn.addEventListener('pointerdown', function(e) { e.stopPropagation(); });
           editBtn.addEventListener('click', function(e) {
@@ -9323,13 +9344,13 @@ function updatePeerList() {
     if (!showPeerUuids || !actualPeerId) return;
     const btn = document.createElement('button');
     btn.className = 'btn-icon peer-copy-btn';
-    btn.title = 'Copy PeerJS UUID';
+    btn.title = tr('js.copy_peerjs_uuid', 'Copy PeerJS UUID');
     btn.setAttribute('aria-label', 'Copy PeerJS UUID for ' + (label || actualPeerId));
     btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
     btn.addEventListener('click', function(e) {
       e.preventDefault();
       e.stopPropagation();
-      copyTextToClipboard(actualPeerId, 'Peer UUID copied!');
+      copyTextToClipboard(actualPeerId, tr('js.peer_uuid_copied', 'Peer UUID copied!'));
     });
     parent.appendChild(btn);
   };
@@ -9345,8 +9366,8 @@ function updatePeerList() {
     if (!showDeviceInfo) return;
     const btn = document.createElement('button');
     btn.className = 'btn-icon peer-info-btn';
-    btn.title = 'Device diagnostics';
-    btn.setAttribute('aria-label', 'Show device info');
+    btn.title = tr('js.device_diagnostics', 'Device diagnostics');
+    btn.setAttribute('aria-label', tr('js.show_device_info', 'Show device info'));
     btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
     btn.addEventListener('click', function(e) {
       e.preventDefault();
@@ -9362,8 +9383,8 @@ function updatePeerList() {
     if (!active) return;
     const dot = document.createElement('span');
     dot.className = 'peer-video-live-dot';
-    dot.title = title || 'Camera live';
-    dot.setAttribute('aria-label', title || 'Camera live');
+    dot.title = title || tr('js.camera_live', 'Camera live');
+    dot.setAttribute('aria-label', title || tr('js.camera_live', 'Camera live'));
     parent.appendChild(dot);
   };
 
@@ -9371,8 +9392,8 @@ function updatePeerList() {
     if (!active) return;
     const dot = document.createElement('span');
     dot.className = 'peer-screen-live-dot';
-    dot.title = title || 'Screen shared';
-    dot.setAttribute('aria-label', title || 'Screen shared');
+    dot.title = title || tr('js.screen_shared', 'Screen shared');
+    dot.setAttribute('aria-label', title || tr('js.screen_shared', 'Screen shared'));
     parent.appendChild(dot);
   };
 
@@ -9386,7 +9407,7 @@ function updatePeerList() {
     const dot = document.createElement('span');
     dot.className = 'peer-dot' + (!self ? ' peer-dot-clickable' : '');
     if (!self && actualPeerId) {
-      dot.title = 'Connection stats';
+      dot.title = tr('js.connection_stats', 'Connection stats');
       dot.addEventListener('click', function(e) {
         e.stopPropagation();
         if (_statsPopoverPeerId === actualPeerId) { closeStatsPopover(); return; }
@@ -9434,7 +9455,7 @@ function updatePeerList() {
       input.type = 'text';
       input.maxLength = 20;
       input.className = 'peer-name-inline';
-      input.placeholder = 'Your name…';
+      input.placeholder = tr('ui.your_name', 'Your name…');
       input.value = myPseudo;
       input.addEventListener('keydown', function(e) {
         if (e.key === 'Enter') {
@@ -9454,8 +9475,8 @@ function updatePeerList() {
         setMyPseudo(input.value);
       });
       nameWrap.appendChild(input);
-      appendCameraLiveDot(nameWrap, videoLive, 'Your camera is live');
-      appendScreenLiveDot(nameWrap, screenLive, 'Your screen is shared');
+      appendCameraLiveDot(nameWrap, videoLive, tr('js.your_camera_is_live', 'Your camera is live'));
+      appendScreenLiveDot(nameWrap, screenLive, tr('js.your_screen_is_shared', 'Your screen is shared'));
       appendPeerRole(nameWrap, actualPeerId);
       peerMain.appendChild(nameWrap);
       appendPeerUuid(peerMain, actualPeerId);
@@ -9470,12 +9491,12 @@ function updatePeerList() {
     name.textContent = displayPseudoForSelf();
     if (labelColor) name.style.color = labelColor;
     nameWrap.appendChild(name);
-    appendCameraLiveDot(nameWrap, videoLive, 'Your camera is live');
-    appendScreenLiveDot(nameWrap, screenLive, 'Your screen is shared');
+    appendCameraLiveDot(nameWrap, videoLive, tr('js.your_camera_is_live', 'Your camera is live'));
+    appendScreenLiveDot(nameWrap, screenLive, tr('js.your_screen_is_shared', 'Your screen is shared'));
     appendPeerRole(nameWrap, peer && peer.id);
     const editBtn = document.createElement('button');
     editBtn.className = 'btn-icon peer-edit-btn';
-    editBtn.title = 'Edit name';
+    editBtn.title = tr('js.edit_name', 'Edit name');
     editBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>';
     editBtn.addEventListener('click', function(e) {
       e.stopPropagation();
@@ -9509,7 +9530,7 @@ function updatePeerList() {
     nudge.className = 'room-invite-nudge';
     var nudgeText = document.createElement('span');
     nudgeText.className = 'room-invite-nudge-text';
-    nudgeText.textContent = 'Share your invite link to invite others';
+    nudgeText.textContent = tr('js.share_your_invite_link_to_invite_others', 'Share your invite link to invite others');
     nudge.appendChild(nudgeText);
 
     // Built on click, not at render: the link now carries the camera's state,
@@ -9518,7 +9539,7 @@ function updatePeerList() {
     if (navigator.share && IS_NATIVE_MOBILE) {
       var shareBtn = document.createElement('button');
       shareBtn.className = 'btn btn-secondary btn-sm';
-      shareBtn.textContent = 'Share invite';
+      shareBtn.textContent = tr('js.share_invite', 'Share invite');
       shareBtn.addEventListener('click', function() {
         shareInviteLink(inviteUrl());
       });
@@ -9526,10 +9547,10 @@ function updatePeerList() {
     } else {
       var nudgeBtn = document.createElement('button');
       nudgeBtn.className = 'btn btn-secondary btn-sm';
-      nudgeBtn.textContent = 'Copy invite link';
+      nudgeBtn.textContent = tr('js.copy_invite_link', 'Copy invite link');
       nudgeBtn.addEventListener('click', function() {
         var url = inviteUrl();
-        if (url) copyTextToClipboard(url, 'Invite link copied!');
+        if (url) copyTextToClipboard(url, tr('js.invite_link_copied', 'Invite link copied!'));
       });
       nudge.appendChild(nudgeBtn);
     }
@@ -9848,7 +9869,7 @@ async function maybeApplyVideoEffects(rawStream) {
       return rawStream;
     }
     devLog('[Video] Background effect failed to start: ' + (e && e.message ? e.message : String(e)), 'warn');
-    showCopyToast('Background effect unavailable — sharing without it');
+    showCopyToast(tr('js.background_effect_unavailable_sharing_withou', 'Background effect unavailable — sharing without it'));
     return rawStream;
   }
 }
@@ -9893,7 +9914,7 @@ function applyNoiseSuppressionRecommendation() {
     if (wantBadge) {
       title.textContent = base + ' ';
       var em = document.createElement('em');
-      em.textContent = '(Recommended)';
+      em.textContent = tr('ui.recommended', '(Recommended)');
       title.appendChild(em);
     } else {
       title.textContent = base;
@@ -10216,8 +10237,8 @@ function appendMicPermissionHint(list) {
   close.id = 'btn-dismiss-mic-hint';
   close.className = 'btn-icon mic-hint-close';
   close.textContent = '✕';
-  close.title = 'Dismiss';
-  close.setAttribute('aria-label', 'Dismiss');
+  close.title = tr('ui.dismiss', 'Dismiss');
+  close.setAttribute('aria-label', tr('ui.dismiss', 'Dismiss'));
   close.addEventListener('click', dismissMicPermissionHint);
   row.appendChild(close);
 
@@ -10443,9 +10464,9 @@ function updateAudioRouteUI() {
   btn.classList.toggle('active', onEarpiece);
   btn.setAttribute('aria-pressed', String(onEarpiece));
   // The label names where the audio *is*; the title names what a tap would do.
-  btn.title = onEarpiece ? 'Switch to speaker' : 'Switch to earpiece';
+  btn.title = onEarpiece ? tr('js.switch_to_speaker', 'Switch to speaker') : tr('ui.switch_to_earpiece', 'Switch to earpiece');
   var label = btn.querySelector('.audio-route-label');
-  if (label) label.textContent = onEarpiece ? 'Earpiece' : 'Speaker';
+  if (label) label.textContent = onEarpiece ? tr('js.earpiece', 'Earpiece') : tr('ui.speaker', 'Speaker');
   var speakerIcon = btn.querySelector('.audio-route-icon-speaker');
   if (speakerIcon) speakerIcon.classList.toggle('hidden', onEarpiece);
   var earpieceIcon = btn.querySelector('.audio-route-icon-earpiece');
@@ -10738,7 +10759,7 @@ async function stopMicTest(options) {
     if (meter) meter.classList.add('hidden');
   }
   var btn = document.getElementById('btn-test-mic');
-  if (btn) btn.textContent = 'Test';
+  if (btn) btn.textContent = tr('ui.test', 'Test');
   if (replay) renderMicTestPlayback(recordedBlob);
   else clearMicTestPlayback();
 }
@@ -10770,7 +10791,7 @@ async function startMicTest() {
   }
 
   var btn = document.getElementById('btn-test-mic');
-  if (btn) btn.textContent = 'Stop & Replay';
+  if (btn) btn.textContent = tr('js.stop_replay', 'Stop & Replay');
   var fill = document.getElementById('mic-test-level-fill');
   if (fill) {
     var meter = fill.closest('.media-level');
@@ -10798,7 +10819,7 @@ async function toggleMicTest() {
   else {
     await stopEchoTest();  // the two tests share the mic and the playback element
     try { await startMicTest(); }
-    catch (e) { showCopyToast('Microphone test failed'); console.warn('[Mic test]', e.message); }
+    catch (e) { showCopyToast(tr('js.microphone_test_failed', 'Microphone test failed')); console.warn('[Mic test]', e.message); }
   }
 }
 
@@ -11142,7 +11163,7 @@ async function startEchoTest(options) {
 
   echoStatus('Speak now — recording…');
   var btn = document.getElementById('btn-test-echo');
-  if (btn) btn.textContent = 'Stop & Replay';
+  if (btn) btn.textContent = tr('js.stop_replay', 'Stop & Replay');
   var meter = document.getElementById('echo-test-level-fill');
   if (meter && meter.closest('.media-level')) meter.closest('.media-level').classList.remove('hidden');
 
@@ -11200,7 +11221,7 @@ async function stopEchoTest(options) {
   if (echo.audioEl) { echo.audioEl.srcObject = null; }
 
   var btn = document.getElementById('btn-test-echo');
-  if (btn) btn.textContent = 'Test over network';
+  if (btn) btn.textContent = tr('ui.test_over_network', 'Test over network');
   var meter = document.getElementById('echo-test-level-fill');
   if (meter) {
     meter.style.width = '0%';
@@ -11251,7 +11272,7 @@ function stopCameraPreview() {
     video.classList.add('hidden');
   }
   var btn = document.getElementById('btn-preview-camera');
-  if (btn) btn.textContent = 'Preview';
+  if (btn) btn.textContent = tr('ui.preview', 'Preview');
 }
 
 async function startCameraPreview() {
@@ -11272,7 +11293,7 @@ async function startCameraPreview() {
     video.play().catch(function() {});
   }
   var btn = document.getElementById('btn-preview-camera');
-  if (btn) btn.textContent = 'Stop Preview';
+  if (btn) btn.textContent = tr('js.stop_preview', 'Stop Preview');
 }
 
 async function toggleCameraPreview() {
@@ -11285,7 +11306,7 @@ async function toggleCameraPreview() {
 
 async function testSpeakerOutput() {
   var statusEl = document.getElementById('speaker-test-status');
-  if (statusEl) statusEl.textContent = 'Playing…';
+  if (statusEl) statusEl.textContent = tr('js.playing', 'Playing…');
   var ctx = new (window.AudioContext || window.webkitAudioContext)();
   var dest = ctx.createMediaStreamDestination();
   var tone = new Audio();
@@ -11297,7 +11318,7 @@ async function testSpeakerOutput() {
       var sink = selectedSpeakerDeviceId();
       await tone.setSinkId(sink || 'default');
     } catch (e) {
-      if (statusEl) statusEl.textContent = 'Output routing unavailable';
+      if (statusEl) statusEl.textContent = tr('js.output_routing_unavailable', 'Output routing unavailable');
       console.warn('[Speaker test]', e.message);
     }
   }
@@ -11478,7 +11499,7 @@ function reacquireMicForRoom() {
     // The old stream is still live and still wired up — a failed re-acquire
     // must never leave the call mute, so keep using it and just report.
     console.warn('[mic-swap] failed, keeping the previous microphone:', err.message);
-    showCopyToast('Could not switch microphone — keeping the current one');
+    showCopyToast(tr('js.could_not_switch_microphone_keeping_the_curr', 'Could not switch microphone — keeping the current one'));
     return false;
   });
 
@@ -11526,7 +11547,7 @@ function setTinyMicAcquiring(on) {
 function acquireMicForRoom(reason) {
   if (_micAcquirePromise) return _micAcquirePromise;
 
-  $('ptt-status').textContent = '\u25cf Requesting microphone…';
+  $('ptt-status').textContent = tr('js.u25cf_requesting_microphone', '\u25cf Requesting microphone…');
   if (reason === 'press') setTinyMicAcquiring(true);
 
   _micAcquirePromise = (async function() {
@@ -11713,18 +11734,10 @@ function setFreeHand(active) {
   if (!active) $('ptt-btn').classList.remove('active');
 
   if (active) {
-    if (IS_MOBILE_DEVICE) {
-      $('ptt-hint').textContent = PTT_HINT_MOBILE_FREEHAND;
-    } else {
-      $('ptt-hint').innerHTML = pttHintHtml('Hands-free · press ', ' to stop');
-    }
-    $('ptt-status').textContent = '\u25cf Live';
+    refreshPttHint();
+    $('ptt-status').textContent = tr('js.u25cf_live', '\u25cf Live');
   } else {
-    if (IS_MOBILE_DEVICE) {
-      $('ptt-hint').textContent = PTT_HINT_MOBILE;
-    } else {
-      $('ptt-hint').innerHTML = pttHintHtml('Hold ', ' anywhere to talk · x2 for hands-free');
-    }
+    refreshPttHint();
     $('ptt-status').textContent = '';
   }
 
@@ -11849,7 +11862,7 @@ function videoStageTiles() {
       peerId: selfId,
       kind: 'screen',
       self: true,
-      label: 'Your screen',
+      label: tr('js.your_screen', 'Your screen'),
       color: null,
       stream: localScreenStream,
       talking: false,
@@ -12114,7 +12127,7 @@ function _buildVideoTile(tile) {
   badges.className = 'video-tile-badges';
   var topology = document.createElement('span');
   topology.className = 'video-tile-topology hidden';
-  topology.title = 'Relayed through a media server (Cloudflare) — voice always stays direct';
+  topology.title = tr('js.relayed_through_a_media_server_cloudflare_vo', 'Relayed through a media server (Cloudflare) — voice always stays direct');
   var ice = document.createElement('span');
   ice.className = 'video-tile-ice';
   badges.appendChild(topology);
@@ -12152,7 +12165,7 @@ function _syncVideoTile(el, tile) {
     if (flip) {
       flip.classList.toggle('available', !!_cameraFlipSupported);
       flip.title = _cameraFacing === 'user'
-        ? 'Switch to the rear camera' : 'Switch to the front camera';
+        ? tr('js.switch_to_the_rear_camera', 'Switch to the rear camera') : tr('js.switch_to_the_front_camera', 'Switch to the front camera');
       flip.setAttribute('aria-label', flip.title);
     }
     var bg = el.querySelector('.video-tile-bg');
@@ -12160,7 +12173,7 @@ function _syncVideoTile(el, tile) {
       var mode = videoBackgroundMode();
       bg.classList.toggle('available', videoEffectsAvailable());
       bg.classList.toggle('is-on', mode !== 'off');
-      bg.title = mode === 'off' ? 'Change your background' : 'Background: on';
+      bg.title = mode === 'off' ? tr('js.change_your_background', 'Change your background') : tr('js.background_on', 'Background: on');
       bg.setAttribute('aria-label', bg.title);
     }
   }
@@ -13860,7 +13873,7 @@ function appendPeerVideoButtons(parent, peerId, isSelf) {
     parent.appendChild(_videoIconButton(
       'camera',
       selfShown,
-      selfShown ? 'Hide your self-view' : 'Show your self-view',
+      selfShown ? tr('js.hide_your_self_view', 'Hide your self-view') : tr('js.show_your_self_view', 'Show your self-view'),
       function() { toggleStageTileHidden(SELF_CAMERA_TILE_KEY); }
     ));
     return;
@@ -13931,12 +13944,12 @@ function cameraAccessHint(err) {
   var message = String((err && err.message) || '');
   var policyBlocked = /permissions policy|camera is not allowed in this document/i.test(message) || name === 'SecurityError';
   if (policyBlocked && _isIframe) {
-    return 'Camera is blocked in this iframe — add allow="camera" to the <iframe>.';
+    return tr('js.camera_is_blocked_in_this_iframe_add_allow_c', 'Camera is blocked in this iframe — add allow="camera" to the <iframe>.');
   }
   if (policyBlocked || name === 'NotAllowedError') {
-    return 'Camera access was blocked by the browser.';
+    return tr('js.camera_access_was_blocked_by_the_browser', 'Camera access was blocked by the browser.');
   }
-  return 'Camera access failed';
+  return tr('js.camera_access_failed', 'Camera access failed');
 }
 
 function toggleVideoMode() {
@@ -14128,7 +14141,7 @@ async function flipCamera() {
       // Keep the old camera wired up, exactly as reacquireMicForRoom does.
       _cameraFacing = previousFacing;
       devLog('[Video] Camera flip failed: ' + (e && e.message ? e.message : String(e)), 'warn');
-      showCopyToast('Could not switch camera');
+      showCopyToast(tr('js.could_not_switch_camera', 'Could not switch camera'));
       return;
     }
 
@@ -14136,7 +14149,7 @@ async function flipCamera() {
     if (!newTrack) {
       _cameraFacing = previousFacing;
       stopStreamTracks(newStream);
-      showCopyToast('Could not switch camera');
+      showCopyToast(tr('js.could_not_switch_camera', 'Could not switch camera'));
       return;
     }
 
@@ -14208,7 +14221,7 @@ function setBgDropHint(on) {
     el = document.createElement('div');
     el.id = 'bg-drop-hint';
     el.className = 'bg-drop-hint';
-    el.textContent = 'Drop an image to use it as your background';
+    el.textContent = tr('js.drop_an_image_to_use_it_as_your_background', 'Drop an image to use it as your background');
     document.body.appendChild(el);
   }
   if (el) el.classList.toggle('show', !!on);
@@ -14237,14 +14250,14 @@ function initBackgroundDrop() {
     e.preventDefault();
     var files = Array.prototype.slice.call(e.dataTransfer.files || []);
     var file = files.filter(function(f) { return /^image\//.test(f.type); })[0];
-    if (!file) { showCopyToast('That is not an image'); return; }
+    if (!file) { showCopyToast(tr('js.that_is_not_an_image', 'That is not an image')); return; }
     VideoEffects.setCustomImage(file).then(function() {
       return Promise.all(_videoBgPickers.map(function(p) {
         return p.refreshCustom ? p.refreshCustom() : null;
       }));
     }).then(function() {
       return applyVideoBackground('custom');
-    }).catch(function() { showCopyToast('Could not use that image'); });
+    }).catch(function() { showCopyToast(tr('js.could_not_use_that_image', 'Could not use that image')); });
   });
 }
 initBackgroundDrop();
@@ -14374,8 +14387,8 @@ function wireBackgroundOrbit(el) {
 function backgroundOrbitHintText() {
   if (!IS_MOBILE_DEVICE) return 'Drag your own picture to look around the scene · double-click to recentre.';
   var sensor = typeof DeviceTilt !== 'undefined' && DeviceTilt.ready();
-  return (sensor ? 'Turn your phone, or drag your own picture, to look around the scene'
-                 : 'Drag your own picture to look around the scene') + ' · double-tap to recentre.';
+  return (sensor ? tr('js.turn_your_phone_or_drag_your_own_picture_to', 'Turn your phone, or drag your own picture, to look around the scene')
+                 : tr('js.drag_your_own_picture_to_look_around_the_sce', 'Drag your own picture to look around the scene')) + tr('js.double_tap_to_recentre', ' · double-tap to recentre.');
 }
 
 function syncBackgroundOrbit() {
@@ -14526,8 +14539,8 @@ function renderVideoBackgroundProgress() {
     // not want to spend it on the connection they are on should be able to tell
     // before it finishes rather than after.
     text.textContent = _videoBgLoad.phase === 'cache'
-      ? 'Preparing background effects…'
-      : 'Downloading background effects (about 12 MB) — ' + pct + '%';
+      ? tr('js.preparing_background_effects', 'Preparing background effects…')
+      : tr('js.downloading_background_effects', 'Downloading background effects (about 12 MB) — {pct}%', { pct: pct });
   }
   if (fill) fill.style.width = pct + '%';
   positionVideoBackgroundPopover();
@@ -14558,37 +14571,36 @@ var _videoRefTimer = null;
 var _videoRefLastState = null;
 var _videoRefRun = 0;            // bumped per capture, so a late result never lands on a newer one
 
-var VIDEO_REF_TEXT = {
-  none: 'Fixed camera: capture the room without you in it to sharpen the cut-out.',
-  capturing: 'Capturing the empty room…',
-  ready: 'Using your empty-room picture. Keep the camera where it is.',
-  stale: 'The room no longer matches — the camera moved or the light changed. Capture it again.'
-};
+// Functions, not constants: read at call time so the chosen language applies.
+function videoRefText() { return {
+  none: tr('js.fixed_camera_capture_the_room', 'Fixed camera: capture the room without you in it to sharpen the cut-out.'),
+  capturing: tr('js.capturing_the_empty_room', 'Capturing the empty room…'),
+  ready: tr('js.using_your_empty_room_picture_keep_the_camer', 'Using your empty-room picture. Keep the camera where it is.'),
+  stale: tr('js.the_room_no_longer_matches', 'The room no longer matches — the camera moved or the light changed. Capture it again.')
+}; }
 
-var VIDEO_REF_GUIDE = {
+function videoRefGuide() { return {
   leave: {
-    title: 'Step out of the picture',
-    text: 'Move out of the camera’s view and wait for the click. ' +
-          'Leave the camera and the computer exactly where they are.'
+    title: tr('js.step_out_of_the_picture', 'Step out of the picture'),
+    text: tr('js.move_out_of_view', 'Move out of the camera’s view and wait for the click. Leave the camera and the computer exactly where they are.')
   },
   capturing: {
-    title: 'Hold on — capturing the room…',
-    text: 'Stay out of the picture for one more moment.'
+    title: tr('js.hold_on_capturing_the_room', 'Hold on — capturing the room…'),
+    text: tr('js.stay_out_of_the_picture_for_one_more_moment', 'Stay out of the picture for one more moment.')
   },
   done: {
-    title: 'Done — you can come back',
-    text: 'Don’t move the camera or the computer: the effect is matched to this ' +
-          'exact view. If it moves, capture the room again from the background menu.'
+    title: tr('js.done_you_can_come_back', 'Done — you can come back'),
+    text: tr('js.dont_move_the_camera', 'Don’t move the camera or the computer: the effect is matched to this exact view. If it moves, capture the room again from the background menu.')
   },
   present: {
-    title: 'You were still in the picture',
-    text: 'Step fully out of the camera’s view before the countdown ends, then try again.'
+    title: tr('js.you_were_still_in_the_picture', 'You were still in the picture'),
+    text: tr('js.step_fully_out_of_the_camera_s_view_before_t', 'Step fully out of the camera’s view before the countdown ends, then try again.')
   },
   failed: {
-    title: 'Could not capture the room',
-    text: 'The camera stopped sending pictures. Check it is still on, then try again.'
+    title: tr('js.could_not_capture_the_room', 'Could not capture the room'),
+    text: tr('js.the_camera_stopped_sending_pictures_check_it', 'The camera stopped sending pictures. Check it is still on, then try again.')
   }
-};
+}; }
 
 // --- the guide's sounds --------------------------------------------------------
 // Synthesised on the shared context, like every other cue in the app: no files.
@@ -14665,7 +14677,8 @@ function videoRefGuidePhase() {
 function showVideoRefGuide(phase, kind) {
   var g = document.getElementById('video-ref-guide');
   if (!g) return;
-  var copy = VIDEO_REF_GUIDE[kind || phase] || VIDEO_REF_GUIDE.failed;
+  var guide = videoRefGuide();
+  var copy = guide[kind || phase] || guide.failed;
   g.dataset.phase = phase;
   g.classList.remove('hidden');
 
@@ -14691,7 +14704,7 @@ function showVideoRefGuide(phase, kind) {
   if (ok) ok.classList.toggle('hidden', phase !== 'done');
   if (cancel) {
     cancel.classList.toggle('hidden', phase === 'capturing' || phase === 'done');
-    cancel.textContent = phase === 'failed' ? 'Close' : 'Cancel';
+    cancel.textContent = phase === 'failed' ? tr('ui.close', 'Close') : tr('ui.cancel', 'Cancel');
   }
   // Focus follows the one thing to do next, so Enter answers it. While the
   // user is leaving, the dialog itself holds focus, not Cancel: Space is
@@ -14754,11 +14767,11 @@ function renderVideoBackgroundReference() {
     if (text) {
       text.textContent = _videoRefCountdown > 0
         ? 'Step out of the picture — capturing in ' + _videoRefCountdown + '…'
-        : (VIDEO_REF_TEXT[st] || '');
+        : (videoRefText()[st] || '');
     }
     if (capture) {
       capture.disabled = busy;
-      capture.textContent = (st === 'none' || busy) ? 'Capture empty room' : 'Capture again';
+      capture.textContent = (st === 'none' || busy) ? tr('ui.capture_empty_room', 'Capture empty room') : tr('js.capture_again', 'Capture again');
     }
     if (forget) forget.classList.toggle('hidden', st === 'none' || busy);
   }
@@ -14833,7 +14846,7 @@ function onVideoReferenceState(st) {
   // closed by then, and the picture just got slightly worse for no visible
   // reason.
   if (st === 'stale' && _videoRefLastState === 'ready') {
-    showCopyToast('Fixed camera: the room changed — capture it again from the background menu');
+    showCopyToast(tr('js.fixed_camera_the_room_changed_capture_it_aga', 'Fixed camera: the room changed — capture it again from the background menu'));
   }
   _videoRefLastState = st;
   renderVideoBackgroundReference();
@@ -14908,14 +14921,14 @@ function initVideoBackgroundUI() {
     document.getElementById('settings-detection-quality'));
   _videoBgLight = VideoEffects.renderLightAdapt(
     document.getElementById('settings-light-adapt'),
-    { id: 'btn-light-adapt', label: 'Adapt to low light',
+    { id: 'btn-light-adapt', label: tr('ui.adapt_to_low_light', 'Adapt to low light'),
       title: 'Brighten the detector\'s copy of the picture in a dim room' });
   // Full HD: desktop only, so the row stays hidden everywhere else. A change
   // is a new capture (onFullHDChanged), not a uniform.
   if (!IS_MOBILE_DEVICE && keyedApi('renderFullHD')) {
     _videoFullHD = VideoEffects.renderFullHD(
       document.getElementById('settings-fullhd'),
-      { id: 'btn-fullhd', label: 'Full HD video',
+      { id: 'btn-fullhd', label: tr('ui.full_hd_video', 'Full HD video'),
         title: 'Capture, draw and send your camera at 1080p' });
     var fhdCard = document.getElementById('settings-fullhd-card');
     if (fhdCard) fhdCard.classList.remove('hidden');
@@ -14923,16 +14936,16 @@ function initVideoBackgroundUI() {
   }
   _videoBgReference = VideoEffects.renderReference(
     document.getElementById('settings-bg-reference'),
-    { id: 'btn-bg-reference', label: 'Fixed camera',
-      title: 'Compare the cut-out with a picture of the empty room' });
+    { id: 'btn-bg-reference', label: tr('ui.fixed_camera', 'Fixed camera'),
+      title: tr('js.compare_the_cut_out_with_a_picture_of_the_em', 'Compare the cut-out with a picture of the empty room') });
   // "Let others draw my scene". Unlike the controls above it is not a uniform:
   // it decides which track each peer is sent, which only this file can do, so
   // the switch stores it (setSubjectOnly) and the hook below does the rest.
   if (keyedApi('renderSubjectOnly')) {
     _videoBgSubjectOnly = VideoEffects.renderSubjectOnly(
       document.getElementById('settings-subject-only'),
-      { id: 'btn-subject-only', label: 'Let others draw my scene',
-        title: 'With an animated scene, the people you call draw it on their own device' });
+      { id: 'btn-subject-only', label: tr('ui.let_others_draw_my_scene', 'Let others draw my scene'),
+        title: tr('js.with_an_animated_scene_the_people_you_call_d', 'With an animated scene, the people you call draw it on their own device') });
   }
   if (keyedApi('onSubjectOnlyChange')) VideoEffects.onSubjectOnlyChange(onSubjectOnlyChanged);
   // "Move the background with my phone": phones only, so the card stays hidden
@@ -14941,8 +14954,8 @@ function initVideoBackgroundUI() {
       keyedApi('renderBackgroundTilt')) {
     _videoBgTilt = VideoEffects.renderBackgroundTilt(
       document.getElementById('settings-bg-tilt'),
-      { id: 'btn-bg-tilt', label: 'Move the background with my phone',
-        title: 'The background moves as you tilt or turn the phone' });
+      { id: 'btn-bg-tilt', label: tr('ui.move_the_background_with_my_phone', 'Move the background with my phone'),
+        title: tr('js.the_background_moves_as_you_tilt_or_turn_the', 'The background moves as you tilt or turn the phone') });
     var tiltCard = document.getElementById('settings-bg-tilt-card');
     if (tiltCard) tiltCard.classList.remove('hidden');
     if (keyedApi('onBackgroundTiltChange')) VideoEffects.onBackgroundTiltChange(function() { syncBackgroundTilt(); });
@@ -15020,7 +15033,7 @@ function initVideoBackgroundUI() {
   // segmentation rate down as far as it goes by the time this fires.
   VideoEffects.onOverload(function(why) {
     devLog('[Video] Background effect disabled: ' + why, 'warn');
-    showCopyToast('Background effect turned off — this device can\'t keep up');
+    showCopyToast(tr('js.background_effect_turned_off_this_device_can', 'Background effect turned off — this device can\'t keep up'));
     applyVideoBackground('off');
   });
 
@@ -15091,7 +15104,7 @@ async function applyVideoBackground(mode) {
 
     // Turning it on over a live camera.
     if (!wrapped && mode !== 'off') {
-      if (!videoEffectsAvailable()) { showCopyToast('Background effects are not available here'); return; }
+      if (!videoEffectsAvailable()) { showCopyToast(tr('js.background_effects_are_not_available_here', 'Background effects are not available here')); return; }
       var source = localVideoStream;
       var next;
       try {
@@ -15106,7 +15119,7 @@ async function applyVideoBackground(mode) {
           return;
         }
         devLog('[Video] Background effect failed: ' + (e && e.message ? e.message : String(e)), 'warn');
-        showCopyToast('Background effect unavailable on this device');
+        showCopyToast(tr('js.background_effect_unavailable_on_this_device', 'Background effect unavailable on this device'));
         return;
       }
       var nextTrack = next.getVideoTracks()[0];
@@ -15236,7 +15249,7 @@ async function cameraFlipAvailable() {
 async function startScreenShare() {
   if (localScreenActive) return;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-    showCopyToast('Screen sharing not supported');
+    showCopyToast(tr('js.screen_sharing_not_supported', 'Screen sharing not supported'));
     return;
   }
   try {
@@ -15245,7 +15258,7 @@ async function startScreenShare() {
       audio: false
     });
   } catch (e) {
-    showCopyToast('Screen share cancelled');
+    showCopyToast(tr('js.screen_share_cancelled', 'Screen share cancelled'));
     return;
   }
   localScreenActive = true;
@@ -16707,8 +16720,8 @@ var KEYED_IN_USE_TIP = 'Let others draw my scene is on: their Voxal draws the sc
 function keyedPopoverText(st) {
   if (!st || st.state !== 'active' || !st.peers) return '';
   if (st.peers >= st.of) {
-    return st.of === 1 ? 'The other person draws this scene on their own device.'
-                       : 'Everyone here draws this scene on their own device.';
+    return st.of === 1 ? tr('js.the_other_person_draws_this_scene_on_their_o', 'The other person draws this scene on their own device.')
+                       : tr('js.everyone_here_draws_this_scene_on_their_own', 'Everyone here draws this scene on their own device.');
   }
   return st.peers + ' of ' + st.of + ' people draw this scene on their own device; the others see your usual picture.';
 }
@@ -16736,7 +16749,7 @@ function renderKeyedStatus() {
       info.type = 'button';
       info.className = 'video-bg-info';
       info.textContent = 'i';
-      info.setAttribute('aria-label', 'What this means');
+      info.setAttribute('aria-label', tr('js.what_this_means', 'What this means'));
       // A tap shows it too: on a phone there is no hover, and an (i) does
       // nothing else.
       if (keyedApi('attachTip')) VideoEffects.attachTip(info, KEYED_IN_USE_TIP, { click: true });
@@ -17475,14 +17488,14 @@ function popOutVideoViewer() {
           if (panel) panel.classList.add('pip-active');
         }).catch(function(e) {
           console.warn('[video] PiP failed:', e.message);
-          showCopyToast('Picture-in-Picture not available');
+          showCopyToast(tr('js.picture_in_picture_not_available', 'Picture-in-Picture not available'));
         });
       } else if (vid.webkitSetPresentationMode) {
         vid.webkitSetPresentationMode('picture-in-picture');
         let panel = document.getElementById('video-viewer-panel');
         if (panel) panel.classList.add('pip-active');
       } else {
-        showCopyToast('Picture-in-Picture not available');
+        showCopyToast(tr('js.picture_in_picture_not_available', 'Picture-in-Picture not available'));
       }
     }
     return;
@@ -17583,10 +17596,10 @@ function popOutScreenViewer() {
           var panel = document.getElementById('screen-viewer-panel');
           if (panel) panel.classList.add('pip-active');
         }).catch(function(e) {
-          showCopyToast('Picture-in-Picture not available');
+          showCopyToast(tr('js.picture_in_picture_not_available', 'Picture-in-Picture not available'));
         });
       } else {
-        showCopyToast('Picture-in-Picture not available');
+        showCopyToast(tr('js.picture_in_picture_not_available', 'Picture-in-Picture not available'));
       }
     }
     return;
@@ -18100,7 +18113,7 @@ function noteRemoteVersion(label, remoteProtocol, remoteApp, peerId) {
 // One-time, non-blocking nudge when a peer is on a newer protocol. Desktop/mobile
 // auto-update (Tauri updater / Capgo OTA) on next launch; this mainly helps web.
 function maybeShowOutdatedHint() {
-  try { showCopyToast('A newer version of Voxal is available — refresh to update.'); } catch (_) {}
+  try { showCopyToast(tr('js.a_newer_version_of_voxal_is_available_refres', 'A newer version of Voxal is available — refresh to update.')); } catch (_) {}
 }
 
 function buildHostPeerList(excludedPeerId) {
@@ -19653,6 +19666,17 @@ async function joinOrCreateByChannelName(channelName) {
 
 // --- Bootstrap ---------------------------------------------------------------
 
+// A language change repaints the markup itself (i18n.js); what main.js builds
+// at runtime is rebuilt here.
+I18N.onChange(function() {
+  if (I18N.lang !== 'en' || _pttHintBuilt) refreshPttHint();
+  if (window._updateRejoinBar) window._updateRejoinBar();
+  if (typeof inRoom !== 'undefined' && inRoom) {
+    updatePeerList();
+    if (typeof updateRoomHeader === 'function') updateRoomHeader();
+  }
+});
+
 window.addEventListener('DOMContentLoaded', function() {
   function applyEmbedHeaderMode() {
     if (!_isIframe || !HIDE_EMBED_HEADER) return;
@@ -19722,7 +19746,7 @@ window.addEventListener('DOMContentLoaded', function() {
     if (!panel) return;
     var collapsed = panel.classList.toggle('collapsed');
     toggleBtn.textContent = collapsed ? '▸' : '▾';
-    toggleBtn.setAttribute('aria-label', collapsed ? 'Expand log' : 'Collapse log');
+    toggleBtn.setAttribute('aria-label', collapsed ? tr('js.expand_log', 'Expand log') : tr('ui.collapse_log', 'Collapse log'));
   });
   var clearBtn = document.getElementById('btn-clear-dev-log');
   if (clearBtn) clearBtn.addEventListener('click', function() {
@@ -19744,10 +19768,10 @@ window.addEventListener('DOMContentLoaded', function() {
     });
     var text = lines.join('\n');
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function() { showCopyToast('Log copied'); }).catch(function() { fallbackCopy(text); showCopyToast('Log copied'); });
+      navigator.clipboard.writeText(text).then(function() { showCopyToast(tr('js.log_copied', 'Log copied')); }).catch(function() { fallbackCopy(text); showCopyToast(tr('js.log_copied', 'Log copied')); });
     } else {
       fallbackCopy(text);
-      showCopyToast('Log copied');
+      showCopyToast(tr('js.log_copied', 'Log copied'));
     }
   });
 
@@ -19867,20 +19891,20 @@ window.addEventListener('DOMContentLoaded', function() {
     var _micSourceRow = $('settings-audio-mic-row'); if (_micSourceRow) _micSourceRow.style.display = 'none';
     var _videoSection = $('settings-video'); if (_videoSection) _videoSection.style.display = 'none';
     var _devPopoutBtn = $('btn-popout-dev-log'); if (_devPopoutBtn) _devPopoutBtn.style.display = 'none';
-    $('btn-copy').title = 'Copy room code';
+    $('btn-copy').title = tr('ui.copy_room_code', 'Copy room code');
   }
   // The hint follows the DEVICE, not the wrapper. Installed to the home screen
   // a phone runs the plain web build, and the markup in index.html starts out
   // telling it to hold a key it does not have — so any touch device gets the
   // plain sentence, native app and mobile browser alike. Written last so it
   // wins over whatever the markup shipped.
-  if (IS_MOBILE_DEVICE) $('ptt-hint').textContent = PTT_HINT_MOBILE;
+  if (IS_MOBILE_DEVICE) $('ptt-hint').textContent = pttHintMobile();
 
   $('btn-create').addEventListener('click', function() {
     if (!beginHomeAction()) return;
     if (_audioCtx.state === 'suspended') _audioCtx.resume();
     var btn = $('btn-create');
-    setLoading(btn, true, 'Create Room');
+    setLoading(btn, true, tr('ui.create_room', 'Create Room'));
     lockHomeCTAs();
     createRoom().catch(function(err) {
       if (isMicDeniedError(err)) showMicDeniedError(function() { $('btn-create').click(); });
@@ -19908,12 +19932,12 @@ window.addEventListener('DOMContentLoaded', function() {
       : joinRoom(rawCode);
     joinPromise
       .catch(function(err) {
-        if (err.message === 'Connection cancelled.') { showCopyToast('Connection cancelled'); return; }
+        if (err.message === 'Connection cancelled.') { showCopyToast(tr('js.connection_cancelled', 'Connection cancelled')); return; }
         if (isMicDeniedError(err)) showMicDeniedError(function() { $('btn-join').click(); });
         else showError(err.message);
       })
       .finally(function() {
-        btn.textContent = 'Join';
+        btn.textContent = tr('ui.join', 'Join');
         btn.classList.remove('btn-ghost');
         btn.classList.add('btn-secondary');
         unlockHomeCTAs();
@@ -19997,7 +20021,7 @@ window.addEventListener('DOMContentLoaded', function() {
 
   // { state: 'ok' | 'warn' | 'none' | 'pending', text }
   function turnStatusSummary() {
-    if (!_lastIceResolution) return { state: 'pending', text: 'Checking relay…' };
+    if (!_lastIceResolution) return { state: 'pending', text: tr('js.checking_relay', 'Checking relay…') };
 
     const { source, relayCount } = _lastIceResolution;
     if (!relayCount) {
@@ -20088,13 +20112,13 @@ window.addEventListener('DOMContentLoaded', function() {
 
     if (!appName || !apiKey) {
       statusEl.style.color = '';
-      statusEl.textContent = 'Enter app name and API key first.';
+      statusEl.textContent = tr('js.enter_app_name_and_api_key_first', 'Enter app name and API key first.');
       return;
     }
 
     btn.disabled = true;
     statusEl.style.color = '';
-    statusEl.textContent = 'Testing…';
+    statusEl.textContent = tr('js.testing', 'Testing…');
 
     try {
       const url = 'https://' + appName + '.metered.live/api/v1/turn/credentials?apiKey=' + apiKey;
@@ -20313,7 +20337,7 @@ window.addEventListener('DOMContentLoaded', function() {
       wireStatusHover(statusEl);
     } else if (savedTurnStatus === 'error') {
       statusEl.style.color = '#fb923c';
-      statusEl.textContent = '✕ Test failed';
+      statusEl.textContent = tr('js.test_failed', '✕ Test failed');
       statusEl.onmouseenter = null;
     } else {
       statusEl.textContent = '';
@@ -20461,7 +20485,7 @@ window.addEventListener('DOMContentLoaded', function() {
     const select    = $('select-presence-org');
     const statusEl  = $('org-load-status');
     select.disabled = true;
-    statusEl.textContent = 'Loading…';
+    statusEl.textContent = tr('js.loading', 'Loading…');
     statusEl.style.color = '';
     try {
       const orgs       = await fetchOrgs();
@@ -20704,7 +20728,7 @@ window.addEventListener('DOMContentLoaded', function() {
   if (logCopyBtn) {
     logCopyBtn.addEventListener('click', function() {
       if (!_remoteLogViewPeerId) return;
-      copyTextToClipboard(remoteLogAsText(_remoteLogViewPeerId), 'Log copied!');
+      copyTextToClipboard(remoteLogAsText(_remoteLogViewPeerId), tr('js.log_copied_2', 'Log copied!'));
     });
   }
 
@@ -20757,7 +20781,7 @@ window.addEventListener('DOMContentLoaded', function() {
       openAboutWindow();
     });
     window.__TAURI__.event.listen('update-available', function(e) {
-      showCopyToast('Updating to v' + (e.payload || '?') + '…');
+      showCopyToast(tr('js.updating_to_version', 'Updating to v{version}…', { version: e.payload || '?' }));
     });
   }
 
@@ -20766,7 +20790,7 @@ window.addEventListener('DOMContentLoaded', function() {
       const { WebviewWindow } = window.__TAURI__.webviewWindow;
       const win = new WebviewWindow('about', {
         url: 'about.html',
-        title: 'About Voxal',
+        title: tr('ui.about_voxal', 'About Voxal'),
         width: 340,
         height: 420,
         resizable: false,
@@ -21068,7 +21092,7 @@ window.addEventListener('DOMContentLoaded', function() {
   $('btn-copy').addEventListener('click', function() {
     var text = roomDisplayCode();
     if (!text) return;
-    copyTextToClipboard(text, 'Room code copied!');
+    copyTextToClipboard(text, tr('js.room_code_copied', 'Room code copied!'));
   });
   $('btn-leave').addEventListener('click', leaveRoom);
   $('btn-leave-tiny').addEventListener('click', leaveRoom);
@@ -21100,9 +21124,9 @@ window.addEventListener('DOMContentLoaded', function() {
     bar.className = 'rejoin-bar';
     bar.innerHTML =
       '<span class="rejoin-icon">↩</span>' +
-      '<span id="rejoin-label" class="rejoin-label">Last room</span>' +
-      '<button id="btn-rejoin" class="btn btn-secondary rejoin-btn">Rejoin</button>' +
-      '<button id="btn-dismiss-rejoin" class="btn-icon rejoin-dismiss" aria-label="Dismiss">✕</button>';
+      '<span id="rejoin-label" class="rejoin-label">' + tr('ui.last_room', 'Last room') + '</span>' +
+      '<button id="btn-rejoin" class="btn btn-secondary rejoin-btn">' + tr('ui.rejoin', 'Rejoin') + '</button>' +
+      '<button id="btn-dismiss-rejoin" class="btn-icon rejoin-dismiss" aria-label="' + tr('ui.dismiss', 'Dismiss') + '">✕</button>';
     var joinRow = document.querySelector('.join-row');
     if (joinRow && joinRow.parentNode) joinRow.parentNode.insertBefore(bar, joinRow.nextSibling);
     _wireRejoinBar(bar);
@@ -21114,7 +21138,7 @@ window.addEventListener('DOMContentLoaded', function() {
       var btn = $('btn-rejoin');
       var snapshot = loadRejoinSnapshot();
       if (!snapshot) { var b = $('rejoin-bar'); if (b) b.remove(); return; }
-      setLoading(btn, true, 'Rejoin');
+      setLoading(btn, true, tr('ui.rejoin', 'Rejoin'));
       lockHomeCTAs();
       bar.querySelector('#btn-dismiss-rejoin').disabled = true;
       attemptRejoin()
@@ -21127,7 +21151,7 @@ window.addEventListener('DOMContentLoaded', function() {
           if (b) b.remove();
         })
         .finally(function() {
-          setLoading(btn, false, 'Rejoin');
+          setLoading(btn, false, tr('ui.rejoin', 'Rejoin'));
           unlockHomeCTAs();
           var d = bar.querySelector('#btn-dismiss-rejoin');
           if (d) d.disabled = false;
@@ -21151,7 +21175,7 @@ window.addEventListener('DOMContentLoaded', function() {
     if (!bar) bar = _createRejoinBar();
     var peerCount = (snapshot.peerIds || []).length;
     var labelEl = $('rejoin-label');
-    if (labelEl) labelEl.textContent = 'Last room · ' + peerCount + ' peer' + (peerCount !== 1 ? 's' : '');
+    if (labelEl) labelEl.textContent = tr('js.last_room_peers', { one: 'Last room · {n} peer', other: 'Last room · {n} peers' }, { n: peerCount });
     bar.classList.remove('hidden');
   };
   window._updateRejoinBar = updateRejoinBar;
@@ -21175,7 +21199,7 @@ window.addEventListener('DOMContentLoaded', function() {
       joinBtn.type = 'button';
       joinBtn.className = 'recent-room-join';
       joinBtn.textContent = code;
-      joinBtn.title = 'Join "' + code + '"';
+      joinBtn.title = tr('js.join_code', 'Join "{code}"', { code: code });
       joinBtn.addEventListener('click', function() {
         var input = $('input-code');
         if (input) input.value = code;
