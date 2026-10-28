@@ -2020,7 +2020,13 @@ body.video-stage-immersive #screen-room.active {
   inset: 0;
   width: auto;
   height: auto;
+  /* When the viewport itself comes up short of the screen (see
+     syncStandaloneViewportGap()), a box pinned to its edges is short too. */
+  height: var(--room-height, auto);
 }
+/* Whatever a short viewport still leaves bare behind the stage is black, not the
+   app's navy, so it reads as part of the picture. */
+body.video-stage-immersive { background-color: #000; }
 
 /* ── The immersive stage on a phone held sideways ─────────────────
    The control stack is an 80px circle with a row of buttons UNDER it, which on
