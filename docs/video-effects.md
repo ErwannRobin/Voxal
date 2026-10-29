@@ -1571,6 +1571,30 @@ lets through as a *partial* picture (the smoothstep window, 12–78% by default)
 That is the quickest way to see which grey texels in B are the ones that show up
 as background fragments in D.
 
+### The confidence cut
+
+The first real capture (a phone selfie) put the fragments in **B**: a lamp above
+the head at a median 48% confidence and a shoulder rim at 62%, both inside the
+composite's 12–78% window, which therefore showed them at roughly half strength
+or more. Neither a threshold nor the edge slider could have fixed that without
+also cutting hair (the hair edge read a median 41%, the same as the lamp): the
+model cannot tell them apart.
+
+So the raw mask is now cut before anything else touches it (`MASK_CUT`, in
+`FRAG_MASK_MIX`): a value **at or below 78% is background**, outright; above
+78% it ramps to fully person over the next 6%. 78% is the top of the old window,
+i.e. exactly the band the diagnostic paints red on the raw mask — *everything in
+red is masked*. The blend, dilate, feather and window then work on that cleaner
+mask, so C1–C4 show the cut and **B stays the model's own, uncut mask** (that is
+what keeps the diagnostic honest).
+
+The price: genuinely uncertain edges — fine hair, a blurred hand — are 40–70%
+and go with the rest. A clean 0/255 mask is unchanged (pinned byte for byte).
+To compare on a device without a console: `?maskcut=0` turns the cut off and
+`?maskcut=0.6` moves it (also `window.__voxalMaskCut`); the panel prints the
+value in use. Verified only on synthetic masks and one synthetic figure through
+the real model; the effect on a real face is for your eyes.
+
 ### Why the comparison can be trusted
 
 - **No extra inference.** It reads the mask the one existing `segmentForVideo()`

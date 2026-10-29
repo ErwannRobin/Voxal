@@ -182,6 +182,23 @@ var VideoEffects = (function () {
   var MASK_ALPHA_UP   = 0.85;
   var MASK_ALPHA_DOWN = 0.20;
 
+  // The confidence cut. The model's mask is not 0/1: where it is unsure (a
+  // lamp over the head, the rim of a shoulder, a wisp of hair) it says 20-70%,
+  // and the composite's smoothstep window (MASK_EDGE_LO..HI, 12-78%) keeps a
+  // visible share of anything above 12% — so the room shows through those
+  // places. Measured on a phone selfie with the diagnostic: a lamp above the
+  // head at a median 48%, a shoulder rim at 62%, both inside that window.
+  //
+  // So the raw mask is cut BEFORE anything else touches it: at or below
+  // MASK_CUT the pixel is background, outright; above it ramps to 1 over
+  // MASK_CUT_RAMP. MASK_CUT is the top of the old window, which is exactly the
+  // red band the diagnostic paints on the raw mask — "everything in red is
+  // masked". The price is paid by genuinely uncertain edges (fine hair): they
+  // are 40-70% and go with it. `?maskcut=0` turns it off, `?maskcut=0.6`
+  // moves it (and so does window.__voxalMaskCut), for comparing on a device.
+  var MASK_CUT      = 0.78;
+  var MASK_CUT_RAMP = 0.06;
+
   // Segmentation rates, in Hz, stepped down under load in the order listed.
   //
   // This ladder IS the accuracy knob, and it is the honest one. The mask's
@@ -744,6 +761,22 @@ var VideoEffects = (function () {
     v = Number(v);
     if (!isFinite(v)) return SHARPNESS_DEFAULT;
     return Math.min(1, Math.max(0, v));
+  }
+
+  // Where the raw mask is cut: 0 = no cut. A test or a device comparison may
+  // override it with window.__voxalMaskCut or `?maskcut=` in the URL.
+  function readMaskCut() {
+    var v = NaN;
+    try {
+      if (typeof window !== 'undefined' && window.__voxalMaskCut !== undefined) {
+        v = Number(window.__voxalMaskCut);
+      } else if (typeof location !== 'undefined') {
+        var m = /[?&]maskcut=([0-9.]+)/.exec(location.search || '');
+        if (m) v = Number(m[1]);
+      }
+    } catch (e) { /* no window or location */ }
+    if (!isFinite(v)) return MASK_CUT;
+    return Math.max(0, Math.min(0.94, v));
   }
 
   function readSharpness() {
@@ -1832,10 +1865,12 @@ var VideoEffects = (function () {
     'uniform sampler2D uNext;',
     'uniform float uAlphaUp;',
     'uniform float uAlphaDown;',
+    'uniform float uCut;',
     'out vec4 outColor;',
     'void main() {',
     '  float p = texture(uPrev, vUv).r;',
     '  float n = texture(uNext, vUv).r;',
+    '  if (uCut > 0.0) n = smoothstep(uCut, uCut + ' + MASK_CUT_RAMP.toFixed(3) + ', n);',
     '  float a = (n > p) ? uAlphaUp : uAlphaDown;',
     '  outColor = vec4(mix(p, n, a), 0.0, 0.0, 1.0);',
     '}'
@@ -2485,6 +2520,7 @@ var VideoEffects = (function () {
     // localStorage.
     this.edge = edgeProfile(readSharpness());
     this.decon = DECON_STRENGTH;
+    this.maskCut = readMaskCut();
 
     // Low-light state. gain 1 / contrast 1 means "set no canvas filter at
     // all", which is both the well-lit case and the unsupported one.
@@ -3713,6 +3749,7 @@ var VideoEffects = (function () {
     this.bindTex(this.pMix, 'uNext', 1, this.texMaskRaw);
     gl.uniform1f(uloc(gl, this.pMix, 'uAlphaUp'), this.maskPrimed ? MASK_ALPHA_UP : 1.0);
     gl.uniform1f(uloc(gl, this.pMix, 'uAlphaDown'), this.maskPrimed ? MASK_ALPHA_DOWN : 1.0);
+    gl.uniform1f(uloc(gl, this.pMix, 'uCut'), this.maskCut);
     this.drawQuad(this.fbMaskSB, W, H);
 
     // Swap the state pair: texMaskS is the blend's memory, and nothing
@@ -5503,6 +5540,9 @@ var VideoEffects = (function () {
       (p.labels ? ' · labels ' + p.labels : ''));
     lines.push('same frame? video clock skew between inference and draw: ' +
       (p.skewMs === null ? '–' : p.skewMs.toFixed(1) + ' ms'));
+    lines.push(_active.maskCut > 0
+      ? 'mask cut: raw values <= ' + Math.round(_active.maskCut * 100) + '% are background (?maskcut=0 to compare without)'
+      : 'mask cut: OFF');
     lines.push('raw mask: person (>=50%) ' + diagPct(st.person) +
       ' · mid-confidence (' + Math.round(_active.edge.lo * 100) + '-' +
       Math.round(_active.edge.hi * 100) + '%) ' + diagPct(st.mid));
@@ -7629,6 +7669,7 @@ var VideoEffects = (function () {
       target: LIGHT_TARGET, maxGain: LIGHT_GAIN_MAX,
       sampleMs: LIGHT_SAMPLE_MS, smooth: LIGHT_SMOOTH
     },
+    _maskCut: { cut: MASK_CUT, ramp: MASK_CUT_RAMP, read: readMaskCut },
     _edgeConfig: {
       dilate: MASK_DILATE, feather: MASK_FEATHER,
       lo: MASK_EDGE_LO, hi: MASK_EDGE_HI, def: SHARPNESS_DEFAULT
