@@ -1529,6 +1529,168 @@ popover (`#video-bg-subject-only`); the preferences window holds no call to
 report on. The Video card, this switch with it, is hidden in the native phone
 apps.
 
+## Looking at the cutout: the segmentation diagnostic
+
+*"A piece of the room stays sharp around me, even when I sit still."* Between the
+model and the screen there are five places that could be responsible: the model's
+own mask, the resize/reading of it, the temporal blend, the dilate / feather /
+smoothstep, and the composite. Tuning any of them before knowing which one is
+guesswork — every stage erodes or grows the subject, so a change in the wrong
+one just moves the problem. The diagnostic shows each stage's output for the
+**same inference**, side by side.
+
+**Open it** (it is off, and costs one boolean test per frame, until you do):
+
+- `?segdiag=1` on the page's URL (web / PWA — the way to do it on an iPhone), or
+- `localStorage['seg-diagnostic'] = '1'` then reload (Tauri, Capacitor), or
+- `VideoEffects.openDiagnostic('stages')` in the console.
+
+It opens a panel with a mode selector, *Freeze* (hold the last inference so you
+can study it or take a screenshot), *Save PNG*, *Hide* (shrinks it to a small
+"Seg" chip — on a phone the panel is otherwise over the room's own mic and camera
+buttons — and it takes no pictures while hidden) and ✕ (closes it and frees what
+it made). `VideoEffects.closeDiagnostic()` does the same. The panel is opaque,
+sized to the *visible* screen (`dvh`, safe areas) and keeps its control bar
+sticky at the top, so the buttons stay reachable on a phone.
+
+| View | What it is |
+|---|---|
+| **A** original | The camera frame, untouched |
+| **A′** model input | What the segmenter was actually handed: the 256-wide downscale, brightened in a dim room (`light-adapt`) |
+| **B** raw mask | `confidenceMasks[0].getAsUint8Array()` before anything touched it. Grey scale: white = person, black = background, greys = the model's uncertainty. Each model texel is a visible square (no interpolation) |
+| **C1** blended | After the temporal blend (grows 0.85 / shrinks 0.20 per inference) |
+| **C2** dilated | After the 3-texel max filter |
+| **C3** feathered | After the feather blur — what the composite is given |
+| **C4** matte used | The composite shader's own `m`: smoothstep window + empty-room reference + hair refinement, i.e. the alpha it actually mixes with |
+| **D** final | The composite |
+| stability map | Where the raw mask kept changing between successive inferences (bright = changing) |
+| *grid* / *stages* | A B C3 D in 2x2, or B C1 C2 C3 C4 D in 3x2, of one inference |
+
+"Tint the visible band red" paints, on the mask views, the values the composite
+lets through as a *partial* picture (the smoothstep window, 12–78% by default).
+That is the quickest way to see which grey texels in B are the ones that show up
+as background fragments in D.
+
+### The confidence cut
+
+The first real capture (a phone selfie) put the fragments in **B**: a lamp above
+the head at a median 48% confidence and a shoulder rim at 62%, both inside the
+composite's 12–78% window, which therefore showed them at roughly half strength
+or more. Neither a threshold nor the edge slider could have fixed that without
+also cutting hair (the hair edge read a median 41%, the same as the lamp): the
+model cannot tell them apart.
+
+So the raw mask is now cut before anything else touches it (`MASK_CUT`, in
+`FRAG_MASK_MIX`): a value **at or below 78% is background**, outright; above
+78% it ramps to fully person over the next 6%. 78% is the top of the old window,
+i.e. exactly the band the diagnostic paints red on the raw mask — *everything in
+red is masked*. The blend, dilate, feather and window then work on that cleaner
+mask, so C1–C4 show the cut and **B stays the model's own, uncut mask** (that is
+what keeps the diagnostic honest).
+
+The price: genuinely uncertain edges — fine hair, a blurred hand — are 40–70%
+and go with the rest. A clean 0/255 mask is unchanged (pinned byte for byte).
+To compare on a device without a console: `?maskcut=0` turns the cut off and
+`?maskcut=0.6` moves it (also `window.__voxalMaskCut`); the panel prints the
+value in use. Verified only on synthetic masks and one synthetic figure through
+the real model; the effect on a real face is for your eyes.
+
+### Why the comparison can be trusted
+
+- **No extra inference.** It reads the mask the one existing `segmentForVideo()`
+  call already returned. MediaPipe's callback form returns synchronously
+  (documented in `vision.d.ts`: *"The method returns synchronously once the
+  callback returns"*), so the camera frame `draw()` uploads right after is the
+  frame that inference saw. That is checked, not assumed: the panel prints the
+  video clock's skew between the two reads (it was 0.0 ms on the real model).
+- **Same inference everywhere.** Panes are drawn only on the frame that follows
+  an inference, from that inference's textures. C2 is copied out of the work
+  texture before the feather overwrites it. C4 is the composite shader printing
+  its own `m` (`uDbg`) — there is no second copy of the maths to drift.
+- **The published frame does not change.** The panes are drawn into the
+  processor's canvas, copied to the panel's 2D canvas in the same task (the keyed
+  frame's trick), and then the real composite is drawn over the whole canvas.
+  `unit-seg-diagnostic.spec.js` pins this byte for byte, with a baseline taken
+  *before* the panel is opened (`uDbg` lives in the program, so a baseline taken
+  after closing would hide a leak).
+- **No console spam.** One line per opening (mask shape, label list, input size).
+- **GL objects** (one program, three mask-sized textures) are created on first
+  use and deleted on close, on a context rebuild (a turned phone) and with the
+  processor.
+
+### The numbers
+
+Under the picture, per inference (moving average over ~5): the inference rate,
+the mask shape and count, the label list (`["selfie"]` for the model we ship), the
+share of pixels that are *person* (>= 50%) and *mid-confidence* (inside the
+smoothstep window), and, against the previous inference, the **mean |delta|**,
+the share of pixels that changed by more than 10%, and the share that **crossed
+50%**. Sitting still, that last one should be close to 0.
+
+### Reading it: which stage first shows the fragment
+
+Freeze on an inference where the fragment is visible, open *stages*, and find the
+**first** pane that has it. Every claim below is a hypothesis to confirm with
+the pane named, not a finding — none has been verified against a real person
+on a real camera (see the end of this section).
+
+1. **Already in B (raw mask).** The model. Look at A′ first: is the downscale
+   aliased or dark, is the subject/background contrast low, is it the same
+   fragment frame after frame (stability map dark there = the model is *consistently*
+   wrong, a limit of a 256x144 input and of this model) or does it come and go
+   (the next case)? Levers that are not the model: the quality of the
+   downscale (`segCtx.drawImage()` leaves `imageSmoothingQuality` at its default,
+   `low`; I expect that to alias on a 5x reduction but have not measured it —
+   A′ shows what it produces), light, and the empty-room reference for a fixed
+   camera. Changing the model is a separate decision.
+2. **B clean, a fragment appears in a later pane.** The stage that introduces it
+   is the culprit:
+   - *C1*: the **temporal blend**. It grows 0.85 and shrinks 0.20, so a texel
+     the model fires on for a single inference is held up for several afterwards
+     (a ratchet toward "person" on noisy input, by construction). If
+     B flickers there (stability map bright, "crossing 50%" > 0) this is the
+     mechanism, and sitting still does not help because the noise is in the
+     input (sensor, auto-exposure, compression), not in your movement.
+   - *C2*: the **dilate** grows any isolated texel by 3 texels (about 15 px of a
+     1280-wide picture), speckle included.
+   - *C3*: the **feather** spreads a small blob into a soft one.
+   - *C4*: the **smoothstep window** (`lo` 0.12) keeps a visible share of any
+     value above 12%, and the **hair refinement** pulls in neighbours whose
+     colour matches. To test the second cheaply: `window.__voxalNoHairRefine = true`.
+3. **C4 clean, D not.** The composite: orientation, the decontamination, the
+   mix. Also check that the "fragment" is not simply the *blurred* room: in blur
+   mode the room behind you is meant to be visible, soft.
+4. **B changes while you sit still.** Read the stability numbers. On a still
+   synthetic image through the real model the deltas were exactly 0, so a still
+   *person* that flickers points at the camera input (noise, exposure,
+   compression) rather than the model's determinism — a prediction to check with
+   the numbers on your camera, not a result.
+5. **Several are possible** (a weak value in B, then grown by C2 and kept by C4):
+   the stage that shows it *first* is necessary but may not be sufficient. To
+   separate them, change one thing at a time **after** isolating (`edge-sharpness`
+   moves feather, window and dilate together; the temporal weights and the
+   window are constants) and watch the same pane.
+
+If the screenshots were taken of the *remote* tile, rather than the sender's own
+panel, video compression can add block artifacts of its own; compare with the
+sender's D pane.
+
+### What is, and is not, tested
+
+Automated (`tests/e2e/unit-seg-diagnostic.spec.js`, MediaPipe stubbed with a
+hard-edged oval, GL passes real): panel off by default; `?segdiag=1`; one ingest
+per inference; each pane reads the right texture and is upright; the dilated pane
+really is pre-feather; the published frame is byte-identical (four views); the
+stability arithmetic; close frees every texture and the program, repeatedly; no
+per-frame logging. Run once by hand against the **real** model on a synthetic
+head-and-shoulders scene: it returns one mask, label `selfie`, 256x144, and the
+panes line up.
+
+**Not** tested, and needing your eyes in a real browser on a real camera: how the
+real model's confidences look on you, which stage first shows *your* fragments,
+and iPhone behaviour (the panel is plain DOM and WebGL2 ops already used by the
+pipeline; it has not been run on a device).
+
 ## Key files
 
 | File | What it holds |
@@ -1538,6 +1700,7 @@ apps.
 | `src/video-scenes.js` | The six animated scenes (one shader each), measuring how you are lit (`measureSubject()` / `lookFromStats()` / `easeLook()`), the async compile and the chip thumbnails |
 | `src/main.js` | `maybeApplyVideoEffects()`, `applyVideoBackground()`, `swapLocalVideoTrack()`, the unwrap in `stopStreamTracks()`, the effects branches in `flipCamera()` and `setLocalCameraSuspended()`, the tile button in `_buildVideoTile()`, and `positionVideoBackgroundPopover()` / `renderVideoBackgroundProgress()`. The keyed camera: `localCaps()`, `currentOffer()`, `keyedFor()`, `refreshKeyedSend()` and the reconcile behind `queueVideoSenderMutation()`, the receivers (`reconcileKeyedReceivers()`, `displayVideoStreamFor()`), `keyedStatus()`, and `keyedVideoBitrate()` |
 | `tests/e2e/unit-video-effects.spec.js` | Coverage, with inference stubbed via `window.__voxalSegStub` |
+| `tests/e2e/unit-seg-diagnostic.spec.js` | The segmentation diagnostic: panes, orientation, byte-identical published frame, stability numbers, GL cleanup |
 | `tests/e2e/unit-video-scenes.spec.js` | The scenes: every one renders, moves only a little, mirrors to the light; the measurement; shadow, light wrap and motion through the real pipeline |
 | `tests/e2e/unit-video-keyed.spec.js` | The keyed frame, pixel for pixel, and every guard that withholds it |
 | `tests/e2e/unit-video-keyin.spec.js` | The receiving end: the round trip, detection, staying out of the user's own pipeline, and the codec round trips through VP8 (band colour error, starved markers, the switch) |

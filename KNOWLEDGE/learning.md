@@ -232,6 +232,15 @@ Then `npx playwright test --config=.pw-local.config.js` (`/opt/pw-browsers/chrom
 - Do not set `dir="rtl"` on `<html>`: the room/stage layout and drawer geometry are physical-pixel math (`padding-right`, self-badge edges). Arabic gets RTL *text* only.
 - A language switch must not overwrite text the page wrote itself (`applyEl` compares against what it last wrote), or a live status line reverts to its placeholder.
 
+## Segmentation diagnostic (`VideoEffects.openDiagnostic()`, `docs/video-effects.md` → *Looking at the cutout*)
+
+- **Debug uniforms live in the program, so "frame with panel open == frame after closing" proves nothing.** `uDbg` left at 1 made BOTH frames print the matte and the test passed; only a baseline drawn *before the panel was ever opened* catches it (found by mutating the reset away). Also run the mutation on a layout where the debug pane is the LAST draw (`matte` alone): in `stages`/`grid` the final pane resets the uniform and hides the bug.
+- **MediaPipe's callback form of `segmentForVideo` returns synchronously** (`vision.d.ts`), so the frame `draw()` uploads right after is the frame the inference saw; the panel prints the video-clock skew (0.0 ms measured on the real model). The mask is only valid inside the callback: copy what you need there.
+- The shipped `selfie_segmenter_landscape.tflite` returns ONE confidence mask, label `["selfie"]`, 256x144 for a 16:9 camera; high = person.
+- **`gl.finish()` is not a timing fence in Chromium/SwiftShader**: a 720p draw "took" 0.09 ms. Force completion with a 1-pixel `readPixels`, and expect it to be slow enough that a 120-iteration loop times out; keep software-GL micro-benchmarks to ~25 iterations.
+- **The selfie model's unsure pixels are 20–70%, not 0/1** (phone selfie: lamp over the head median 48%, shoulder rim 62%, hair edge 41%). The composite's 12–78% window kept those partly visible; the raw mask is now cut at `MASK_CUT` (78%) in `FRAG_MASK_MIX`. Thresholding cannot separate a lamp from hair (same confidence), so the cut costs fine hair — that is the user's accepted trade. `?maskcut=` compares on a device.
+- Don't `pkill -f "<pattern>"` with the pattern in your own command line — it kills the shell running it.
+
 ## Sync rule
 
 Every change to `src/` must be mirrored to `ios/App/App/public/` and `android/app/src/main/assets/public/` (`make cap-sync`).

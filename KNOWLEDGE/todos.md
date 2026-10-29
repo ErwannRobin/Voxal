@@ -1129,6 +1129,14 @@ Shipped on web/JS (OTA); `NSMotionUsageDescription` needs a store build. Everyth
 - [ ] **Lag:** the scene is redrawn at ≤20 Hz, so the room can trail the person by a frame or two in a quick turn. Raise the scene's rate while the phone moves, or re-project the resolve history by the rotation (also keeps it sharp in motion).
 - [ ] Settings preview does not tilt (it runs no published camera); the picker's chips never do.
 
+## 🔬 Cutout fragments — find the stage (segmentation diagnostic)
+
+The diagnostic is built and tested with a stubbed model plus one run of the real model on a synthetic figure; the cause of the *reported* fragments is **not yet identified** — that needs a real person on a real camera.
+
+- [ ] Open `?segdiag=1`, sit still, *Freeze* on an inference with a fragment, view *stages*: which pane shows it first (B raw / C1 blend / C2 dilate / C3 feather / C4 matte / D)? Record the stability numbers (crossing 50%, changed >10%) and take a *Save PNG* of the stages view.
+- [ ] If B itself has it: look at A′ (is the 256-wide downscale aliased? `imageSmoothingQuality` is the default `low` — unmeasured) and test a higher-quality downscale only then.
+- [ ] iPhone / Capacitor: open the panel on a device (`?segdiag=1` in Safari, `localStorage['seg-diagnostic']='1'` in the app) — plain DOM + the pipeline's own GL ops, never run on a device.
+
 ---
 
 _Add new items above this line._
