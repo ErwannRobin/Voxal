@@ -1546,8 +1546,12 @@ one just moves the problem. The diagnostic shows each stage's output for the
 - `VideoEffects.openDiagnostic('stages')` in the console.
 
 It opens a panel with a mode selector, *Freeze* (hold the last inference so you
-can study it or take a screenshot), *Save PNG*, and ✕ (closes it and frees what
-it made). `VideoEffects.closeDiagnostic()` does the same.
+can study it or take a screenshot), *Save PNG*, *Hide* (shrinks it to a small
+"Seg" chip — on a phone the panel is otherwise over the room's own mic and camera
+buttons — and it takes no pictures while hidden) and ✕ (closes it and frees what
+it made). `VideoEffects.closeDiagnostic()` does the same. The panel is opaque,
+sized to the *visible* screen (`dvh`, safe areas) and keeps its control bar
+sticky at the top, so the buttons stay reachable on a phone.
 
 | View | What it is |
 |---|---|

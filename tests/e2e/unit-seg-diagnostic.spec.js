@@ -330,3 +330,56 @@ test('a changed view applies to the next inference; an unknown view is refused',
   expect(r.view).toBe('heat');
   expect(r.select).toBe('heat');
 });
+
+for (const vp of [{ width: 390, height: 664 }, { width: 664, height: 340 }, { width: 320, height: 480 }]) {
+  test(`every control is on screen and tappable on a phone (${vp.width}x${vp.height})`, async ({ page }) => {
+    await page.setViewportSize(vp);
+    await start(page);
+    await page.evaluate(() => VideoEffects.openDiagnostic('stages'));
+    expect(await page.evaluate(() => window.__untilInferences(2))).toBe(true);
+    const r = await page.evaluate(() => {
+      const el = document.getElementById('seg-diagnostic');
+      const out = [];
+      for (const b of el.querySelectorAll('button, select')) {
+        if (b.offsetParent === null) continue;   // the chip, while the panel is open
+        const q = b.getBoundingClientRect();
+        // The element at the control's centre must be the control itself: not
+        // clipped, not under something.
+        const hit = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2);
+        out.push({ name: b.textContent.slice(0, 8) || 'select', inside:
+          q.top >= 0 && q.left >= 0 && q.bottom <= innerHeight && q.right <= innerWidth,
+          hit: hit === b || b.contains(hit), h: Math.round(q.height) });
+      }
+      return { out, panelBottom: el.getBoundingClientRect().bottom, vh: innerHeight };
+    });
+    for (const c of r.out) {
+      expect(c.inside, `${c.name} inside the window`).toBe(true);
+      expect(c.hit, `${c.name} not covered`).toBe(true);
+      expect(c.h, `${c.name} tall enough to tap`).toBeGreaterThanOrEqual(30);
+    }
+    expect(r.out.map((c) => c.name)).toEqual(expect.arrayContaining(['Freeze', 'Save PNG', 'Hide', '✕']));
+  });
+}
+
+test('Hide shrinks the panel to a chip, stops taking pictures, and the chip brings it back', async ({ page }) => {
+  await start(page);
+  await page.evaluate(() => VideoEffects.openDiagnostic('grid'));
+  expect(await page.evaluate(() => window.__untilInferences(2))).toBe(true);
+  await page.getByRole('button', { name: 'Hide' }).click();
+  const hidden = await page.evaluate(async () => {
+    const el = document.getElementById('seg-diagnostic');
+    const n0 = VideoEffects.diagnosticState().inference;
+    const stamp = el.querySelector('canvas').toDataURL();
+    await new Promise((r) => setTimeout(r, 600));
+    return { w: el.getBoundingClientRect().width, h: el.getBoundingClientRect().height,
+             canvasVisible: el.querySelector('canvas').offsetParent !== null,
+             stillPicture: el.querySelector('canvas').toDataURL() === stamp,
+             counted: VideoEffects.diagnosticState().inference >= n0 };
+  });
+  expect(hidden.canvasVisible).toBe(false);
+  expect(hidden.w).toBeLessThan(120);
+  expect(hidden.h).toBeLessThan(60);
+  expect(hidden.stillPicture).toBe(true);
+  await page.getByRole('button', { name: 'Seg' }).click();
+  await expect(page.locator('#seg-diagnostic canvas')).toBeVisible();
+});

@@ -5297,8 +5297,8 @@ var VideoEffects = (function () {
   };
 
   var _diag = {
-    on: false, view: 'grid', tint: false, frozen: false,
-    el: null, canvas: null, ctx: null, info: null, select: null, freezeBtn: null,
+    on: false, view: 'grid', tint: false, frozen: false, collapsed: false,
+    el: null, body: null, chip: null, canvas: null, ctx: null, info: null, select: null, freezeBtn: null,
     error: '', lastInfo: 0, text: ''
   };
 
@@ -5327,16 +5327,37 @@ var VideoEffects = (function () {
     el.id = 'seg-diagnostic';
     el.setAttribute('role', 'dialog');
     el.setAttribute('aria-label', 'Segmentation diagnostic');
-    el.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:2147483000;' +
-      'width:min(96vw,640px);max-height:92vh;overflow:auto;box-sizing:border-box;' +
-      'padding:8px;border-radius:8px;background:rgba(0,0,0,.88);color:#eee;' +
+    // Sized to what is VISIBLE (dvh, not vh: on iOS Safari 100vh is the page
+    // with the toolbars away, taller than the screen), clear of the notch and
+    // the home bar, and opaque — a see-through panel over the room's own
+    // buttons shows them as ghosts you cannot tell from its controls.
+    el.style.cssText = 'position:fixed;' +
+      'left:max(8px,env(safe-area-inset-left));' +
+      'bottom:max(8px,env(safe-area-inset-bottom));z-index:2147483000;' +
+      'width:min(96vw,640px);max-height:calc(100vh - 16px);' +
+      'max-height:calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));' +
+      'overflow:auto;box-sizing:border-box;padding:8px;border-radius:8px;' +
+      'background:#111;color:#eee;box-shadow:0 2px 16px rgba(0,0,0,.5);' +
       'font:12px/1.35 ui-monospace,Menlo,Consolas,monospace;touch-action:manipulation';
 
+    // The panel can shrink to a small chip: on a phone it is otherwise over
+    // the room's own controls (mic, camera), which are underneath it.
+    var chip = document.createElement('button');
+    chip.type = 'button';
+    chip.textContent = 'Seg ▴';
+    chip.style.cssText = 'display:none;font:inherit;padding:8px 12px;min-height:36px';
+    chip.addEventListener('click', function () { diagCollapse(false); });
+    el.appendChild(chip);
+
+    var body = document.createElement('div');
+
+    // Sticky, so the controls stay on screen however tall the picture is.
     var bar = document.createElement('div');
-    bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px';
+    bar.style.cssText = 'position:sticky;top:0;z-index:1;background:#111;display:flex;' +
+      'flex-wrap:wrap;gap:6px;align-items:center;padding-bottom:6px';
 
     var sel = document.createElement('select');
-    sel.style.cssText = 'flex:1 1 220px;min-width:0;font:inherit;padding:3px';
+    sel.style.cssText = 'flex:1 1 100%;min-width:0;font:inherit;padding:6px;min-height:36px';
     DIAG_VIEWS.forEach(function (v) {
       var o = document.createElement('option');
       o.value = v[0]; o.textContent = v[1];
@@ -5347,19 +5368,19 @@ var VideoEffects = (function () {
     bar.appendChild(sel);
 
     var tintLabel = document.createElement('label');
-    tintLabel.style.cssText = 'white-space:nowrap';
+    tintLabel.style.cssText = 'white-space:nowrap;flex:1 1 auto';
     var tint = document.createElement('input');
     tint.type = 'checkbox';
     tint.addEventListener('change', function () { _diag.tint = !!tint.checked; });
     tintLabel.appendChild(tint);
-    tintLabel.appendChild(document.createTextNode(' tint the visible band red'));
+    tintLabel.appendChild(document.createTextNode(' tint visible band'));
     bar.appendChild(tintLabel);
 
     function button(text, fn) {
       var b = document.createElement('button');
       b.type = 'button';
       b.textContent = text;
-      b.style.cssText = 'font:inherit;padding:3px 8px';
+      b.style.cssText = 'font:inherit;padding:6px 12px;min-height:36px';
       b.addEventListener('click', fn);
       bar.appendChild(b);
       return b;
@@ -5369,22 +5390,38 @@ var VideoEffects = (function () {
       _diag.freezeBtn.textContent = _diag.frozen ? 'Resume' : 'Freeze';
     });
     button('Save PNG', diagSave);
+    button('Hide', function () { diagCollapse(true); });
     button('✕', diagClose);
-    el.appendChild(bar);
+    body.appendChild(bar);
 
     var canvas = document.createElement('canvas');
     canvas.width = 16; canvas.height = 9;
-    canvas.style.cssText = 'display:block;width:100%;height:auto;background:#222';
-    el.appendChild(canvas);
+    canvas.style.cssText = 'display:block;width:100%;height:auto;max-height:50vh;' +
+      'max-height:50dvh;object-fit:contain;background:#222';
+    body.appendChild(canvas);
 
     var info = document.createElement('pre');
     info.style.cssText = 'margin:6px 0 0;white-space:pre-wrap;word-break:break-word;font:inherit';
     info.textContent = 'waiting for the first inference…';
-    el.appendChild(info);
+    body.appendChild(info);
+    el.appendChild(body);
 
-    _diag.el = el; _diag.canvas = canvas; _diag.ctx = canvas.getContext('2d');
+    _diag.el = el; _diag.body = body; _diag.chip = chip;
+    _diag.canvas = canvas; _diag.ctx = canvas.getContext('2d');
     _diag.info = info; _diag.select = sel;
     document.body.appendChild(el);
+    diagCollapse(_diag.collapsed);
+  }
+
+  // Shrink the panel to a chip, or bring it back. A hidden panel takes no
+  // pictures (diagBegin), so it costs nothing while it is out of the way.
+  function diagCollapse(on) {
+    _diag.collapsed = !!on;
+    if (!_diag.el) return;
+    _diag.body.style.display = on ? 'none' : '';
+    _diag.chip.style.display = on ? '' : 'none';
+    _diag.el.style.width = on ? 'auto' : 'min(96vw,640px)';
+    _diag.el.style.padding = on ? '0' : '8px';
   }
 
   function diagOpen(view) {
@@ -5393,6 +5430,7 @@ var VideoEffects = (function () {
     if (typeof document === 'undefined' || !document.body) return null;
     _diag.on = true;
     _diag.frozen = false;
+    _diag.collapsed = false;
     _diag.error = '';
     diagBuildPanel();
     return diagState();
@@ -5403,7 +5441,8 @@ var VideoEffects = (function () {
     _diag.on = false;
     if (_active) _active.diagRelease();
     if (_diag.el && _diag.el.parentNode) _diag.el.parentNode.removeChild(_diag.el);
-    _diag.el = _diag.canvas = _diag.ctx = _diag.info = _diag.select = _diag.freezeBtn = null;
+    _diag.el = _diag.body = _diag.chip = _diag.canvas = _diag.ctx = null;
+    _diag.info = _diag.select = _diag.freezeBtn = null;
   }
 
   function diagSetView(view) {
@@ -5633,7 +5672,7 @@ var VideoEffects = (function () {
     var d = this._dg;
     if (!d || !d.fresh) return null;
     d.fresh = false;
-    if (_diag.frozen || !_diag.ctx) return null;
+    if (_diag.frozen || _diag.collapsed || !_diag.ctx) return null;
     var lay = diagLayout(_diag.view, w, h);
     // The same frame, checked rather than assumed: the video clock when the
     // inference read it against now, when the picture is about to be uploaded
@@ -7684,6 +7723,7 @@ var VideoEffects = (function () {
     DIAGNOSTIC_VIEWS: DIAG_VIEWS.map(function (v) { return v[0]; }),
     openDiagnostic: diagOpen,
     closeDiagnostic: diagClose,
+    collapseDiagnostic: diagCollapse,
     setDiagnosticView: diagSetView,
     diagnosticState: diagState,
     keyIn: keyIn,
