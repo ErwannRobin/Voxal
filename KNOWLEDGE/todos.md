@@ -1140,3 +1140,11 @@ The diagnostic is built and tested with a stubbed model plus one run of the real
 ---
 
 _Add new items above this line._
+
+## Longpipe experiment (branch `claude/longpipe-experiment`)
+
+- [ ] Real-device validation: iPhone Safari (does the pipeline start, WebGPU or WebGL2 path, fps, memory) — nothing here has run on iOS.
+- [ ] Same-frame A/B in the diagnostic (still → MediaPipe, then Longpipe, sequential) with ground-truth alpha from black/white renders.
+- [ ] Longpipe's own blur as the final picture (skips Voxal's compositing; no scenes/keyed camera).
+- [ ] Paint the person's colour from Longpipe's despilled frame instead of the camera (removes the pipeline-latency skew between mask and colour).
+- [ ] Self-host the weights (CDN sends no Cache-Control) and decide on CC BY attribution for the training data.

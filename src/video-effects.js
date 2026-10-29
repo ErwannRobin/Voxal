@@ -1661,7 +1661,35 @@ var VideoEffects = (function () {
     });
   }
 
-  function createSegmenter() {
+  // The engine a new Processor starts with. MediaPipe unless the experimental
+  // Longpipe engine was asked for (localStorage / ?segengine=longpipe) AND its
+  // script is present — any other case is MediaPipe, silently.
+  function selectedEngine() {
+    return typeof LongpipeEngine !== 'undefined' && LongpipeEngine.selected() === 'longpipe'
+      ? 'longpipe' : 'mediapipe';
+  }
+
+  // `engine` forces one; absent follows the preference. A Longpipe that cannot
+  // load or start falls back to MediaPipe here, so the camera never waits on an
+  // experiment: the reason is kept for the diagnostic panel.
+  function createSegmenter(raw, engine) {
+    var want = engine || selectedEngine();
+    if (want === 'longpipe' && (!window.__voxalSegStub || window.__voxalLongpipeStub) && typeof LongpipeEngine !== 'undefined') {
+      return LongpipeEngine.create(raw).then(function (seg) {
+        _engineFallback = null;
+        return seg;
+      }, function (e) {
+        _engineFallback = (e && e.message) || String(e);
+        console.warn('[VideoEffects] Longpipe unavailable, using MediaPipe: ' + _engineFallback);
+        return createMediaPipeSegmenter();
+      });
+    }
+    return createMediaPipeSegmenter();
+  }
+
+  var _engineFallback = null;   // why the last Longpipe request ended on MediaPipe
+
+  function createMediaPipeSegmenter() {
     if (window.__voxalSegStub) return stubSegmenter();
     return loadRuntime().then(function (rt) {
       // Its own canvas, deliberately: MediaPipe initialises a WebGL context on
@@ -2613,6 +2641,46 @@ var VideoEffects = (function () {
     });
   }
 
+  // Take a segmenter as THE engine. The MediaPipe mask cut (a threshold that
+  // treats anything the model is unsure of as background) is tuned to that
+  // model's 20-70% "unsure" pixels; Longpipe's mask is a matte, whose soft edge
+  // that cut would delete, so it is switched off for it.
+  Processor.prototype.adoptSegmenter = function (seg) {
+    var self = this;
+    this.segmenter = seg;
+    this.engine = seg.engine || 'mediapipe';
+    this.maskCut = this.engine === 'longpipe' ? 0 : readMaskCut();
+    this.maskPrimed = false;
+    if (this.engine === 'longpipe') {
+      // A Longpipe that dies mid-call hands the camera back to MediaPipe.
+      seg.onFail = function (e) {
+        if (self.segmenter !== seg || self.stopped) return;
+        _engineFallback = (e && e.message) || String(e);
+        console.warn('[VideoEffects] Longpipe failed, back to MediaPipe: ' + _engineFallback);
+        self.swapSegmenter('mediapipe');
+      };
+    }
+  };
+
+  // Change engine under a running camera: no new track, no renegotiation (the
+  // canvas track is the same). The old engine keeps feeding the last mask until
+  // the new one is up; a failed swap leaves the old one running.
+  Processor.prototype.swapSegmenter = function (engine) {
+    var self = this;
+    if (this.stopped || this._swapping) return Promise.resolve(this.engine);
+    if (engine === this.engine) return Promise.resolve(this.engine);
+    this._swapping = true;
+    var old = this.segmenter;
+    return createSegmenter(this.raw, engine).then(function (seg) {
+      if (self.stopped) { try { seg.close(); } catch (e) { /* ignore */ } return self.engine; }
+      self.segmenter = null;                       // runSegment() must not use the one being closed
+      if (old) { try { old.onFail = null; old.close(); } catch (e) { /* ignore */ } }
+      self.adoptSegmenter(seg);
+      return self.engine;
+    }).then(function (e) { self._swapping = false; return e; },
+            function (e) { self._swapping = false; throw e; });
+  };
+
   Processor.prototype.targetFps = function () {
     var t = this.raw && this.raw.getVideoTracks()[0];
     var s = t && t.getSettings ? t.getSettings() : null;
@@ -2635,10 +2703,10 @@ var VideoEffects = (function () {
     var self = this;
     return this.video.play().catch(function () { /* autoplay of a muted local stream */ })
       .then(function () { return self.waitForFrame(); })
-      .then(function () { return createSegmenter(); })
+      .then(function () { return createSegmenter(self.raw); })
       .then(function (seg) {
         if (self.stopped) { try { seg.close(); } catch (e) { /* ignore */ } return null; }
-        self.segmenter = seg;
+        self.adoptSegmenter(seg);
         self.initGL();
         return self.applyBackground(self.mode).then(function () {
           var fps = self.targetFps();
@@ -4259,6 +4327,7 @@ var VideoEffects = (function () {
   Processor.prototype.setSource = function (rawStream) {
     this.raw = rawStream;
     if (this.stream) this.stream._effectsOriginal = rawStream;
+    if (this.segmenter && this.segmenter.setSource) this.segmenter.setSource(rawStream);
     var self = this;
     return this.repoint(rawStream).then(function () {
       var size = self.sizeFromTrack();
@@ -5404,6 +5473,29 @@ var VideoEffects = (function () {
     sel.addEventListener('change', function () { diagSetView(sel.value); });
     bar.appendChild(sel);
 
+    // The experimental engine, switchable under the running camera. Offered only
+    // where the Longpipe script is present; the choice is stored, so it survives
+    // a reload exactly like ?segengine=longpipe would.
+    if (typeof LongpipeEngine !== 'undefined') {
+      var eng = document.createElement('select');
+      eng.setAttribute('aria-label', 'Segmentation engine');
+      eng.style.cssText = 'flex:1 1 100%;min-width:0;font:inherit;padding:6px;min-height:36px';
+      [['mediapipe', 'Engine: MediaPipe (default)'], ['longpipe', 'Engine: Longpipe (experimental)']].forEach(function (v) {
+        var o = document.createElement('option');
+        o.value = v[0]; o.textContent = v[1];
+        eng.appendChild(o);
+      });
+      eng.value = engine();
+      eng.addEventListener('change', function () {
+        var want = eng.value;
+        eng.disabled = true;       // one swap at a time
+        setEngine(want).then(function () { eng.value = engine(); eng.disabled = false; },
+                             function () { eng.value = engine(); eng.disabled = false; });
+      });
+      bar.appendChild(eng);
+      _diag.engineSelect = eng;
+    }
+
     var tintLabel = document.createElement('label');
     tintLabel.style.cssText = 'white-space:nowrap;flex:1 1 auto';
     var tint = document.createElement('input');
@@ -5533,8 +5625,37 @@ var VideoEffects = (function () {
     };
   }
 
+  // The running engine's own account of itself, refreshed at most once a
+  // second (Longpipe's pipeline stats are asynchronous) and printed from the
+  // last answer.
+  var _engLine = '', _engAt = 0;
+  function diagEngineText() {
+    var now = performance.now();
+    if (now - _engAt > 1000) {
+      _engAt = now;
+      engineStats().then(function (s) {
+        var t = 'engine: ' + s.engine;
+        if (s.engine === 'longpipe') {
+          var pl = s.pipeline || {};
+          t += ' · key ' + s.key + ' (' + s.keySwitches + ' switch' + (s.keySwitches === 1 ? '' : 'es') + ')' +
+            ' · preset ' + (pl.preset || '–') + ' · its model ' + (pl.modelMs ? pl.modelMs.toFixed(1) + ' ms' : '–') +
+            '\nour read-back + mask ' + (s.ourMsP50 === null ? '–' : s.ourMsP50.toFixed(2) + ' ms p50 / ' + s.ourMsP95.toFixed(2) + ' p95') +
+            ' · masks ' + (s.maskHz === null ? '–' : s.maskHz + ' Hz') + ' · held ' + s.heldFrames +
+            ' · init ' + (s.initMs === null ? '–' : s.initMs + ' ms') + ' · edgeE ' + s.edgeE +
+            '\nthe mask is read from Longpipe\'s OUTPUT stream, so it lags the camera by that pipeline\'s latency (not measured here)';
+          if (s.errors && s.errors.length) t += '\nlongpipe errors: ' + s.errors.join(' | ');
+        }
+        if (s.fallback) t += '\nfell back to MediaPipe: ' + s.fallback;
+        _engLine = t;
+      }, function () { /* keep the last line */ });
+    }
+    return _engLine;
+  }
+
   function diagInfoText(p) {
     var st = p.st, lines = [];
+    var eng = diagEngineText();
+    if (eng) lines.push(eng);
     lines.push('inference #' + p.n + ' · ' + (p.hz ? p.hz.toFixed(1) : '–') + ' Hz · mask ' +
       p.w + 'x' + p.h + ' · ' + (_active._maskCount || 0) + ' mask(s)' +
       (p.labels ? ' · labels ' + p.labels : ''));
@@ -5844,6 +5965,34 @@ var VideoEffects = (function () {
   function stop(stream) {
     var p = stream ? stream._effectsProcessor : _active;
     if (p) p.destroy();
+  }
+
+  // --- segmentation engine (experimental) ----------------------------------
+  //
+  // MediaPipe is the engine unless the user asked for Longpipe. Both calls are
+  // safe at any moment: with no camera running they only store the choice;
+  // with one they swap the engine under it, keeping the canvas track.
+  function setEngine(name) {
+    name = name === 'longpipe' ? 'longpipe' : 'mediapipe';
+    if (typeof LongpipeEngine !== 'undefined') LongpipeEngine.setSelected(name);
+    _engineFallback = null;
+    if (!_active) return Promise.resolve(name);
+    return _active.swapSegmenter(name).then(function () { return name; }, function (e) {
+      _engineFallback = (e && e.message) || String(e);
+      return _active ? _active.engine : 'mediapipe';
+    });
+  }
+
+  function engine() { return _active && _active.engine ? _active.engine : selectedEngine(); }
+
+  // What the running engine can say about itself (timings, key colour, errors);
+  // MediaPipe's callback form gives no model timing, so it reports the cadence
+  // the Processor measures itself.
+  function engineStats() {
+    var seg = _active && _active.segmenter;
+    var base = { engine: engine(), fallback: _engineFallback };
+    if (seg && seg.stats) return seg.stats().then(function (s) { s.fallback = _engineFallback; return s; });
+    return Promise.resolve(base);
   }
 
   // Store a new blur strength and push it at whatever is running. Safe to call
@@ -7761,6 +7910,9 @@ var VideoEffects = (function () {
     onPressure: onPressure,
     // The segmentation diagnostic (see the section of that name above).
     DIAGNOSTIC_KEY: DIAG_KEY,
+    setEngine: setEngine,
+    engine: engine,
+    engineStats: engineStats,
     DIAGNOSTIC_VIEWS: DIAG_VIEWS.map(function (v) { return v[0]; }),
     openDiagnostic: diagOpen,
     closeDiagnostic: diagClose,

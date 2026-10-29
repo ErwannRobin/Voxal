@@ -16,6 +16,7 @@ export default [
       'bench-results/**',
       'src-tauri/target/**',
       'ios/**',
+      'src/assets/longpipe/**',   // vendored, minified (MIT)
       'android/**',
       'ds-bundle/**',
       '.design-sync/**',
@@ -60,6 +61,7 @@ export default [
         VOXAL_BUILD_DATE: 'readonly', // src/version.js / build-info.js
         I18N: 'readonly', // src/i18n.js
         tr: 'readonly', // src/i18n.js
+        LongpipeEngine: 'readonly', // src/longpipe-engine.js
         VideoEffects: 'readonly', // src/video-effects.js
         VideoScenes: 'readonly', // src/video-scenes.js
         DeviceTilt: 'readonly', // src/device-tilt.js
