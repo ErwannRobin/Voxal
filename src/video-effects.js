@@ -592,6 +592,60 @@ var VideoEffects = (function () {
     '}'
   ].join('\n');
 
+  // The scene's light on the person, beyond the plain wrap. Every term is
+  // scaled by the scene's own `wrap` (uWrap), so a scene that asks for no wrap
+  // (and every test that pins it to 0) gets none of it.
+  //   facing: the wrap hugs the outline that FACES the light and thins on the
+  //     side turned away. Light = uShadowOff (it points toward the light);
+  //     outward = down the soft mask's gradient.
+  //   match:  the person is pulled a little towards the scene's average colour
+  //     and black level, so shadows and highlights agree with the room.
+  //   bounce: colour of what is below, on the lower part of the picture.
+  //   bloom:  only what is brighter than the knee glows over the outline.
+  // The edge refinement's reach (in mask texels), how sharply colour difference
+  // cuts a neighbour off, and how much of its answer replaces the mask's.
+  var HAIR_REACH = 2.0;
+  var HAIR_SIGMA = 40.0;
+  var HAIR_MIX = 0.75;
+  var LIGHT_FACING = [0.45, 1.5];
+  var LIGHT_MATCH_TINT = 0.12;
+  var LIGHT_MATCH_LIFT = 0.04;
+  var LIGHT_BOUNCE = 0.12;
+  var LIGHT_BLOOM = 0.35;
+  var LIGHT_BLOOM_KNEE = 0.6;
+  var LIGHT_GLSL = [
+    'float wrapFacing(vec2 flip) {',
+    '  if (dot(uShadowOff, uShadowOff) < 1e-8) return 1.0;',
+    '  vec2 t = 1.0 / vec2(textureSize(uSoft, 0));',
+    '  vec2 g = vec2(texture(uSoft, flip + vec2(t.x, 0.0)).r - texture(uSoft, flip - vec2(t.x, 0.0)).r,',
+    '                texture(uSoft, flip + vec2(0.0, t.y)).r - texture(uSoft, flip - vec2(0.0, t.y)).r);',
+    '  float gl2 = length(g);',
+    '  if (gl2 < 0.002) return 1.0;',
+    '  float f = dot(-g / gl2, normalize(uShadowOff));',
+    '  return mix(' + LIGHT_FACING[0].toFixed(3) + ', ' + LIGHT_FACING[1].toFixed(3) + ', smoothstep(-0.5, 0.8, f));',
+    '}',
+    'vec3 sceneLight(vec3 c, vec2 flip, vec2 uv, float soft) {',
+    '  float w = min(uWrap, 1.0);',
+    '  const vec3 LW = vec3(0.299, 0.587, 0.114);',
+    '  vec3 env = textureLod(uSceneEnv, uv, 3.0).rgb;',
+    '  float edge = 1.0 - smoothstep(0.4, 0.95, soft);',
+    '  vec3 avg = textureLod(uSceneEnv, vec2(0.5), 6.0).rgb;',
+    '  vec3 tint = clamp(avg / max(dot(avg, LW), 0.04), 0.75, 1.3);',
+    '  c = clamp(c, 0.0, 1.0);',
+    '  c *= mix(vec3(1.0), tint, ' + LIGHT_MATCH_TINT.toFixed(3) + ' * w);',
+    '  c += avg * ' + LIGHT_MATCH_LIFT.toFixed(3) + ' * w * (1.0 - dot(c, LW));',
+    '  vec3 below = textureLod(uSceneEnv, vec2(uv.x, max(uv.y - 0.2, 0.0)), 4.0).rgb;',
+    '  float low = smoothstep(0.6, 0.0, uv.y);',
+    '  c = 1.0 - (1.0 - c) * (1.0 - below * ' + LIGHT_BOUNCE.toFixed(3) + ' * w * low);',
+    '  float rim = min(uWrap * edge * wrapFacing(flip), 1.0);',
+    '  vec3 s = c * c;',
+    '  c = sqrt(s + env * env * rim * (1.0 - s));',
+    '  vec3 glow = max(textureLod(uSceneEnv, uv, 5.0).rgb - ' + LIGHT_BLOOM_KNEE.toFixed(3) + ', 0.0) * ' +
+      LIGHT_BLOOM.toFixed(3) + ' * w * edge;',
+    '  return clamp(1.0 - (1.0 - c) * (1.0 - glow), 0.0, 1.0);',
+    '}'
+  ].join('\n');
+
   function filmUniform(gl, p) {
     var off = typeof window !== 'undefined' && window.__voxalSceneFilmOff;
     gl.uniform3f(uloc(gl, p, 'uFilm'), off ? 0 : SCENE_GRAIN, off ? 0 : SCENE_VIGNETTE, Math.random());
@@ -1902,8 +1956,10 @@ var VideoEffects = (function () {
     'uniform float uTiltOn;',
     'uniform highp uint uTiltBits;',
     'uniform float uDecon;',
+    'uniform float uHair;',
     'out vec4 outColor;',
     FILM_GLSL,
+    LIGHT_GLSL,
     'void main() {',
     '  vec2 flip = vec2(vUv.x, 1.0 - vUv.y);',
     '  vec3 sharp = texture(uSharp, flip).rgb;',
@@ -1928,6 +1984,26 @@ var VideoEffects = (function () {
       ', texture(uCore, flip).r);',
     '    float d = texture(uRef, flip).r;',
     '    m = mix(m, m * max(d, core), uRefOn);',
+    '  }',
+    // Edge refinement guided by the camera's own picture. The mask is small, so
+    // its edge is round where hair and shoulders are not. In the band only,
+    // each pixel takes the matte of its neighbours that LOOK like it (a joint
+    // bilateral filter): a strand the model missed but whose colour matches the
+    // person's is pulled in, and the wall between strands is not. Not true
+    // matting — it does not estimate partly transparent strands, only snaps the
+    // edge to the picture. Runs before the keyed branch, so it reaches both.
+    '  if (uHair > 0.0 && m > 0.03 && m < 0.97) {',
+    '    vec2 ht = ' + HAIR_REACH.toFixed(2) + ' / vec2(textureSize(uMask, 0));',
+    '    float acc = m, wsum = 1.0;',
+    '    for (int i = 0; i < 8; i++) {',
+    '      float ha = float(i) * 0.7853982;',
+    '      vec2 hp = flip + vec2(cos(ha), sin(ha)) * ht;',
+    '      vec3 dc = texture(uSharp, hp).rgb - sharp;',
+    '      float hw = exp(-dot(dc, dc) * ' + HAIR_SIGMA.toFixed(1) + ');',
+    '      acc += smoothstep(uEdge.x, uEdge.y, texture(uMask, hp).r) * hw;',
+    '      wsum += hw;',
+    '    }',
+    '    m = mix(m, acc / wsum, uHair);',
     '  }',
     // The keyed frame. In flip space the top of the picture is y = 0, so the
     // zones are the two top corners there. Nothing of the scene, the shadow
@@ -2008,12 +2084,7 @@ var VideoEffects = (function () {
     '  } else {',
     '    bg = texture(uBlur, flip).rgb;',
     '  }',
-    '  if (uBgMode > 1.5 && uWrap > 0.0) {',
-    '    vec3 env = textureLod(uSceneEnv, vUv, 3.0).rgb;',
-    '    float rim = uWrap * (1.0 - smoothstep(0.4, 0.95, soft));',
-    '    vec3 s = sharp * sharp;',
-    '    sharp = sqrt(s + env * env * rim * (1.0 - s));',
-    '  }',
+    '  if (uBgMode > 1.5 && uWrap > 0.0) sharp = sceneLight(sharp, flip, vUv, soft);',
     '  outColor = vec4(mix(bg, sharp, m), 1.0);',
     '}'
   ].join('\n');
@@ -2179,7 +2250,8 @@ var VideoEffects = (function () {
     'uniform vec3 uFlat;',
     'uniform vec2 uFit;',
     'out vec4 outColor;',
-    FILM_GLSL
+    FILM_GLSL,
+    LIGHT_GLSL
   ].concat(keyDetectGlsl(), [
     'void main() {',
     // The output may be bigger than the picture (see setStageAspect): the
@@ -2214,12 +2286,7 @@ var VideoEffects = (function () {
     '  float spill = max(0.0, S.g - max(S.r, S.b)) * spillW;',
     '  vec3 F = clamp(S - vec3(0.0, spill, 0.0), 0.0, 1.0);',
     '  vec3 lit = F;',
-    '  if (uHasScene > 0.5 && uWrap > 0.0) {',
-    '    vec3 env = textureLod(uSceneEnv, vUv, 3.0).rgb;',
-    '    float rim = uWrap * (1.0 - smoothstep(0.4, 0.95, soft));',
-    '    vec3 s = F * F;',
-    '    lit = sqrt(s + env * env * rim * (1.0 - s));',
-    '  }',
+    '  if (uHasScene > 0.5 && uWrap > 0.0) lit = sceneLight(F, flip, vUv, soft);',
     '  vec3 o = c + (bg - kd) * (1.0 - a) + a * (lit - F - vec3(0.0, spill, 0.0));',
     '  outColor = vec4(clamp(o, 0.0, 1.0), 1.0);',
     '}'
@@ -3762,6 +3829,7 @@ var VideoEffects = (function () {
     gl.uniform1f(uloc(gl, this.pComp, 'uWrap'), useScene && this.scene ? this.scene.wrap : 0);
     gl.uniform2f(uloc(gl, this.pComp, 'uEdge'), this.edge.lo, this.edge.hi);
     gl.uniform1f(uloc(gl, this.pComp, 'uDecon'), this.decon);
+    gl.uniform1f(uloc(gl, this.pComp, 'uHair'), window.__voxalNoHairRefine ? 0 : HAIR_MIX);
     filmUniform(gl, this.pComp);
     var x = this.bgXform();
     gl.uniform4f(uloc(gl, this.pComp, 'uBgXform'), x[0], x[1], x[2], x[3]);

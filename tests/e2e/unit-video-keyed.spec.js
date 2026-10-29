@@ -212,6 +212,8 @@ test.describe('the keyed frame', () => {
     // Island has both a light wrap and a shadow: if either leaked into the
     // keyed frame, the band would not be mix(K, camera, m).
     const seen = await page.evaluate(async () => {
+      // The matte is compared with its formula; the edge refinement is tested apart.
+      window.__voxalNoHairRefine = true;
       const p = await window.__start('preset:island');
       VideoEffects.keyedTrack(window.__stream);
       VideoEffects.setKeyedDemand(window.__stream, 1);
@@ -269,6 +271,36 @@ test.describe('the keyed frame', () => {
     expect(seen.worst).toBeLessThanOrEqual(3);
     // The dot on the bottom rows moves between the two reads; nothing else may.
     expect(seen.moved).toBeLessThanOrEqual(1);
+  });
+
+  test('the edge refinement moves only the edge band, and leaves the zones and the inside alone', async ({ page }) => {
+    test.setTimeout(60_000);
+    const seen = await page.evaluate(async () => {
+      const p = await window.__start('preset:island');
+      VideoEffects.keyedTrack(window.__stream);
+      VideoEffects.setKeyedDemand(window.__stream, 1);
+      const W = p.canvas.width, H = p.canvas.height, Z = Math.ceil(0.1 * Math.min(W, H));
+      const read = async (off) => {
+        window.__voxalNoHairRefine = off;
+        await window.__sleep(400);
+        return Array.from(p.keyed.ctx.getImageData(0, 0, W, H).data);
+      };
+      const off = await read(true), on = await read(false);
+      let differ = 0, zoneDiffer = 0, total = 0;
+      for (let y = 0; y < H - 4; y++) {
+        for (let x = 0; x < W; x++) {
+          const o = (y * W + x) * 4;
+          const d = Math.abs(off[o] - on[o]) + Math.abs(off[o + 1] - on[o + 1]) + Math.abs(off[o + 2] - on[o + 2]);
+          const inZone = y < Z && (x < Z || x >= W - Z);
+          total++;
+          if (d > 6) { differ++; if (inZone) zoneDiffer++; }
+        }
+      }
+      return { differ, zoneDiffer, total };
+    });
+    expect(seen.zoneDiffer).toBe(0);
+    // An edge is a thin line: the picture as a whole barely moves.
+    expect(seen.differ).toBeLessThan(seen.total * 0.1);
   });
 
   test('a portrait frame sizes its zones from the short side', async ({ page }) => {
