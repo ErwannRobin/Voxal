@@ -412,6 +412,12 @@ var VideoEffects = (function () {
   // ghost of the real room — so it is cut to exact key instead, and the room
   // never leaves the device.
   var KEY_ALPHA_FLOOR = 0.06;
+  // The keyed frame's matte is sharper than the composite's: a pixel that is
+  // half person, half key is, after 4:2:0 chroma and the encoder, a green
+  // pixel the receiver cannot always tell from skin. A narrow, slightly
+  // inward ramp leaves fewer such pixels to leak. Only the keyed output uses
+  // it — the local composite and the soft mask keep the user's edge setting.
+  var KEY_MATTE_EDGE = [0.38, 0.68];
   // Where the detectors look inside a zone: pixel indices of a 20x20 grid laid
   // over it, so the GPU taps and the CPU probe read exactly the same places.
   // The ring taps sit in the middle of the ring (the patch spans 0.2-0.8 of
@@ -1897,6 +1903,7 @@ var VideoEffects = (function () {
     // or the wrap is drawn: the receiver draws all three itself.
     '  if (uKeyOut > 0.5) {',
     '    vec3 key = vec3(' + KEY_COLOR.map(function (c) { return (c / 255).toFixed(1); }).join(', ') + ');',
+    '    m = smoothstep(' + KEY_MATTE_EDGE[0].toFixed(4) + ', ' + KEY_MATTE_EDGE[1].toFixed(4) + ', m);',
     '    if (m < ' + KEY_ALPHA_FLOOR.toFixed(4) + ') m = 0.0;',
     '    bool top = flip.y < uZone.y;',
     '    bool tl = top && flip.x < uZone.x;',
@@ -2168,7 +2175,11 @@ var VideoEffects = (function () {
     '  float a = near < ' + KEYIN_BAND_A0.toFixed(4) + ' ? clamp(a0 / (1.0 - uEdgeE), 0.0, 1.0) : 1.0;',
     '  a = keyRamp(a);',
     '  vec3 S = (c - kd * (1.0 - a)) / max(a, 1.0 / 255.0);',
-    '  float spill = max(0.0, S.g - max(S.r, S.b)) * clamp((1.0 - a0) * ' + KEYIN_DESPILL.toFixed(2) + ', 0.0, 1.0);',
+    // In the edge band all green above red and blue goes, whatever a0 says: a
+    // sender that withholds keying for a green subject never gets here, so
+    // nothing real is lost, and a lime rim is.
+    '  float spillW = near < ' + KEYIN_BAND_A0.toFixed(4) + ' ? 1.0 : clamp((1.0 - a0) * ' + KEYIN_DESPILL.toFixed(2) + ', 0.0, 1.0);',
+    '  float spill = max(0.0, S.g - max(S.r, S.b)) * spillW;',
     '  vec3 F = clamp(S - vec3(0.0, spill, 0.0), 0.0, 1.0);',
     '  vec3 lit = F;',
     '  if (uHasScene > 0.5 && uWrap > 0.0) {',
@@ -7015,6 +7026,7 @@ var VideoEffects = (function () {
     keyProbe: keyProbe,
     keyInCount: keyInCount,
     KEY_COLOR: KEY_COLOR,
+    KEY_MATTE_EDGE: KEY_MATTE_EDGE,
     KEY_MARKER: KEY_MARKER,
     KEY_ALPHA_FLOOR: KEY_ALPHA_FLOOR,
     cancelLoad: cancelLoad,
