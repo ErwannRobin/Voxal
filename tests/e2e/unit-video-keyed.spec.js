@@ -207,7 +207,7 @@ test.describe('the keyed frame', () => {
     expect(seen.context).toBe(false);
   });
 
-  test('in the edge band its alpha is the composite\'s own, floored, with no wrap and no shadow', async ({ page }) => {
+  test('in the edge band its alpha is the composite\'s own, sharpened and floored, with no wrap and no shadow', async ({ page }) => {
     test.setTimeout(60_000);
     // Island has both a light wrap and a shadow: if either leaked into the
     // keyed frame, the band would not be mix(K, camera, m).
@@ -234,7 +234,9 @@ test.describe('the keyed frame', () => {
       let band = 0, worst = 0, floored = 0, floorMiss = 0, interior = 0;
       for (let y = Math.ceil(Z); y < H - 4; y++) {
         for (let x = 0; x < W; x++) {
-          const m = ss(p.edge.lo, p.edge.hi, mask((x + 0.5) / W, (y + 0.5) / H));
+          // The keyed frame narrows the user's edge once more (KEY_MATTE_EDGE).
+          const m = ss(VideoEffects.KEY_MATTE_EDGE[0], VideoEffects.KEY_MATTE_EDGE[1],
+            ss(p.edge.lo, p.edge.hi, mask((x + 0.5) / W, (y + 0.5) / H)));
           const o = (y * W + x) * 4;
           if (m < 0.055) {
             floored++;
