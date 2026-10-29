@@ -1903,6 +1903,38 @@ var VideoEffects = (function () {
 
   var FRAG_REF_DIFF = fragRefDiff();
 
+  // The segmentation diagnostic's one program (compiled only while the panel
+  // is open). Everything is in the mask's own convention, rows top first,
+  // sampled at `flip` exactly as FRAG_COMPOSITE samples them, so a pane shows
+  // the orientation the composite really uses.
+  //   uKind 0: a camera-like RGBA texture, filtered;
+  //   uKind 1: a mask, grey, read with texelFetch so each model texel is a
+  //            visible square — no interpolation between the data and the eye;
+  //   uKind 2: the same, on a heat ramp (the stability map).
+  // uTint paints the composite's own smoothstep window (uBand) red on a mask:
+  // those are the values that survive as a partial, visible background.
+  var FRAG_DIAG = [
+    '#version 300 es',
+    'precision mediump float;',
+    'in vec2 vUv;',
+    'uniform sampler2D uTex;',
+    'uniform float uKind;',
+    'uniform float uTint;',
+    'uniform vec2 uBand;',
+    'out vec4 outColor;',
+    'void main() {',
+    '  vec2 flip = vec2(vUv.x, 1.0 - vUv.y);',
+    '  if (uKind < 0.5) { outColor = vec4(texture(uTex, flip).rgb, 1.0); return; }',
+    '  ivec2 sz = textureSize(uTex, 0);',
+    '  ivec2 p = clamp(ivec2(flip * vec2(sz)), ivec2(0), sz - ivec2(1));',
+    '  float v = texelFetch(uTex, p, 0).r;',
+    '  vec3 c = vec3(v);',
+    '  if (uKind > 1.5) c = vec3(clamp(v * 2.0, 0.0, 1.0), clamp(v * 2.0 - 1.0, 0.0, 1.0), 0.0);',
+    '  if (uTint > 0.5 && uKind < 1.5 && v > uBand.x && v < uBand.y) c = mix(c, vec3(1.0, 0.15, 0.15), 0.5);',
+    '  outColor = vec4(c, 1.0);',
+    '}'
+  ].join('\n');
+
   // uBgMode picks the background: 0 the blurred camera, 1 an image, 2 a scene.
   // uBgXform packs a cover-fit for the background image: xy scale, zw offset.
   // uEdge packs the smoothstep window the feathered mask is mapped through.
@@ -1957,6 +1989,10 @@ var VideoEffects = (function () {
     'uniform highp uint uTiltBits;',
     'uniform float uDecon;',
     'uniform float uHair;',
+    // Segmentation diagnostic only (see "The segmentation diagnostic"): 1
+    // prints the matte `m` this shader is about to mix with, as grey. Always 0
+    // in normal use, which makes the branch below dead.
+    'uniform float uDbg;',
     'out vec4 outColor;',
     FILM_GLSL,
     LIGHT_GLSL,
@@ -2005,6 +2041,7 @@ var VideoEffects = (function () {
     '    }',
     '    m = mix(m, acc / wsum, uHair);',
     '  }',
+    '  if (uDbg > 0.5) { outColor = vec4(vec3(m), 1.0); return; }',
     // The keyed frame. In flip space the top of the picture is y = 0, so the
     // zones are the two top corners there. Nothing of the scene, the shadow
     // or the wrap is drawn: the receiver draws all three itself.
@@ -3566,6 +3603,7 @@ var VideoEffects = (function () {
         // segmenters put the person at index 1 behind the background.
         var mask = masks && (masks.length > 1 ? masks[1] : masks[0]);
         if (!mask) return;
+        self._maskCount = masks.length;
         try {
           var data = mask.getAsUint8Array();
           if (self.refCapture) self.captureSawMask(data);
@@ -3638,6 +3676,7 @@ var VideoEffects = (function () {
     var gl = this.gl;
     if (!gl) return;
     var W = this.segW, H = this.segH;
+    var dg = _diag.on && this === _active;
 
     gl.bindTexture(gl.TEXTURE_2D, this.texMaskRaw);
     if (w !== W || h !== H) {
@@ -3650,6 +3689,9 @@ var VideoEffects = (function () {
     } else {
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RED, gl.UNSIGNED_BYTE, data);
     }
+    // The raw mask and the model's input, exactly as handed over (nothing has
+    // touched either yet).
+    if (dg) this.diagIngest(data, this.segW, this.segH);
 
     // Temporal blend, into a state buffer of its OWN.
     //
@@ -3717,6 +3759,8 @@ var VideoEffects = (function () {
     this.bindTex(this.pDilate, 'uTex', 0, this.texMaskB);
     gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), 0, dilate / H);
     this.drawQuad(this.fbMaskA, W, H);
+    // fbMaskA holds the dilated mask until the feather overwrites it below.
+    if (dg) this.diagKeepDilated();
 
     // Feather: blur the dilated mask so the composite's smoothstep has a real
     // gradient to work with instead of the model's staircase. Its own program
@@ -3736,6 +3780,7 @@ var VideoEffects = (function () {
     // the work pair has a fixed direction now, so there is no way for the
     // feedback above to come back.
     this.maskPrimed = true;
+    if (dg) this.diagMarkFresh();
   };
 
   // Re-allocate just the mask ping-pong for a new mask shape, leaving the
@@ -3783,6 +3828,11 @@ var VideoEffects = (function () {
       this.texRefB = rt; this.fbRefB = rf;
     }
 
+    // Segmentation diagnostic: only on the frame that follows an inference
+    // (the camera frame just uploaded is the one that inference saw), and
+    // only while the panel is open. `dgl` is null otherwise.
+    var dgl = (_diag.on && this === _active) ? this.diagBegin(w, h) : null;
+
     var useScene = !!this.sceneId;
     var useImage = !useScene && this.bgReady && this.mode !== 'blur';
     if (useScene) this.drawScene(now);
@@ -3808,6 +3858,9 @@ var VideoEffects = (function () {
       }
     }
 
+    // Every composite bind below is explicit, so the diagnostic's own texture
+    // units cannot leak into the frame.
+    if (dgl) this.diagPanes(dgl, false);
     gl.useProgram(this.pComp);
     this.bindTex(this.pComp, 'uSharp', 0, this.texCam);
     this.bindTex(this.pComp, 'uBlur', 1, this.texBlurA);
@@ -3833,6 +3886,10 @@ var VideoEffects = (function () {
     filmUniform(gl, this.pComp);
     var x = this.bgXform();
     gl.uniform4f(uloc(gl, this.pComp, 'uBgXform'), x[0], x[1], x[2], x[3]);
+    // The panes that need the composite's state, then the copy out. The real
+    // frame is drawn over all of it just below, full viewport, so what is
+    // published is exactly what it is without the diagnostic.
+    if (dgl) this.diagPanes(dgl, true);
     if (this.keyed && this.keyed.demand > 0) this.drawKeyed(w, h);
     else this.drawQuad(null, w, h);
   };
@@ -4200,6 +4257,7 @@ var VideoEffects = (function () {
   Processor.prototype.releaseGL = function () {
     var gl = this.gl;
     if (!gl) return;
+    this.diagRelease();
     [this.texCam, this.texImg, this.texBlurA, this.texBlurB, this.texMaskRaw,
      this.texMaskS, this.texMaskSB, this.texMaskA, this.texMaskB,
      this.texPlate, this.texRefA, this.texRefB, this.texCore].forEach(function (t) {
@@ -5169,6 +5227,502 @@ var VideoEffects = (function () {
     if (i >= 0) _keyIns.splice(i, 1);
   };
 
+  // --- the segmentation diagnostic -------------------------------------------
+  //
+  // "Why is a piece of the room still sharp around me?" has five possible
+  // answers, one per stage between the model and the screen: the model's own
+  // mask, the resize/interpretation of it, the temporal blend, the
+  // dilate/feather/smoothstep, or the composite. This shows each stage's
+  // output for ONE inference, side by side, so the stage that first shows the
+  // fragment is the one to look at.
+  //
+  // Off by default and costless when off: one boolean test per frame and per
+  // inference. It is opened by `VideoEffects.openDiagnostic()`, by `?segdiag=1`
+  // in the URL, or by localStorage['seg-diagnostic'] = '1' (diagnosis only,
+  // never written by the app), and closed by its ✕ button or
+  // `VideoEffects.closeDiagnostic()`.
+  //
+  // How it keeps the comparison honest:
+  //   * It adds NO inference. It reads the mask the one existing
+  //     segmentForVideo() call already returned (MediaPipe's callback form runs
+  //     the callback synchronously, so the camera frame uploaded by draw() a
+  //     moment later is the frame that inference saw — and the skew between
+  //     the two reads of the video's clock is printed, not assumed).
+  //   * Panes are drawn only on the frame that follows an inference, from the
+  //     textures of THAT inference: the raw mask is texMaskRaw before anything
+  //     touched it, the blend is the state the mix just wrote, the dilated mask
+  //     is copied out of the work texture before the feather overwrites it, and
+  //     the matte is the composite shader itself printing its own `m` (uDbg) —
+  //     no second implementation of the maths to drift from the real one.
+  //   * The panes are drawn into the processor's canvas, copied to a 2D canvas
+  //     in the panel in the same task (the keyed frame's trick), and then the
+  //     real composite is drawn over the whole canvas. What the call publishes
+  //     is therefore identical with the panel open, bar the cost.
+  //   * Nothing is logged per frame. One console line when the first inference
+  //     arrives, with the model's label list and the mask's shape.
+
+  var DIAG_KEY = 'seg-diagnostic';
+  var DIAG_OVERLAY_MAX = 960;   // the panel's canvas, in px of its long side
+  var DIAG_INFO_MS = 250;       // the numbers repaint at most this often
+  var DIAG_CHANGED = 26;        // |delta| of 26/255 (~10%) counts as "changed"
+  var DIAG_EMA = 0.2;
+
+  var DIAG_VIEWS = [
+    ['grid',      'A B C D — side by side'],
+    ['stages',    'Every stage: B → C1 → C2 → C3 → C4 → D'],
+    ['original',  'A — original camera frame'],
+    ['input',     "A′ — what the model was given"],
+    ['raw',       'B — raw MediaPipe mask'],
+    ['blend',     'C1 — after temporal blend'],
+    ['dilated',   'C2 — after dilate'],
+    ['feathered', 'C3 — after feather (fed to the composite)'],
+    ['matte',     'C4 — matte used (smoothstep + reference + hair)'],
+    ['final',     'D — final render'],
+    ['heat',      'Stability map (raw mask, successive inferences)']
+  ];
+  var DIAG_PANE = {
+    original:  { label: 'A camera',                    src: 'cam' },
+    input:     { label: "A' model input",              src: 'in' },
+    raw:       { label: 'B raw mask',                  src: 'raw' },
+    blend:     { label: 'C1 blended',                  src: 'blend' },
+    dilated:   { label: 'C2 dilated',                  src: 'dil' },
+    feathered: { label: 'C3 feathered',                src: 'fea' },
+    matte:     { label: 'C4 matte used',               src: 'matte' },
+    final:     { label: 'D final',                     src: 'final' },
+    heat:      { label: 'stability (bright = changing)', src: 'heat' }
+  };
+  var DIAG_GRIDS = {
+    grid:   { ids: ['original', 'raw', 'feathered', 'final'], cols: 2, rows: 2 },
+    stages: { ids: ['raw', 'blend', 'dilated', 'feathered', 'matte', 'final'], cols: 3, rows: 2 }
+  };
+
+  var _diag = {
+    on: false, view: 'grid', tint: false, frozen: false,
+    el: null, canvas: null, ctx: null, info: null, select: null, freezeBtn: null,
+    error: '', lastInfo: 0, text: ''
+  };
+
+  function diagViewValid(v) {
+    return DIAG_VIEWS.some(function (x) { return x[0] === v; });
+  }
+
+  // Which panes, in which grid, at which size, for a canvas of w x h. The
+  // panes keep the camera's aspect (a stages grid uses a third of the height
+  // per row, not half), so the region used is not always the whole canvas.
+  function diagLayout(view, w, h) {
+    var g = DIAG_GRIDS[view] || { ids: [view], cols: 1, rows: 1 };
+    // A pane is 1/cols of the canvas on BOTH sides, which is what keeps the
+    // camera's aspect.
+    return {
+      ids: g.ids, cols: g.cols, rows: g.rows,
+      pw: Math.floor(w / g.cols), ph: Math.floor(h / g.cols),
+      skewMs: 0
+    };
+  }
+
+  function diagPct(x) { return (x * 100).toFixed(1) + '%'; }
+
+  function diagBuildPanel() {
+    var el = document.createElement('div');
+    el.id = 'seg-diagnostic';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-label', 'Segmentation diagnostic');
+    el.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:2147483000;' +
+      'width:min(96vw,640px);max-height:92vh;overflow:auto;box-sizing:border-box;' +
+      'padding:8px;border-radius:8px;background:rgba(0,0,0,.88);color:#eee;' +
+      'font:12px/1.35 ui-monospace,Menlo,Consolas,monospace;touch-action:manipulation';
+
+    var bar = document.createElement('div');
+    bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px';
+
+    var sel = document.createElement('select');
+    sel.style.cssText = 'flex:1 1 220px;min-width:0;font:inherit;padding:3px';
+    DIAG_VIEWS.forEach(function (v) {
+      var o = document.createElement('option');
+      o.value = v[0]; o.textContent = v[1];
+      sel.appendChild(o);
+    });
+    sel.value = _diag.view;
+    sel.addEventListener('change', function () { diagSetView(sel.value); });
+    bar.appendChild(sel);
+
+    var tintLabel = document.createElement('label');
+    tintLabel.style.cssText = 'white-space:nowrap';
+    var tint = document.createElement('input');
+    tint.type = 'checkbox';
+    tint.addEventListener('change', function () { _diag.tint = !!tint.checked; });
+    tintLabel.appendChild(tint);
+    tintLabel.appendChild(document.createTextNode(' tint the visible band red'));
+    bar.appendChild(tintLabel);
+
+    function button(text, fn) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = text;
+      b.style.cssText = 'font:inherit;padding:3px 8px';
+      b.addEventListener('click', fn);
+      bar.appendChild(b);
+      return b;
+    }
+    _diag.freezeBtn = button('Freeze', function () {
+      _diag.frozen = !_diag.frozen;
+      _diag.freezeBtn.textContent = _diag.frozen ? 'Resume' : 'Freeze';
+    });
+    button('Save PNG', diagSave);
+    button('✕', diagClose);
+    el.appendChild(bar);
+
+    var canvas = document.createElement('canvas');
+    canvas.width = 16; canvas.height = 9;
+    canvas.style.cssText = 'display:block;width:100%;height:auto;background:#222';
+    el.appendChild(canvas);
+
+    var info = document.createElement('pre');
+    info.style.cssText = 'margin:6px 0 0;white-space:pre-wrap;word-break:break-word;font:inherit';
+    info.textContent = 'waiting for the first inference…';
+    el.appendChild(info);
+
+    _diag.el = el; _diag.canvas = canvas; _diag.ctx = canvas.getContext('2d');
+    _diag.info = info; _diag.select = sel;
+    document.body.appendChild(el);
+  }
+
+  function diagOpen(view) {
+    if (view && diagViewValid(view)) _diag.view = view;
+    if (_diag.on) { if (_diag.select) _diag.select.value = _diag.view; return diagState(); }
+    if (typeof document === 'undefined' || !document.body) return null;
+    _diag.on = true;
+    _diag.frozen = false;
+    _diag.error = '';
+    diagBuildPanel();
+    return diagState();
+  }
+
+  function diagClose() {
+    if (!_diag.on) return;
+    _diag.on = false;
+    if (_active) _active.diagRelease();
+    if (_diag.el && _diag.el.parentNode) _diag.el.parentNode.removeChild(_diag.el);
+    _diag.el = _diag.canvas = _diag.ctx = _diag.info = _diag.select = _diag.freezeBtn = null;
+  }
+
+  function diagSetView(view) {
+    if (!diagViewValid(view)) return false;
+    _diag.view = view;
+    if (_diag.select) _diag.select.value = view;
+    // A frozen picture was drawn in the old layout; the next inference redraws.
+    if (_diag.frozen) {
+      _diag.frozen = false;
+      if (_diag.freezeBtn) _diag.freezeBtn.textContent = 'Freeze';
+    }
+    return true;
+  }
+
+  function diagSave() {
+    try {
+      if (!_diag.canvas) return;
+      _diag.canvas.toBlob(function (blob) {
+        if (!blob) return;
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = 'voxal-seg-' + _diag.view + '.png';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+      }, 'image/png');
+    } catch (e) { /* a long-press on the picture still saves it */ }
+  }
+
+  function diagAutoOpen() {
+    if (_diag.on) return;
+    var want = false;
+    try {
+      want = /[?&]segdiag=1(&|$)/.test(location.search) || localStorage.getItem(DIAG_KEY) === '1';
+    } catch (e) { /* storage blocked */ }
+    if (want) diagOpen();
+  }
+
+  // The numbers, for the panel and for tests. Null when the panel is closed or
+  // no inference has arrived since it opened.
+  function diagState() {
+    var p = _active && _active._dg;
+    return {
+      on: _diag.on, view: _diag.view, frozen: _diag.frozen, error: _diag.error,
+      inference: p ? p.n : 0,
+      stats: p && p.st ? {
+        width: p.w, height: p.h, masks: _active._maskCount || 0,
+        person: p.st.person, mid: p.st.mid,
+        meanDelta: p.st.mean, changed: p.st.changed, flips: p.st.flips,
+        hz: p.hz, skewMs: p.skewMs, compared: p.compared, last: p.last
+      } : null
+    };
+  }
+
+  function diagInfoText(p) {
+    var st = p.st, lines = [];
+    lines.push('inference #' + p.n + ' · ' + (p.hz ? p.hz.toFixed(1) : '–') + ' Hz · mask ' +
+      p.w + 'x' + p.h + ' · ' + (_active._maskCount || 0) + ' mask(s)' +
+      (p.labels ? ' · labels ' + p.labels : ''));
+    lines.push('same frame? video clock skew between inference and draw: ' +
+      (p.skewMs === null ? '–' : p.skewMs.toFixed(1) + ' ms'));
+    lines.push('raw mask: person (>=50%) ' + diagPct(st.person) +
+      ' · mid-confidence (' + Math.round(_active.edge.lo * 100) + '-' +
+      Math.round(_active.edge.hi * 100) + '%) ' + diagPct(st.mid));
+    if (p.compared) {
+      lines.push('vs previous inference: mean |delta| ' + diagPct(st.mean) +
+        ' · pixels changed >10% ' + diagPct(st.changed) +
+        ' · crossing 50% ' + diagPct(st.flips));
+    }
+    lines.push('person pixels = high mask values. Sitting still, "crossing 50%" ' +
+      'should be close to 0; speckle there is the model, not the pipeline.');
+    if (_diag.error) lines.push('diagnostic error: ' + _diag.error);
+    return lines.join('\n');
+  }
+
+  // --- the processor's half --------------------------------------------------
+
+  // Lazily make what the panes need: the program, and three mask-sized
+  // textures (the model's input, the dilated mask, the stability map). Reshaped
+  // when the mask is.
+  Processor.prototype.diagEnsure = function () {
+    var gl = this.gl, W = this.segW, H = this.segH;
+    var d = this._dg || (this._dg = {
+      prog: null, texIn: null, texDil: null, texHeat: null, w: 0, h: 0,
+      prev: null, heat: null, fresh: false, n: 0, st: null, last: null,
+      compared: 0, hz: 0, lastAt: 0, vt: 0, skewMs: null, labels: ''
+    });
+    if (!d.prog) d.prog = program(gl, FRAG_DIAG);
+    if (d.w !== W || d.h !== H) {
+      [d.texIn, d.texDil, d.texHeat].forEach(function (t) {
+        if (t) try { gl.deleteTexture(t); } catch (e) { /* ignore */ }
+      });
+      d.texIn = texture(gl, W, H, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      d.texDil = texture(gl, W, H, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
+      d.texHeat = texture(gl, W, H, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
+      d.w = W; d.h = H;
+      d.prev = null;
+      d.heat = new Uint8Array(W * H);
+      d.n = 0; d.st = null; d.last = null; d.compared = 0;
+    }
+    return d;
+  };
+
+  Processor.prototype.diagRelease = function () {
+    var gl = this.gl, d = this._dg;
+    this._dg = null;
+    if (!d || !gl) return;
+    [d.texIn, d.texDil, d.texHeat].forEach(function (t) {
+      if (t) try { gl.deleteTexture(t); } catch (e) { /* ignore */ }
+    });
+    if (d.prog) try { gl.deleteProgram(d.prog); } catch (e) { /* ignore */ }
+  };
+
+  // Called from uploadMask() with the raw mask, before anything has touched
+  // it: what the model was given, how stable the mask is against the previous
+  // inference, and the stability map. The mask's lifetime ends with the
+  // segmenter's callback, so it is read here and not kept.
+  Processor.prototype.diagIngest = function (data, w, h) {
+    try {
+      var gl = this.gl, n = w * h;
+      if (!data || data.length < n) return;
+      var d = this.diagEnsure();
+
+      // The model's input, as it is right now: the downscaled (and, in a dim
+      // room, brightened) canvas the segmenter was handed a moment ago.
+      gl.bindTexture(gl.TEXTURE_2D, d.texIn);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, this.segCanvas);
+
+      var lo = this.edge.lo * 255, hi = this.edge.hi * 255;
+      var prev = d.prev, heat = d.heat;
+      var hadPrev = !!prev;
+      var person = 0, mid = 0, changed = 0, flips = 0, sum = 0, i, v, q, dl;
+      if (prev) {
+        for (i = 0; i < n; i++) {
+          v = data[i]; q = prev[i];
+          if (v >= 128) person++;
+          if (v > lo && v < hi) mid++;
+          dl = v > q ? v - q : q - v;
+          sum += dl;
+          if (dl >= DIAG_CHANGED) changed++;
+          if ((v >= 128) !== (q >= 128)) flips++;
+          dl = dl * 4; if (dl > 255) dl = 255;
+          heat[i] = (heat[i] * 7 + dl) >> 3;
+        }
+      } else {
+        for (i = 0; i < n; i++) {
+          v = data[i];
+          if (v >= 128) person++;
+          if (v > lo && v < hi) mid++;
+        }
+        d.prev = prev = new Uint8Array(n);
+      }
+      prev.set(data.subarray ? data.subarray(0, n) : data);
+
+      // `last` is this inference alone, `st` a short moving average of it.
+      // The change figures need two inferences: the first has nothing to be
+      // compared with, so it must not seed them with a fake zero.
+      var cur = { person: person / n, mid: mid / n };
+      if (!d.st) d.st = { person: cur.person, mid: cur.mid, mean: 0, changed: 0, flips: 0 };
+      else {
+        d.st.person += (cur.person - d.st.person) * DIAG_EMA;
+        d.st.mid += (cur.mid - d.st.mid) * DIAG_EMA;
+      }
+      if (hadPrev) {
+        cur.mean = sum / n / 255; cur.changed = changed / n; cur.flips = flips / n;
+        if (!d.compared) {
+          d.st.mean = cur.mean; d.st.changed = cur.changed; d.st.flips = cur.flips;
+        } else {
+          d.st.mean += (cur.mean - d.st.mean) * DIAG_EMA;
+          d.st.changed += (cur.changed - d.st.changed) * DIAG_EMA;
+          d.st.flips += (cur.flips - d.st.flips) * DIAG_EMA;
+        }
+        d.compared++;
+      }
+      d.last = cur;
+
+      gl.bindTexture(gl.TEXTURE_2D, d.texHeat);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, gl.RED, gl.UNSIGNED_BYTE, heat);
+
+      var now = performance.now();
+      if (d.lastAt) {
+        var hz = 1000 / Math.max(1, now - d.lastAt);
+        d.hz = d.hz ? d.hz + (hz - d.hz) * DIAG_EMA : hz;
+      }
+      d.lastAt = now;
+      d.vt = this.video.currentTime;
+      d.n++;
+
+      if (d.n === 1) {
+        var labels = '';
+        try { labels = JSON.stringify(this.segmenter.getLabels()); } catch (e) { labels = 'n/a'; }
+        d.labels = labels;
+        // One line per opening, never per frame.
+        if (typeof console !== 'undefined' && console.info) {
+          console.info('[voxal seg-diagnostic] mask ' + w + 'x' + h + ', ' + (this._maskCount || 0) +
+            ' mask(s), labels ' + labels + ', input canvas ' + this.segCanvas.width + 'x' +
+            this.segCanvas.height + ', video ' + this.video.videoWidth + 'x' + this.video.videoHeight);
+        }
+      }
+    } catch (e) {
+      _diag.error = String(e && e.message || e);
+    }
+  };
+
+  // The dilated mask lives in fbMaskA for exactly one step. Copy it out.
+  Processor.prototype.diagKeepDilated = function () {
+    try {
+      var gl = this.gl, d = this._dg;
+      if (!d || !d.texDil) return;
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.fbMaskA);
+      gl.bindTexture(gl.TEXTURE_2D, d.texDil);
+      gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, this.segW, this.segH);
+    } catch (e) {
+      _diag.error = String(e && e.message || e);
+    }
+  };
+
+  Processor.prototype.diagMarkFresh = function () {
+    if (this._dg) this._dg.fresh = true;
+  };
+
+  // Is this frame the one right after an inference, and is the panel taking
+  // new pictures? Returns the layout to draw, or null. A frame that is not
+  // fresh draws nothing: the panel keeps the last inference's picture.
+  Processor.prototype.diagBegin = function (w, h) {
+    var d = this._dg;
+    if (!d || !d.fresh) return null;
+    d.fresh = false;
+    if (_diag.frozen || !_diag.ctx) return null;
+    var lay = diagLayout(_diag.view, w, h);
+    // The same frame, checked rather than assumed: the video clock when the
+    // inference read it against now, when the picture is about to be uploaded
+    // into the same panes.
+    d.skewMs = Math.abs(this.video.currentTime - d.vt) * 1000;
+    lay.skewMs = d.skewMs;
+    return lay;
+  };
+
+  Processor.prototype.drawQuadRect = function (x, y, w, h) {
+    var gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(x, y, w, h);
+    gl.bindVertexArray(this.vao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+  };
+
+  // Draw the panes of one kind: those that only read textures (composite
+  // false), or those that are the composite itself and so need its state
+  // (composite true, after which the picture is copied out).
+  Processor.prototype.diagPanes = function (lay, composite) {
+    var gl = this.gl, d = this._dg, self = this;
+    if (!d || !d.prog) return;
+    var h = this.canvas.height;
+    var dbg = this.pComp && uloc(gl, this.pComp, 'uDbg');
+    try {
+      lay.ids.forEach(function (id, i) {
+        var pane = DIAG_PANE[id], src = pane.src;
+        var isComp = src === 'matte' || src === 'final';
+        if (isComp !== composite) return;
+        var x = (i % lay.cols) * lay.pw;
+        var y = h - (Math.floor(i / lay.cols) + 1) * lay.ph;
+        if (isComp) {
+          gl.uniform1f(dbg, src === 'matte' ? 1 : 0);
+          self.drawQuadRect(x, y, lay.pw, lay.ph);
+          return;
+        }
+        var tex, kind = 1;
+        if (src === 'cam') { tex = self.texCam; kind = 0; }
+        else if (src === 'in') { tex = d.texIn; kind = 0; }
+        else if (src === 'raw') tex = self.texMaskRaw;
+        else if (src === 'blend') tex = self.texMaskS;
+        else if (src === 'dil') tex = d.texDil;
+        else if (src === 'fea') tex = self.texMaskA;
+        else { tex = d.texHeat; kind = 2; }
+        gl.useProgram(d.prog);
+        self.bindTex(d.prog, 'uTex', 0, tex);
+        gl.uniform1f(uloc(gl, d.prog, 'uKind'), kind);
+        gl.uniform1f(uloc(gl, d.prog, 'uTint'), _diag.tint ? 1 : 0);
+        gl.uniform2f(uloc(gl, d.prog, 'uBand'), self.edge.lo, self.edge.hi);
+        self.drawQuadRect(x, y, lay.pw, lay.ph);
+      });
+      if (composite) this.diagPublish(lay);
+    } catch (e) {
+      _diag.error = String(e && e.message || e);
+    } finally {
+      // Whatever happened above, the real frame must never print the matte.
+      if (composite && dbg) gl.uniform1f(dbg, 0);
+    }
+  };
+
+  // Copy the finished panes out of the GL canvas, in the task that drew them,
+  // label them, and repaint the numbers.
+  Processor.prototype.diagPublish = function (lay) {
+    var ctx = _diag.ctx, cv = _diag.canvas, d = this._dg;
+    if (!ctx || !cv || !d) return;
+    var rw = lay.cols * lay.pw, rh = lay.rows * lay.ph;
+    var ow = Math.min(rw, DIAG_OVERLAY_MAX), oh = Math.max(1, Math.round(rh * ow / rw));
+    if (cv.width !== ow || cv.height !== oh) { cv.width = ow; cv.height = oh; }
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(this.canvas, 0, 0, rw, rh, 0, 0, ow, oh);
+    ctx.font = '12px ui-monospace, Menlo, monospace';
+    ctx.textBaseline = 'top';
+    lay.ids.forEach(function (id, i) {
+      var x = (i % lay.cols) * (ow / lay.cols), y = Math.floor(i / lay.cols) * (oh / lay.rows);
+      var text = DIAG_PANE[id].label;
+      ctx.fillStyle = 'rgba(0,0,0,.65)';
+      ctx.fillRect(x, y, ctx.measureText(text).width + 8, 16);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(text, x + 4, y + 2);
+    });
+    var now = performance.now();
+    if (_diag.info && d.st && now - _diag.lastInfo >= DIAG_INFO_MS) {
+      _diag.lastInfo = now;
+      _diag.info.textContent = diagInfoText(d);
+    }
+  };
+
   // --- public surface -------------------------------------------------------
 
   // Wrap a raw camera stream. Resolves with the processed stream, which carries
@@ -5182,6 +5736,7 @@ var VideoEffects = (function () {
 
     var p = new Processor(rawStream, mode);
     _active = p;
+    diagAutoOpen();
     return p.start().then(function (stream) {
       if (!stream) throw new Error('video effects were torn down while starting');
       return stream;
@@ -7124,6 +7679,13 @@ var VideoEffects = (function () {
     keyedState: keyedState,
     onKeyedState: onKeyedState,
     onPressure: onPressure,
+    // The segmentation diagnostic (see the section of that name above).
+    DIAGNOSTIC_KEY: DIAG_KEY,
+    DIAGNOSTIC_VIEWS: DIAG_VIEWS.map(function (v) { return v[0]; }),
+    openDiagnostic: diagOpen,
+    closeDiagnostic: diagClose,
+    setDiagnosticView: diagSetView,
+    diagnosticState: diagState,
     keyIn: keyIn,
     keyProbe: keyProbe,
     keyInCount: keyInCount,
