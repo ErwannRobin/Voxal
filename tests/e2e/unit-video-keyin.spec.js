@@ -231,6 +231,8 @@ test.describe('the round trip', () => {
   test('inside is the person, outside and the zones are the receiver\'s own scene', async ({ page }) => {
     test.setTimeout(90_000);
     const seen = await page.evaluate(async () => {
+      // This compares pixels with the raw scene; the film look is tested below.
+      window.__voxalSceneFilmOff = true;
       const h = await window.__start({ look: { tint: [1.12, 1, 0.9], exposure: 0.6, dirX: -0.7, dirY: 0.2, hard: 0.8, side: -1 } });
       const p = window.__p;
       const resolved = { scene: h.scene(), alive: h.alive(), live: h.stream.getVideoTracks()[0].readyState,
@@ -272,9 +274,30 @@ test.describe('the round trip', () => {
     expect(seen.now - seen.keyedAt).toBeLessThan(1500);
   });
 
+  test('the scene carries the camera\'s grain and a soft vignette, and not the person', async ({ page }) => {
+    test.setTimeout(90_000);
+    const seen = await page.evaluate(async () => {
+      const h = await window.__start();
+      const p = window.__p;
+      p.scene = Object.assign({}, p.scene, { shadow: 0, wrap: 0 });
+      await window.__nextDraw();
+      h.setPaused(true);
+      await window.__sleep(150);
+      const H = p.canvas.height;
+      const lum = (c) => c[0] * 0.299 + c[1] * 0.587 + c[2] * 0.114;
+      return { inside: window.__out(80, 78),
+        scene: lum(window.__sceneAt(5, H - 8)), out: lum(window.__out(5, H - 8)) };
+    });
+    // The person is untouched; the scene's corner is darker than the raw
+    // scene (the vignette is ~12% there, the grain a few levels either way).
+    expect(near(seen.inside, C, 4)).toBe(true);
+    expect(seen.out).toBeLessThan(seen.scene - 2);
+  });
+
   test('an unmarked frame passes through untouched; the strict and the relaxed detectors each do their job', async ({ page }) => {
     test.setTimeout(90_000);
     const seen = await page.evaluate(async () => {
+      window.__voxalSceneFilmOff = true;
       const h = await window.__start();
       // No shadow: a grey picture read as keyed is "all person", and the
       // contact shadow would darken the scene under the zone.

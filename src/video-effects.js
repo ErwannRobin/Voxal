@@ -567,6 +567,36 @@ var VideoEffects = (function () {
   // blurring a keyed frame would smear the key into green mush.
   var KEYIN_FLAT = [0.42, 0.42, 0.44];
 
+  // A drawn scene is clean and razor sharp where the camera's picture of you is
+  // not, which is half of what makes a person look pasted on. The scene gets
+  // the camera's habits: a little sensor grain (new every frame, strongest in
+  // the mid-tones) and a soft fall-off towards the corners. Only the scene —
+  // you already carry your own camera's. Amounts are fractions of full scale.
+  // `window.__voxalSceneFilmOff` switches it off for tests that compare pixels.
+  var SCENE_GRAIN = 0.012;
+  var SCENE_VIGNETTE = 0.12;
+  var FILM_GLSL = [
+    'uniform vec3 uFilm;',
+    'float filmHash(vec2 p, float s) {',
+    '  vec3 q = fract(vec3(p.xyx) * 0.1031 + s);',
+    '  q += dot(q, q.yzx + 33.33);',
+    '  return fract((q.x + q.y) * q.z);',
+    '}',
+    // uFilm = (grain, vignette, seed). Triangular noise, so it has no DC bias.
+    'vec3 sceneFilm(vec3 c, vec2 uv) {',
+    '  float n = filmHash(gl_FragCoord.xy, uFilm.z) + filmHash(gl_FragCoord.xy + 17.0, uFilm.z) - 1.0;',
+    '  float l = dot(c, vec3(0.299, 0.587, 0.114));',
+    '  c += n * uFilm.x * (1.0 - 0.6 * abs(2.0 * l - 1.0));',
+    '  vec2 d = uv - 0.5;',
+    '  return c * (1.0 - uFilm.y * clamp(dot(d, d) * 2.0, 0.0, 1.0));',
+    '}'
+  ].join('\n');
+
+  function filmUniform(gl, p) {
+    var off = typeof window !== 'undefined' && window.__voxalSceneFilmOff;
+    gl.uniform3f(uloc(gl, p, 'uFilm'), off ? 0 : SCENE_GRAIN, off ? 0 : SCENE_VIGNETTE, Math.random());
+  }
+
   // --- mode: read, write, normalise ----------------------------------------
 
   function normalizeMode(mode) {
@@ -1873,6 +1903,7 @@ var VideoEffects = (function () {
     'uniform highp uint uTiltBits;',
     'uniform float uDecon;',
     'out vec4 outColor;',
+    FILM_GLSL,
     'void main() {',
     '  vec2 flip = vec2(vUv.x, 1.0 - vUv.y);',
     '  vec3 sharp = texture(uSharp, flip).rgb;',
@@ -1970,7 +2001,7 @@ var VideoEffects = (function () {
     '    soft = texture(uSoft, flip).r;',
     '    float thrown = texture(uSoft, flip + uShadowOff).r;',
     '    float shade = clamp(thrown * uShadow.x + soft * uShadow.y, 0.0, 0.85);',
-    '    bg = sc.rgb * (1.0 - sc.a * shade);',
+    '    bg = sceneFilm(sc.rgb * (1.0 - sc.a * shade), vUv);',
     '  } else if (uBgMode > 0.5) {',
     '    vec2 uv = clamp(flip * uBgXform.xy + uBgXform.zw, 0.0, 1.0);',
     '    bg = texture(uImage, uv).rgb;',
@@ -2147,7 +2178,8 @@ var VideoEffects = (function () {
     'uniform float uHasScene;',
     'uniform vec3 uFlat;',
     'uniform vec2 uFit;',
-    'out vec4 outColor;'
+    'out vec4 outColor;',
+    FILM_GLSL
   ].concat(keyDetectGlsl(), [
     'void main() {',
     // The output may be bigger than the picture (see setStageAspect): the
@@ -2163,7 +2195,7 @@ var VideoEffects = (function () {
     '    soft = texture(uSoft, flip).r;',
     '    float thrown = texture(uSoft, flip + uShadowOff).r;',
     '    float shade = clamp(thrown * uShadow.x + soft * uShadow.y, 0.0, 0.85);',
-    '    bg = sc.rgb * (1.0 - sc.a * shade);',
+    '    bg = sceneFilm(sc.rgb * (1.0 - sc.a * shade), vUv);',
     '  }',
     '  if (outside) { outColor = vec4(bg, 1.0); return; }',
     '  vec4 det = keyDetect();',
@@ -3730,6 +3762,7 @@ var VideoEffects = (function () {
     gl.uniform1f(uloc(gl, this.pComp, 'uWrap'), useScene && this.scene ? this.scene.wrap : 0);
     gl.uniform2f(uloc(gl, this.pComp, 'uEdge'), this.edge.lo, this.edge.hi);
     gl.uniform1f(uloc(gl, this.pComp, 'uDecon'), this.decon);
+    filmUniform(gl, this.pComp);
     var x = this.bgXform();
     gl.uniform4f(uloc(gl, this.pComp, 'uBgXform'), x[0], x[1], x[2], x[3]);
     if (this.keyed && this.keyed.demand > 0) this.drawKeyed(w, h);
@@ -4774,6 +4807,7 @@ var VideoEffects = (function () {
     gl.uniform1f(uloc(gl, p, 'uWrap'), hasScene ? this.scene.wrap : 0);
     gl.uniform1f(uloc(gl, p, 'uHasScene'), hasScene ? 1 : 0);
     gl.uniform3f(uloc(gl, p, 'uFlat'), KEYIN_FLAT[0], KEYIN_FLAT[1], KEYIN_FLAT[2]);
+    filmUniform(gl, p);
     var f = this.fit();
     gl.uniform2f(uloc(gl, p, 'uFit'), f[0], f[1]);
     this.drawQuad(null, this.canvas.width, this.canvas.height);
