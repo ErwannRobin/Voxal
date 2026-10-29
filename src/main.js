@@ -10560,7 +10560,9 @@ function initModalSettingsSidebar() {
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'settings-card-toggle';
-    btn.textContent = title.textContent;
+    var ico = title.querySelector('.prefs-ico');
+    if (ico) btn.appendChild(ico.cloneNode(true));
+    btn.appendChild(document.createTextNode(title.textContent.trim()));
     btn.setAttribute('aria-expanded', 'false');
     title.replaceWith(btn);
     return btn;
@@ -20598,11 +20600,26 @@ window.addEventListener('DOMContentLoaded', function() {
   // About: a plain modal, no state to load beyond the version line.
   function setAboutOpen(open) {
     var el = $('modal-about');
+    var content = el.querySelector('.modal-content');
+    // Below 640px .modal-content rests off-screen (bottom sheet) until
+    // .modal-sheet-open is added, so it must be toggled like the settings sheet.
+    var sheet = content && isSettingsSheetLayout();
     if (open) {
       var v = $('about-version-home');
       if (v) v.textContent = typeof VOXAL_VERSION !== 'undefined' ? 'v' + VOXAL_VERSION : '';
+      el.classList.remove('hidden');
+      if (sheet) {
+        content.classList.remove('modal-sheet-open');
+        requestAnimationFrame(function() {
+          requestAnimationFrame(function() { content.classList.add('modal-sheet-open'); });
+        });
+      }
+    } else if (sheet) {
+      content.classList.remove('modal-sheet-open');
+      setTimeout(function() { el.classList.add('hidden'); }, SETTINGS_SHEET_TRANSITION_MS);
+    } else {
+      el.classList.add('hidden');
     }
-    el.classList.toggle('hidden', !open);
   }
   $('btn-open-about').addEventListener('click', function() { setAboutOpen(true); });
   $('btn-close-about').addEventListener('click', function() { setAboutOpen(false); });
