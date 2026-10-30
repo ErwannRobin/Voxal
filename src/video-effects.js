@@ -7462,6 +7462,23 @@ var VideoEffects = (function () {
     return sc.thumb ? 'url("' + sc.thumb + '"), ' + sc.swatch : sc.swatch;
   }
 
+  // A chip inside a closed popover or an unopened settings card is not painted,
+  // so its background is not fetched until the first time it is shown — and the
+  // first opening then shows the swatches while the pictures arrive. Fetch them
+  // as soon as a picker exists instead, once per page, and keep them referenced
+  // so the cache holds them.
+  var _thumbsPreloaded = null;
+  function preloadSceneThumbs() {
+    if (_thumbsPreloaded || typeof Image !== 'function') return;
+    _thumbsPreloaded = PRESETS.map(function (p) {
+      if (!p.thumb) return null;
+      var img = new Image();
+      img.decoding = 'async';
+      img.src = p.thumb;
+      return img;
+    });
+  }
+
   // What a scene chip says on hover or a long press: what it is, then when it
   // looks best and what it costs this device to draw.
   function sceneTip(sc) {
@@ -7505,6 +7522,7 @@ var VideoEffects = (function () {
     // with the app, src/assets/scenes/, rendered from the scene's own shader by
     // scripts/scene-preview.mjs), with the gradient swatch behind it for the
     // moment before it has loaded.
+    preloadSceneThumbs();
     PRESETS.forEach(function (p) {
       var c = chip('bg-chip-image bg-chip-scene', p.name || p.label, 'preset:' + p.id);
       c.dataset.scene = p.id;
