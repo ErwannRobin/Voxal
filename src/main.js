@@ -14921,6 +14921,11 @@ function initVideoBackgroundUI() {
     document.getElementById('settings-edge-sharpness'));
   _videoBgQuality = VideoEffects.renderQuality(
     document.getElementById('settings-detection-quality'));
+  // Settings → Advanced → Segmentation debug. Applied to the running camera by
+  // video-effects.js itself.
+  if (keyedApi('renderDebugOptions')) {
+    VideoEffects.renderDebugOptions(document.getElementById('seg-debug-body'));
+  }
   _videoBgLight = VideoEffects.renderLightAdapt(
     document.getElementById('settings-light-adapt'),
     { id: 'btn-light-adapt', label: tr('ui.adapt_to_low_light', 'Adapt to low light'),

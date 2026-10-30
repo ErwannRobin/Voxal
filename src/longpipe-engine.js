@@ -169,6 +169,11 @@ var LongpipeEngine = (function () {
   function weightsUrl() {
     try { return localStorage.getItem(WEIGHTS_KEY) || null; } catch (e) { return null; }
   }
+  // Longpipe's own blur as the final picture (instead of Voxal's) — opt-in.
+  var BLUR_KEY = 'longpipe-blur';
+  function blurWanted() {
+    try { return localStorage.getItem(BLUR_KEY) === '1'; } catch (e) { return false; }
+  }
   function presetChoice() {
     try {
       var v = localStorage.getItem(PRESET_KEY);
@@ -203,6 +208,16 @@ var LongpipeEngine = (function () {
     this.ctx = this.cvs.getContext('2d', { willReadFrequently: true });
     this.cam = document.createElement('canvas');
     this.camCtx = this.cam.getContext('2d', { willReadFrequently: true });
+    // Direct blur: sigma while Longpipe's own blurred picture is wanted, else null.
+    // 'off' | 'arming' (key mode until the model has shown it is running) |
+    // 'switching' (asked for the blur, waiting for the key to leave) | 'live' | 'failed'
+    this.direct = null;
+    this.dState = 'off';
+    this.dAt = 0;
+    this.dLast = 0;
+    this.tiny = document.createElement('canvas');
+    this.tiny.width = 16; this.tiny.height = 9;
+    this.tinyCtx = this.tiny.getContext('2d', { willReadFrequently: true });
     this.openPromise = this.open(raw);
   }
 
@@ -264,6 +279,64 @@ var LongpipeEngine = (function () {
     if (this.onFail) { try { this.onFail(e); } catch (x) { /* ignore */ } }
   };
 
+  // Longpipe's blurred picture as the published one. Starts in key mode so that
+  // the model has proved it is running (its output is the unprocessed camera
+  // until then, which would publish a SHARP room), then asks for the blur and
+  // waits for the key to be gone before saying it is live. Until then, and
+  // whenever it is not live, the Processor draws Voxal's own blur.
+  LongpipeSegmenter.prototype.setDirect = function (sigma) {
+    if (sigma === this.direct) return;
+    var was = this.direct;
+    this.direct = sigma;
+    if (sigma === null) {
+      this.dState = 'off';
+      if (this.pipeline && this.pipeReady) {
+        this.settled = false;
+        this.fresh = false;
+        this.keySince = performance.now();
+        this.askBackground({ color: KEYS[this.keyIndex].rgb });
+      }
+    } else if (was === null) {
+      this.dState = 'arming';
+    } else if (this.dState === 'live') {
+      this.askBackground({ blur: { sigma: sigma } });
+    }
+  };
+
+  LongpipeSegmenter.prototype.askBackground = function (bg) {
+    var self = this, p = this.pipeline;
+    if (!p) return;
+    var done = p.setBackground(bg);
+    if (done && done.catch) done.catch(function (e) {
+      self.noteError({ message: 'setBackground: ' + (e && e.message || e), recoverable: true });
+    });
+  };
+
+  LongpipeSegmenter.prototype.stepDirect = function (now) {
+    var v = this.video;
+    if (!v || v.readyState < 2 || !v.videoWidth || now - this.dLast < 90) return;
+    this.dLast = now;
+    var lp;
+    try { this.tinyCtx.drawImage(v, 0, 0, 16, 9); lp = this.tinyCtx.getImageData(0, 0, 16, 9).data; }
+    catch (e) { return; }
+    var onKey = cornersMatch(lp, 16, 9, KEYS[this.keyIndex].rgb);
+    if (this.dState === 'arming' && onKey) {
+      this.dState = 'switching';
+      this.dAt = now;
+      this.askBackground({ blur: { sigma: this.direct } });
+    } else if (this.dState === 'switching') {
+      if (!onKey && now - this.dAt > 150) this.dState = 'live';
+      else if (now - this.dAt > 3000) { this.dState = 'failed'; this.noteError({ message: 'blur never replaced the key colour', recoverable: true }); }
+    }
+  };
+
+  // The video element to publish, or null while Voxal should draw.
+  LongpipeSegmenter.prototype.directFrame = function () {
+    var v = this.video;
+    return this.direct !== null && this.dState === 'live' && !this.closed && !this.failed &&
+      v && v.readyState >= 2 && v.videoWidth ? v : null;
+  };
+
   LongpipeSegmenter.prototype.getLabels = function () { return ['selfie']; };
 
   // Camera flipped: the pipeline's input is fixed, so a new one is opened. The
@@ -280,6 +353,7 @@ var LongpipeEngine = (function () {
     if (this.input) { try { this.input.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* ignore */ } this.input = null; }
     if (this.video) { try { this.video.srcObject = null; } catch (e) { /* ignore */ } this.video = null; }
     this.pipeReady = false;
+    if (this.direct !== null) this.dState = 'arming';
   };
 
   LongpipeSegmenter.prototype.close = function () {
@@ -311,6 +385,7 @@ var LongpipeEngine = (function () {
   // has a trustworthy mask — otherwise the Processor keeps the last one.
   LongpipeSegmenter.prototype.segmentForVideo = function (frame, ts, cb) {
     if (this.closed || this.failed || !this.pipeReady || !this.video) return;
+    if (this.direct !== null) { this.stepDirect(performance.now()); return; }   // no mask is read for a blurred picture
     var v = this.video;
     if (v.readyState < 2 || !v.videoWidth) return;
     var t0 = performance.now();
@@ -379,6 +454,7 @@ var LongpipeEngine = (function () {
       engine: 'longpipe',
       key: KEYS[this.keyIndex].name,
       keySwitches: this.switches,
+      direct: this.direct === null ? 'off' : this.dState,
       keyConflict: this.conflict === undefined ? null : Math.round(this.conflict * 1000) / 1000,
       initMs: this.initMs,
       maskFrames: this.frames,
@@ -405,6 +481,8 @@ var LongpipeEngine = (function () {
     ENGINE_KEY: ENGINE_KEY,
     WEIGHTS_KEY: WEIGHTS_KEY,
     PRESET_KEY: PRESET_KEY,
+    BLUR_KEY: BLUR_KEY,
+    blurWanted: blurWanted,
     KEYS: KEYS,
     selected: selected,
     setSelected: setSelected,

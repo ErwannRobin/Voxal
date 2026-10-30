@@ -416,6 +416,7 @@
               Advanced troubleshooting &amp; self-hosted deployments.
             </p>
 
+            <div id="seg-debug-options" style="margin-bottom:18px"><p class="settings-sublabel">Segmentation debug</p><div id="seg-debug-body"></div></div>
             <p data-i18n="ui.turn_relay_credentials" class="settings-sublabel">TURN relay credentials</p>
             <p data-i18n-html="html.a_turn_server_relays_your_audio_when_a_f" class="settings-hint">
               A TURN server relays your audio when a firewall blocks a direct
@@ -1556,6 +1557,11 @@
         var bgQuality = VideoEffects.renderQuality($id('settings-detection-quality'), {
           onChange: function(q) { VideoEffects.writeQuality(q); }
         });
+        // Segmentation debug (Settings → Advanced): stored here, applied by the
+        // main window's `storage` listener.
+        if (typeof VideoEffects.renderDebugOptions === 'function') {
+          VideoEffects.renderDebugOptions($id('seg-debug-body'));
+        }
         // Full HD: stored here; the main window holds the camera and restarts it.
         VideoEffects.renderFullHD($id('settings-fullhd'), {
           id: 'btn-fullhd',

@@ -29,7 +29,7 @@ test.beforeEach(async ({ page }) => {
           const ctx = this.cv.getContext('2d');
           const paint = () => {
             const k = this.key.map((v) => Math.round(v * 255));
-            ctx.fillStyle = `rgb(${k[0]},${k[1]},${k[2]})`;
+            ctx.fillStyle = this.blurred ? 'rgb(200,50,50)' : `rgb(${k[0]},${k[1]},${k[2]})`;
             ctx.fillRect(0, 0, 160, 90);
             ctx.fillStyle = person;
             ctx.fillRect(50, 20, 60, 70);
@@ -41,7 +41,12 @@ test.beforeEach(async ({ page }) => {
           this.ready = Promise.resolve();
           made.push(this);
         }
-        setBackground(b) { this.calls.push(b); if (b && b.color) this.key = b.color; return Promise.resolve(); }
+        setBackground(b) {
+          this.calls.push(b);
+          if (b && b.color) { this.key = b.color; this.blurred = false; }
+          if (b && b.blur) this.blurred = true;
+          return Promise.resolve();
+        }
         getStats() { return Promise.resolve({ preset: 'stub', modelMs: 1, fps: 15 }); }
         destroy() { this.destroyed = true; clearInterval(this.timer); }
       }
@@ -395,5 +400,188 @@ test.describe('the edge of a matte', () => {
     expect(r.longpipe).toBeGreaterThan(0.5);
     expect(r.override).toBe(2.5);
     expect(r.back).toBeCloseTo(3, 5);
+  });
+});
+
+
+test.describe('Longpipe\'s own blur as the published picture', () => {
+  async function untilState(page, want) {
+    return page.evaluate(async (w) => {
+      const seg = window.__seg;
+      for (let i = 0; i < 100; i++) {
+        seg.segmentForVideo(window.__mkFrame(64, 36, '#446', '#d9a080'), i, () => {});
+        if (seg.dState === w) return true;
+        await new Promise((r) => setTimeout(r, 40));
+      }
+      return seg.dState;
+    }, want);
+  }
+
+  test('the adapter proves the model runs, then asks for the blur, then goes live', async ({ page }) => {
+    const r = await page.evaluate(async () => {
+      window.__voxalLongpipeStub = window.__mkLongpipeStub('#d9a080');
+      const seg = await LongpipeEngine.create(window.__camStream());
+      window.__seg = seg;
+      for (let i = 0; i < 100 && !(seg.video.readyState >= 2 && seg.video.videoWidth); i++) await new Promise((r) => setTimeout(r, 50));
+      seg.setDirect(20);
+      return { before: seg.directFrame() === null, state: seg.dState, calls: window.__lpMade[0].calls.length };
+    });
+    expect(r).toEqual({ before: true, state: 'arming', calls: 0 });    // still in key mode: no blur asked yet
+    expect(await untilState(page, 'live')).toBe(true);
+    const after = await page.evaluate(() => {
+      const p = window.__lpMade[0];
+      return { asked: p.calls.map((c) => c.blur && c.blur.sigma), frame: window.__seg.directFrame() !== null };
+    });
+    expect(after.asked).toEqual([20]);
+    expect(after.frame).toBe(true);
+    // A new strength is a new sigma, asked of the running pipeline; leaving puts the key back.
+    const moved = await page.evaluate(() => {
+      window.__seg.setDirect(35);
+      const asked = window.__lpMade[0].calls.map((c) => c.blur && c.blur.sigma);
+      window.__seg.setDirect(null);
+      const last = window.__lpMade[0].calls[window.__lpMade[0].calls.length - 1];
+      return { asked, last, frame: window.__seg.directFrame() };
+    });
+    expect(moved.asked).toEqual([20, 35]);
+    expect(moved.last.color).toEqual([0, 1, 0]);
+    expect(moved.frame).toBeNull();
+  });
+
+  test('no mask is read while the blur is the picture', async ({ page }) => {
+    await page.evaluate(async () => {
+      window.__voxalLongpipeStub = window.__mkLongpipeStub('#d9a080');
+      const seg = await LongpipeEngine.create(window.__camStream());
+      window.__seg = seg;
+      for (let i = 0; i < 100 && !(seg.video.readyState >= 2 && seg.video.videoWidth); i++) await new Promise((r) => setTimeout(r, 50));
+      seg.setDirect(20);
+    });
+    await untilState(page, 'live');
+    const called = await page.evaluate(() => {
+      let n = 0;
+      for (let i = 0; i < 5; i++) window.__seg.segmentForVideo(window.__mkFrame(64, 36, '#446', '#d9a080'), i, () => { n++; });
+      return n;
+    });
+    expect(called).toBe(0);
+  });
+
+  test('through the Processor: the published frame is Longpipe\'s, and it falls back to our blur when switched off', async ({ page }) => {
+    const r = await page.evaluate(async () => {
+      window.__voxalLongpipeStub = window.__mkLongpipeStub('#d9a080');
+      localStorage.setItem('segmentation-engine', 'longpipe');
+      localStorage.setItem('longpipe-blur', '1');
+      const out = await VideoEffects.wrap(window.__camStream(), 'blur');
+      const p = out._effectsProcessor;
+      const v = document.createElement('video'); v.muted = true; v.srcObject = out; await v.play();
+      const c = document.createElement('canvas'); c.width = 32; c.height = 24;
+      const px = () => { c.getContext('2d').drawImage(v, 0, 0, 32, 24); return Array.from(c.getContext('2d').getImageData(16, 4, 1, 1).data.slice(0, 3)); };
+      for (let i = 0; i < 150 && p.segmenter.dState !== 'live'; i++) await new Promise((r) => setTimeout(r, 40));
+      await new Promise((r) => setTimeout(r, 600));
+      const live = { state: p.segmenter.dState, px: px() };
+      localStorage.removeItem('longpipe-blur');
+      VideoEffects.DEBUG_KEYS; window.dispatchEvent(new StorageEvent('storage', { key: 'longpipe-blur' }));
+      await new Promise((r) => setTimeout(r, 600));
+      const off = { state: p.segmenter.dState, direct: p.segmenter.direct, px: px() };
+      VideoEffects.stop(out);
+      localStorage.removeItem('segmentation-engine');
+      return { live, off };
+    });
+    expect(r.live.state).toBe('live');
+    expect(r.live.px[0]).toBeGreaterThan(150);                 // Longpipe's rgb(200,50,50)
+    expect(r.live.px[1]).toBeLessThan(90);
+    expect(r.off.state).toBe('off');
+    expect(r.off.direct).toBeNull();
+    expect(r.off.px[0] > 150 && r.off.px[1] < 90).toBe(false); // back on our own picture
+  });
+
+  test('a scene is never drawn by Longpipe\'s blur', async ({ page }) => {
+    const r = await page.evaluate(async () => {
+      window.__voxalLongpipeStub = window.__mkLongpipeStub('#d9a080');
+      localStorage.setItem('segmentation-engine', 'longpipe');
+      localStorage.setItem('longpipe-blur', '1');
+      const out = await VideoEffects.wrap(window.__camStream(), 'blur');
+      const p = out._effectsProcessor;
+      const a = p.segmenter.direct;
+      p.mode = 'preset:island'; p.syncDirect();
+      const b = p.segmenter.direct;
+      VideoEffects.stop(out);
+      localStorage.removeItem('segmentation-engine'); localStorage.removeItem('longpipe-blur');
+      return { a, b };
+    });
+    expect(typeof r.a).toBe('number');
+    expect(r.b).toBeNull();
+  });
+});
+
+test.describe('Settings → Advanced → Segmentation debug', () => {
+  test('every control stores its key and applies it to the running camera', async ({ page }) => {
+    const r = await page.evaluate(async () => {
+      window.__voxalLongpipeStub = window.__mkLongpipeStub('#d9a080');
+      const out = await VideoEffects.wrap(window.__camStream(), 'blur');
+      const p = out._effectsProcessor;
+      const host = document.createElement('div'); document.body.appendChild(host);
+      VideoEffects.renderDebugOptions(host);
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const res = {};
+
+      const eng = host.querySelector('select[aria-label="Segmentation engine"]');
+      eng.value = 'longpipe'; eng.dispatchEvent(new Event('change'));
+      for (let i = 0; i < 100 && VideoEffects.engine() !== 'longpipe'; i++) await wait(50);
+      res.engine = [VideoEffects.engine(), localStorage.getItem('segmentation-engine')];
+
+      host.querySelector('#toggle-longpipe-blur').click();
+      res.blur = [localStorage.getItem('longpipe-blur'), typeof p.segmenter.direct];
+
+      const dil = host.querySelector('input[aria-label="Longpipe edge dilate (texels)"]');
+      dil.value = '2.2'; dil.dispatchEvent(new Event('change'));
+      res.dilate = [localStorage.getItem('longpipe-dilate'), p.edge.dilate];
+      dil.value = ''; dil.dispatchEvent(new Event('change'));
+      res.dilateAuto = [localStorage.getItem('longpipe-dilate'), p.edge.dilate < 1.5];
+
+      const cut = host.querySelector('input[aria-label^="MediaPipe mask cut"]');
+      cut.value = '0.5'; cut.dispatchEvent(new Event('change'));
+      res.cut = [localStorage.getItem('mask-cut'), VideoEffects._maskCut.read()];
+
+      const pre = host.querySelector('select[aria-label="Longpipe quality preset"]');
+      const made = window.__lpMade.length;
+      pre.value = 'quality'; pre.dispatchEvent(new Event('change'));
+      for (let i = 0; i < 100 && window.__lpMade.length === made; i++) await wait(50);
+      res.preset = [localStorage.getItem('longpipe-preset'), window.__lpMade.length - made,
+                    window.__lpMade[window.__lpMade.length - 1].options.preset];
+
+      host.querySelector('#toggle-seg-diagnostic').click();
+      res.diag = [localStorage.getItem('seg-diagnostic'), !!document.getElementById('seg-diagnostic')];
+      host.querySelector('#toggle-seg-diagnostic').click();
+      res.diagOff = [localStorage.getItem('seg-diagnostic'), !!document.getElementById('seg-diagnostic')];
+
+      // Another window writes; this one applies from the storage event.
+      localStorage.setItem('longpipe-dilate', '3.5');
+      window.dispatchEvent(new StorageEvent('storage', { key: 'longpipe-dilate' }));
+      res.fromStorage = p.edge.dilate;
+
+      ['longpipe-blur', 'longpipe-dilate', 'mask-cut', 'longpipe-preset', 'segmentation-engine'].forEach((k) => localStorage.removeItem(k));
+      VideoEffects.stop(out);
+      return res;
+    });
+    expect(r.engine).toEqual(['longpipe', 'longpipe']);
+    expect(r.blur).toEqual(['1', 'number']);
+    expect(r.dilate).toEqual(['2.2', 2.2]);
+    expect(r.dilateAuto).toEqual([null, true]);
+    expect(r.cut).toEqual(['0.5', 0.5]);
+    expect(r.preset).toEqual(['quality', 1, 'quality']);
+    expect(r.diag).toEqual(['1', true]);
+    expect(r.diagOff).toEqual([null, false]);
+    expect(r.fromStorage).toBe(3.5);
+  });
+
+  test('both documents carry the card and the preferences window renders it', async ({ page }) => {
+    const main = await page.evaluate(() => !!document.getElementById('seg-debug-body'));
+    expect(main).toBe(true);
+    await page.goto('/settings.html');
+    const prefs = await page.evaluate(() => ({
+      body: !!document.getElementById('seg-debug-body'),
+      rows: document.querySelectorAll('#seg-debug-body .settings-field').length,
+    }));
+    expect(prefs.body).toBe(true);
+    expect(prefs.rows).toBeGreaterThanOrEqual(5);
   });
 });

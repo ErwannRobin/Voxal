@@ -773,6 +773,11 @@ var VideoEffects = (function () {
       } else if (typeof location !== 'undefined') {
         var m = /[?&]maskcut=([0-9.]+)/.exec(location.search || '');
         if (m) v = Number(m[1]);
+        else {
+          // Settings → Advanced → Segmentation debug (blank = the tuned value).
+          var stored = localStorage.getItem('mask-cut');
+          if (stored !== null && stored !== '') v = Number(stored);
+        }
       }
     } catch (e) { /* no window or location */ }
     if (!isFinite(v)) return MASK_CUT;
@@ -1858,13 +1863,18 @@ var VideoEffects = (function () {
     'in vec2 vUv;',
     'uniform sampler2D uTex;',
     'uniform vec2 uOff;',
+    // 1 turns the picture over: a video texture is stored top row first, and the
+    // blur chain reads it back through a framebuffer that undoes that. Drawing it
+    // straight to the canvas (Longpipe's own picture) has to do it itself.
+    'uniform float uFlip;',
     'out vec4 outColor;',
     'vec3 lin(vec3 c) { return c * c; }',
     'void main() {',
-    '  vec3 sum = lin(texture(uTex, vUv + vec2(-uOff.x, -uOff.y)).rgb);',
-    '  sum += lin(texture(uTex, vUv + vec2( uOff.x, -uOff.y)).rgb);',
-    '  sum += lin(texture(uTex, vUv + vec2(-uOff.x,  uOff.y)).rgb);',
-    '  sum += lin(texture(uTex, vUv + vec2( uOff.x,  uOff.y)).rgb);',
+    '  vec2 uv = uFlip > 0.5 ? vec2(vUv.x, 1.0 - vUv.y) : vUv;',
+    '  vec3 sum = lin(texture(uTex, uv + vec2(-uOff.x, -uOff.y)).rgb);',
+    '  sum += lin(texture(uTex, uv + vec2( uOff.x, -uOff.y)).rgb);',
+    '  sum += lin(texture(uTex, uv + vec2(-uOff.x,  uOff.y)).rgb);',
+    '  sum += lin(texture(uTex, uv + vec2( uOff.x,  uOff.y)).rgb);',
     '  outColor = vec4(sqrt(max(sum * 0.25, 0.0)), 1.0);',
     '}'
   ].join('\n');
@@ -2662,6 +2672,22 @@ var VideoEffects = (function () {
     });
   }
 
+  // Longpipe's blur sigma for a Voxal blur strength (a fraction of the frame's
+  // long side, 0.02-0.20). The scale is a guess anchored on the sigma 20 its own
+  // README shows, for the default 0.08 — not a measured equivalence.
+  var LONGPIPE_SIGMA_PER_STRENGTH = 250;
+
+  // Whether Longpipe's own blur should be the published picture: only for the
+  // plain blur mode (never a scene or an image, which need our compositing),
+  // only when asked for, only with no keyed sender reading our composite.
+  Processor.prototype.syncDirect = function () {
+    var seg = this.segmenter;
+    if (!seg || !seg.setDirect) return;
+    var want = this.engine === 'longpipe' && this.mode === 'blur' &&
+      typeof LongpipeEngine !== 'undefined' && LongpipeEngine.blurWanted();
+    seg.setDirect(want ? Math.round(readStrength() * LONGPIPE_SIGMA_PER_STRENGTH * 10) / 10 : null);
+  };
+
   // Take a segmenter as THE engine. The MediaPipe mask cut (a threshold that
   // treats anything the model is unsure of as background) is tuned to that
   // model's 20-70% "unsure" pixels; Longpipe's mask is a matte, whose soft edge
@@ -2681,6 +2707,7 @@ var VideoEffects = (function () {
         console.warn('[VideoEffects] Longpipe failed, back to MediaPipe: ' + _engineFallback);
         self.swapSegmenter('mediapipe');
       };
+      this.syncDirect();
     }
   };
 
@@ -2915,6 +2942,7 @@ var VideoEffects = (function () {
     // The strength is a fraction of the frame and the buffer's long side spans
     // exactly that, so the sigma in texels is the two multiplied.
     this.blurSteps = blurPlan(readStrength() * Math.max(this.blurW, this.blurH));
+    this.syncDirect();
   };
 
   // Re-read the edge preference. Three uniforms of passes that already run, so
@@ -3195,6 +3223,7 @@ var VideoEffects = (function () {
   Processor.prototype.applyBackground = function (mode) {
     var self = this;
     this.mode = normalizeMode(mode);
+    this.syncDirect();
     if (this.mode.indexOf('preset:') === 0) {
       // A scene is a shader, not a download: switching to one is a compile
       // (once per scene per camera) and nothing else. The compile runs off the
@@ -3928,11 +3957,26 @@ var VideoEffects = (function () {
     var w = this.canvas.width, h = this.canvas.height;
     if (now === undefined) now = performance.now();
 
+    // Longpipe's own blurred picture, when it is live and nothing reads our
+    // composite (a keyed sender does): drawn as is, no mask, no reference, no
+    // composite. Anything short of live is Voxal's blur below.
+    var direct = (this.segmenter && this.segmenter.directFrame && !(this.keyed && this.keyed.demand > 0))
+      ? this.segmenter.directFrame() : null;
     gl.bindTexture(gl.TEXTURE_2D, this.texCam);
     try {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.video);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, direct || this.video);
     } catch (e) {
       return;   // the source can vanish mid-teardown
+    }
+    if (direct) {
+      // The downsample program with a quarter-texel offset is a copy.
+      gl.useProgram(this.pDown);
+      this.bindTex(this.pDown, 'uTex', 0, this.texCam);
+      gl.uniform2f(uloc(gl, this.pDown, 'uOff'), 0.25 / w, 0.25 / h);
+      gl.uniform1f(uloc(gl, this.pDown, 'uFlip'), 1);
+      this.drawQuad(null, w, h);
+      gl.uniform1f(uloc(gl, this.pDown, 'uFlip'), 0);
+      return;
     }
 
     // The empty-room reference: ease its weight toward whether it should be
@@ -6017,6 +6061,168 @@ var VideoEffects = (function () {
     return Promise.resolve(base);
   }
 
+  // --- Settings → Advanced → Segmentation debug -----------------------------
+  //
+  // The switches that used to be URL parameters and localStorage keys, in one
+  // card both documents render. Each is stored, then applied to the running
+  // camera; another window (the preferences window) only stores, and the
+  // `storage` listener below applies it here. A URL parameter (?segengine=,
+  // ?maskcut=, ?segdiag=1) still outranks the stored value for that visit.
+  var DEBUG_KEYS = ['segmentation-engine', 'longpipe-blur', 'longpipe-preset',
+                    'longpipe-dilate', 'mask-cut', DIAG_KEY];
+
+  function readDebug(key) {
+    try { return localStorage.getItem(key); } catch (e) { return null; }
+  }
+  function writeDebug(key, value) {
+    try {
+      if (value === null || value === undefined || value === '') localStorage.removeItem(key);
+      else localStorage.setItem(key, String(value));
+    } catch (e) { /* private mode: it still applies for this session */ }
+  }
+
+  function applyDebug(key) {
+    if (key === DIAG_KEY) {
+      if (readDebug(DIAG_KEY) === '1') { if (_active) diagOpen(); } else diagClose();
+      return;
+    }
+    var p = _active;
+    if (!p) return;
+    try {
+      if (key === 'segmentation-engine') {
+        p.swapSegmenter(selectedEngine()).catch(function (e) {
+          _engineFallback = (e && e.message) || String(e);
+        });
+      } else if (key === 'longpipe-blur') {
+        p.syncDirect();
+      } else if (key === 'longpipe-preset') {
+        // The preset is read when the pipeline is built: reopen it.
+        if (p.engine === 'longpipe' && p.segmenter && p.segmenter.setSource) p.segmenter.setSource(p.raw);
+      } else if (key === 'longpipe-dilate') {
+        p.applyEdge();
+      } else if (key === 'mask-cut') {
+        p.maskCut = p.engine === 'longpipe' ? 0 : readMaskCut();
+      }
+    } catch (e) { /* a bad value must never take the camera down */ }
+  }
+
+  function setDebug(key, value) {
+    writeDebug(key, value);
+    applyDebug(key);
+  }
+
+  function renderDebugOptions(el) {
+    if (!el) return null;
+    el.innerHTML = '';
+    var syncs = [];
+
+    function field(label, hint) {
+      var d = document.createElement('div');
+      d.className = 'settings-field';
+      d.style.marginTop = '12px';
+      var l = document.createElement('label');
+      l.textContent = label;
+      l.style.display = 'block';
+      d.appendChild(l);
+      var holder = document.createElement('div');
+      d.appendChild(holder);
+      if (hint) {
+        var h = document.createElement('p');
+        h.className = 'settings-hint';
+        h.style.marginTop = '4px';
+        h.textContent = hint;
+        d.appendChild(h);
+      }
+      el.appendChild(d);
+      return holder;
+    }
+    function select(label, hint, key, options, current, onPick) {
+      var holder = field(label, hint);
+      var sel = document.createElement('select');
+      sel.className = 'org-select';
+      sel.setAttribute('aria-label', label);
+      options.forEach(function (o) {
+        var opt = document.createElement('option');
+        opt.value = o[0]; opt.textContent = o[1];
+        sel.appendChild(opt);
+      });
+      sel.addEventListener('change', function () { onPick(sel.value); });
+      holder.appendChild(sel);
+      syncs.push(function () { sel.value = current(); });
+      sel.value = current();
+    }
+    function number(label, hint, key, min, max, step, placeholder) {
+      var holder = field(label, hint);
+      var inp = document.createElement('input');
+      inp.type = 'number';
+      inp.className = 'org-select';
+      inp.min = String(min); inp.max = String(max); inp.step = String(step);
+      inp.placeholder = placeholder;
+      inp.setAttribute('aria-label', label);
+      inp.addEventListener('change', function () {
+        var v = inp.value === '' ? null : Math.max(min, Math.min(max, Number(inp.value)));
+        if (v !== null && !isFinite(v)) v = null;
+        setDebug(key, v);
+        inp.value = v === null ? '' : String(v);
+      });
+      holder.appendChild(inp);
+      syncs.push(function () { var v = readDebug(key); inp.value = v === null ? '' : v; });
+      inp.value = readDebug(key) === null ? '' : readDebug(key);
+    }
+    function toggle(label, hint, id, key) {
+      var holder = field(label, hint);
+      var t = renderToggle(holder, {
+        id: id, label: label,
+        read: function () { return readDebug(key) === '1'; },
+        apply: function (on) { setDebug(key, on ? '1' : null); }
+      });
+      syncs.push(function () { t.sync(); });
+    }
+
+    if (typeof LongpipeEngine !== 'undefined') {
+      select('Segmentation engine',
+        'MediaPipe is the default. Longpipe is experimental: it runs its own model on the GPU and its output is turned into a mask (see the diagnostic).',
+        'segmentation-engine',
+        [['mediapipe', 'MediaPipe (default)'], ['longpipe', 'Longpipe (experimental)']],
+        function () { return engine(); },
+        function (v) { setEngine(v); });
+      toggle('Longpipe blur',
+        'With Longpipe, plain blur is Longpipe\'s own picture instead of ours. Virtual backgrounds still use our compositing. Until Longpipe is running, our blur is shown.',
+        'toggle-longpipe-blur', 'longpipe-blur');
+      select('Longpipe quality preset',
+        'Auto lets Longpipe benchmark the device. Applies by restarting its pipeline.',
+        'longpipe-preset',
+        [['auto', 'Auto'], ['fast', 'Fast'], ['balanced', 'Balanced'], ['quality', 'Quality']],
+        function () { var v = readDebug('longpipe-preset'); return v === 'fast' || v === 'balanced' || v === 'quality' ? v : 'auto'; },
+        function (v) { setDebug('longpipe-preset', v === 'auto' ? null : v); });
+      number('Longpipe edge dilate (texels)',
+        'How far the Longpipe mask is grown before feathering. Blank = automatic (about 1). Raise it if a thin line of the old room shows; 0 for none.',
+        'longpipe-dilate', 0, 4, 0.1, 'auto');
+    }
+    number('MediaPipe mask cut (0-0.94)',
+      'MediaPipe values at or under this are background. Blank = 0.78; 0 turns the cut off. Not used by Longpipe.',
+      'mask-cut', 0, 0.94, 0.01, '0.78');
+    toggle('Segmentation diagnostic panel',
+      'Shows each stage of the cut-out (camera, raw mask, dilated, feathered, final) with the engine\'s own numbers. Opens when the camera is on.',
+      'toggle-seg-diagnostic', DIAG_KEY);
+
+    var note = document.createElement('p');
+    note.className = 'settings-hint';
+    note.style.marginTop = '10px';
+    note.textContent = '?segengine=longpipe, ?maskcut=0.5 and ?segdiag=1 in the page address override these for one visit.';
+    el.appendChild(note);
+
+    return { sync: function () { syncs.forEach(function (f) { f(); }); } };
+  }
+
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('storage', function (e) {
+      if (e.key !== null && DEBUG_KEYS.indexOf(e.key) < 0) return;
+      (e.key === null ? DEBUG_KEYS : [e.key]).forEach(applyDebug);
+    });
+  }
+
+
   // Store a new blur strength and push it at whatever is running. Safe to call
   // on every `input` event of a dragged slider: it writes one small string and
   // rebuilds an array of at most six numbers.
@@ -7933,6 +8139,8 @@ var VideoEffects = (function () {
     // The segmentation diagnostic (see the section of that name above).
     DIAGNOSTIC_KEY: DIAG_KEY,
     setEngine: setEngine,
+    renderDebugOptions: renderDebugOptions,
+    DEBUG_KEYS: DEBUG_KEYS,
     engine: engine,
     engineStats: engineStats,
     DIAGNOSTIC_VIEWS: DIAG_VIEWS.map(function (v) { return v[0]; }),
