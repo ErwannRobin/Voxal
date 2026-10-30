@@ -1,3 +1,4 @@
 # Vendored build output (make three-vendor): its GLSL strings keep upstream's
 # whitespace, which git diff --check (the pre-commit hook) would reject.
 src/assets/three/three.min.js -whitespace
+src/assets/longpipe/* -whitespace
