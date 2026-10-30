@@ -821,6 +821,27 @@ var VideoEffects = (function () {
     };
   }
 
+  // Longpipe's mask is a matte whose 50% point already sits on the silhouette,
+  // where MediaPipe's sits inside it. The dilate that wins that margin back for
+  // MediaPipe (MASK_DILATE, ~15 px at 1280 wide) is then a halo of the old room
+  // all round the person, so the matte is dilated by about a texel instead.
+  // `longpipe-dilate` (texels, 0-4) overrides it for comparing on a device.
+  var LONGPIPE_DILATE_BASE = 0.3;
+  function longpipeDilateOverride() {
+    try {
+      var v = parseFloat(localStorage.getItem('longpipe-dilate'));
+      return isFinite(v) ? Math.max(0, Math.min(4, v)) : null;
+    } catch (e) { return null; }
+  }
+  function edgeProfileFor(engine) {
+    var e = edgeProfile(readSharpness());
+    if (engine === 'longpipe') {
+      var o = longpipeDilateOverride();
+      e.dilate = o !== null ? o : LONGPIPE_DILATE_BASE + e.feather * 0.5;
+    }
+    return e;
+  }
+
   function sharpnessFromSlider(pos) {
     return clampSharpness((Number(pos) || 0) / 100);
   }
@@ -2650,6 +2671,7 @@ var VideoEffects = (function () {
     this.segmenter = seg;
     this.engine = seg.engine || 'mediapipe';
     this.maskCut = this.engine === 'longpipe' ? 0 : readMaskCut();
+    this.edge = edgeProfileFor(this.engine);
     this.maskPrimed = false;
     if (this.engine === 'longpipe') {
       // A Longpipe that dies mid-call hands the camera back to MediaPipe.
@@ -2900,7 +2922,7 @@ var VideoEffects = (function () {
   // reallocation, no track swap, nothing on the wire. The next inference
   // rebuilds the mask with the new profile, which at 10-24 Hz is immediate.
   Processor.prototype.applyEdge = function () {
-    this.edge = edgeProfile(readSharpness());
+    this.edge = edgeProfileFor(this.engine);
   };
 
   // Re-read the accuracy preference and start again at the top of the new
