@@ -277,11 +277,11 @@ test.describe('applyDesktopWindowShape — the window actually resizes', () => {
 });
 
 test.describe('what the desktop app does NOT do', () => {
-  test('the chat never opens by itself — that would resize the window on join', async ({ page }) => {
+  test('the chat is not open on join unless it was left open', async ({ page }) => {
     await page.setViewportSize({ width: 1400, height: 800 });
     const opens = await page.evaluate(() => {
       inRoom = true;
-      localStorage.removeItem('chat-collapsed');
+      localStorage.removeItem('chat-open');
       _chatCollapsedHere = false;
       return chatOpensOnEntry();
     });

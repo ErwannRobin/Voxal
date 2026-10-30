@@ -844,8 +844,8 @@ always did, at `SCENE_SCALE_SOFT` (`[1.5, 1]`, `[1.25, 1]` on a phone) and the
 catalogue's `res`, without multisampling. `window.__voxalSceneHardware` lets a
 test take the GPU path anyway.
 
-**Full HD** (Settings → Video → *Full HD video*, desktop only, off by default,
-`video-resolution` = `fhd`). The effect canvas is the camera's size, so a Full
+**Full HD** (Settings → Video → *Full HD video*, desktop only, on by default,
+`video-resolution` = `off` for 720p; `fhd`, from when it was opt-in, still reads as on). The effect canvas is the camera's size, so a Full
 HD picture starts with the capture: `cameraCaptureCap()` asks for 1920x1080 and
 `cameraMaxBitrate()` lifts the per-listener cap to 2.5 Mbps (the room-size
 `scaleResolutionDownBy` still applies on top). The scene ladder follows the
@@ -916,21 +916,19 @@ freeze the call's video.
 
 ### The chips
 
-Each chip shows a gradient swatch (`swatch` in the catalogue) at once, then a
-**thumbnail rendered from the scene's own shader** at the moment the live scene
-starts from (`THUMB_TIME`), so the chip is the picture you get. All six render
-in one small offscreen WebGL2 context that is released as soon as they are done,
-and only once the chip row is actually on screen (an `IntersectionObserver`):
-every page renders its pickers at load, inside a popover or a settings card that
-may never be opened. Even then they wait a beat (`THUMB_DELAY_MS`) — the person
-who opened the row is reaching for a chip — and where the driver cannot compile
-off the page's thread (no `KHR_parallel_shader_compile`: a software GPU) each
-shader is compiled in a task of its own, so five compiles never freeze the page
-together. A *software* GPU (SwiftShader, llvmpipe — `VideoScenes.isSoftwareGL()`
-reads the renderer string) skips the thumbnails altogether and keeps the
-swatches: five ray-marched compiles would cost it seconds of a frozen page for a
-chip nobody was waiting on. A test that wants the thumbnails anyway sets
-`window.__voxalThumbsOnSoftwareGL`.
+Each chip shows a **preview picture shipped with the app**
+(`src/assets/scenes/<id>.jpg`, `thumb` in the catalogue), over the gradient
+swatch that fills the moment before it loads. They are rendered from the scenes'
+own shaders by `scripts/scene-preview.mjs --gpu --size 320x180 --time 37` and
+shrunk to 192 px wide: nothing is compiled to draw a picker, so a software GPU
+shows the same chips as any other. Re-render them when a scene's look changes.
+(`VideoScenes.thumbnails()`, the old runtime render, is no longer called by the
+picker.)
+
+Hovering a chip (after a beat) or long-pressing it on a touch screen opens a
+card (`attachTip()`) with the scene's name and blurb, `best` (the room it suits)
+and `load` (what it costs to draw and send). Scenes of your own show name and
+blurb only.
 
 ### From the image presets
 

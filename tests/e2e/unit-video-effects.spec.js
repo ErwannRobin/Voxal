@@ -1207,7 +1207,7 @@ test.describe('the detection accuracy preference', () => {
       return { ids, ladders, shared: VideoEffects._segHzFor('balanced', false)[0], def: VideoEffects.QUALITY_DEFAULT };
     });
     expect(seen.ids).toEqual(['battery', 'balanced', 'high']);
-    expect(seen.def).toBe('balanced');
+    expect(seen.def).toBe('high');
     expect(seen.shared).not.toBe(999);
     Object.keys(seen.ladders).forEach((id) => {
       ['desktop', 'mobile'].forEach((k) => {
@@ -1227,16 +1227,16 @@ test.describe('the detection accuracy preference', () => {
   test('round-trips, rejects junk, and stores its default as an absence', async ({ page }) => {
     const seen = await page.evaluate(() => {
       const initial = VideoEffects.readQuality();
-      VideoEffects.writeQuality('high');
+      VideoEffects.writeQuality('balanced');
       const set = [VideoEffects.readQuality(), localStorage.getItem(VideoEffects.QUALITY_KEY)];
       localStorage.setItem(VideoEffects.QUALITY_KEY, 'ludicrous');
       const junk = VideoEffects.readQuality();
-      VideoEffects.writeQuality('balanced');
+      VideoEffects.writeQuality('high');
       return { initial, set, junk, cleared: localStorage.getItem(VideoEffects.QUALITY_KEY) };
     });
-    expect(seen.initial).toBe('balanced');
-    expect(seen.set).toEqual(['high', 'high']);
-    expect(seen.junk).toBe('balanced');
+    expect(seen.initial).toBe('high');
+    expect(seen.set).toEqual(['balanced', 'balanced']);
+    expect(seen.junk).toBe('high');
     expect(seen.cleared).toBe(null);
   });
 
@@ -1245,10 +1245,10 @@ test.describe('the detection accuracy preference', () => {
     await page.click('#modal-settings [data-target="settings-video"]');
     const seg = page.locator('#settings-detection-quality');
     await expect(seg.locator('button')).toHaveCount(3);
-    await seg.locator('button[data-quality="high"]').click();
-    expect(await page.evaluate(() => VideoEffects.readQuality())).toBe('high');
-    await expect(seg.locator('button[data-quality="high"]')).toHaveAttribute('aria-checked', 'true');
-    await expect(seg.locator('button[data-quality="balanced"]')).toHaveAttribute('aria-checked', 'false');
+    await seg.locator('button[data-quality="balanced"]').click();
+    expect(await page.evaluate(() => VideoEffects.readQuality())).toBe('balanced');
+    await expect(seg.locator('button[data-quality="balanced"]')).toHaveAttribute('aria-checked', 'true');
+    await expect(seg.locator('button[data-quality="high"]')).toHaveAttribute('aria-checked', 'false');
   });
 
   // Changing it retimes the inference clock and nothing else — no
@@ -1814,28 +1814,28 @@ test.describe('edge decontamination', () => {
   });
 });
 
-// Full HD: an opt-in, desktop-only capture size. The setting stores 'fhd' (and
-// nothing when off), moves the camera constraints and the bitrate cap, and
+// Full HD: a desktop-only capture size, on by default. The setting stores 'off'
+// (and nothing when on), moves the camera constraints and the bitrate cap, and
 // gives the scene a bigger buffer to start from.
 test.describe('full HD video', () => {
-  test('is off by default, stored as fhd, and moves the capture size and the bitrate cap', async ({ page }) => {
+  test('is on by default, stored as off, and moves the capture size and the bitrate cap', async ({ page }) => {
     const seen = await page.evaluate(() => {
       const before = {
         on: VideoEffects.readFullHD(), stored: localStorage.getItem(VideoEffects.FULLHD_KEY),
         w: cameraCaptureCap().width.ideal, bps: cameraMaxBitrate(),
       };
-      VideoEffects.writeFullHD(true);
+      VideoEffects.writeFullHD(false);
       const after = {
         on: VideoEffects.readFullHD(), stored: localStorage.getItem(VideoEffects.FULLHD_KEY),
         w: cameraCaptureCap().width.ideal, h: cameraCaptureCap().height.ideal, bps: cameraMaxBitrate(),
       };
-      VideoEffects.writeFullHD(false);
-      return { before, after, off: localStorage.getItem(VideoEffects.FULLHD_KEY) };
+      VideoEffects.writeFullHD(true);
+      return { before, after, on: localStorage.getItem(VideoEffects.FULLHD_KEY) };
     });
-    expect(seen.before).toEqual({ on: false, stored: null, w: 1280, bps: 600000 });
-    expect(seen.after).toEqual({ on: true, stored: 'fhd', w: 1920, h: 1080, bps: 2500000 });
-    // Back off is an absence, like every other default here.
-    expect(seen.off).toBeNull();
+    expect(seen.before).toEqual({ on: true, stored: null, w: 1920, bps: 2500000 });
+    expect(seen.after).toEqual({ on: false, stored: 'off', w: 1280, h: 720, bps: 600000 });
+    // Back on is an absence, like every other default here.
+    expect(seen.on).toBeNull();
   });
 
   test('the Video settings toggle stores it and restarts a running camera', async ({ page }) => {
@@ -1849,7 +1849,7 @@ test.describe('full HD video', () => {
     await page.click('#btn-open-settings');
     await page.click('#modal-settings [data-target="settings-video"]');
     const btn = page.locator('#settings-fullhd .toggle-btn');
-    await expect(btn).toHaveAttribute('aria-checked', 'false');
+    await expect(btn).toHaveAttribute('aria-checked', 'true');
     await btn.click();
     await expect.poll(() => page.evaluate(() => window.__gums.length)).toBe(2);
     const seen = await page.evaluate(() => ({
@@ -1857,7 +1857,7 @@ test.describe('full HD video', () => {
       w: window.__gums[1].width.ideal,
       live: localVideoActive,
     }));
-    expect(seen).toEqual({ stored: 'fhd', w: 1920, live: true });
+    expect(seen).toEqual({ stored: 'off', w: 1280, live: true });
   });
 
   test('a Full HD picture starts the scene buffer larger, and steps down through the base', async ({ page }) => {

@@ -215,7 +215,7 @@ var VideoEffects = (function () {
   // is 6 Hz in every mode, because below that the effect is worse than not
   // having it and giveUp() is the right answer instead.
   var QUALITY_KEY     = 'detection-quality';
-  var QUALITY_DEFAULT = 'balanced';
+  var QUALITY_DEFAULT = 'high';
   var SEG_HZ = {
     battery:  { desktop: [10, 6],         mobile: [6] },
     balanced: { desktop: [15, 10, 6],     mobile: [10, 6] },
@@ -223,8 +223,8 @@ var VideoEffects = (function () {
   };
   var QUALITIES = [
     { id: 'battery',  label: 'Battery',  hint: 'Fewest inferences' },
-    { id: 'balanced', label: 'Balanced', hint: 'The default' },
-    { id: 'high',     label: 'High',     hint: 'Tracks fast movement' }
+    { id: 'balanced', label: 'Balanced', hint: 'Fewer inferences' },
+    { id: 'high',     label: 'High',     hint: 'The default: tracks fast movement' }
   ];
 
   // --- low light ------------------------------------------------------------
@@ -242,7 +242,7 @@ var VideoEffects = (function () {
   // never darkens: a well-lit scene gets gain 1.0, which sets no filter at all
   // and therefore costs nothing.
   var LIGHT_ADAPT_KEY = 'light-adapt';
-  // Full HD capture (desktop only), absent = 720p. Read by main.js's capture
+  // Full HD capture (desktop only), absent = Full HD ('off' = 720p). Read by main.js's capture
   // constraints and bitrate cap; here because both documents render the toggle.
   var FULLHD_KEY = 'video-resolution';
   // Phones only: turn an animated scene's camera with the phone. Absent is ON
@@ -377,8 +377,6 @@ var VideoEffects = (function () {
   // before anything else is given up. This is the default; a scene that costs
   // more to draw says so (`hz` in the catalogue) and is drawn less often.
   var SCENE_HZ = [20, 10];
-  // How long the picker is on screen before its scene thumbnails start to render.
-  var THUMB_DELAY_MS = 600;
   // The subject's light is re-measured this often (a 32-wide probe).
   var LOOK_SAMPLE_MS = 250;
   var LOOK_PROBE_W = 32;
@@ -1032,20 +1030,21 @@ var VideoEffects = (function () {
     catch (e) { return true; }
   }
 
-  // Full HD: opt-in, off unless stored as 'fhd', and never on a phone (it
-  // captures smaller to save battery and data). A change is a new capture, so
-  // main.js owns what happens next (onFullHDChange); here is only the storage.
+  // Full HD: on unless stored as 'off' ('fhd', from when it was opt-in, still
+  // reads as on), and never on a phone (it captures smaller to save battery
+  // and data). A change is a new capture, so main.js owns what happens next
+  // (onFullHDChange); here is only the storage.
   function readFullHD() {
     if (IS_MOBILE) return false;
-    try { return localStorage.getItem(FULLHD_KEY) === 'fhd'; }
-    catch (e) { return false; }
+    try { return localStorage.getItem(FULLHD_KEY) !== 'off'; }
+    catch (e) { return true; }
   }
 
   function writeFullHD(on) {
     on = !!on;
     try {
-      if (on) localStorage.setItem(FULLHD_KEY, 'fhd');
-      else localStorage.removeItem(FULLHD_KEY);
+      if (on) localStorage.removeItem(FULLHD_KEY);
+      else localStorage.setItem(FULLHD_KEY, 'off');
     } catch (e) { /* private mode — it still applies for this session */ }
     return on;
   }
@@ -7457,6 +7456,38 @@ var VideoEffects = (function () {
     }
   }
 
+  // The picture a scene chip wears: its preview over the swatch (a scene of
+  // your own has its thumbnail in the swatch already).
+  function sceneChipImage(sc) {
+    return sc.thumb ? 'url("' + sc.thumb + '"), ' + sc.swatch : sc.swatch;
+  }
+
+  // A chip inside a closed popover or an unopened settings card is not painted,
+  // so its background is not fetched until the first time it is shown — and the
+  // first opening then shows the swatches while the pictures arrive. Fetch them
+  // as soon as a picker exists instead, once per page, and keep them referenced
+  // so the cache holds them.
+  var _thumbsPreloaded = null;
+  function preloadSceneThumbs() {
+    if (_thumbsPreloaded || typeof Image !== 'function') return;
+    _thumbsPreloaded = PRESETS.map(function (p) {
+      if (!p.thumb) return null;
+      var img = new Image();
+      img.decoding = 'async';
+      img.src = p.thumb;
+      return img;
+    });
+  }
+
+  // What a scene chip says on hover or a long press: what it is, then when it
+  // looks best and what it costs this device to draw.
+  function sceneTip(sc) {
+    var lines = [(sc.name || sc.label) + ' — ' + sc.blurb];
+    if (sc.best) lines.push('Best for: ' + sc.best);
+    if (sc.load) lines.push('Performance: ' + sc.load);
+    return lines.join('\n');
+  }
+
   // opts: { onPick(mode), onError(text), allowCustom (default true),
   //         addScene (default true: the chip that adds a 360° photo or a 3D model),
   //         scenesOnly (the scenes and nothing else: the preview's full window) }
@@ -7487,48 +7518,18 @@ var VideoEffects = (function () {
       chips.push(blur);
     }
 
-    // The scenes. Each chip shows a gradient swatch at once and its real
-    // thumbnail — rendered from the scene's own shader — once that is ready.
-    var sceneChips = PRESETS.map(function (p) {
+    // The scenes. Each chip shows its preview picture (a small JPEG shipped
+    // with the app, src/assets/scenes/, rendered from the scene's own shader by
+    // scripts/scene-preview.mjs), with the gradient swatch behind it for the
+    // moment before it has loaded.
+    preloadSceneThumbs();
+    PRESETS.forEach(function (p) {
       var c = chip('bg-chip-image bg-chip-scene', p.name || p.label, 'preset:' + p.id);
       c.dataset.scene = p.id;
-      c.style.backgroundImage = p.swatch;
+      c.style.backgroundImage = sceneChipImage(p);
+      attachTip(c, function () { return sceneTip(p); });
       chips.push(c);
-      return c;
     });
-    // The thumbnails are rendered only once the row is actually on screen:
-    // every page renders its pickers at load, inside a closed popover or a
-    // settings card nobody has opened, and five shader compiles are not worth
-    // paying for a picker that may never be seen.
-    //
-    // And not the instant the row appears either: the person who opened it is
-    // reaching for a chip, and whatever the page does in the first moments is
-    // work they will feel (a compile can take seconds where the GPU is soft).
-    // The swatches are already there; the pictures replace them a beat later.
-    var thumbsAsked = false;
-    function paintThumbs() {
-      if (thumbsAsked) return;
-      thumbsAsked = true;
-      setTimeout(function () {
-        VideoScenes.thumbnails().then(function (thumbs) {
-          sceneChips.forEach(function (c) {
-            var url = thumbs[c.dataset.scene];
-            if (url) c.style.backgroundImage = 'url("' + url + '")';
-          });
-        });
-      }, THUMB_DELAY_MS);
-    }
-    if (typeof IntersectionObserver === 'function') {
-      var io = new IntersectionObserver(function (entries) {
-        if (entries.some(function (e) { return e.isIntersecting; })) {
-          io.disconnect();
-          paintThumbs();
-        }
-      });
-      io.observe(el);
-    } else {
-      paintThumbs();
-    }
 
     // The chip that adds a scene of your own, and the input behind it.
     var addScene = null, sceneInput = null;
@@ -7603,7 +7604,8 @@ var VideoEffects = (function () {
         var sc = VideoScenes.byId(m.id);
         var c = chip('bg-chip-image bg-chip-scene bg-chip-own', m.name, 'preset:' + m.id);
         c.dataset.scene = m.id;
-        c.style.backgroundImage = sc.swatch;
+        c.style.backgroundImage = sceneChipImage(sc);
+        attachTip(c, function () { return sceneTip(sc); });
         var x = document.createElement('button');
         x.type = 'button';
         x.className = 'bg-chip-clear';
