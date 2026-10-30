@@ -301,10 +301,9 @@ const CHAT_WIDTH_KEY     = 'chat-width';
 const CHAT_WIDTH_DEFAULT = 360;
 const CHAT_WIDTH_MIN     = 280;
 const CHAT_WIDTH_MAX     = 720;
-// Whether the desktop drawer was deliberately collapsed. Stored as a presence,
-// so "never chosen" is an absence and the default stays open — see
-// chatOpensOnEntry().
-const CHAT_COLLAPSED_KEY = 'chat-collapsed';
+// Whether the chat drawer was left open. Stored as a presence (`1`), so
+// "never chosen" is an absence and the default is shut — see chatOpensOnEntry().
+const CHAT_OPEN_KEY      = 'chat-open';
 var   _rejoinDismissed          = false;
 const RECENT_ROOMS_KEY          = 'recent-rooms';
 const RECENT_ROOMS_MAX          = 5;
@@ -5109,31 +5108,29 @@ function applyChatDock() {
   // with it.
 }
 
-// --- Chat: open by default on a desktop --------------------------------------
+// --- Chat: shut by default, and it remembers -----------------------------------
 //
-// On a screen with room to spare the conversation is part of the call, not
-// something you have to go and find, so the drawer starts expanded. On a phone
-// it stays shut: there the drawer covers the room, and a call must not open
-// over its own controls.
-//
-// A deliberate collapse is remembered, so "expanded by default" is a default
-// and not something that undoes the user's choice on every join.
+// The conversation starts out of the way. Opening it (the edge handle, the
+// palette, the shortcut) is a choice, and it is remembered: a drawer left open
+// is open again on the next launch, a drawer closed stays closed. A phone never
+// restores it, though — there the drawer covers the room, and a call must not
+// open over its own controls.
 
-// Shut during THIS room, deliberately or not. Auto-open answers the question
+// Shut during THIS room, deliberately or not. Restoring answers the question
 // "has anyone put this away yet?", and a resize is not a new answer to it — a
 // window dragged wider must not push a drawer back over a call. Cleared by
-// resetChatState(), so the next room starts from the stored default again.
+// resetChatState(), so the next room starts from the stored choice again.
 var _chatCollapsedHere = false;
 
-function chatCollapsedByChoice() {
-  if (_chatCollapsedHere) return true;
-  try { return localStorage.getItem(CHAT_COLLAPSED_KEY) === '1'; } catch (_) { return false; }
+function chatLeftOpen() {
+  if (_chatCollapsedHere) return false;
+  try { return localStorage.getItem(CHAT_OPEN_KEY) === '1'; } catch (_) { return false; }
 }
 
-function rememberChatCollapsed(collapsed) {
+function rememberChatOpen(open) {
   try {
-    if (collapsed) localStorage.setItem(CHAT_COLLAPSED_KEY, '1');
-    else localStorage.removeItem(CHAT_COLLAPSED_KEY);
+    if (open) localStorage.setItem(CHAT_OPEN_KEY, '1');
+    else localStorage.removeItem(CHAT_OPEN_KEY);
   } catch (_) { /* private mode / disabled storage */ }
 }
 
@@ -5143,14 +5140,8 @@ function rememberChatCollapsed(collapsed) {
 // a column is the width at which it can be open without costing anything.
 function chatOpensOnEntry() {
   if (IS_TINY_EMBED || !inRoom) return false;
-  // The desktop app is the one surface where width is not evidence of spare
-  // room: it sizes its own window, so a window wide enough for the chat is one
-  // WE made wide. Opening the drawer there would grow the window again, on its
-  // own, in the middle of joining a call — so on the Mac the chat is only ever
-  // opened by the person using it.
-  if (IS_TAURI_DESKTOP) return false;
   if (videoStageMode() === 'immersive') return false;
-  if (chatCollapsedByChoice()) return false;
+  if (!chatLeftOpen()) return false;
   return window.innerWidth >= CHAT_DOCK_MIN_WIDTH;
 }
 
@@ -5170,7 +5161,7 @@ function applyChatAutoOpen() {
 function toggleChatPanel(open, opts) {
   var next = (open === undefined) ? !chatPanelOpen() : !!open;
   _chatCollapsedHere = !next;
-  if (opts && opts.remember) rememberChatCollapsed(!next);
+  if (opts && opts.remember) rememberChatOpen(next);
   if (next) closeStagePanels();
   document.body.classList.toggle('chat-open', next);
   // Where the drawer goes, and — on the Mac — how much window there is for it

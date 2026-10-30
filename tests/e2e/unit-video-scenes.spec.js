@@ -1466,38 +1466,20 @@ test.describe('in the camera pipeline', () => {
 });
 
 test.describe('the picker', () => {
-  // The other half of that: left alone, a software GPU is not asked to render
-  // them (and nothing else in the picker waits for them).
-  test('a software GPU keeps the swatches and renders no thumbnails', async ({ page }) => {
-    const seen = await page.evaluate(async () => {
-      const probe = document.createElement('canvas').getContext('webgl2');
-      const software = VideoScenes.isSoftwareGL(probe);
-      const thumbs = await VideoScenes.thumbnails();
-      return { software, thumbs: Object.keys(thumbs).length };
-    });
-    // Only meaningful where the test machine is itself a software renderer,
-    // which is what CI and this container are; on a real GPU it is the other test.
-    test.skip(!seen.software, 'this machine has a real GPU');
-    expect(seen.thumbs).toBe(0);
-  });
-
-  test('each scene chip gets a thumbnail rendered from its own shader', async ({ page }) => {
-    // On a software GPU (this machine's) the picker keeps its gradient swatches
-    // and renders no thumbnails: five ray-marched shaders compiled on the CPU
-    // would freeze the page for a quarter of a minute. This test asks for them
-    // anyway, which takes a good while here and a blink on a real GPU.
-    test.setTimeout(120_000);
-    await page.evaluate(() => { window.__voxalThumbsOnSoftwareGL = true; });
+  test('each scene chip wears its shipped preview picture and explains itself on hover', async ({ page }) => {
     await page.click('#btn-open-settings');
     await page.click('#modal-settings [data-target="settings-video"]');
     const chips = page.locator('#settings-bg-picker .bg-chip-scene');
     await expect(chips).toHaveCount(SCENES.length);
-    await expect.poll(() => page.evaluate(() =>
-      Array.from(document.querySelectorAll('#settings-bg-picker .bg-chip-scene'))
-        .filter((c) => /url\("(blob|data):/.test(c.style.backgroundImage)).length), { timeout: 100_000 })
-      .toBe(SCENES.length);
-    const labels = await chips.evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')));
-    // Named by the place, not the kind of place.
-    expect(labels).toEqual(['Copenhagen studio', 'Lagoon deck', 'Lisbon espresso bar', 'Dolomites lake', 'Val d’Orcia', 'Neon rain']);
+    const seen = await chips.evaluateAll((els) => els.map((e) => ({
+      label: e.getAttribute('aria-label'), bg: e.style.backgroundImage,
+    })));
+    expect(seen.map((s) => s.label)).toEqual(['Copenhagen studio', 'Lagoon deck', 'Lisbon espresso bar', 'Dolomites lake', 'Val d’Orcia', 'Neon rain']);
+    for (const s of seen) expect(s.bg).toMatch(/url\("assets\/scenes\/[a-z]+\.jpg"\)/);
+    await chips.nth(5).hover();
+    const tip = page.locator('.ve-tip:not(.hidden)');
+    await expect(tip).toContainText('Neon rain');
+    await expect(tip).toContainText('Best for: a dark room at night');
+    await expect(tip).toContainText('Performance: Heavy');
   });
 });
