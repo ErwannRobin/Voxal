@@ -649,12 +649,24 @@ var VideoEffects = (function () {
   // Light across the body: the side towards the scene's key light is brighter
   // and takes its colour, the far side falls towards the room's ambient. A
   // frontal light (no shadow offset) has no side, so none of it.
+  // Soft focus: the scene stays sharp (a blurred scene was rejected, and costs
+  // nothing in bits to leave alone), but right around the person it takes a
+  // little of its own softer mip, the way a lens rolls off next to what it is
+  // focused on. `soft` is the finished mask blurred wide, so the halo follows
+  // the silhouette and fades out within a few tenths of the frame; near
+  // surfaces (the scene's alpha) take more of it than the distant sky.
+  var SOFT_FOCUS = 0.45;
+  var SOFT_FOCUS_LOD = 2.0;
   var LIGHT_SIDE = 0.10;
   var LIGHT_SIDE_TINT = 0.14;
   var LIGHT_BOUNCE = 0.12;
   var LIGHT_BLOOM = 0.35;
   var LIGHT_BLOOM_KNEE = 0.6;
   var LIGHT_GLSL = [
+    'vec3 softFocus(vec3 sc, vec2 uv, float soft, float near) {',
+    '  float h = min(uWrap, 1.0) * ' + SOFT_FOCUS.toFixed(3) + ' * smoothstep(0.03, 0.45, soft) * (0.5 + 0.5 * near);',
+    '  return mix(sc, textureLod(uSceneEnv, uv, ' + SOFT_FOCUS_LOD.toFixed(1) + ').rgb, h);',
+    '}',
     'float wrapFacing(vec2 flip) {',
     '  if (dot(uShadowOff, uShadowOff) < 1e-8) return 1.0;',
     '  vec2 t = 1.0 / vec2(textureSize(uSoft, 0));',
@@ -1727,9 +1739,9 @@ var VideoEffects = (function () {
     });
   }
 
-  // The engine a new Processor starts with. MediaPipe unless the experimental
-  // Longpipe engine was asked for (localStorage / ?segengine=longpipe) AND its
-  // script is present — any other case is MediaPipe, silently.
+  // The engine a new Processor starts with. Longpipe unless MediaPipe was
+  // chosen (localStorage / ?segengine=mediapipe) or the Longpipe script is
+  // missing — that case is MediaPipe, silently.
   function selectedEngine() {
     return typeof LongpipeEngine !== 'undefined' && LongpipeEngine.selected() === 'longpipe'
       ? 'longpipe' : 'mediapipe';
@@ -2252,7 +2264,7 @@ var VideoEffects = (function () {
     '    soft = texture(uSoft, flip).r;',
     '    float thrown = texture(uSoft, flip + uShadowOff).r;',
     '    float shade = clamp(thrown * uShadow.x + soft * uShadow.y, 0.0, 0.85);',
-    '    bg = sceneFilm(sc.rgb * (1.0 - sc.a * shade), vUv);',
+    '    bg = sceneFilm(softFocus(sc.rgb, vUv, soft, sc.a) * (1.0 - sc.a * shade), vUv);',
     '  } else if (uBgMode > 0.5) {',
     '    vec2 uv = clamp(flip * uBgXform.xy + uBgXform.zw, 0.0, 1.0);',
     '    bg = texture(uImage, uv).rgb;',
@@ -2442,7 +2454,7 @@ var VideoEffects = (function () {
     '    soft = texture(uSoft, flip).r;',
     '    float thrown = texture(uSoft, flip + uShadowOff).r;',
     '    float shade = clamp(thrown * uShadow.x + soft * uShadow.y, 0.0, 0.85);',
-    '    bg = sceneFilm(sc.rgb * (1.0 - sc.a * shade), vUv);',
+    '    bg = sceneFilm(softFocus(sc.rgb, vUv, soft, sc.a) * (1.0 - sc.a * shade), vUv);',
     '  }',
     '  if (outside) { outColor = vec4(bg, 1.0); return; }',
     '  vec4 det = keyDetect();',
@@ -5591,7 +5603,7 @@ var VideoEffects = (function () {
       var eng = document.createElement('select');
       eng.setAttribute('aria-label', 'Segmentation engine');
       eng.style.cssText = 'flex:1 1 100%;min-width:0;font:inherit;padding:6px;min-height:36px';
-      [['mediapipe', 'Engine: MediaPipe (default)'], ['longpipe', 'Engine: Longpipe (experimental)']].forEach(function (v) {
+      [['longpipe', 'Engine: Longpipe (default)'], ['mediapipe', 'Engine: MediaPipe']].forEach(function (v) {
         var o = document.createElement('option');
         o.value = v[0]; o.textContent = v[1];
         eng.appendChild(o);
@@ -6080,7 +6092,7 @@ var VideoEffects = (function () {
 
   // --- segmentation engine (experimental) ----------------------------------
   //
-  // MediaPipe is the engine unless the user asked for Longpipe. Both calls are
+  // Longpipe is the engine unless the user chose MediaPipe. Both calls are
   // safe at any moment: with no camera running they only store the choice;
   // with one they swap the engine under it, keeping the canvas track.
   function setEngine(name) {
@@ -6214,26 +6226,26 @@ var VideoEffects = (function () {
       syncs.push(function () { var v = readDebug(key); inp.value = v === null ? '' : v; });
       inp.value = readDebug(key) === null ? '' : readDebug(key);
     }
-    function toggle(label, hint, id, key) {
+    function toggle(label, hint, id, key, onByDefault) {
       var holder = field(label, hint);
       var t = renderToggle(holder, {
         id: id, label: label,
-        read: function () { return readDebug(key) === '1'; },
-        apply: function (on) { setDebug(key, on ? '1' : null); }
+        read: function () { return onByDefault ? readDebug(key) !== '0' : readDebug(key) === '1'; },
+        apply: function (on) { setDebug(key, onByDefault ? (on ? null : '0') : (on ? '1' : null)); }
       });
       syncs.push(function () { t.sync(); });
     }
 
     if (typeof LongpipeEngine !== 'undefined') {
       select('Segmentation engine',
-        'MediaPipe is the default. Longpipe is experimental: it runs its own model on the GPU and its output is turned into a mask (see the diagnostic).',
+        'Longpipe is the default: it runs its own model on the GPU and its output is turned into a mask (see the diagnostic). MediaPipe is the fallback, and what a Longpipe that cannot start ends up on.',
         'segmentation-engine',
-        [['mediapipe', 'MediaPipe (default)'], ['longpipe', 'Longpipe (experimental)']],
+        [['longpipe', 'Longpipe (default)'], ['mediapipe', 'MediaPipe']],
         function () { return engine(); },
         function (v) { setEngine(v); });
       toggle('Longpipe blur',
-        'With Longpipe, plain blur is Longpipe\'s own picture instead of ours. Virtual backgrounds still use our compositing. Until Longpipe is running, our blur is shown.',
-        'toggle-longpipe-blur', 'longpipe-blur');
+        'On by default. With Longpipe, plain blur is Longpipe\'s own picture instead of ours. Virtual backgrounds still use our compositing. Until Longpipe is running, our blur is shown.',
+        'toggle-longpipe-blur', 'longpipe-blur', true);
       select('Longpipe quality preset',
         'Auto lets Longpipe benchmark the device. Applies by restarting its pipeline.',
         'longpipe-preset',
@@ -6254,7 +6266,7 @@ var VideoEffects = (function () {
     var note = document.createElement('p');
     note.className = 'settings-hint';
     note.style.marginTop = '10px';
-    note.textContent = '?segengine=longpipe, ?maskcut=0.5 and ?segdiag=1 in the page address override these for one visit.';
+    note.textContent = '?segengine=mediapipe, ?maskcut=0.5 and ?segdiag=1 in the page address override these for one visit.';
     el.appendChild(note);
 
     return { sync: function () { syncs.forEach(function (f) { f(); }); } };

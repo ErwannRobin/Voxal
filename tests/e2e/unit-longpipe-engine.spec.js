@@ -14,6 +14,9 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => { window.__voxalSegStub = true; });
   await page.goto('/');
   await page.evaluate(() => {
+    // Longpipe is the engine by default; these tests start from MediaPipe, the
+    // way they were written, and say so — the default has its own tests below.
+    localStorage.setItem('segmentation-engine', 'mediapipe');
     // A Longpipe look-alike. `person` is the colour of the figure it keeps.
     window.__mkLongpipeStub = function (person) {
       const made = [];
@@ -246,7 +249,28 @@ test.describe('the adapter', () => {
 });
 
 test.describe('the engine choice', () => {
-  test('MediaPipe is the engine by default and Longpipe is never fetched', async ({ page }) => {
+  test('Longpipe is the engine by default, with its own blur on; choosing MediaPipe turns both off', async ({ page }) => {
+    const r = await page.evaluate(async () => {
+      localStorage.removeItem('segmentation-engine');
+      const res = { sel: LongpipeEngine.selected(), blur: LongpipeEngine.blurWanted(), eng: VideoEffects.engine() };
+      await VideoEffects.setEngine('mediapipe');
+      res.chosen = [LongpipeEngine.selected(), localStorage.getItem('segmentation-engine')];
+      await VideoEffects.setEngine('longpipe');
+      res.back = [LongpipeEngine.selected(), localStorage.getItem('segmentation-engine')];
+      localStorage.setItem('longpipe-blur', '0');
+      res.blurOff = LongpipeEngine.blurWanted();
+      localStorage.removeItem('longpipe-blur');
+      return res;
+    });
+    expect(r.sel).toBe('longpipe');
+    expect(r.eng).toBe('longpipe');
+    expect(r.blur).toBe(true);
+    expect(r.chosen).toEqual(['mediapipe', 'mediapipe']);
+    expect(r.back).toEqual(['longpipe', null]);
+    expect(r.blurOff).toBe(false);
+  });
+
+  test('MediaPipe, when chosen, runs without Longpipe ever being fetched', async ({ page }) => {
     const hits = [];
     page.on('request', (rq) => { if (/longpipe/i.test(rq.url())) hits.push(rq.url()); });
     const r = await page.evaluate(async () => {
@@ -273,7 +297,7 @@ test.describe('the engine choice', () => {
       const sameTrack = out.getVideoTracks()[0] === track && track.readyState === 'live';
       const made = window.__lpMade.map((p) => p.destroyed);
       VideoEffects.stop(out);
-      localStorage.removeItem('segmentation-engine');
+      localStorage.setItem('segmentation-engine', 'mediapipe');
       return { a, live, statsEngine: stats.engine, key: stats.key, b, sameTrack, made, back: VideoEffects.engine() };
     });
     expect(r.a).toBe('longpipe');
@@ -295,7 +319,7 @@ test.describe('the engine choice', () => {
       const s = await VideoEffects.engineStats();
       const res = { engine: VideoEffects.engine(), fallback: s.fallback, live: track.readyState };
       VideoEffects.stop(out);
-      localStorage.removeItem('segmentation-engine');
+      localStorage.setItem('segmentation-engine', 'mediapipe');
       return res;
     });
     expect(r.engine).toBe('mediapipe');
@@ -313,7 +337,7 @@ test.describe('the engine choice', () => {
       const s = await VideoEffects.engineStats();
       const res = { engine: VideoEffects.engine(), fallback: s.fallback, destroyed: window.__lpMade[0].destroyed };
       VideoEffects.stop(out);
-      localStorage.removeItem('segmentation-engine');
+      localStorage.setItem('segmentation-engine', 'mediapipe');
       return res;
     });
     expect(r.engine).toBe('mediapipe');
@@ -327,6 +351,7 @@ test.describe('through the real Processor and the diagnostic panel', () => {
     const r = await page.evaluate(async () => {
       window.__voxalLongpipeStub = window.__mkLongpipeStub('#d9a080');
       localStorage.setItem('segmentation-engine', 'longpipe');
+      localStorage.setItem('longpipe-blur', '0');           // direct blur reads no mask, and this reads the mask
       const out = await VideoEffects.wrap(window.__camStream(), 'blur');
       VideoEffects.openDiagnostic();
       for (let i = 0; i < 200 && VideoEffects.diagnosticState().inference < 4; i++) await new Promise((r) => setTimeout(r, 50));
@@ -338,7 +363,7 @@ test.describe('through the real Processor and the diagnostic panel', () => {
                     made: window.__lpMade.length };
       VideoEffects.closeDiagnostic && VideoEffects.closeDiagnostic();
       VideoEffects.stop(out);
-      localStorage.removeItem('segmentation-engine');
+      localStorage.setItem('segmentation-engine', 'mediapipe');
       return res;
     });
     expect(r.engine).toBe('longpipe');
@@ -369,7 +394,7 @@ test.describe('through the real Processor and the diagnostic panel', () => {
       for (let i = 0; i < 100 && VideoEffects.engine() !== 'mediapipe'; i++) await new Promise((r) => setTimeout(r, 50));
       seen.push(VideoEffects.engine());
       VideoEffects.stop(out);
-      localStorage.removeItem('segmentation-engine');
+      localStorage.setItem('segmentation-engine', 'mediapipe');
       return seen;
     });
     expect(r).toEqual(['mediapipe', 'longpipe', 'mediapipe']);
@@ -392,7 +417,7 @@ test.describe('the edge of a matte', () => {
       await VideoEffects.setEngine('mediapipe');
       res.back = p.edge.dilate;
       VideoEffects.stop(out);
-      localStorage.removeItem('segmentation-engine');
+      localStorage.setItem('segmentation-engine', 'mediapipe');
       return res;
     });
     expect(r.mediapipe).toBeCloseTo(3, 5);
@@ -477,12 +502,12 @@ test.describe('Longpipe\'s own blur as the published picture', () => {
       for (let i = 0; i < 150 && p.segmenter.dState !== 'live'; i++) await new Promise((r) => setTimeout(r, 40));
       await new Promise((r) => setTimeout(r, 600));
       const live = { state: p.segmenter.dState, px: px() };
-      localStorage.removeItem('longpipe-blur');
+      localStorage.setItem('longpipe-blur', '0');
       VideoEffects.DEBUG_KEYS; window.dispatchEvent(new StorageEvent('storage', { key: 'longpipe-blur' }));
       await new Promise((r) => setTimeout(r, 600));
       const off = { state: p.segmenter.dState, direct: p.segmenter.direct, px: px() };
       VideoEffects.stop(out);
-      localStorage.removeItem('segmentation-engine');
+      localStorage.setItem('segmentation-engine', 'mediapipe');
       return { live, off };
     });
     expect(r.live.state).toBe('live');
@@ -504,7 +529,7 @@ test.describe('Longpipe\'s own blur as the published picture', () => {
       p.mode = 'preset:island'; p.syncDirect();
       const b = p.segmenter.direct;
       VideoEffects.stop(out);
-      localStorage.removeItem('segmentation-engine'); localStorage.removeItem('longpipe-blur');
+      localStorage.setItem('segmentation-engine', 'mediapipe'); localStorage.removeItem('longpipe-blur');
       return { a, b };
     });
     expect(typeof r.a).toBe('number');
@@ -526,7 +551,7 @@ test.describe('Settings → Advanced → Segmentation debug', () => {
       const eng = host.querySelector('select[aria-label="Segmentation engine"]');
       eng.value = 'longpipe'; eng.dispatchEvent(new Event('change'));
       for (let i = 0; i < 100 && VideoEffects.engine() !== 'longpipe'; i++) await wait(50);
-      res.engine = [VideoEffects.engine(), localStorage.getItem('segmentation-engine')];
+      res.engine = [VideoEffects.engine(), localStorage.getItem('segmentation-engine')];   // the default: stored as an absence
 
       host.querySelector('#toggle-longpipe-blur').click();
       res.blur = [localStorage.getItem('longpipe-blur'), typeof p.segmenter.direct];
@@ -562,8 +587,8 @@ test.describe('Settings → Advanced → Segmentation debug', () => {
       VideoEffects.stop(out);
       return res;
     });
-    expect(r.engine).toEqual(['longpipe', 'longpipe']);
-    expect(r.blur).toEqual(['1', 'number']);
+    expect(r.engine).toEqual(['longpipe', null]);
+    expect(r.blur).toEqual(['0', 'object']);                // on by default: the click switches it OFF ('0', direct = null)
     expect(r.dilate).toEqual(['2.2', 2.2]);
     expect(r.dilateAuto).toEqual([null, true]);
     expect(r.cut).toEqual(['0.5', 0.5]);
@@ -644,7 +669,7 @@ test.describe('a phone\'s camera shape', () => {
       const out = await VideoEffects.wrap(window.__camStream(), 'blur');
       const st = await VideoEffects.engineStats();
       VideoEffects.stop(out);
-      localStorage.removeItem('segmentation-engine');
+      localStorage.setItem('segmentation-engine', 'mediapipe');
       return st.relay;
     });
     expect(r).toBe('320x240');

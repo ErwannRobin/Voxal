@@ -702,6 +702,10 @@ blurred wide, rebuilt per inference in four draws on ~2,000 pixels.
 * **A softer edge while you move** — the matte's smoothstep window widens by
   `EDGE_MOTION_SOFTEN` (0.08) at full motion (the look's `motion`), hiding the
   mask's lag; a held pose gets the sharp edge back. Sender-side only.
+* **Soft focus** — the scene stays sharp, but right around you it takes a coarser
+  mip of itself (`SOFT_FOCUS` 0.45 at `SOFT_FOCUS_LOD` 2), following the soft
+  mask and weighted by the scene's alpha, so near surfaces roll off more than
+  the sky. No depth blur anywhere else.
 
 ### Interactions
 

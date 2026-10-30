@@ -26,7 +26,7 @@
 var LongpipeEngine = (function () {
   'use strict';
 
-  var ENGINE_KEY = 'segmentation-engine';    // 'longpipe' | absent / anything else = MediaPipe
+  var ENGINE_KEY = 'segmentation-engine';    // 'mediapipe' = MediaPipe; absent / anything else = Longpipe (the default)
   var WEIGHTS_KEY = 'longpipe-weights-url';  // self-host override, same meaning as weightsBaseUrl
   var PRESET_KEY = 'longpipe-preset';        // auto (default) | fast | balanced | quality
   var MODULE_URL = './assets/longpipe/index.js';
@@ -59,13 +59,13 @@ var LongpipeEngine = (function () {
     try {
       var q = /[?&]segengine=([a-z]+)/.exec(location.search);
       if (q) return q[1] === 'longpipe' ? 'longpipe' : 'mediapipe';
-      return localStorage.getItem(ENGINE_KEY) === 'longpipe' ? 'longpipe' : 'mediapipe';
-    } catch (e) { return 'mediapipe'; }
+      return localStorage.getItem(ENGINE_KEY) === 'mediapipe' ? 'mediapipe' : 'longpipe';
+    } catch (e) { return 'longpipe'; }
   }
 
   function setSelected(name) {
     try {
-      if (name === 'longpipe') localStorage.setItem(ENGINE_KEY, 'longpipe');
+      if (name === 'mediapipe') localStorage.setItem(ENGINE_KEY, 'mediapipe');
       else localStorage.removeItem(ENGINE_KEY);
     } catch (e) { /* storage unavailable: the choice lasts until reload at best */ }
   }
@@ -169,10 +169,11 @@ var LongpipeEngine = (function () {
   function weightsUrl() {
     try { return localStorage.getItem(WEIGHTS_KEY) || null; } catch (e) { return null; }
   }
-  // Longpipe's own blur as the final picture (instead of Voxal's) — opt-in.
+  // Longpipe's own blur as the final picture (instead of Voxal's): on unless
+  // switched off ('0'). Only acts with the Longpipe engine and the plain blur.
   var BLUR_KEY = 'longpipe-blur';
   function blurWanted() {
-    try { return localStorage.getItem(BLUR_KEY) === '1'; } catch (e) { return false; }
+    try { return localStorage.getItem(BLUR_KEY) !== '0'; } catch (e) { return true; }
   }
   function presetChoice() {
     try {
