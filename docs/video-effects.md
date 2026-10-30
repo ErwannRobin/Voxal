@@ -693,6 +693,19 @@ blurred wide, rebuilt per inference in four draws on ~2,000 pixels.
   light, so it only ever *adds* light: the café's neon tints your shoulder, a
   bright sky rims your hair, a dark wall never dirties you. Fades in from the
   edge over the soft mask's width; the middle of you is untouched.
+* **Harmonisation and a lit side** — beyond the rim: the scene's colour is let into
+  your mid-tones, your blacks are lifted towards the scene's own black level, and
+  across the body the side towards the scene's key light is a little brighter and
+  takes its colour while the far side falls to ambient (none of it for a frontal
+  light). The scene's grain follows the camera too: more of it, with colour noise,
+  as the measured exposure drops. Everything scales with the scene's `wrap`.
+* **A softer edge while you move** — the matte's smoothstep window widens by
+  `EDGE_MOTION_SOFTEN` (0.08) at full motion (the look's `motion`), hiding the
+  mask's lag; a held pose gets the sharp edge back. Sender-side only.
+* **Soft focus** — the scene stays sharp, but right around you it takes a coarser
+  mip of itself (`SOFT_FOCUS` 0.45 at `SOFT_FOCUS_LOD` 2), following the soft
+  mask and weighted by the scene's alpha, so near surfaces roll off more than
+  the sky. No depth blur anywhere else.
 
 ### Interactions
 

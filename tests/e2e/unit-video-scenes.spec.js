@@ -1331,7 +1331,10 @@ test.describe('in the camera pipeline', () => {
       return { on, off };
     });
     expect(seen.on.edge).toBeGreaterThan(seen.off.edge + 4);
-    expect(Math.abs(seen.on.mid - seen.off.mid)).toBeLessThan(2);
+    // The middle of you is no longer untouched: the scene's colour and black
+    // level are let into the body (LIGHT_MATCH_*), a little. The rim moves far more.
+    expect(Math.abs(seen.on.mid - seen.off.mid)).toBeLessThan(5);
+    expect(seen.on.edge - seen.off.edge).toBeGreaterThan(Math.abs(seen.on.mid - seen.off.mid));
   });
 
   test('moving in front of the camera stirs the scene', async ({ page }) => {

@@ -590,7 +590,14 @@ var VideoEffects = (function () {
   // the mid-tones) and a soft fall-off towards the corners. Only the scene —
   // you already carry your own camera's. Amounts are fractions of full scale.
   // `window.__voxalSceneFilmOff` switches it off for tests that compare pixels.
-  var SCENE_GRAIN = 0.012;
+  // A webcam's noise is not constant: it climbs as the light drops (the sensor
+  // gains up), and a real one has colour noise as well as brightness noise. So
+  // the grain is scaled by the measured exposure (the same look the scene is
+  // lit by) and carries a chroma part; a dim room gets a grainier scene, as the
+  // person in it already is.
+  var SCENE_GRAIN = 0.014;
+  var SCENE_GRAIN_DIM = 1.2;      // extra gain at the darkest exposure
+  var SCENE_GRAIN_CHROMA = 0.45;  // chroma noise, as a share of the luma noise
   var SCENE_VIGNETTE = 0.12;
   var FILM_GLSL = [
     'uniform vec3 uFilm;',
@@ -602,8 +609,11 @@ var VideoEffects = (function () {
     // uFilm = (grain, vignette, seed). Triangular noise, so it has no DC bias.
     'vec3 sceneFilm(vec3 c, vec2 uv) {',
     '  float n = filmHash(gl_FragCoord.xy, uFilm.z) + filmHash(gl_FragCoord.xy + 17.0, uFilm.z) - 1.0;',
+    '  vec3 nc = vec3(filmHash(gl_FragCoord.xy + 31.0, uFilm.z), filmHash(gl_FragCoord.xy + 47.0, uFilm.z),',
+    '                 filmHash(gl_FragCoord.xy + 59.0, uFilm.z)) * 2.0 - 1.0;',
     '  float l = dot(c, vec3(0.299, 0.587, 0.114));',
-    '  c += n * uFilm.x * (1.0 - 0.6 * abs(2.0 * l - 1.0));',
+    '  float k = uFilm.x * (1.0 - 0.6 * abs(2.0 * l - 1.0));',
+    '  c += n * k + (nc - dot(nc, vec3(0.3333))) * k * ' + SCENE_GRAIN_CHROMA.toFixed(3) + ';',
     '  vec2 d = uv - 0.5;',
     '  return c * (1.0 - uFilm.y * clamp(dot(d, d) * 2.0, 0.0, 1.0));',
     '}'
@@ -624,13 +634,39 @@ var VideoEffects = (function () {
   var HAIR_REACH = 2.0;
   var HAIR_SIGMA = 40.0;
   var HAIR_MIX = 0.75;
+  // How much wider the matte's smoothstep window is at full motion (look.motion).
+  var EDGE_MOTION_SOFTEN = 0.08;
   var LIGHT_FACING = [0.45, 1.5];
+  // Harmonisation: the scene's colour pulled into the person's mid-tones (the
+  // rim and the extremes are left to the wrap and the black level), and the
+  // person's blacks lifted towards the scene's own black level, so a dark wall
+  // and a face with crushed shadows (or the reverse) agree. LIGHT_MATCH_MID is
+  // the extra share of the tint applied where the picture is mid-grey.
   var LIGHT_MATCH_TINT = 0.12;
+  var LIGHT_MATCH_MID = 0.14;
   var LIGHT_MATCH_LIFT = 0.04;
+  var LIGHT_MATCH_BLACK = 0.06;
+  // Light across the body: the side towards the scene's key light is brighter
+  // and takes its colour, the far side falls towards the room's ambient. A
+  // frontal light (no shadow offset) has no side, so none of it.
+  // Soft focus: the scene stays sharp (a blurred scene was rejected, and costs
+  // nothing in bits to leave alone), but right around the person it takes a
+  // little of its own softer mip, the way a lens rolls off next to what it is
+  // focused on. `soft` is the finished mask blurred wide, so the halo follows
+  // the silhouette and fades out within a few tenths of the frame; near
+  // surfaces (the scene's alpha) take more of it than the distant sky.
+  var SOFT_FOCUS = 0.45;
+  var SOFT_FOCUS_LOD = 2.0;
+  var LIGHT_SIDE = 0.10;
+  var LIGHT_SIDE_TINT = 0.14;
   var LIGHT_BOUNCE = 0.12;
   var LIGHT_BLOOM = 0.35;
   var LIGHT_BLOOM_KNEE = 0.6;
   var LIGHT_GLSL = [
+    'vec3 softFocus(vec3 sc, vec2 uv, float soft, float near) {',
+    '  float h = min(uWrap, 1.0) * ' + SOFT_FOCUS.toFixed(3) + ' * smoothstep(0.03, 0.45, soft) * (0.5 + 0.5 * near);',
+    '  return mix(sc, textureLod(uSceneEnv, uv, ' + SOFT_FOCUS_LOD.toFixed(1) + ').rgb, h);',
+    '}',
     'float wrapFacing(vec2 flip) {',
     '  if (dot(uShadowOff, uShadowOff) < 1e-8) return 1.0;',
     '  vec2 t = 1.0 / vec2(textureSize(uSoft, 0));',
@@ -649,8 +685,22 @@ var VideoEffects = (function () {
     '  vec3 avg = textureLod(uSceneEnv, vec2(0.5), 6.0).rgb;',
     '  vec3 tint = clamp(avg / max(dot(avg, LW), 0.04), 0.75, 1.3);',
     '  c = clamp(c, 0.0, 1.0);',
-    '  c *= mix(vec3(1.0), tint, ' + LIGHT_MATCH_TINT.toFixed(3) + ' * w);',
+    '  float mid = 4.0 * dot(c, LW) * (1.0 - dot(c, LW));',
+    '  c *= mix(vec3(1.0), tint, (' + LIGHT_MATCH_TINT.toFixed(3) + ' + ' + LIGHT_MATCH_MID.toFixed(3) + ' * mid) * w);',
     '  c += avg * ' + LIGHT_MATCH_LIFT.toFixed(3) + ' * w * (1.0 - dot(c, LW));',
+    // Blacks only: the darker the pixel, the more of the scene's own darkness
+    // (its average, quartered) is let into it.
+    '  c += avg * 0.25 * ' + LIGHT_MATCH_BLACK.toFixed(3) + ' * w * (1.0 - smoothstep(0.0, 0.35, dot(c, LW)));',
+    '  if (dot(uShadowOff, uShadowOff) > 1e-8) {',
+    // uShadowOff is in the camera picture's (flipped) space; the scene is not.
+    '    vec2 L = normalize(vec2(uShadowOff.x, -uShadowOff.y));',
+    '    float side = clamp(dot(uv - 0.5, L) * 1.6, -0.5, 0.5);',
+    '    vec3 key = textureLod(uSceneEnv, clamp(uv + L * 0.35, 0.0, 1.0), 5.0).rgb;',
+    '    vec3 keyTint = clamp(key / max(dot(key, LW), 0.04), 0.7, 1.4);',
+    '    c *= 1.0 + ' + LIGHT_SIDE.toFixed(3) + ' * w * side;',
+    '    c *= mix(vec3(1.0), keyTint, ' + LIGHT_SIDE_TINT.toFixed(3) + ' * w * smoothstep(-0.2, 0.5, side));',
+    '    c = clamp(c, 0.0, 1.0);',
+    '  }',
     '  vec3 below = textureLod(uSceneEnv, vec2(uv.x, max(uv.y - 0.2, 0.0)), 4.0).rgb;',
     '  float low = smoothstep(0.6, 0.0, uv.y);',
     '  c = 1.0 - (1.0 - c) * (1.0 - below * ' + LIGHT_BOUNCE.toFixed(3) + ' * w * low);',
@@ -663,9 +713,11 @@ var VideoEffects = (function () {
     '}'
   ].join('\n');
 
-  function filmUniform(gl, p) {
+  function filmUniform(gl, p, exposure) {
     var off = typeof window !== 'undefined' && window.__voxalSceneFilmOff;
-    gl.uniform3f(uloc(gl, p, 'uFilm'), off ? 0 : SCENE_GRAIN, off ? 0 : SCENE_VIGNETTE, Math.random());
+    var e = typeof exposure === 'number' && isFinite(exposure) ? Math.min(1, Math.max(0.3, exposure)) : 1;
+    var grain = SCENE_GRAIN * (1 + SCENE_GRAIN_DIM * (1 - e) / 0.7);
+    gl.uniform3f(uloc(gl, p, 'uFilm'), off ? 0 : grain, off ? 0 : SCENE_VIGNETTE, Math.random());
   }
 
   // --- mode: read, write, normalise ----------------------------------------
@@ -1687,9 +1739,9 @@ var VideoEffects = (function () {
     });
   }
 
-  // The engine a new Processor starts with. MediaPipe unless the experimental
-  // Longpipe engine was asked for (localStorage / ?segengine=longpipe) AND its
-  // script is present — any other case is MediaPipe, silently.
+  // The engine a new Processor starts with. Longpipe unless MediaPipe was
+  // chosen (localStorage / ?segengine=mediapipe) or the Longpipe script is
+  // missing — that case is MediaPipe, silently.
   function selectedEngine() {
     return typeof LongpipeEngine !== 'undefined' && LongpipeEngine.selected() === 'longpipe'
       ? 'longpipe' : 'mediapipe';
@@ -2083,6 +2135,7 @@ var VideoEffects = (function () {
     'uniform highp uint uTiltBits;',
     'uniform float uDecon;',
     'uniform float uHair;',
+    'uniform float uMotion;',
     // Segmentation diagnostic only (see "The segmentation diagnostic"): 1
     // prints the matte `m` this shader is about to mix with, as grey. Always 0
     // in normal use, which makes the branch below dead.
@@ -2100,7 +2153,10 @@ var VideoEffects = (function () {
     // off gradually at the subject, and a window centred on 0.5 cuts inside the
     // face rather than outside it. Better to keep a sliver of background sharp
     // than to blur somebody's ear off. See MASK_EDGE_LO / MASK_EDGE_HI.
-    '  float m = smoothstep(uEdge.x, uEdge.y, texture(uMask, flip).r);',
+    // While you move, the mask lags the picture by a frame or two and its edge
+    // crawls; a wider window hides that, and a held pose gets the sharp edge back.
+    '  float mw = uMotion * ' + EDGE_MOTION_SOFTEN.toFixed(3) + ';',
+    '  float m = smoothstep(uEdge.x - mw, uEdge.y + mw, texture(uMask, flip).r);',
     // The empty-room reference, when there is one. `m` is the model's band —
     // dilated, so it reaches past you — and the reference only ever takes
     // away from it: outside the band it is never asked, so a shadow across
@@ -2208,7 +2264,7 @@ var VideoEffects = (function () {
     '    soft = texture(uSoft, flip).r;',
     '    float thrown = texture(uSoft, flip + uShadowOff).r;',
     '    float shade = clamp(thrown * uShadow.x + soft * uShadow.y, 0.0, 0.85);',
-    '    bg = sceneFilm(sc.rgb * (1.0 - sc.a * shade), vUv);',
+    '    bg = sceneFilm(softFocus(sc.rgb, vUv, soft, sc.a) * (1.0 - sc.a * shade), vUv);',
     '  } else if (uBgMode > 0.5) {',
     '    vec2 uv = clamp(flip * uBgXform.xy + uBgXform.zw, 0.0, 1.0);',
     '    bg = texture(uImage, uv).rgb;',
@@ -2398,7 +2454,7 @@ var VideoEffects = (function () {
     '    soft = texture(uSoft, flip).r;',
     '    float thrown = texture(uSoft, flip + uShadowOff).r;',
     '    float shade = clamp(thrown * uShadow.x + soft * uShadow.y, 0.0, 0.85);',
-    '    bg = sceneFilm(sc.rgb * (1.0 - sc.a * shade), vUv);',
+    '    bg = sceneFilm(softFocus(sc.rgb, vUv, soft, sc.a) * (1.0 - sc.a * shade), vUv);',
     '  }',
     '  if (outside) { outColor = vec4(bg, 1.0); return; }',
     '  vec4 det = keyDetect();',
@@ -4053,8 +4109,9 @@ var VideoEffects = (function () {
     gl.uniform1f(uloc(gl, this.pComp, 'uWrap'), useScene && this.scene ? this.scene.wrap : 0);
     gl.uniform2f(uloc(gl, this.pComp, 'uEdge'), this.edge.lo, this.edge.hi);
     gl.uniform1f(uloc(gl, this.pComp, 'uDecon'), this.decon);
+    gl.uniform1f(uloc(gl, this.pComp, 'uMotion'), window.__voxalNoEdgeMotion ? 0 : Math.min(1, Math.max(0, this.look.motion || 0)));
     gl.uniform1f(uloc(gl, this.pComp, 'uHair'), window.__voxalNoHairRefine ? 0 : HAIR_MIX);
-    filmUniform(gl, this.pComp);
+    filmUniform(gl, this.pComp, this.look.exposure);
     var x = this.bgXform();
     gl.uniform4f(uloc(gl, this.pComp, 'uBgXform'), x[0], x[1], x[2], x[3]);
     // The panes that need the composite's state, then the copy out. The real
@@ -5105,7 +5162,7 @@ var VideoEffects = (function () {
     gl.uniform1f(uloc(gl, p, 'uWrap'), hasScene ? this.scene.wrap : 0);
     gl.uniform1f(uloc(gl, p, 'uHasScene'), hasScene ? 1 : 0);
     gl.uniform3f(uloc(gl, p, 'uFlat'), KEYIN_FLAT[0], KEYIN_FLAT[1], KEYIN_FLAT[2]);
-    filmUniform(gl, p);
+    filmUniform(gl, p, this.look.exposure);
     var f = this.fit();
     gl.uniform2f(uloc(gl, p, 'uFit'), f[0], f[1]);
     this.drawQuad(null, this.canvas.width, this.canvas.height);
@@ -5546,7 +5603,7 @@ var VideoEffects = (function () {
       var eng = document.createElement('select');
       eng.setAttribute('aria-label', 'Segmentation engine');
       eng.style.cssText = 'flex:1 1 100%;min-width:0;font:inherit;padding:6px;min-height:36px';
-      [['mediapipe', 'Engine: MediaPipe (default)'], ['longpipe', 'Engine: Longpipe (experimental)']].forEach(function (v) {
+      [['longpipe', 'Engine: Longpipe (default)'], ['mediapipe', 'Engine: MediaPipe']].forEach(function (v) {
         var o = document.createElement('option');
         o.value = v[0]; o.textContent = v[1];
         eng.appendChild(o);
@@ -6035,7 +6092,7 @@ var VideoEffects = (function () {
 
   // --- segmentation engine (experimental) ----------------------------------
   //
-  // MediaPipe is the engine unless the user asked for Longpipe. Both calls are
+  // Longpipe is the engine unless the user chose MediaPipe. Both calls are
   // safe at any moment: with no camera running they only store the choice;
   // with one they swap the engine under it, keeping the canvas track.
   function setEngine(name) {
@@ -6169,26 +6226,26 @@ var VideoEffects = (function () {
       syncs.push(function () { var v = readDebug(key); inp.value = v === null ? '' : v; });
       inp.value = readDebug(key) === null ? '' : readDebug(key);
     }
-    function toggle(label, hint, id, key) {
+    function toggle(label, hint, id, key, onByDefault) {
       var holder = field(label, hint);
       var t = renderToggle(holder, {
         id: id, label: label,
-        read: function () { return readDebug(key) === '1'; },
-        apply: function (on) { setDebug(key, on ? '1' : null); }
+        read: function () { return onByDefault ? readDebug(key) !== '0' : readDebug(key) === '1'; },
+        apply: function (on) { setDebug(key, onByDefault ? (on ? null : '0') : (on ? '1' : null)); }
       });
       syncs.push(function () { t.sync(); });
     }
 
     if (typeof LongpipeEngine !== 'undefined') {
       select('Segmentation engine',
-        'MediaPipe is the default. Longpipe is experimental: it runs its own model on the GPU and its output is turned into a mask (see the diagnostic).',
+        'Longpipe is the default: it runs its own model on the GPU and its output is turned into a mask (see the diagnostic). MediaPipe is the fallback, and what a Longpipe that cannot start ends up on.',
         'segmentation-engine',
-        [['mediapipe', 'MediaPipe (default)'], ['longpipe', 'Longpipe (experimental)']],
+        [['longpipe', 'Longpipe (default)'], ['mediapipe', 'MediaPipe']],
         function () { return engine(); },
         function (v) { setEngine(v); });
       toggle('Longpipe blur',
-        'With Longpipe, plain blur is Longpipe\'s own picture instead of ours. Virtual backgrounds still use our compositing. Until Longpipe is running, our blur is shown.',
-        'toggle-longpipe-blur', 'longpipe-blur');
+        'On by default. With Longpipe, plain blur is Longpipe\'s own picture instead of ours. Virtual backgrounds still use our compositing. Until Longpipe is running, our blur is shown.',
+        'toggle-longpipe-blur', 'longpipe-blur', true);
       select('Longpipe quality preset',
         'Auto lets Longpipe benchmark the device. Applies by restarting its pipeline.',
         'longpipe-preset',
@@ -6209,7 +6266,7 @@ var VideoEffects = (function () {
     var note = document.createElement('p');
     note.className = 'settings-hint';
     note.style.marginTop = '10px';
-    note.textContent = '?segengine=longpipe, ?maskcut=0.5 and ?segdiag=1 in the page address override these for one visit.';
+    note.textContent = '?segengine=mediapipe, ?maskcut=0.5 and ?segdiag=1 in the page address override these for one visit.';
     el.appendChild(note);
 
     return { sync: function () { syncs.forEach(function (f) { f(); }); } };
