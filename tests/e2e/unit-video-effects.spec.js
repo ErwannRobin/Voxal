@@ -1573,13 +1573,50 @@ test.describe('the empty-room reference', () => {
       // Knock the camera: a different room.
       window.__scene = 'moved';
       const stale = await __waitFor(() => VideoEffects.referenceState() === 'stale', 4000);
-      const faded = await __waitFor(() => VideoEffects.active().refWeight === 0, 10000);
+      // The captured picture is set aside; the room learned by itself (still
+      // empty of trust here) is what the reference falls back on.
+      const handedOver = await __waitFor(() => VideoEffects.active().referenceSource() !== 'captured', 4000);
       // And back: the reference is trusted again.
       window.__scene = 'person';
       const back = await __waitFor(() => VideoEffects.referenceState() === 'ready', 4000);
-      return { r, ready, stale, faded, back };
+      return { r, ready, stale, handedOver, back };
     });
-    expect(seen).toEqual({ r: { ok: true }, ready: true, stale: true, faded: true, back: true });
+    expect(seen).toEqual({ r: { ok: true }, ready: true, stale: true, handedOver: true, back: true });
+  });
+
+  // No capture at all: the room is learned from what holds still while the
+  // model sees nobody, and then cuts the model's wrong band exactly as a
+  // captured picture does.
+  test('learns the room by itself from what never moves', async ({ page }) => {
+    await seedEffectsRoom(page);
+    await installScene(page);
+    const seen = await page.evaluate(async () => {
+      VideoEffects.setReference(true);
+      VideoEffects.writeMode('blur');
+      await startVideoShare();
+      window.__voxalSegStub = { empty: true };
+      const learned = await __waitFor(() => VideoEffects.active().referenceSource() === 'learned', 15000);
+      // Let trust build: ~60 still frames per pixel.
+      await __sleep(8000);
+      window.__voxalSegStub = true;
+      window.__scene = 'person';
+      await __sleep(600);
+      const band = { x: 93, y: 150 };
+      const ready = await __waitFor(() => VideoEffects.active().refWeight > 0.99, 4000);
+      await __sleep(400);
+      return { learned, ready, captured: VideoEffects.hasReference(),
+               band: __probe(band.x, band.y), person: __probe(160, 170) };
+    });
+    expect(seen.learned).toBe(true);
+    expect(seen.ready).toBe(true);
+    expect(seen.captured).toBe(false);
+    // Same band as the captured test: blurred room, not the sharp yellow stripe.
+    expect(seen.band[2]).toBeGreaterThan(90);
+    expect(seen.band[0]).toBeLessThan(200);
+    // The person is never learned as room.
+    expect(Math.abs(seen.person[0] - 0xc8)).toBeLessThan(16);
+    expect(Math.abs(seen.person[1] - 0x96)).toBeLessThan(16);
+    expect(Math.abs(seen.person[2] - 0x78)).toBeLessThan(16);
   });
 
   // The desktop preferences window stores the switch but holds no picture —

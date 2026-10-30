@@ -459,6 +459,39 @@ A capture is refused (`reason: 'present'`) if the model calls more than
 `REF_PRESENT_MAX` (2%) of any frame during it a person: a reference with you in
 it would teach the pipeline that you are the room.
 
+**The room also learns itself** (`FRAG_REF_LEARN`, `learnStep()`), with no
+capture at all, whenever *Fixed camera* is on and the device is not a phone
+(a held phone has no still room, so it would only cost). A second ping-pong
+texture at the reference's size holds a learned picture whose alpha is per-pixel
+trust. Per frame and pixel:
+
+- **room and still** (same score as the reference): trust climbs by
+  `LEARN_UP` (~2 s at 30 fps to be believed) and the picture follows slow drift;
+- **room and changed**: trust falls fast and, nearly gone, the pixel is
+  re-seeded — a curtain or a passer-by never gets in, and a knocked camera
+  forgets itself within a second;
+- **the model's band round you**: frozen — nothing learned, nothing forgotten,
+  because that band is exactly where the reference decides, so the room behind
+  it must survive you stepping in front;
+- **deep inside you** (the same eroded core the composite protects): trust
+  collapses, so a limb the model missed for a while and learned as wall is
+  forgotten once the model finds it.
+
+`referenceSource()` picks the picture: the captured one while it is loaded and
+matches, the learned one otherwise (after `LEARN_MIN_FRAMES` masks). A pixel not
+yet trusted (`LEARN_TRUST_LO/HI`) gives the reference no opinion, so it only
+ever takes away where it is sure. Capturing stays the fast, exact way to start;
+learning is what fills in once the capture goes stale and what works for anybody
+who never captured. It is memory-only like the capture, and switching *Fixed
+camera* off clears it.
+
+**It removes what it recognises.** The difference goes through a second
+smoothstep (`REF_HARDEN_*`) so a pixel that matches the room goes to 0 rather
+than keeping a faint sharp halo, the "ask the reference" window starts earlier
+(`REF_SCORE_LO/HI` 0.08/0.22) and the protected core is eroded further
+(`REF_CORE_ERODE` 7, `REF_CORE_LO/HI` 0.70/0.98). Cost: a shirt the colour of the
+wall loses more of its edge than before.
+
 **Privacy.** The picture lives in a module-level variable, in memory only — it
 survives turning the camera off and on, and nothing else. It is never written
 to storage and never sent. Switching the setting off **forgets** it, not just

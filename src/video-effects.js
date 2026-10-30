@@ -291,8 +291,8 @@ var VideoEffects = (function () {
   // The difference score, 0 = identical to the room, mapped through
   // smoothstep(LO, HI) to "how much this is not the room". Reasoned, not
   // measured on a real room — see docs/video-effects.md.
-  var REF_SCORE_LO       = 0.10;
-  var REF_SCORE_HI       = 0.28;
+  var REF_SCORE_LO       = 0.08;
+  var REF_SCORE_HI       = 0.22;
   var REF_MATCH_MAX      = 0.15;  // the CPU probe's "still the same room" score
   // Where the model is sure enough that the reference is not asked: the
   // blended mask ERODED by REF_CORE_ERODE mask texels, through
@@ -301,20 +301,39 @@ var VideoEffects = (function () {
   // of 1.0 right up to its staircase edge would leave the reference nothing
   // to decide. Four texels is ~20 px on a 1280-wide camera: the region where
   // hair and shoulders go wrong, and no deeper.
-  var REF_CORE_ERODE     = 4;
+  var REF_CORE_ERODE     = 7;
   // Edge colour decontamination (FRAG_COMPOSITE): how far the person's colour
   // is pulled into the matte's band, 0-1, and how far apart, in matte texels,
   // the four taps either side of the band are.
   var DECON_STRENGTH     = 0.85;
   var DECON_STEP         = 2.0;
-  var REF_CORE_LO        = 0.60;
-  var REF_CORE_HI        = 0.95;
+  var REF_CORE_LO        = 0.70;
+  var REF_CORE_HI        = 0.98;
   // The band the reference may decide is widened by this much, in mask
   // texels, while it is in use — hair the model missed can only be given back
   // if it is inside the band.
   var REF_DILATE_EXTRA   = 2;
   var REF_TEMPORAL       = 0.6;   // per-frame blend of the difference, toward the new frame
   var REF_FADE           = 0.15;  // per-frame ease of the reference's weight in and out
+  // A matched pixel is room, not "a bit less person": the difference is pushed
+  // through this second smoothstep before it multiplies the matte, so a band
+  // pixel that matches the room goes to 0 instead of keeping a faint sharp halo.
+  var REF_HARDEN_LO      = 0.20;
+  var REF_HARDEN_HI      = 0.65;
+  // The room learned by itself (see FRAG_REF_LEARN): per-pixel confidence in
+  // the learned picture climbs by LEARN_UP per frame while the pixel is room and
+  // still, falls by LEARN_DOWN per frame while it changes, and collapses while
+  // the model calls it person. ~2 s of stillness (at 30 fps) is enough to be
+  // trusted; the reference ignores pixels below LEARN_TRUST_LO and fully uses
+  // them above LEARN_TRUST_HI.
+  var LEARN_UP           = 1 / 60;
+  var LEARN_DOWN         = 1 / 12;
+  var LEARN_RATE         = 1 / 16;  // how fast a trusted pixel follows slow drift (light, shadows)
+  var LEARN_STABLE_LO    = 0.10;    // difference score under which a pixel counts as still…
+  var LEARN_STABLE_HI    = 0.20;    // …and over which it counts as changed
+  var LEARN_TRUST_LO     = 0.35;
+  var LEARN_TRUST_HI     = 0.70;
+  var LEARN_MIN_FRAMES   = 45;      // masks seen before the learned picture is consulted at all
 
   var IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
 
@@ -2026,11 +2045,16 @@ var VideoEffects = (function () {
       // The reference through the SAME four taps. Sampled once, it is sharper
       // than the box-filtered camera, and every edge in the room — a door
       // frame, a shelf — would read as "different" along its length.
-      '  vec3 p = texture(uPlate, vUv + vec2(-uOff.x, -uOff.y)).rgb;',
-      '  p += texture(uPlate, vUv + vec2( uOff.x, -uOff.y)).rgb;',
-      '  p += texture(uPlate, vUv + vec2(-uOff.x,  uOff.y)).rgb;',
-      '  p += texture(uPlate, vUv + vec2( uOff.x,  uOff.y)).rgb;',
-      '  p = clamp(p * 0.25 * uGain, 0.0, 1.0);',
+      // The plate's alpha is how far it is trusted here: 1 everywhere for a
+      // captured picture, per pixel for the learned one. Colour is averaged
+      // weighted by it, so a pixel not yet learned cannot bleed black in.
+      '  vec4 q = texture(uPlate, vUv + vec2(-uOff.x, -uOff.y));',
+      '  vec4 acc = vec4(q.rgb * q.a, q.a);',
+      '  q = texture(uPlate, vUv + vec2( uOff.x, -uOff.y)); acc += vec4(q.rgb * q.a, q.a);',
+      '  q = texture(uPlate, vUv + vec2(-uOff.x,  uOff.y)); acc += vec4(q.rgb * q.a, q.a);',
+      '  q = texture(uPlate, vUv + vec2( uOff.x,  uOff.y)); acc += vec4(q.rgb * q.a, q.a);',
+      '  vec3 p = clamp(acc.rgb / max(acc.a, 0.001) * uGain, 0.0, 1.0);',
+      '  float trust = smoothstep(' + f(LEARN_TRUST_LO) + ', ' + f(LEARN_TRUST_HI) + ', acc.a * 0.25);',
       '  vec3 Y = vec3(0.2126, 0.7152, 0.0722);',
       '  float yc = dot(c, Y);',
       '  float yp = dot(p, Y);',
@@ -2040,6 +2064,9 @@ var VideoEffects = (function () {
       '  float chroma = length(cc - pc) * 4.0 * smoothstep(0.04, 0.15, max(yc, yp));',
       '  float score = max(chroma, lum * 0.7);',
       '  float d = smoothstep(' + f(REF_SCORE_LO) + ', ' + f(REF_SCORE_HI) + ', score);',
+      '  d = smoothstep(' + f(REF_HARDEN_LO) + ', ' + f(REF_HARDEN_HI) + ', d);',
+      // Nothing known here: the reference has no opinion and takes nothing away.
+      '  d = mix(1.0, d, trust);',
       '  float prev = texture(uPrev, vUv).r;',
       '  outColor = vec4(mix(prev, d, uAlpha), 0.0, 0.0, 1.0);',
       '}'
@@ -2047,6 +2074,63 @@ var VideoEffects = (function () {
   }
 
   var FRAG_REF_DIFF = fragRefDiff();
+
+  // The room, learned from what never moves. Ping-pong RGBA at the reference's
+  // size: rgb is the learned picture, alpha how far it is trusted (0 = never
+  // seen). Per pixel and frame:
+  //   - the model's band round you (uMask, the dilated mask — it reaches past
+  //     you): frozen, nothing learned and nothing forgotten. This is the band
+  //     the reference exists to decide, so the room learned behind it must
+  //     survive you stepping in front of it;
+  //   - deep inside you (uCore, the same eroded core the composite protects):
+  //     trust collapses, so a limb the model missed for a while and learned as
+  //     wall is forgotten once the model finds it;
+  //   - room and still (same score as the reference, so "still" and "the
+  //     same" cannot disagree): trust climbs, and the picture follows slowly;
+  //   - room and changed: trust falls fast, and once it is nearly gone the
+  //     pixel is re-seeded from the camera. A moved camera therefore forgets
+  //     itself within a second, and a curtain or a passer-by never gets in.
+  // One bilinear tap of the camera, not the reference's four: the consumer
+  // box-samples the learned picture itself, and softening it twice would make
+  // every edge in the room read as "different". uGo is 0 until the model has
+  // produced a mask, so the first frames cannot learn you.
+  var FRAG_REF_LEARN = [
+    '#version 300 es',
+    'precision mediump float;',
+    'in vec2 vUv;',
+    'uniform sampler2D uCam;',
+    'uniform sampler2D uPrev;',
+    'uniform sampler2D uMask;',
+    'uniform sampler2D uCore;',
+    'uniform float uGo;',
+    'out vec4 outColor;',
+    'void main() {',
+    '  vec3 c = texture(uCam, vUv).rgb;',
+    '  vec4 pv = texture(uPrev, vUv);',
+    '  float room = uGo * (1.0 - smoothstep(0.03, 0.15, texture(uMask, vUv).r));',
+    '  vec3 Y = vec3(0.2126, 0.7152, 0.0722);',
+    '  float yc = dot(c, Y), yp = dot(pv.rgb, Y);',
+    '  float lum = abs(yc - yp) / max(max(yc, yp), 0.08);',
+    '  vec3 cc = c / max(c.r + c.g + c.b, 0.03);',
+    '  vec3 pc = pv.rgb / max(pv.r + pv.g + pv.b, 0.03);',
+    '  float chroma = length(cc - pc) * 4.0 * smoothstep(0.04, 0.15, max(yc, yp));',
+    '  float score = max(chroma, lum * 0.7);',
+    '  float still = 1.0 - smoothstep(' + LEARN_STABLE_LO.toFixed(3) + ', ' + LEARN_STABLE_HI.toFixed(3) + ', score);',
+    '  float conf = pv.a;',
+    '  bool unseen = conf < 0.004;',
+    '  conf += ' + LEARN_UP.toFixed(5) + ' * still * room - ' + LEARN_DOWN.toFixed(5) + ' * (1.0 - still) * room;',
+    '  conf *= mix(1.0, 0.6, smoothstep(' + REF_CORE_LO.toFixed(2) + ', ' + REF_CORE_HI.toFixed(2) + ', texture(uCore, vUv).r));',
+    '  conf = clamp(conf, 0.0, 1.0);',
+    '  vec3 plate = pv.rgb;',
+    // Follow the camera: at once where nothing is known or trust is nearly
+    // gone, slowly where the pixel is still.
+    '  float follow = (unseen || conf < 0.08) ? 1.0 : ' + LEARN_RATE.toFixed(5) + ' * still;',
+    '  plate = mix(plate, c, follow * room);',
+    // A pixel that has just been seeded starts above the "unseen" line.
+    '  if (room > 0.5 && conf < 0.008) conf = 0.008;',
+    '  outColor = vec4(plate, conf);',
+    '}'
+  ].join('\n');
 
   // The segmentation diagnostic's one program (compiled only while the panel
   // is open). Everything is in the mask's own convention, rows top first,
@@ -2653,6 +2737,7 @@ var VideoEffects = (function () {
     this.lastRefStats = 0;
     this.refCapture = null;
     this.refStateSent = null;
+    this.learnFrames = 0;
 
     this.frames = 0;
     this.windowStart = 0;
@@ -2883,6 +2968,7 @@ var VideoEffects = (function () {
     this.pDilate = program(gl, FRAG_DILATE);
     this.pComp = program(gl, FRAG_COMPOSITE);
     this.pRef  = program(gl, FRAG_REF_DIFF);
+    this.pLearn = program(gl, FRAG_REF_LEARN);
     this.pErode = program(gl, FRAG_ERODE);
 
     this.texCam = texture(gl, 1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
@@ -2952,6 +3038,13 @@ var VideoEffects = (function () {
     this.texRefB = texture(gl, this.refW, this.refH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
     this.fbRefA = framebuffer(gl, this.texRefA);
     this.fbRefB = framebuffer(gl, this.texRefB);
+    // The room learned by itself: same shape as the captured picture, alpha =
+    // trust. Memory only, like the capture; clearLearned() empties it.
+    this.texLearnA = texture(gl, this.refW, this.refH, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+    this.texLearnB = texture(gl, this.refW, this.refH, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+    this.fbLearnA = framebuffer(gl, this.texLearnA);
+    this.fbLearnB = framebuffer(gl, this.texLearnB);
+    this.clearLearned();
     // The core: the blended mask, eroded. Mask-sized, rebuilt per inference
     // while a reference is loaded.
     this.texCore = texture(gl, this.segW, this.segH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
@@ -3041,7 +3134,50 @@ var VideoEffects = (function () {
   Processor.prototype.applyReference = function () {
     this.refOn = readReference();
     if (!this.refOn && this.refCapture) this.finishCapture({ ok: false, reason: 'off' });
+    if (!this.refOn) this.clearLearned();
     this.syncReference();
+  };
+
+  // Forget everything the learner knows. Trust 0 everywhere means "never
+  // seen", which the reference reads as no opinion.
+  Processor.prototype.clearLearned = function () {
+    var gl = this.gl;
+    this.learnFrames = 0;
+    if (!gl || !this.fbLearnA) return;
+    [this.fbLearnA, this.fbLearnB].forEach(function (fb) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    });
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  };
+
+  // Which picture the reference compares with right now: the captured one
+  // while it is loaded and still matches, otherwise the learned one once the
+  // model has been watching long enough to have seen a room. null = neither.
+  Processor.prototype.referenceSource = function () {
+    if (this.refCapture || !this.refOn) return null;
+    if (this.refLoaded && !this.refStale) return 'captured';
+    if (this.learnFrames >= LEARN_MIN_FRAMES) return 'learned';
+    return null;
+  };
+
+  // One learning step, from draw(). A phone is held, not fixed: nothing would
+  // ever be still, so it would only cost.
+  Processor.prototype.learnStep = function () {
+    if (!this.refOn || IS_MOBILE || this.refCapture) return;
+    var gl = this.gl;
+    if (this.maskPrimed) this.learnFrames++;
+    gl.useProgram(this.pLearn);
+    this.bindTex(this.pLearn, 'uCam', 0, this.texCam);
+    this.bindTex(this.pLearn, 'uPrev', 1, this.texLearnA);
+    this.bindTex(this.pLearn, 'uMask', 2, this.texMaskA);
+    this.bindTex(this.pLearn, 'uCore', 3, this.texCore);
+    gl.uniform1f(uloc(gl, this.pLearn, 'uGo'), this.maskPrimed ? 1 : 0);
+    this.drawQuad(this.fbLearnB, this.refW, this.refH);
+    var lt = this.texLearnA, lf = this.fbLearnA;
+    this.texLearnA = this.texLearnB; this.fbLearnA = this.fbLearnB;
+    this.texLearnB = lt; this.fbLearnB = lf;
   };
 
   // The camera this processor is reading, as far as the browser will say.
@@ -3944,7 +4080,7 @@ var VideoEffects = (function () {
     // the blended mask eroded by REF_CORE_ERODE, as two 3-tap min passes per
     // axis at half that stride (taps at 0, ±s, ±2s — no gaps for a sliver to
     // slip through). The work pair is scratch, exactly as for the dilate.
-    if (this.refLoaded) {
+    if (this.refLoaded || (this.refOn && !IS_MOBILE)) {
       var es = REF_CORE_ERODE / 2;
       gl.useProgram(this.pErode);
       this.bindTex(this.pErode, 'uTex', 0, this.texMaskS);
@@ -4036,15 +4172,20 @@ var VideoEffects = (function () {
 
     // The empty-room reference: ease its weight toward whether it should be
     // used, and while it carries any weight, compare this frame to it.
-    var refWant = (this.refLoaded && !this.refStale && !this.refCapture) ? 1 : 0;
+    this.learnStep();
+    var refSrc = this.referenceSource();
+    var refWant = refSrc ? 1 : 0;
     this.refWeight += (refWant - this.refWeight) * REF_FADE;
     if (refWant === 0 && this.refWeight < 0.001) this.refWeight = 0;
     if (this.refWeight > 0) {
+      var learned = refSrc !== 'captured';
       gl.useProgram(this.pRef);
       this.bindTex(this.pRef, 'uCam', 0, this.texCam);
-      this.bindTex(this.pRef, 'uPlate', 1, this.texPlate);
+      this.bindTex(this.pRef, 'uPlate', 1, learned ? this.texLearnA : this.texPlate);
       this.bindTex(this.pRef, 'uPrev', 2, this.texRefA);
-      gl.uniform3f(uloc(gl, this.pRef, 'uGain'), this.refGain[0], this.refGain[1], this.refGain[2]);
+      // The learned picture follows the camera's exposure by itself.
+      var rg = learned ? [1, 1, 1] : this.refGain;
+      gl.uniform3f(uloc(gl, this.pRef, 'uGain'), rg[0], rg[1], rg[2]);
       gl.uniform2f(uloc(gl, this.pRef, 'uOff'), 0.25 / this.refW, 0.25 / this.refH);
       gl.uniform1f(uloc(gl, this.pRef, 'uAlpha'), REF_TEMPORAL);
       this.drawQuad(this.fbRefB, this.refW, this.refH);
@@ -4488,15 +4629,17 @@ var VideoEffects = (function () {
     this.diagRelease();
     [this.texCam, this.texImg, this.texBlurA, this.texBlurB, this.texMaskRaw,
      this.texMaskS, this.texMaskSB, this.texMaskA, this.texMaskB,
-     this.texPlate, this.texRefA, this.texRefB, this.texCore].forEach(function (t) {
+     this.texPlate, this.texRefA, this.texRefB, this.texLearnA, this.texLearnB,
+     this.texCore].forEach(function (t) {
       if (t) try { gl.deleteTexture(t); } catch (e) { /* ignore */ }
     });
     [this.fbBlurA, this.fbBlurB, this.fbMaskS, this.fbMaskSB,
-     this.fbMaskA, this.fbMaskB, this.fbRefA, this.fbRefB, this.fbCore].forEach(function (f) {
+     this.fbMaskA, this.fbMaskB, this.fbRefA, this.fbRefB, this.fbLearnA, this.fbLearnB,
+     this.fbCore].forEach(function (f) {
       if (f) try { gl.deleteFramebuffer(f); } catch (e) { /* ignore */ }
     });
     [this.pDown, this.pBlur, this.pFeather, this.pMix, this.pDilate, this.pComp,
-     this.pRef, this.pErode].forEach(function (p) {
+     this.pRef, this.pLearn, this.pErode].forEach(function (p) {
       if (p) try { gl.deleteProgram(p); } catch (e) { /* ignore */ }
     });
     [this.texScene, this.texSoftA, this.texSoftB].concat(this.texSceneOut || []).forEach(function (t) {
