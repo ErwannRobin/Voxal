@@ -634,6 +634,8 @@ var VideoEffects = (function () {
   var HAIR_REACH = 2.0;
   var HAIR_SIGMA = 40.0;
   var HAIR_MIX = 0.75;
+  // How much wider the matte's smoothstep window is at full motion (look.motion).
+  var EDGE_MOTION_SOFTEN = 0.08;
   var LIGHT_FACING = [0.45, 1.5];
   // Harmonisation: the scene's colour pulled into the person's mid-tones (the
   // rim and the extremes are left to the wrap and the black level), and the
@@ -2121,6 +2123,7 @@ var VideoEffects = (function () {
     'uniform highp uint uTiltBits;',
     'uniform float uDecon;',
     'uniform float uHair;',
+    'uniform float uMotion;',
     // Segmentation diagnostic only (see "The segmentation diagnostic"): 1
     // prints the matte `m` this shader is about to mix with, as grey. Always 0
     // in normal use, which makes the branch below dead.
@@ -2138,7 +2141,10 @@ var VideoEffects = (function () {
     // off gradually at the subject, and a window centred on 0.5 cuts inside the
     // face rather than outside it. Better to keep a sliver of background sharp
     // than to blur somebody's ear off. See MASK_EDGE_LO / MASK_EDGE_HI.
-    '  float m = smoothstep(uEdge.x, uEdge.y, texture(uMask, flip).r);',
+    // While you move, the mask lags the picture by a frame or two and its edge
+    // crawls; a wider window hides that, and a held pose gets the sharp edge back.
+    '  float mw = uMotion * ' + EDGE_MOTION_SOFTEN.toFixed(3) + ';',
+    '  float m = smoothstep(uEdge.x - mw, uEdge.y + mw, texture(uMask, flip).r);',
     // The empty-room reference, when there is one. `m` is the model's band —
     // dilated, so it reaches past you — and the reference only ever takes
     // away from it: outside the band it is never asked, so a shadow across
@@ -4091,6 +4097,7 @@ var VideoEffects = (function () {
     gl.uniform1f(uloc(gl, this.pComp, 'uWrap'), useScene && this.scene ? this.scene.wrap : 0);
     gl.uniform2f(uloc(gl, this.pComp, 'uEdge'), this.edge.lo, this.edge.hi);
     gl.uniform1f(uloc(gl, this.pComp, 'uDecon'), this.decon);
+    gl.uniform1f(uloc(gl, this.pComp, 'uMotion'), window.__voxalNoEdgeMotion ? 0 : Math.min(1, Math.max(0, this.look.motion || 0)));
     gl.uniform1f(uloc(gl, this.pComp, 'uHair'), window.__voxalNoHairRefine ? 0 : HAIR_MIX);
     filmUniform(gl, this.pComp, this.look.exposure);
     var x = this.bgXform();

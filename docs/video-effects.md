@@ -699,6 +699,9 @@ blurred wide, rebuilt per inference in four draws on ~2,000 pixels.
   takes its colour while the far side falls to ambient (none of it for a frontal
   light). The scene's grain follows the camera too: more of it, with colour noise,
   as the measured exposure drops. Everything scales with the scene's `wrap`.
+* **A softer edge while you move** — the matte's smoothstep window widens by
+  `EDGE_MOTION_SOFTEN` (0.08) at full motion (the look's `motion`), hiding the
+  mask's lag; a held pose gets the sharp edge back. Sender-side only.
 
 ### Interactions
 
