@@ -585,3 +585,90 @@ test.describe('Settings → Advanced → Segmentation debug', () => {
     expect(prefs.rows).toBeGreaterThanOrEqual(5);
   });
 });
+
+test.describe('a phone\'s camera shape', () => {
+  // A portrait camera <video>, as Voxal's Processor holds it.
+  async function portraitVideo(page, w = 240, h = 320) {
+    await page.evaluate(async ([w, h]) => {
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const x = c.getContext('2d'); let n = 0;
+      const paint = () => { x.fillStyle = `rgb(${(n++ * 9) % 255},80,120)`; x.fillRect(0, 0, w, h); };
+      paint();
+      const s = c.captureStream(15); setInterval(paint, 40);
+      const v = document.createElement('video'); v.muted = true; v.playsInline = true; v.srcObject = s;
+      await v.play();
+      for (let i = 0; i < 50 && !v.videoWidth; i++) await new Promise((r) => setTimeout(r, 40));
+      window.__portraitVideo = v; window.__portraitStream = s;
+    }, [w, h]);
+  }
+
+  test('on a phone Longpipe is fed the upright camera picture, not the raw track', async ({ page }) => {
+    await portraitVideo(page);
+    const r = await page.evaluate(async () => {
+      window.__voxalLongpipeRelay = true;
+      window.__voxalLongpipeStub = window.__mkLongpipeStub('#d9a080');
+      const seg = await LongpipeEngine.create(window.__portraitStream, window.__portraitVideo);
+      await new Promise((r) => setTimeout(r, 400));
+      const p = window.__lpMade[0];
+      const input = p.input.getVideoTracks()[0];
+      const res = { relay: seg.relay.canvas.width + 'x' + seg.relay.canvas.height,
+                    notTheCamera: input !== window.__portraitStream.getVideoTracks()[0],
+                    stats: (await seg.stats()).relay };
+      seg.close();
+      res.after = { relayStopped: input.readyState, camera: window.__portraitStream.getVideoTracks()[0].readyState };
+      return res;
+    });
+    expect(r.relay).toBe('240x320');                            // the picture's own, portrait shape
+    expect(r.notTheCamera).toBe(true);
+    expect(r.stats).toBe('240x320');
+    expect(r.after).toEqual({ relayStopped: 'ended', camera: 'live' });
+  });
+
+  test('on a desktop browser the camera track goes straight in', async ({ page }) => {
+    await portraitVideo(page);
+    const r = await page.evaluate(async () => {
+      window.__voxalLongpipeStub = window.__mkLongpipeStub('#d9a080');
+      const seg = await LongpipeEngine.create(window.__portraitStream, window.__portraitVideo);
+      const res = { relay: seg.relay, stats: (await seg.stats()).relay };
+      seg.close();
+      return res;
+    });
+    expect(r).toEqual({ relay: null, stats: 'off' });
+  });
+
+  test('the Processor hands its own video to the engine', async ({ page }) => {
+    const r = await page.evaluate(async () => {
+      window.__voxalLongpipeRelay = true;
+      window.__voxalLongpipeStub = window.__mkLongpipeStub('#d9a080');
+      localStorage.setItem('segmentation-engine', 'longpipe');
+      const out = await VideoEffects.wrap(window.__camStream(), 'blur');
+      const st = await VideoEffects.engineStats();
+      VideoEffects.stop(out);
+      localStorage.removeItem('segmentation-engine');
+      return st.relay;
+    });
+    expect(r).toBe('320x240');
+  });
+
+  test('turning the phone reopens the pipeline on the new shape', async ({ page }) => {
+    await portraitVideo(page, 240, 320);
+    const r = await page.evaluate(async () => {
+      window.__voxalLongpipeRelay = true;
+      window.__voxalLongpipeStub = window.__mkLongpipeStub('#d9a080');
+      const seg = await LongpipeEngine.create(window.__portraitStream, window.__portraitVideo);
+      // The same <video> now shows a landscape picture.
+      const c = document.createElement('canvas'); c.width = 320; c.height = 240;
+      const x = c.getContext('2d'); let n = 0;
+      const paint = () => { x.fillStyle = `rgb(${(n++ * 9) % 255},120,80)`; x.fillRect(0, 0, 320, 240); };
+      paint();
+      const s = c.captureStream(15); setInterval(paint, 40);
+      window.__portraitVideo.srcObject = s;
+      for (let i = 0; i < 100 && window.__lpMade.length < 2; i++) await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 300));
+      const res = { made: window.__lpMade.length, firstDestroyed: window.__lpMade[0].destroyed, relay: seg.relay && seg.relay.canvas.width + 'x' + seg.relay.canvas.height };
+      seg.close();
+      return res;
+    });
+    expect(r).toEqual({ made: 2, firstDestroyed: true, relay: '320x240' });
+  });
+});

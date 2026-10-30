@@ -1698,10 +1698,10 @@ var VideoEffects = (function () {
   // `engine` forces one; absent follows the preference. A Longpipe that cannot
   // load or start falls back to MediaPipe here, so the camera never waits on an
   // experiment: the reason is kept for the diagnostic panel.
-  function createSegmenter(raw, engine) {
+  function createSegmenter(raw, engine, video) {
     var want = engine || selectedEngine();
     if (want === 'longpipe' && (!window.__voxalSegStub || window.__voxalLongpipeStub) && typeof LongpipeEngine !== 'undefined') {
-      return LongpipeEngine.create(raw).then(function (seg) {
+      return LongpipeEngine.create(raw, video).then(function (seg) {
         _engineFallback = null;
         return seg;
       }, function (e) {
@@ -2720,7 +2720,7 @@ var VideoEffects = (function () {
     if (engine === this.engine) return Promise.resolve(this.engine);
     this._swapping = true;
     var old = this.segmenter;
-    return createSegmenter(this.raw, engine).then(function (seg) {
+    return createSegmenter(this.raw, engine, this.video).then(function (seg) {
       if (self.stopped) { try { seg.close(); } catch (e) { /* ignore */ } return self.engine; }
       self.segmenter = null;                       // runSegment() must not use the one being closed
       if (old) { try { old.onFail = null; old.close(); } catch (e) { /* ignore */ } }
@@ -2752,7 +2752,7 @@ var VideoEffects = (function () {
     var self = this;
     return this.video.play().catch(function () { /* autoplay of a muted local stream */ })
       .then(function () { return self.waitForFrame(); })
-      .then(function () { return createSegmenter(self.raw); })
+      .then(function () { return createSegmenter(self.raw, undefined, self.video); })
       .then(function (seg) {
         if (self.stopped) { try { seg.close(); } catch (e) { /* ignore */ } return null; }
         self.adoptSegmenter(seg);

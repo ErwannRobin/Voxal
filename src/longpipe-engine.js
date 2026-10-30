@@ -181,8 +181,10 @@ var LongpipeEngine = (function () {
     } catch (e) { return 'auto'; }
   }
 
-  function LongpipeSegmenter(raw) {
+  function LongpipeSegmenter(raw, camVideo) {
     this.engine = 'longpipe';
+    this.camVideo = camVideo || null;   // Voxal's own <video> of the camera: upright, whatever the sensor says
+    this.relay = null;
     this.onFail = null;
     this.closed = false;
     this.pipeline = null;
@@ -221,6 +223,70 @@ var LongpipeEngine = (function () {
     this.openPromise = this.open(raw);
   }
 
+  // A phone's camera track says 1280x720 while its pictures are portrait (the
+  // browser turns them for display), and Longpipe reads the track's frames
+  // itself: on an iPhone the picture came out turned a quarter and stretched to
+  // the wrong shape. So on a phone Longpipe is fed Voxal's own <video> redrawn on
+  // a canvas — upright and the shape we draw — instead of the camera track. It
+  // costs one canvas copy per frame; `longpipe-relay` = 1 / 0 forces it on / off.
+  function relayWanted(video) {
+    if (!video) return false;
+    if (typeof window.__voxalLongpipeRelay === 'boolean') return window.__voxalLongpipeRelay;
+    try {
+      var v = localStorage.getItem('longpipe-relay');
+      if (v === '1') return true;
+      if (v === '0') return false;
+    } catch (e) { /* storage blocked */ }
+    return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+  }
+
+  function openRelay(video, onFlip) {
+    var c = document.createElement('canvas');
+    var ctx = c.getContext('2d', { alpha: false });
+    function fit() {
+      var w = video.videoWidth || 0, h = video.videoHeight || 0;
+      if (!w || !h) return false;
+      if (c.width !== w || c.height !== h) c.width = w, c.height = h;
+      return true;
+    }
+    fit();
+    if (!c.width) { c.width = 640; c.height = 360; }
+    var wasLandscape = c.width >= c.height;
+    var cs = c.captureStream(0);
+    var track = cs.getVideoTracks()[0];
+    var manual = !!(track && typeof track.requestFrame === 'function');
+    if (!manual) {
+      // Safari: no requestFrame, the browser pulls frames on its own clock.
+      try { cs.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* ignore */ }
+      cs = c.captureStream(30);
+      track = cs.getVideoTracks()[0];
+    }
+    var stopped = false, last = -1, lastAt = 0;
+    // rAF, not requestVideoFrameCallback: that one has crashed Chromium across a
+    // srcObject switch on the very <video> we read (see KNOWLEDGE/learning.md).
+    function tick(now) {
+      if (stopped) return;
+      requestAnimationFrame(tick);
+      if (video.readyState < 2 || now - lastAt < 30) return;
+      if (video.currentTime === last) return;
+      last = video.currentTime; lastAt = now;
+      if (!fit()) return;
+      var landscape = c.width >= c.height;
+      if (landscape !== wasLandscape) { wasLandscape = landscape; if (onFlip) onFlip(); }
+      try { ctx.drawImage(video, 0, 0, c.width, c.height); } catch (e) { return; }
+      if (manual) { try { track.requestFrame(); } catch (e) { /* track ended */ } }
+    }
+    requestAnimationFrame(tick);
+    return {
+      canvas: c, stream: cs,
+      stop: function () {
+        stopped = true;
+        try { cs.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* ignore */ }
+        c.width = c.height = 0;
+      }
+    };
+  }
+
   LongpipeSegmenter.prototype.open = function (raw) {
     var self = this;
     this.pipeReady = false;
@@ -231,9 +297,18 @@ var LongpipeEngine = (function () {
       if (self.closed) return;
       var track = raw && raw.getVideoTracks()[0];
       if (!track) throw new Error('no camera track');
-      // A clone, so that stopping Longpipe's input can never stop the camera the
-      // rest of the app is using.
-      self.input = new MediaStream([track.clone()]);
+      if (relayWanted(self.camVideo)) {
+        // A turned phone is a new shape for Longpipe's pipeline: start it again.
+        self.relay = openRelay(self.camVideo, function () {
+          if (!self.closed && self.relayRaw) self.setSource(self.relayRaw);
+        });
+        self.relayRaw = raw;
+        self.input = self.relay.stream;
+      } else {
+        // A clone, so that stopping Longpipe's input can never stop the camera the
+        // rest of the app is using.
+        self.input = new MediaStream([track.clone()]);
+      }
       var opts = {
         background: { color: KEYS[self.keyIndex].rgb },
         audio: 'drop',
@@ -350,6 +425,7 @@ var LongpipeEngine = (function () {
 
   LongpipeSegmenter.prototype.teardownPipeline = function () {
     if (this.pipeline) { try { this.pipeline.destroy(); } catch (e) { /* ignore */ } this.pipeline = null; }
+    if (this.relay) { this.relay.stop(); this.relay = null; }
     if (this.input) { try { this.input.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* ignore */ } this.input = null; }
     if (this.video) { try { this.video.srcObject = null; } catch (e) { /* ignore */ } this.video = null; }
     this.pipeReady = false;
@@ -463,6 +539,7 @@ var LongpipeEngine = (function () {
       ourMsP95: percentile(this.times, 0.95),
       maskHz: span > 0 ? Math.round((this.stamps.length - 1) / span * 10) / 10 : null,
       edgeE: Math.round(this.edgeE * 1000) / 1000,
+      relay: this.relay ? this.relay.canvas.width + 'x' + this.relay.canvas.height : 'off',
       errors: this.errors.slice()
     };
     if (!this.pipeline || !this.pipeline.getStats) return Promise.resolve(out);
@@ -472,8 +549,8 @@ var LongpipeEngine = (function () {
     }, function () { return out; });
   };
 
-  function create(raw) {
-    var seg = new LongpipeSegmenter(raw);
+  function create(raw, camVideo) {
+    var seg = new LongpipeSegmenter(raw, camVideo);
     return seg.openPromise.then(function () { return seg; });
   }
 
