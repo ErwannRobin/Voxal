@@ -590,7 +590,14 @@ var VideoEffects = (function () {
   // the mid-tones) and a soft fall-off towards the corners. Only the scene —
   // you already carry your own camera's. Amounts are fractions of full scale.
   // `window.__voxalSceneFilmOff` switches it off for tests that compare pixels.
-  var SCENE_GRAIN = 0.012;
+  // A webcam's noise is not constant: it climbs as the light drops (the sensor
+  // gains up), and a real one has colour noise as well as brightness noise. So
+  // the grain is scaled by the measured exposure (the same look the scene is
+  // lit by) and carries a chroma part; a dim room gets a grainier scene, as the
+  // person in it already is.
+  var SCENE_GRAIN = 0.014;
+  var SCENE_GRAIN_DIM = 1.2;      // extra gain at the darkest exposure
+  var SCENE_GRAIN_CHROMA = 0.45;  // chroma noise, as a share of the luma noise
   var SCENE_VIGNETTE = 0.12;
   var FILM_GLSL = [
     'uniform vec3 uFilm;',
@@ -602,8 +609,11 @@ var VideoEffects = (function () {
     // uFilm = (grain, vignette, seed). Triangular noise, so it has no DC bias.
     'vec3 sceneFilm(vec3 c, vec2 uv) {',
     '  float n = filmHash(gl_FragCoord.xy, uFilm.z) + filmHash(gl_FragCoord.xy + 17.0, uFilm.z) - 1.0;',
+    '  vec3 nc = vec3(filmHash(gl_FragCoord.xy + 31.0, uFilm.z), filmHash(gl_FragCoord.xy + 47.0, uFilm.z),',
+    '                 filmHash(gl_FragCoord.xy + 59.0, uFilm.z)) * 2.0 - 1.0;',
     '  float l = dot(c, vec3(0.299, 0.587, 0.114));',
-    '  c += n * uFilm.x * (1.0 - 0.6 * abs(2.0 * l - 1.0));',
+    '  float k = uFilm.x * (1.0 - 0.6 * abs(2.0 * l - 1.0));',
+    '  c += n * k + (nc - dot(nc, vec3(0.3333))) * k * ' + SCENE_GRAIN_CHROMA.toFixed(3) + ';',
     '  vec2 d = uv - 0.5;',
     '  return c * (1.0 - uFilm.y * clamp(dot(d, d) * 2.0, 0.0, 1.0));',
     '}'
@@ -625,8 +635,20 @@ var VideoEffects = (function () {
   var HAIR_SIGMA = 40.0;
   var HAIR_MIX = 0.75;
   var LIGHT_FACING = [0.45, 1.5];
+  // Harmonisation: the scene's colour pulled into the person's mid-tones (the
+  // rim and the extremes are left to the wrap and the black level), and the
+  // person's blacks lifted towards the scene's own black level, so a dark wall
+  // and a face with crushed shadows (or the reverse) agree. LIGHT_MATCH_MID is
+  // the extra share of the tint applied where the picture is mid-grey.
   var LIGHT_MATCH_TINT = 0.12;
+  var LIGHT_MATCH_MID = 0.14;
   var LIGHT_MATCH_LIFT = 0.04;
+  var LIGHT_MATCH_BLACK = 0.06;
+  // Light across the body: the side towards the scene's key light is brighter
+  // and takes its colour, the far side falls towards the room's ambient. A
+  // frontal light (no shadow offset) has no side, so none of it.
+  var LIGHT_SIDE = 0.10;
+  var LIGHT_SIDE_TINT = 0.14;
   var LIGHT_BOUNCE = 0.12;
   var LIGHT_BLOOM = 0.35;
   var LIGHT_BLOOM_KNEE = 0.6;
@@ -649,8 +671,22 @@ var VideoEffects = (function () {
     '  vec3 avg = textureLod(uSceneEnv, vec2(0.5), 6.0).rgb;',
     '  vec3 tint = clamp(avg / max(dot(avg, LW), 0.04), 0.75, 1.3);',
     '  c = clamp(c, 0.0, 1.0);',
-    '  c *= mix(vec3(1.0), tint, ' + LIGHT_MATCH_TINT.toFixed(3) + ' * w);',
+    '  float mid = 4.0 * dot(c, LW) * (1.0 - dot(c, LW));',
+    '  c *= mix(vec3(1.0), tint, (' + LIGHT_MATCH_TINT.toFixed(3) + ' + ' + LIGHT_MATCH_MID.toFixed(3) + ' * mid) * w);',
     '  c += avg * ' + LIGHT_MATCH_LIFT.toFixed(3) + ' * w * (1.0 - dot(c, LW));',
+    // Blacks only: the darker the pixel, the more of the scene's own darkness
+    // (its average, quartered) is let into it.
+    '  c += avg * 0.25 * ' + LIGHT_MATCH_BLACK.toFixed(3) + ' * w * (1.0 - smoothstep(0.0, 0.35, dot(c, LW)));',
+    '  if (dot(uShadowOff, uShadowOff) > 1e-8) {',
+    // uShadowOff is in the camera picture's (flipped) space; the scene is not.
+    '    vec2 L = normalize(vec2(uShadowOff.x, -uShadowOff.y));',
+    '    float side = clamp(dot(uv - 0.5, L) * 1.6, -0.5, 0.5);',
+    '    vec3 key = textureLod(uSceneEnv, clamp(uv + L * 0.35, 0.0, 1.0), 5.0).rgb;',
+    '    vec3 keyTint = clamp(key / max(dot(key, LW), 0.04), 0.7, 1.4);',
+    '    c *= 1.0 + ' + LIGHT_SIDE.toFixed(3) + ' * w * side;',
+    '    c *= mix(vec3(1.0), keyTint, ' + LIGHT_SIDE_TINT.toFixed(3) + ' * w * smoothstep(-0.2, 0.5, side));',
+    '    c = clamp(c, 0.0, 1.0);',
+    '  }',
     '  vec3 below = textureLod(uSceneEnv, vec2(uv.x, max(uv.y - 0.2, 0.0)), 4.0).rgb;',
     '  float low = smoothstep(0.6, 0.0, uv.y);',
     '  c = 1.0 - (1.0 - c) * (1.0 - below * ' + LIGHT_BOUNCE.toFixed(3) + ' * w * low);',
@@ -663,9 +699,11 @@ var VideoEffects = (function () {
     '}'
   ].join('\n');
 
-  function filmUniform(gl, p) {
+  function filmUniform(gl, p, exposure) {
     var off = typeof window !== 'undefined' && window.__voxalSceneFilmOff;
-    gl.uniform3f(uloc(gl, p, 'uFilm'), off ? 0 : SCENE_GRAIN, off ? 0 : SCENE_VIGNETTE, Math.random());
+    var e = typeof exposure === 'number' && isFinite(exposure) ? Math.min(1, Math.max(0.3, exposure)) : 1;
+    var grain = SCENE_GRAIN * (1 + SCENE_GRAIN_DIM * (1 - e) / 0.7);
+    gl.uniform3f(uloc(gl, p, 'uFilm'), off ? 0 : grain, off ? 0 : SCENE_VIGNETTE, Math.random());
   }
 
   // --- mode: read, write, normalise ----------------------------------------
@@ -4054,7 +4092,7 @@ var VideoEffects = (function () {
     gl.uniform2f(uloc(gl, this.pComp, 'uEdge'), this.edge.lo, this.edge.hi);
     gl.uniform1f(uloc(gl, this.pComp, 'uDecon'), this.decon);
     gl.uniform1f(uloc(gl, this.pComp, 'uHair'), window.__voxalNoHairRefine ? 0 : HAIR_MIX);
-    filmUniform(gl, this.pComp);
+    filmUniform(gl, this.pComp, this.look.exposure);
     var x = this.bgXform();
     gl.uniform4f(uloc(gl, this.pComp, 'uBgXform'), x[0], x[1], x[2], x[3]);
     // The panes that need the composite's state, then the copy out. The real
@@ -5105,7 +5143,7 @@ var VideoEffects = (function () {
     gl.uniform1f(uloc(gl, p, 'uWrap'), hasScene ? this.scene.wrap : 0);
     gl.uniform1f(uloc(gl, p, 'uHasScene'), hasScene ? 1 : 0);
     gl.uniform3f(uloc(gl, p, 'uFlat'), KEYIN_FLAT[0], KEYIN_FLAT[1], KEYIN_FLAT[2]);
-    filmUniform(gl, p);
+    filmUniform(gl, p, this.look.exposure);
     var f = this.fit();
     gl.uniform2f(uloc(gl, p, 'uFit'), f[0], f[1]);
     this.drawQuad(null, this.canvas.width, this.canvas.height);
