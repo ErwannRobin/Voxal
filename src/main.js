@@ -14446,6 +14446,12 @@ function syncBackgroundTilt() {
   }
 }
 
+// The popover's copy of Scene light: a scene is the only background it lights.
+function syncVideoBackgroundLight() {
+  var row = document.getElementById('video-bg-light');
+  if (row) row.classList.toggle('hidden', !backgroundMovable());
+}
+
 function syncVideoBackgroundControls() {
   var mode = videoBackgroundMode();
   _videoBgPickers.forEach(function(p) { try { p.sync(mode); } catch (e) { /* ignore */ } });
@@ -14453,6 +14459,7 @@ function syncVideoBackgroundControls() {
    _videoBgReference, _videoBgSubjectOnly, _videoBgTilt, _videoBgPreview].forEach(function(c) {
     if (c) { try { c.sync(); } catch (e) { /* ignore */ } }
   });
+  syncVideoBackgroundLight();
   syncBackgroundTilt();
   renderVideoBackgroundReference();
   renderKeyedStatus();
@@ -14905,6 +14912,10 @@ function initVideoBackgroundUI() {
   // through the `storage` event video-effects.js listens to itself.
   if (keyedApi('renderSceneLight')) {
     VideoEffects.renderSceneLight(document.getElementById('settings-scene-light'), { id: 'select-scene-light' });
+    // Same preference, picked without leaving the room. Every view re-syncs
+    // from writeSceneLight(), so the two selects never disagree.
+    VideoEffects.renderSceneLight(document.getElementById('video-bg-scene-light'),
+      { id: 'select-scene-light-pop', compact: true });
   }
 
   // Blur strength (Settings → Video, under the picker). Unlike the mode, this

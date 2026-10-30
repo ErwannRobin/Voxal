@@ -809,6 +809,12 @@
           <button data-i18n="ui.cancel" type="button" id="btn-video-bg-cancel" class="btn btn-secondary btn-sm">Cancel</button>
         </div>
         <div id="video-bg-picker"></div>
+        <!-- Scene light, same preference as Settings → Video. Shown by
+             syncVideoBackgroundLight() only while a scene is the background. -->
+        <div id="video-bg-light" class="video-bg-light hidden">
+          <label data-i18n="ui.scene_light" for="select-scene-light-pop">Scene light</label>
+          <div id="video-bg-scene-light"></div>
+        </div>
         <!-- "Let others draw my scene": whether it is doing anything in this
              room. Shown only while the setting is on — see renderKeyedStatus(). -->
         <p id="video-bg-subject-only" class="video-bg-subject-only hidden" aria-live="polite"></p>
