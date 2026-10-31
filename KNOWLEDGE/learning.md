@@ -515,3 +515,9 @@ Design: `docs/video-effects.md`. Preview any scene/look headlessly with `make sc
 - **Headless Playwright Chromium is SwiftShader by default, even on a Mac**: `--enable-gpu --use-angle=metal --enable-unsafe-webgpu` gives the real GPU and a WebGPU adapter. Anything timed without them measures the CPU.
 - Bench footage is a keyed green-screen clip: its ground truth carries an olive/magenta rim at the hair (keyer spill), identical in the input and the truth, so it costs every engine the same; judge rims on the stills with that in mind.
 - `git checkout -b X origin/main` makes `origin/main` X's upstream; with `push.default=upstream`, `git push -u origin X` then pushes to **main**. Branch with `--no-track` (or push `X:refs/heads/X`).
+
+## Edge blending (matting bench, 2026-10-31)
+
+- **Blur-fusion foreground estimation did not beat the line-projection decon** (`uDecon`): tried isotropic two-ring F/B averages + `F = Fh + m(I - mFh - (1-m)Bh)`, both matte-weighted and pure-sample-weighted. MediaPipe leak 21% vs decon's 15%, halo (outer) error 28 vs 25. The halo is the dilated matte, not the colour estimate: `dilate` moves it far more than any colour correction (MediaPipe dilate 0.5: leak 2.6%, outer 9, but inner/eaten edge 8.6 -> 15). Reverted; not worth the 34 taps.
+- **A matte engine's feather was the halo.** Longpipe/RVM now run at half the slider's feather (`MATTE_FEATHER_SCALE`), dilate still taken from the full one. Longpipe composite error -14%, outer 13 -> 7.6; RVM outer 2.2 -> 0.8. `feather: 0` gains a bit more halo but costs 9% flicker (`compDt`). MediaPipe's dilate 1.5 vs 0.5 is a halo-vs-eaten-edge trade left to the user.
+- `make matting-bench ARGS="--variant-names a,b&c --engines longpipe --rooms living,kitchen --res 1280x720 --frames 90"` is a ~3 min A/B; variants set `window.__voxal*` flags.

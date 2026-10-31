@@ -240,7 +240,9 @@ const ALL_VARIANTS = [
   // A true matte needs no re-ramp: the composite's smoothstep(lo, hi) and the
   // feather were made for MediaPipe's confidence, not for an alpha.
   { name: 'edgeid', flags: { __voxalEdgeOverride: { lo: 0.0, hi: 1.0 } } },
-  { name: 'nofeather', flags: { __voxalEdgeOverride: { feather: 0 } } }
+  { name: 'nofeather', flags: { __voxalEdgeOverride: { feather: 0 } } },
+  { name: 'feather0.35', flags: { __voxalEdgeOverride: { feather: 0.35 } } },
+  { name: 'feather0.7', flags: { __voxalEdgeOverride: { feather: 0.7 } } }
 ];
 const VARIANTS = opt.variantNames ? ALL_VARIANTS.filter((v) => opt.variantNames.includes(v.name)).concat(
   opt.variantNames.filter((n) => n.includes('&')).map((n) => ({ name: n,
