@@ -362,6 +362,8 @@ var VideoEffects = (function () {
   var SIL_MIN_FG         = 60;
   var SIL_MIN_BG         = 100;
   var SIL_MEMORY         = 0.5;    // share of the colour histograms kept from the last update
+  var SIL_EPS            = 0.003;  // histogram mass counted as "never seen" either way
+  var SIL_KNOWN          = 0.01;   // histogram mass at which a colour counts as known to a side
   var SIL_STRENGTH       = 0.8;    // how far the colour model may take the matte away
   var LEARN_MIN_FRAMES   = 45;      // masks seen before the learned picture is consulted at all
 
@@ -2356,13 +2358,17 @@ var VideoEffects = (function () {
       ', texture(uCore, flip).r);',
     '    vec3 sc = clamp(texture(uSharp, flip).rgb, 0.0, 0.999);',
     '    ivec3 qb = ivec3(sc * 8.0);',
-    '    vec2 lc = texelFetch(uSilC, ivec2(qb.r + 8 * qb.g + 64 * qb.b, 0), 0).rg;',
+    '    vec3 lc = texelFetch(uSilC, ivec2(qb.r + 8 * qb.g + 64 * qb.b, 0), 0).rgb;',
     '    float want = smoothstep(0.20, 0.55, lc.r);',
     '    float sp = texture(uSilP, flip).r;',
-    '    float sw = lc.g * (1.0 - sCore);',
-    '    float keep = 1.0 - 0.5 * smoothstep(0.60, 0.95, sp);',
-    '    m = m * mix(1.0, want, sw * keep * ' + SIL_STRENGTH.toFixed(2) + ');',
-    '    m = max(m, want * smoothstep(0.30, 0.70, sp) * sw * 0.9);',
+    // Taking away needs the ROOM to be known to have this colour (lc.g), not
+    // merely the person not to have been seen with it: a shirt the model only
+    // half-found would otherwise read as "not you". And never where the person
+    // habitually is.
+    '    float keep = 1.0 - smoothstep(0.40, 0.80, sp);',
+    '    m = m * mix(1.0, want, lc.g * (1.0 - sCore) * keep * ' + SIL_STRENGTH.toFixed(2) + ');',
+    // Giving back needs the PERSON to be known to have this colour (lc.b).
+    '    m = max(m, want * smoothstep(0.30, 0.70, sp) * lc.b * (1.0 - sCore) * 0.9);',
     '  }',
     '  if (uDbg > 0.5) { outColor = vec4(vec3(m), 1.0); return; }',
     // The keyed frame. In flip space the top of the picture is y = 0, so the
@@ -2832,7 +2838,10 @@ var VideoEffects = (function () {
     // of assuming the camera is still. Off on desktop, where nothing moves and
     // the CPU readback would be pure cost.
     this.motionComp = IS_MOBILE;
-    this.silhouette = IS_MOBILE;
+    // Diagnosis switch, never written by the app: localStorage['silhouette-prior'] = 'off'.
+    var silOff = false;
+    try { silOff = localStorage.getItem('silhouette-prior') === 'off'; } catch (e) { /* storage unavailable */ }
+    this.silhouette = IS_MOBILE && !silOff;
     this.silOn = false;
     this.silP = null;
     this.silLast = 0;
@@ -3156,7 +3165,7 @@ var VideoEffects = (function () {
     this.silW = Math.max(2, Math.round(this.refW * sl));
     this.silH = Math.max(2, Math.round(this.refH * sl));
     this.texSilP = texture(gl, this.silW, this.silH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
-    this.texSilC = texture(gl, 512, 1, gl.RG8, gl.RG, gl.UNSIGNED_BYTE);
+    this.texSilC = texture(gl, 512, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
     this.silP = null;
     this.silOn = false;
     // The core: the blended mask, eroded. Mask-sized, rebuilt per inference
@@ -3312,7 +3321,7 @@ var VideoEffects = (function () {
       this.silCanvas.width = W; this.silCanvas.height = H;
       this.silCtx = this.silCanvas.getContext('2d', { willReadFrequently: true });
       this.silBytes = new Uint8Array(n);
-      this.silTable = new Uint8Array(1024);
+      this.silTable = new Uint8Array(2048);
       this.silFresh = true;
     }
     var P = this.silP, M = this.silCur, first = this.silFresh;
@@ -3362,12 +3371,15 @@ var VideoEffects = (function () {
     }
     var fs = blurBins(this.silF), gs = blurBins(this.silG), t = this.silTable;
     for (var c = 0; c < 512; c++) {
-      var mass = fs[c] + gs[c];
-      t[c * 2] = Math.round(255 * (fs[c] + 1e-5) / (mass + 2e-5));
-      t[c * 2 + 1] = Math.round(255 * Math.min(1, mass / 0.006));
+      // The epsilon is about one ordinary bin's mass: a colour neither side
+      // has really seen reads 0.5 (neutral), not 0.
+      t[c * 4] = Math.round(255 * (fs[c] + SIL_EPS) / (fs[c] + gs[c] + 2 * SIL_EPS));
+      t[c * 4 + 1] = Math.round(255 * Math.min(1, gs[c] / SIL_KNOWN));
+      t[c * 4 + 2] = Math.round(255 * Math.min(1, fs[c] / SIL_KNOWN));
+      t[c * 4 + 3] = 255;
     }
     gl.bindTexture(gl.TEXTURE_2D, this.texSilC);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 512, 1, gl.RG, gl.UNSIGNED_BYTE, t);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 512, 1, gl.RGBA, gl.UNSIGNED_BYTE, t);
   };
 
   // --- following a held camera ---------------------------------------------

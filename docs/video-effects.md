@@ -514,7 +514,12 @@ smoothed over neighbouring bins, goes to the composite as a 512×1 lookup
 eroded core) a colour the room has and you have not is taken away, one you have
 and the room has not is kept or given back where `P` is high; ambiguous colours
 change nothing. It runs AFTER the hair filter, which would otherwise pull a
-taken-away pixel back toward its model-confident neighbours. Needs `SIL_MIN_FG`
+taken-away pixel back toward its model-confident neighbours. Taking away needs the room to be KNOWN to have the colour (`SIL_KNOWN` of
+histogram mass on the room side), not merely the person not to have been seen
+with it, and is switched off where `P` is high; colours neither side has seen
+read as neutral (`SIL_EPS`). Without that, a shirt the model only half-found
+(Longpipe's key-derived mask does this) read as "not you" and the body was cut.
+`localStorage['silhouette-prior'] = 'off'` turns it off for diagnosis. Needs `SIL_MIN_FG`
 / `SIL_MIN_BG` pixels of each before it speaks, and no picture of the room, so a
 moving camera does not break it. Limit: a persistent model error teaches the
 prior that the error is you; it fixes flicker and edges, not a limb the model
