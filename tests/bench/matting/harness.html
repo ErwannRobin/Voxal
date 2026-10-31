@@ -124,6 +124,7 @@ H.setup = async function (opt) {
   H.real = p.segmenter;
   if (H.real && 'camVideo' in H.real) H.real.camVideo = H.cam;
   H.engineUsed = p.engine;
+  if (typeof opt.maskCut === 'number') p.maskCut = opt.maskCut;
   // The exact target, not the stored JPEG re-encode.
   var gl = p.gl;
   gl.bindTexture(gl.TEXTURE_2D, p.texImg);
@@ -157,10 +158,17 @@ function add(name, v, n) {
 H.maskFor = async function () {
   var p = H.p, real = H.real, eng = H.engineUsed;
   var got = null;
-  if (eng === 'rvm') {
+  if (H.opt.oracle) {
+    // The truth itself, at the size a model would hand over: what Voxal's
+    // pipeline loses on its own, with no model error at all.
+    var ow = H.opt.oracle[0], oh = H.opt.oracle[1];
+    var a = pixels(H.gtAlphaImg, ow, oh), d = new Uint8Array(ow * oh);
+    for (var q = 0; q < ow * oh; q++) d[q] = a[q * 4];
+    got = { width: ow, height: oh, data: d };
+  } else if (eng === 'rvm') {
     var r = await real.inferFrame(H.cam);
     H.inferMs.push(r.ms);
-    got = { width: r.width, height: r.height, data: r.data };
+    got = { width: r.width, height: r.height, data: r.data, rvm: r };
   } else if (eng === 'longpipe') {
     // Longpipe runs its own pipeline on the stream: give it time to see this
     // frame (it is held still meanwhile), then read its output.
@@ -172,7 +180,7 @@ H.maskFor = async function () {
     segmentForVideo: function (frame, ts, cb) {
       if (got) {
         H.captured = got;
-        cb({ confidenceMasks: [{ width: got.width, height: got.height, getAsUint8Array: function () { return got.data; } }] });
+        cb({ confidenceMasks: [{ width: got.width, height: got.height, getAsUint8Array: function () { return got.data; } }], rvm: got.rvm });
         return;
       }
       var t0 = performance.now();
@@ -196,6 +204,7 @@ H.step = async function (f) {
   ]);
   H.camCtx.drawImage(imgs[0], 0, 0, w, h);
   var gtA = pixels(imgs[1], w, h), gtF = pixels(imgs[2], w, h);
+  H.gtAlphaImg = imgs[1];
   await H.maskFor();
   var now = performance.now();
   p.lastSeg = 0;

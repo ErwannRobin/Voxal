@@ -2277,6 +2277,8 @@ var VideoEffects = (function () {
     'uniform float uHair;',
     'uniform float uMotion;',
     'uniform float uLinear;',
+    'uniform sampler2D uFg;',
+    'uniform float uFgOn;',
     // Segmentation diagnostic only (see "The segmentation diagnostic"): 1
     // prints the matte `m` this shader is about to mix with, as grey. Always 0
     // in normal use, which makes the branch below dead.
@@ -2397,6 +2399,13 @@ var VideoEffects = (function () {
     '        }',
     '      }',
     '    }',
+    '  }',
+    // A matting model's own estimate of the person's colour (RVM's fgr), in
+    // the band where the camera pixel is part room: the colour the pixel would
+    // have with nothing behind it, so the new background is mixed with the
+    // person alone. Only where the matte is partial; never for the blur.
+    '  if (uFgOn > 0.5 && uBgMode > 0.5 && m > 0.0 && m < 1.0) {',
+    '    sharp = mix(sharp, texture(uFg, flip).rgb, 1.0 - smoothstep(0.75, 1.0, m));',
     '  }',
     '  vec3 bg;',
     '  float soft = 0.0;',
@@ -4182,6 +4191,7 @@ var VideoEffects = (function () {
           var data = mask.getAsUint8Array();
           if (self.refCapture) self.captureSawMask(data);
           self.uploadMask(data, mask.width, mask.height);
+          if (result.rvm && result.rvm.fg) self.uploadFg(result.rvm);
           if (self.keyed) self.keyedCorner(data, mask.width, mask.height, now);
           // Read here and nowhere else: the mask's lifetime ends with this
           // callback.
@@ -4362,6 +4372,17 @@ var VideoEffects = (function () {
     if (dg) this.diagMarkFresh();
   };
 
+  // RVM's foreground colour (RGBA, its input's size), for the composite's uFg.
+  Processor.prototype.uploadFg = function (r) {
+    var gl = this.gl;
+    if (!gl) return;
+    if (!this.texFg) this.texFg = texture(gl, 0, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+    gl.bindTexture(gl.TEXTURE_2D, this.texFg);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, r.width, r.height, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+                  new Uint8Array(r.fg.buffer, r.fg.byteOffset, r.fg.length));
+    this.fgReady = true;
+  };
+
   // Re-allocate just the mask ping-pong for a new mask shape, leaving the
   // camera and blur buffers alone.
   Processor.prototype.resizeMaskBuffers = function (w, h) {
@@ -4485,6 +4506,9 @@ var VideoEffects = (function () {
     gl.uniform1f(uloc(gl, this.pComp, 'uMotion'), window.__voxalNoEdgeMotion ? 0 : Math.min(1, Math.max(0, this.look.motion || 0)));
     gl.uniform1f(uloc(gl, this.pComp, 'uHair'), window.__voxalNoHairRefine ? 0 : HAIR_MIX);
     gl.uniform1f(uloc(gl, this.pComp, 'uLinear'), window.__voxalLinearComposite ? 1 : 0);
+    var fgOn = !!(this.fgReady && this.engine === 'rvm' && window.__voxalRvmFg);
+    this.bindTex(this.pComp, 'uFg', 10, fgOn ? this.texFg : this.texImg);
+    gl.uniform1f(uloc(gl, this.pComp, 'uFgOn'), fgOn ? 1 : 0);
     filmUniform(gl, this.pComp, this.look.exposure);
     var x = this.bgXform();
     gl.uniform4f(uloc(gl, this.pComp, 'uBgXform'), x[0], x[1], x[2], x[3]);
@@ -4864,9 +4888,11 @@ var VideoEffects = (function () {
     [this.texCam, this.texImg, this.texBlurA, this.texBlurB, this.texMaskRaw,
      this.texMaskS, this.texMaskSB, this.texMaskA, this.texMaskB,
      this.texPlate, this.texRefA, this.texRefB, this.texLearnA, this.texLearnB,
-     this.texCore].forEach(function (t) {
+     this.texCore, this.texFg].forEach(function (t) {
       if (t) try { gl.deleteTexture(t); } catch (e) { /* ignore */ }
     });
+    this.texFg = null;
+    this.fgReady = false;
     [this.fbBlurA, this.fbBlurB, this.fbMaskS, this.fbMaskSB,
      this.fbMaskA, this.fbMaskB, this.fbRefA, this.fbRefB, this.fbLearnA, this.fbLearnB,
      this.fbCore].forEach(function (f) {

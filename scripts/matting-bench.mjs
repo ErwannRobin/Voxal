@@ -79,7 +79,13 @@ const ENGINES = {
   'rvm-fp16': { engine: 'rvm', rvm: { model: 'mobilenetv3_fp16', size: 512 } },
   'rvm-hi': { engine: 'rvm', rvm: { model: 'mobilenetv3_fp32', size: 'camera' } },
   'rvm-resnet': { engine: 'rvm', rvm: { model: 'resnet50_fp32', size: 512 } },
-  'rvm-wasm': { engine: 'rvm', rvm: { model: 'mobilenetv3_fp32', size: 512, ep: 'wasm' } }
+  'rvm-wasm': { engine: 'rvm', rvm: { model: 'mobilenetv3_fp32', size: 512, ep: 'wasm' } },
+  // The ground truth through the pipeline: no model error, only the
+  // pipeline's own. -mp keeps MediaPipe's settings (cut, dilate 3), -matte
+  // a matte engine's (no cut, dilate ~1), at the mask sizes the engines use.
+  'oracle-mp': { engine: 'mediapipe', oracle: [256, 144] },
+  'oracle-matte': { engine: 'mediapipe', oracle: [256, 144], maskCut: 0, flags: { __voxalDilate: 1.0 } },
+  'oracle-matte512': { engine: 'mediapipe', oracle: [512, 288], maskCut: 0, flags: { __voxalDilate: 1.0 } }
 };
 
 // --- a static server with the app's isolation headers ------------------------
@@ -179,7 +185,8 @@ async function main() {
       } else {
         const setup = await page.evaluate((o) => window.H.setup(o), {
           engine: e.engine, rvm: rvmFor(e, r.w), room: r.room, w: r.w, h: r.h,
-          flags: r.flags, longpipeWaitMs: opt.longpipeWaitMs
+          flags: { ...(e.flags || {}), ...(r.flags || {}) }, longpipeWaitMs: opt.longpipeWaitMs,
+          oracle: e.oracle, maskCut: e.maskCut
         });
         const stills = {};
         for (let f = 0; f < nFrames; f++) {
@@ -222,7 +229,8 @@ const ALL_VARIANTS = [
   { name: 'dilate0', flags: { __voxalDilate: 0 } },
   { name: 'dilate1.5', flags: { __voxalDilate: 1.5 } },
   { name: 'noblend', flags: { __voxalMaskBlend: [1, 1] } },
-  { name: 'blend-sym', flags: { __voxalMaskBlend: [0.6, 0.6] } }
+  { name: 'blend-sym', flags: { __voxalMaskBlend: [0.6, 0.6] } },
+  { name: 'rvmfg', flags: { __voxalRvmFg: true } }
 ];
 const VARIANTS = opt.variantNames ? ALL_VARIANTS.filter((v) => opt.variantNames.includes(v.name)).concat(
   opt.variantNames.filter((n) => n.includes('&')).map((n) => ({ name: n,
