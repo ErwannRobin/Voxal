@@ -62,6 +62,7 @@ export default [
         I18N: 'readonly', // src/i18n.js
         tr: 'readonly', // src/i18n.js
         LongpipeEngine: 'readonly', // src/longpipe-engine.js
+        RvmEngine: 'readonly',      // src/rvm-engine.js
         VideoEffects: 'readonly', // src/video-effects.js
         VideoScenes: 'readonly', // src/video-scenes.js
         DeviceTilt: 'readonly', // src/device-tilt.js

@@ -1,0 +1,388 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<base href="/">
+<title>Matting bench harness</title>
+<!-- Driven by scripts/matting-bench.mjs. The app's own scripts, in index.html's
+     order, so the Processor, its shaders and every engine are the shipped ones. -->
+<script src="/video-scenes.js"></script>
+<script src="/longpipe-engine.js"></script>
+<script src="/rvm-engine.js"></script>
+<script src="/video-effects.js"></script>
+</head>
+<body>
+<script>
+'use strict';
+// --- small helpers -------------------------------------------------------------
+
+var LIN = new Float32Array(256);
+for (var i = 0; i < 256; i++) { var c = i / 255; LIN[i] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+function enc(l) { l = l <= 0 ? 0 : l >= 1 ? 1 : l; return (l <= 0.0031308 ? l * 12.92 : 1.055 * Math.pow(l, 1 / 2.4) - 0.055) * 255; }
+
+function loadImage(url) {
+  return fetch(url).then(function (r) {
+    if (!r.ok) throw new Error(url + ': HTTP ' + r.status);
+    return r.blob();
+  }).then(function (b) { return createImageBitmap(b, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' }); });
+}
+
+function pixels(img, w, h) {
+  var c = new OffscreenCanvas(w, h), x = c.getContext('2d', { willReadFrequently: true });
+  x.imageSmoothingQuality = 'high';
+  x.drawImage(img, 0, 0, w, h);
+  return x.getImageData(0, 0, w, h).data;
+}
+
+// Bilinear resample of a single-channel 0-255 plane (texel centres aligned, as
+// a GL texture sample is).
+function upsample(src, sw, sh, w, h) {
+  var out = new Float32Array(w * h);
+  for (var y = 0; y < h; y++) {
+    var fy = (y + 0.5) * sh / h - 0.5, y0 = Math.max(0, Math.floor(fy)), y1 = Math.min(sh - 1, y0 + 1), ty = Math.min(1, Math.max(0, fy - y0));
+    for (var x = 0; x < w; x++) {
+      var fx = (x + 0.5) * sw / w - 0.5, x0 = Math.max(0, Math.floor(fx)), x1 = Math.min(sw - 1, x0 + 1), tx = Math.min(1, Math.max(0, fx - x0));
+      var a = src[y0 * sw + x0] * (1 - tx) + src[y0 * sw + x1] * tx;
+      var b = src[y1 * sw + x0] * (1 - tx) + src[y1 * sw + x1] * tx;
+      out[y * w + x] = (a * (1 - ty) + b * ty) / 255;
+    }
+  }
+  return out;
+}
+
+// The edge band of the ground truth: pixels within r of where it crosses 0.5,
+// plus every partial pixel. Split into outer (truth 0), mixed, inner (truth 1).
+function bandOf(gt, w, h, r) {
+  var bin = new Uint8Array(w * h);
+  for (var i = 0; i < w * h; i++) bin[i] = gt[i] >= 0.5 ? 1 : 0;
+  function morph(src, isMax) {
+    var tmp = new Uint8Array(w * h), out = new Uint8Array(w * h);
+    for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) {
+      var v = isMax ? 0 : 1;
+      for (var k = -r; k <= r; k++) { var xx = Math.min(w - 1, Math.max(0, x + k)); var s = src[y * w + xx]; v = isMax ? (s > v ? s : v) : (s < v ? s : v); }
+      tmp[y * w + x] = v;
+    }
+    for (var y2 = 0; y2 < h; y2++) for (var x2 = 0; x2 < w; x2++) {
+      var v2 = isMax ? 0 : 1;
+      for (var k2 = -r; k2 <= r; k2++) { var yy = Math.min(h - 1, Math.max(0, y2 + k2)); var s2 = tmp[yy * w + x2]; v2 = isMax ? (s2 > v2 ? s2 : v2) : (s2 < v2 ? s2 : v2); }
+      out[y2 * w + x2] = v2;
+    }
+    return out;
+  }
+  var dil = morph(bin, true), ero = morph(bin, false);
+  var band = new Uint8Array(w * h);   // 0 none, 1 outer, 2 mixed, 3 inner
+  for (var j = 0; j < w * h; j++) {
+    if (gt[j] > 0.02 && gt[j] < 0.98) band[j] = 2;
+    else if (dil[j] !== ero[j]) band[j] = gt[j] <= 0.02 ? 1 : 3;
+  }
+  return band;
+}
+
+// --- the run -------------------------------------------------------------------
+
+var H = {};   // what the runner reads back
+
+H.setup = async function (opt) {
+  // opt: { engine, room, w, h, rvm: {model, ep, size, ratio}, flags: {}, frames }
+  localStorage.clear();
+  localStorage.setItem('segmentation-engine', opt.engine === 'longpipe' ? 'longpipe' : opt.engine);
+  localStorage.setItem('longpipe-blur', '0');
+  localStorage.setItem('bg-reference', 'off');
+  if (opt.rvm) {
+    if (opt.rvm.model) localStorage.setItem('rvm-model', opt.rvm.model);
+    if (opt.rvm.ep) localStorage.setItem('rvm-ep', opt.rvm.ep);
+    if (opt.rvm.size) localStorage.setItem('rvm-size', String(opt.rvm.size));
+    if (opt.rvm.ratio) localStorage.setItem('rvm-ratio', String(opt.rvm.ratio));
+  }
+  Object.keys(opt.flags || {}).forEach(function (k) { window[k] = opt.flags[k]; });
+  H.opt = opt;
+  H.manifest = await (await fetch('/__footage/manifest.json')).json();
+  var w = opt.w, h = opt.h;
+  H.cam = document.createElement('canvas');
+  H.cam.width = w; H.cam.height = h;
+  H.camCtx = H.cam.getContext('2d');
+  H.camCtx.imageSmoothingQuality = 'high';
+  var first = await loadImage('/__footage/' + opt.room + '/0000.jpg');
+  H.camCtx.drawImage(first, 0, 0, w, h);
+  // The Processor's <video> is replaced by the canvas once it is up, so every
+  // engine is handed exactly frame N. Until then it plays the canvas's stream.
+  H.stream = H.cam.captureStream(30);
+  H.paintTimer = setInterval(function () { H.camCtx.drawImage(H.cam, 0, 0); }, 33);
+  Object.defineProperty(H.cam, 'videoWidth', { get: function () { return H.cam.width; } });
+  Object.defineProperty(H.cam, 'videoHeight', { get: function () { return H.cam.height; } });
+  Object.defineProperty(H.cam, 'readyState', { get: function () { return 4; } });
+
+  var target = await loadImage('/__footage/target.png');
+  await VideoEffects.setCustomImage(await (await fetch('/__footage/target.png')).blob());
+  var t0 = performance.now();
+  await VideoEffects.wrap(H.stream, 'custom');
+  H.setupMs = performance.now() - t0;
+  var p = H.p = VideoEffects.active();
+  if (!p) throw new Error('no processor');
+  p.unpump();
+  p.video = H.cam;
+  H.real = p.segmenter;
+  if (H.real && 'camVideo' in H.real) H.real.camVideo = H.cam;
+  H.engineUsed = p.engine;
+  // The exact target, not the stored JPEG re-encode.
+  var gl = p.gl;
+  gl.bindTexture(gl.TEXTURE_2D, p.texImg);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, target);
+  p.bgAspect = target.width / target.height;
+  p.bgReady = true;
+  H.targetPx = pixels(target, w, h);
+  var plate = await loadImage('/__footage/' + opt.room + '/plate.png');
+  H.platePx = pixels(plate, w, h);
+  H.out = document.createElement('canvas');
+  H.out.width = w; H.out.height = h;
+  H.outCtx = H.out.getContext('2d', { willReadFrequently: true });
+  H.prevMask = null; H.prevGt = null;
+  H.acc = {};
+  H.maskSize = null;
+  H.inferMs = [];
+  var ign = (H.manifest.ignore || []).map(function (g) {
+    var sx = w / H.manifest.width, sy = h / H.manifest.height;
+    return { first: g.first, last: g.last, x0: g.rect[0] * sx, y0: g.rect[1] * sy, x1: g.rect[2] * sx, y1: g.rect[3] * sy };
+  });
+  H.ignore = ign;
+  return { engine: p.engine, setupMs: H.setupMs, fallback: (await VideoEffects.engineStats()).fallback || null };
+};
+
+function add(name, v, n) {
+  var a = H.acc[name] || (H.acc[name] = { s: 0, n: 0, frames: [] });
+  if (n > 0) { a.s += v; a.n += n; a.frames.push(v / n); }
+}
+
+// The mask the engine gives for the frame now in H.cam.
+H.maskFor = async function () {
+  var p = H.p, real = H.real, eng = H.engineUsed;
+  var got = null;
+  if (eng === 'rvm') {
+    var r = await real.inferFrame(H.cam);
+    H.inferMs.push(r.ms);
+    got = { width: r.width, height: r.height, data: r.data };
+  } else if (eng === 'longpipe') {
+    // Longpipe runs its own pipeline on the stream: give it time to see this
+    // frame (it is held still meanwhile), then read its output.
+    await new Promise(function (res) { setTimeout(res, H.opt.longpipeWaitMs || 150); });
+  }
+  H.captured = null;
+  p.segmenter = {
+    getLabels: function () { return ['selfie']; },
+    segmentForVideo: function (frame, ts, cb) {
+      if (got) {
+        H.captured = got;
+        cb({ confidenceMasks: [{ width: got.width, height: got.height, getAsUint8Array: function () { return got.data; } }] });
+        return;
+      }
+      var t0 = performance.now();
+      real.segmentForVideo(frame, ts, function (res) {
+        var m = res.confidenceMasks[res.confidenceMasks.length > 1 ? 1 : 0];
+        H.captured = { width: m.width, height: m.height, data: new Uint8Array(m.getAsUint8Array()) };
+        cb(res);
+      });
+      if (eng === 'mediapipe') H.inferMs.push(performance.now() - t0);
+    }
+  };
+};
+
+H.step = async function (f) {
+  var opt = H.opt, w = opt.w, h = opt.h, n = w * h, p = H.p;
+  var name = String(f).padStart(4, '0');
+  var imgs = await Promise.all([
+    loadImage('/__footage/' + opt.room + '/' + name + '.jpg'),
+    loadImage('/__footage/gt/alpha/' + name + '.png'),
+    loadImage('/__footage/gt/fg/' + name + '.png')
+  ]);
+  H.camCtx.drawImage(imgs[0], 0, 0, w, h);
+  var gtA = pixels(imgs[1], w, h), gtF = pixels(imgs[2], w, h);
+  await H.maskFor();
+  var now = performance.now();
+  p.lastSeg = 0;
+  p.runSegment(now);
+  p.draw(now);
+  H.outCtx.drawImage(p.canvas, 0, 0, w, h);
+  var out = H.outCtx.getImageData(0, 0, w, h).data;
+  p.segmenter = H.real;
+  var captured = H.captured;
+  if (!captured) { add('missing', 1, 1); return { f: f, missing: true }; }
+  H.maskSize = captured.width + 'x' + captured.height;
+
+  // Scores, at the camera's size, outside the ignore box.
+  var gt = new Float32Array(n);
+  for (var i = 0; i < n; i++) gt[i] = gtA[i * 4] / 255;
+  var m = upsample(captured.data, captured.width, captured.height, w, h);
+  var ign = new Uint8Array(n);
+  H.ignore.forEach(function (g) {
+    if (f < g.first || f > g.last) return;
+    for (var y = Math.floor(g.y0); y < Math.ceil(g.y1); y++) for (var x = Math.floor(g.x0); x < Math.ceil(g.x1); x++) ign[y * w + x] = 1;
+  });
+  var band = bandOf(gt, w, h, Math.round(8 * w / 1280));
+  var sAll = 0, nAll = 0, sBand = 0, nBand = 0, inter = 0, uni = 0, sSq = 0;
+  var cOut = [0, 0], cMix = [0, 0], cIn = [0, 0], cAll = [0, 0], leakNum = 0, leakDen = 0;
+  var dt = 0, dtn = 0, fl = 0, fln = 0;
+  for (var j = 0; j < n; j++) {
+    if (ign[j]) continue;
+    var e = m[j] - gt[j];
+    sAll += Math.abs(e); sSq += e * e; nAll++;
+    if (band[j]) { sBand += Math.abs(e); nBand++; }
+    if (m[j] >= 0.5 || gt[j] >= 0.5) { uni++; if (m[j] >= 0.5 && gt[j] >= 0.5) inter++; }
+    if (H.prevMask) {
+      var d = (m[j] - H.prevMask[j]) - (gt[j] - H.prevGt[j]);
+      dt += d * d; dtn++;
+      if (Math.abs(gt[j] - H.prevGt[j]) < 1 / 255) { fl += Math.abs(m[j] - H.prevMask[j]); fln++; }
+    }
+    // The composite against the truth over the same target, in linear light.
+    var a = gt[j], k = j * 4, ce = 0, lnum = 0, lden = 0;
+    for (var c = 0; c < 3; c++) {
+      var g = enc(a * LIN[gtF[k + c]] + (1 - a) * LIN[H.targetPx[k + c]]);
+      var o = out[k + c];
+      ce += Math.abs(o - g);
+      var dir = H.platePx[k + c] - H.targetPx[k + c];
+      lnum += (o - g) * dir; lden += dir * dir;
+    }
+    ce /= 3;
+    cAll[0] += ce; cAll[1]++;
+    if (band[j] === 1) { cOut[0] += ce; cOut[1]++; }
+    else if (band[j] === 2) { cMix[0] += ce; cMix[1]++; }
+    else if (band[j] === 3) { cIn[0] += ce; cIn[1]++; }
+    // Old-room leak: the share of (room - target) found in the error, over the
+    // band where the two differ enough to tell.
+    if (band[j] && lden > 3 * 40 * 40) { leakNum += lnum; leakDen += lden; }
+  }
+  add('maskMAE', sAll * 1000, nAll);
+  add('maskMSE', sSq * 1000, nAll);
+  add('maskBandMAE', sBand * 1000, nBand);
+  add('iou', inter, uni);
+  if (dtn) add('dtSSD', Math.sqrt(dt / dtn) * 100 * dtn, dtn);
+  if (fln) add('flicker', fl * 1000, fln);
+  add('compMAE', cAll[0], cAll[1]);
+  add('compOuter', cOut[0], cOut[1]);
+  add('compMixed', cMix[0], cMix[1]);
+  add('compInner', cIn[0], cIn[1]);
+  if (leakDen) add('leak', leakNum / leakDen * 100 * 1000, 1000);
+  H.prevMask = m; H.prevGt = gt;
+  return { f: f };
+};
+
+// A PNG of the current composite / raw mask / truth, for the visual report.
+H.snapshot = function () {
+  var c = document.createElement('canvas');
+  c.width = H.out.width; c.height = H.out.height;
+  c.getContext('2d').drawImage(H.out, 0, 0);
+  return c.toDataURL('image/png');
+};
+H.maskSnapshot = function () {
+  var w = H.opt.w, h = H.opt.h, c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  var x = c.getContext('2d'), id = x.createImageData(w, h);
+  for (var i = 0; i < w * h; i++) { var v = H.prevMask ? H.prevMask[i] * 255 : 0; id.data[i * 4] = id.data[i * 4 + 1] = id.data[i * 4 + 2] = v; id.data[i * 4 + 3] = 255; }
+  x.putImageData(id, 0, 0);
+  return c.toDataURL('image/png');
+};
+
+H.result = async function () {
+  var o = {};
+  Object.keys(H.acc).forEach(function (k) {
+    var a = H.acc[k], fr = a.frames.slice().sort(function (p, q) { return p - q; });
+    o[k] = { mean: a.n ? a.s / a.n : null, p95: fr.length ? fr[Math.min(fr.length - 1, Math.floor(fr.length * 0.95))] : null };
+  });
+  var st = await VideoEffects.engineStats();
+  var ms = H.inferMs.slice().sort(function (p, q) { return p - q; });
+  return {
+    scores: o, maskSize: H.maskSize, engine: H.engineUsed, stats: st,
+    inferMsP50: ms.length ? ms[ms.length >> 1] : null,
+    inferMsP95: ms.length ? ms[Math.floor(ms.length * 0.95)] : null
+  };
+};
+
+H.teardown = function () {
+  clearInterval(H.paintTimer);
+  try { VideoEffects.stop(); } catch (e) { /* ignore */ }
+  H.stream.getTracks().forEach(function (t) { t.stop(); });
+};
+
+// --- real time ------------------------------------------------------------------
+//
+// The Processor's own loop, fed at 30 fps for `seconds`: what a call gets.
+H.realtime = async function (opt) {
+  localStorage.clear();
+  localStorage.setItem('segmentation-engine', opt.engine === 'longpipe' ? 'longpipe' : opt.engine);
+  localStorage.setItem('longpipe-blur', '0');
+  localStorage.setItem('bg-reference', 'off');
+  if (opt.rvm) Object.keys(opt.rvm).forEach(function (k) { localStorage.setItem('rvm-' + k, String(opt.rvm[k])); });
+  var w = opt.w, h = opt.h, room = opt.room || 'living';
+  var frames = [];
+  for (var f = 0; f < 60; f++) frames.push(await loadImage('/__footage/' + room + '/' + String(f * 5).padStart(4, '0') + '.jpg'));
+  var cam = document.createElement('canvas'); cam.width = w; cam.height = h;
+  var cx = cam.getContext('2d');
+  cx.drawImage(frames[0], 0, 0, w, h);
+  var stream = cam.captureStream(30);
+  var fi = 0, fed = 0;
+  var feed = setInterval(function () { cx.drawImage(frames[fi = (fi + 1) % frames.length], 0, 0, w, h); fed++; }, 1000 / 30);
+  await VideoEffects.setCustomImage(await (await fetch('/__footage/target.png')).blob());
+  var t0 = performance.now();
+  var out = await VideoEffects.wrap(stream, 'custom');
+  var startMs = performance.now() - t0;
+  var p = VideoEffects.active();
+  // Count the frames the pipeline publishes, and the main thread's time in
+  // each of its steps.
+  var draws = 0, segMs = [], drawMs = [], ages = [];
+  var origRun = p.runSegment, origDraw = p.draw;
+  var lastMaskAt = null;
+  p.runSegment = function (now) {
+    var a = performance.now(), seg = this.segmenter, self = this;
+    var orig = seg && seg.segmentForVideo;
+    if (orig) {
+      seg.segmentForVideo = function (fr, ts, cb) {
+        orig.call(seg, fr, ts, function (res) {
+          // The frame this matte was computed from: RVM says when its
+          // inference started; MediaPipe answers on this frame.
+          lastMaskAt = res && res.rvm ? res.rvm.at : performance.now();
+          cb(res);
+        });
+      };
+    }
+    origRun.call(this, now);
+    if (orig) seg.segmentForVideo = orig;
+    segMs.push(performance.now() - a);
+  };
+  p.draw = function (now) {
+    var a = performance.now();
+    origDraw.call(this, now);
+    drawMs.push(performance.now() - a);
+    draws++;
+    if (lastMaskAt !== null) ages.push(performance.now() - lastMaskAt);
+  };
+  var long = 0;
+  var po = new PerformanceObserver(function (l) { l.getEntries().forEach(function (e) { long += e.duration; }); });
+  try { po.observe({ entryTypes: ['longtask'] }); } catch (e) { /* not supported */ }
+  await new Promise(function (r) { setTimeout(r, (opt.warmup || 3) * 1000); });
+  draws = 0; segMs = []; drawMs = []; ages = []; fed = 0; long = 0;
+  var tStart = performance.now();
+  await new Promise(function (r) { setTimeout(r, (opt.seconds || 10) * 1000); });
+  var span = (performance.now() - tStart) / 1000;
+  po.disconnect();
+  var st = await VideoEffects.engineStats();
+  clearInterval(feed);
+  var q = function (a, pp) { if (!a.length) return null; var s = a.slice().sort(function (x, y) { return x - y; }); return s[Math.min(s.length - 1, Math.floor(pp * s.length))]; };
+  var res = {
+    engine: p.engine, startMs: startMs, outFps: draws / span, inFps: fed / span,
+    segInterval: p.segInterval, segHz: 1000 / p.segInterval,
+    runSegmentMsP50: q(segMs, 0.5), runSegmentMsP95: q(segMs, 0.95),
+    drawMsP50: q(drawMs, 0.5), drawMsP95: q(drawMs, 0.95),
+    maskAgeMsP50: q(ages, 0.5), maskAgeMsP95: q(ages, 0.95),
+    longTaskMsPerS: long / span,
+    canvas: p.canvas.width + 'x' + p.canvas.height,
+    stats: st
+  };
+  VideoEffects.stop();
+  stream.getTracks().forEach(function (t) { t.stop(); });
+  out.getTracks().forEach(function (t) { t.stop(); });
+  return res;
+};
+
+window.H = H;
+</script>
+</body>
+</html>

@@ -919,7 +919,8 @@ var VideoEffects = (function () {
   }
   function edgeProfileFor(engine) {
     var e = edgeProfile(readSharpness());
-    if (engine === 'longpipe') {
+    // RVM's alpha is a matte too (and a finer one): same edge as Longpipe's.
+    if (engine === 'longpipe' || engine === 'rvm') {
       var o = longpipeDilateOverride();
       e.dilate = o !== null ? o : LONGPIPE_DILATE_BASE + e.feather * 0.5;
     }
@@ -1769,8 +1770,10 @@ var VideoEffects = (function () {
 
   // The engine a new Processor starts with. Longpipe unless MediaPipe was
   // chosen (localStorage / ?segengine=mediapipe) or the Longpipe script is
-  // missing — that case is MediaPipe, silently.
+  // missing — that case is MediaPipe, silently. The experimental RVM only when
+  // chosen by name (see rvm-engine.js).
   function selectedEngine() {
+    if (typeof RvmEngine !== 'undefined' && RvmEngine.selected()) return 'rvm';
     return typeof LongpipeEngine !== 'undefined' && LongpipeEngine.selected() === 'longpipe'
       ? 'longpipe' : 'mediapipe';
   }
@@ -1780,6 +1783,16 @@ var VideoEffects = (function () {
   // experiment: the reason is kept for the diagnostic panel.
   function createSegmenter(raw, engine, video) {
     var want = engine || selectedEngine();
+    if (want === 'rvm' && (!window.__voxalSegStub || window.__voxalRvmStub) && typeof RvmEngine !== 'undefined') {
+      return RvmEngine.create(raw, video).then(function (seg) {
+        _engineFallback = null;
+        return seg;
+      }, function (e) {
+        _engineFallback = (e && e.message) || String(e);
+        console.warn('[VideoEffects] RVM unavailable, using MediaPipe: ' + _engineFallback);
+        return createMediaPipeSegmenter();
+      });
+    }
     if (want === 'longpipe' && (!window.__voxalSegStub || window.__voxalLongpipeStub) && typeof LongpipeEngine !== 'undefined') {
       return LongpipeEngine.create(raw, video).then(function (seg) {
         _engineFallback = null;
@@ -2885,18 +2898,19 @@ var VideoEffects = (function () {
     var self = this;
     this.segmenter = seg;
     this.engine = seg.engine || 'mediapipe';
-    this.maskCut = this.engine === 'longpipe' ? 0 : readMaskCut();
+    this.maskCut = this.engine === 'longpipe' || this.engine === 'rvm' ? 0 : readMaskCut();
     this.edge = edgeProfileFor(this.engine);
     this.maskPrimed = false;
-    if (this.engine === 'longpipe') {
-      // A Longpipe that dies mid-call hands the camera back to MediaPipe.
+    if (this.engine === 'longpipe' || this.engine === 'rvm') {
+      // An experimental engine that dies mid-call hands the camera back to MediaPipe.
+      var name = this.engine === 'rvm' ? 'RVM' : 'Longpipe';
       seg.onFail = function (e) {
         if (self.segmenter !== seg || self.stopped) return;
         _engineFallback = (e && e.message) || String(e);
-        console.warn('[VideoEffects] Longpipe failed, back to MediaPipe: ' + _engineFallback);
+        console.warn('[VideoEffects] ' + name + ' failed, back to MediaPipe: ' + _engineFallback);
         self.swapSegmenter('mediapipe');
       };
-      this.syncDirect();
+      if (this.engine === 'longpipe') this.syncDirect();
     }
   };
 
@@ -5953,7 +5967,9 @@ var VideoEffects = (function () {
       var eng = document.createElement('select');
       eng.setAttribute('aria-label', 'Segmentation engine');
       eng.style.cssText = 'flex:1 1 100%;min-width:0;font:inherit;padding:6px;min-height:36px';
-      [['longpipe', 'Engine: Longpipe (default)'], ['mediapipe', 'Engine: MediaPipe']].forEach(function (v) {
+      var engs = [['longpipe', 'Engine: Longpipe (default)'], ['mediapipe', 'Engine: MediaPipe']];
+      if (typeof RvmEngine !== 'undefined') engs.push(['rvm', 'Engine: RVM (experimental, needs make rvm-assets)']);
+      engs.forEach(function (v) {
         var o = document.createElement('option');
         o.value = v[0]; o.textContent = v[1];
         eng.appendChild(o);
@@ -6117,6 +6133,13 @@ var VideoEffects = (function () {
             ' · init ' + (s.initMs === null ? '–' : s.initMs + ' ms') + ' · edgeE ' + s.edgeE +
             '\nthe mask is read from Longpipe\'s OUTPUT stream, so it lags the camera by that pipeline\'s latency (not measured here)';
           if (s.errors && s.errors.length) t += '\nlongpipe errors: ' + s.errors.join(' | ');
+        }
+        if (s.engine === 'rvm') {
+          t += ' · ' + s.model + ' on ' + s.ep + ' · input ' + s.input + ' @ ' + s.ratio +
+            '\ninference ' + (s.inferMsP50 === null ? '–' : s.inferMsP50.toFixed(1) + ' ms p50 / ' + s.inferMsP95.toFixed(1) + ' p95') +
+            ' · masks ' + (s.maskHz === null ? '–' : s.maskHz + ' Hz') + ' · init ' + (s.initMs === null ? '–' : s.initMs + ' ms') +
+            '\nthe matte trails the camera by about one inference';
+          if (s.errors && s.errors.length) t += '\nrvm errors: ' + s.errors.join(' | ');
         }
         if (s.fallback) t += '\nfell back to MediaPipe: ' + s.fallback;
         _engLine = t;
@@ -6446,8 +6469,9 @@ var VideoEffects = (function () {
   // safe at any moment: with no camera running they only store the choice;
   // with one they swap the engine under it, keeping the canvas track.
   function setEngine(name) {
-    name = name === 'longpipe' ? 'longpipe' : 'mediapipe';
-    if (typeof LongpipeEngine !== 'undefined') LongpipeEngine.setSelected(name);
+    name = name === 'longpipe' || name === 'rvm' ? name : 'mediapipe';
+    if (typeof LongpipeEngine !== 'undefined') LongpipeEngine.setSelected(name === 'rvm' ? 'longpipe' : name);
+    if (typeof RvmEngine !== 'undefined') RvmEngine.setSelected(name === 'rvm');
     _engineFallback = null;
     if (!_active) return Promise.resolve(name);
     return _active.swapSegmenter(name).then(function () { return name; }, function (e) {
@@ -6508,7 +6532,7 @@ var VideoEffects = (function () {
       } else if (key === 'longpipe-dilate') {
         p.applyEdge();
       } else if (key === 'mask-cut') {
-        p.maskCut = p.engine === 'longpipe' ? 0 : readMaskCut();
+        p.maskCut = p.engine === 'longpipe' || p.engine === 'rvm' ? 0 : readMaskCut();
       }
     } catch (e) { /* a bad value must never take the camera down */ }
   }
@@ -6590,7 +6614,8 @@ var VideoEffects = (function () {
       select('Segmentation engine',
         'Longpipe is the default: it runs its own model on the GPU and its output is turned into a mask (see the diagnostic). MediaPipe is the fallback, and what a Longpipe that cannot start ends up on.',
         'segmentation-engine',
-        [['longpipe', 'Longpipe (default)'], ['mediapipe', 'MediaPipe']],
+        [['longpipe', 'Longpipe (default)'], ['mediapipe', 'MediaPipe']].concat(
+          typeof RvmEngine !== 'undefined' ? [['rvm', 'RVM (experimental; needs make rvm-assets, never shipped)']] : []),
         function () { return engine(); },
         function (v) { setEngine(v); });
       toggle('Longpipe blur',

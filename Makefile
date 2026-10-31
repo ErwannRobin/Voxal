@@ -3,7 +3,7 @@
         coverage-api coverage-summary coverage-badge bench bench-app bench-audio bench-video \
         bench-report bench-publish bench-history \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
-        seg-assets rvm-assets rvm-clean emoji-data promo-assets scene-preview three-vendor
+        seg-assets rvm-assets rvm-clean matting-footage matting-bench emoji-data promo-assets scene-preview three-vendor
 
 # Default target
 help:
@@ -19,6 +19,8 @@ help:
 	@echo "  build-web    Bundle the web version into dist/"
 	@echo "  seg-assets   Stage the background-effects runtime into src/assets/seg"
 	@echo "  rvm-assets   Stage the EXPERIMENTAL RVM matting engine (GPL-3.0, never shipped) into src/assets/rvm"
+	@echo "  matting-footage Build the matting benchmark's footage (known alpha) into bench-results/matting"
+	@echo "  matting-bench Score MediaPipe / Longpipe / RVM on it through the real pipeline; ARGS=... passes options"
 	@echo "  promo-assets Re-embed the icon and fonts in docs/promo.html (the 30 s film)"
 	@echo "  scene-preview Render the animated backgrounds to PNG (scene-previews/); ARGS=... passes options"
 	@echo "  three-vendor Rebuild src/assets/three/three.min.js from the pinned three version"
@@ -166,6 +168,15 @@ rvm-assets:
 
 rvm-clean:
 	@rm -rf src/assets/rvm
+
+# The matting evaluation: footage with a known alpha (public-domain clip and CC0
+# rooms, downloaded once into bench-results/), then every engine through the
+# real pipeline on it. ARGS=... passes options (see scripts/matting-bench.mjs).
+matting-footage:
+	@node scripts/matting-footage.mjs $(ARGS)
+
+matting-bench: seg-assets
+	@node scripts/matting-bench.mjs $(ARGS)
 
 run-web: gen-build-info seg-assets
 	@command -v npx >/dev/null 2>&1 || { echo "npx not found — install Node.js"; exit 1; }
