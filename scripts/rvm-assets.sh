@@ -3,7 +3,9 @@
 # Stage the EXPERIMENTAL Robust Video Matting engine into src/assets/rvm/.
 #
 # For the matting evaluation only (docs/matting-evaluation.md). Nothing here is
-# committed, bundled into an app or deployed:
+# committed or bundled into a desktop/mobile app. The one place it is deployed
+# is the web PREVIEW build (vercel-build.sh), so the engine can be evaluated
+# on real devices; a production deploy only carries it with RVM_ASSETS=1:
 #
 #   * RVM (https://github.com/PeterL1n/RobustVideoMatting) is GPL-3.0, and its
 #     weights come with no other licence. Voxal is MIT and ships store builds,
@@ -21,6 +23,10 @@
 #   --with-resnet  also the ResNet50 variants (+160 MB)
 
 set -e
+
+# macOS has shasum, a Linux build image may only have sha256sum.
+if command -v shasum >/dev/null 2>&1; then sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
+else sha() { sha256sum "$1" | cut -d' ' -f1; }; fi
 
 DST="src/assets/rvm"
 ORT_VERSION="1.30.0"
@@ -50,10 +56,10 @@ mkdir -p "$DST"
 
 fetch() { # base sum name
   out="$DST/$3"
-  if [ -f "$out" ] && [ "$(shasum -a 256 "$out" | cut -d' ' -f1)" = "$2" ]; then return 0; fi
+  if [ -f "$out" ] && [ "$(sha "$out")" = "$2" ]; then return 0; fi
   echo "  ↓ $3"
   curl -sfL --retry 3 -o "$out.part" "$1/$3"
-  got="$(shasum -a 256 "$out.part" | cut -d' ' -f1)"
+  got="$(sha "$out.part")"
   if [ "$got" != "$2" ]; then
     rm -f "$out.part"
     echo "✗ $3: sha256 $got, expected $2" >&2
