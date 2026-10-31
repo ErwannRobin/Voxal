@@ -352,6 +352,8 @@ Design: `docs/video-effects.md`. Preview any scene/look headlessly with `make sc
 
 - **Learned room (auto reference)**: trust must be *frozen*, not collapsed, in the model's dilated band — that band is the one place the reference decides, so collapsing trust there (when you step in) leaves it with no opinion exactly when needed. Collapse only deep inside the eroded core. Learner samples the camera with ONE bilinear tap (the consumer box-samples the plate; softening twice makes edges read as different). On phones it follows the camera (`motionComp`: translation estimate, search centred on the LAST estimate — centred on the anchor, a fast pan outruns the window and trust collapses; test pans must ramp, a one-frame jump of >5 coarse px is untrackable). Test scenes for motion need non-periodic texture (stripes match themselves one period away). Tests: `learns the room by itself`.
 
+- **Silhouette prior (phones)**: a colour probe smaller than the texture averages it into grey (8 px stripes at 64 wide → no pure colours learned): use 128 wide. A per-pixel matte tweak must run AFTER the hair filter, or the filter pulls the changed pixel back toward its model-confident neighbours. A persistent wrong mask teaches the prior that it is right, so tests must teach with an accurate mask first (stub `{ rect: [x0,y0,x1,y1] }`).
+
 ## Background blur quality
 
 - **A separable kernel that doesn't sum to 1 is a brightness multiplier** (a typo'd 9-tap summed 0.838 → 70% brightness after two passes, and capped the mask feather at 0.7). Weights come from `gaussianHalfKernel(sigma, taps)` now.
