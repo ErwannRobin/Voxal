@@ -929,6 +929,14 @@ var VideoEffects = (function () {
   // every composite measure). `longpipe-dilate` (texels, 0-4) overrides
   // Longpipe's for comparing on a device.
   var MATTE_DILATE_PER_FEATHER = 0.36;
+  // The feather is halved for a matte engine, after the dilate above has been
+  // taken from the full one. A matte's own edge is already a ramp, and
+  // MediaPipe's feather on top of it spread the old room into a halo: measured
+  // on the matting footage (Longpipe, 1280x720), the halo error fell 13 -> 7.6
+  // and the composite's error 14% for +3% frame-to-frame edge change; no
+  // feather at all gained a little more halo and cost 9% on flicker. RVM:
+  // halo 2.2 -> 0.8, composite -3%.
+  var MATTE_FEATHER_SCALE = 0.5;
   function longpipeDilateOverride() {
     try {
       var v = parseFloat(localStorage.getItem('longpipe-dilate'));
@@ -944,6 +952,7 @@ var VideoEffects = (function () {
     } else if (engine === 'rvm') {
       e.dilate = 0;
     }
+    if (engine === 'longpipe' || engine === 'rvm') e.feather *= MATTE_FEATHER_SCALE;
     // The matting bench's A/B switch: { feather, lo, hi } replace the profile's.
     if (typeof window !== 'undefined' && window.__voxalEdgeOverride) {
       Object.keys(window.__voxalEdgeOverride).forEach(function (k) { e[k] = window.__voxalEdgeOverride[k]; });
