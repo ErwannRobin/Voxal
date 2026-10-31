@@ -2293,6 +2293,7 @@ var VideoEffects = (function () {
     'uniform sampler2D uSilP;',
     'uniform sampler2D uSilC;',
     'uniform float uSil;',
+    'uniform float uSilStrength;',
     // Segmentation diagnostic only (see "The segmentation diagnostic"): 1
     // prints the matte `m` this shader is about to mix with, as grey. Always 0
     // in normal use, which makes the branch below dead.
@@ -2366,7 +2367,7 @@ var VideoEffects = (function () {
     // half-found would otherwise read as "not you". And never where the person
     // habitually is.
     '    float keep = 1.0 - smoothstep(0.40, 0.80, sp);',
-    '    m = m * mix(1.0, want, lc.g * (1.0 - sCore) * keep * ' + SIL_STRENGTH.toFixed(2) + ');',
+    '    m = m * mix(1.0, want, lc.g * (1.0 - sCore) * keep * uSilStrength);',
     // Giving back needs the PERSON to be known to have this colour (lc.b).
     '    m = max(m, want * smoothstep(0.30, 0.70, sp) * lc.b * (1.0 - sCore) * 0.9);',
     '  }',
@@ -2838,10 +2839,7 @@ var VideoEffects = (function () {
     // of assuming the camera is still. Off on desktop, where nothing moves and
     // the CPU readback would be pure cost.
     this.motionComp = IS_MOBILE;
-    // Diagnosis switch, never written by the app: localStorage['silhouette-prior'] = 'off'.
-    var silOff = false;
-    try { silOff = localStorage.getItem('silhouette-prior') === 'off'; } catch (e) { /* storage unavailable */ }
-    this.silhouette = IS_MOBILE && !silOff;
+    this.applySilhouette();
     this.silOn = false;
     this.silP = null;
     this.silLast = 0;
@@ -3289,6 +3287,15 @@ var VideoEffects = (function () {
 
   // --- the silhouette prior -------------------------------------------------
 
+  // Re-read the diagnosis switches (mode and strength).
+  Processor.prototype.applySilhouette = function () {
+    var mode = readSilMode();
+    this.silMode = mode;
+    this.silhouette = mode === 'on' || (mode === 'default' && IS_MOBILE);
+    this.silStrength = readSilStrength();
+    if (!this.silhouette) this.silOn = false;
+  };
+
   // 3x3x3 box blur of a 512-bin histogram, so a colour on a bin boundary is not
   // judged by its neighbour's luck.
   function blurBins(h) {
@@ -3363,6 +3370,7 @@ var VideoEffects = (function () {
         else if (hi < SIL_BG && M[k] < 0.1) { g[bin]++; ng++; }
       }
     }
+    this.silNf = nf; this.silNg = ng;
     this.silOn = nf >= SIL_MIN_FG && ng >= SIL_MIN_BG;
     if (!this.silOn) return;
     for (var b = 0; b < 512; b++) {
@@ -4621,6 +4629,7 @@ var VideoEffects = (function () {
     gl.uniform1f(uloc(gl, this.pComp, 'uRefOn'), this.refWeight);
     this.bindTex(this.pComp, 'uSilP', 10, this.texSilP);
     this.bindTex(this.pComp, 'uSilC', 11, this.texSilC);
+    gl.uniform1f(uloc(gl, this.pComp, 'uSilStrength'), this.silStrength);
     gl.uniform1f(uloc(gl, this.pComp, 'uSil'), (this.silhouette && this.silOn && this.refOn && !this.paused) ? 1 : 0);
     gl.uniform1f(uloc(gl, this.pComp, 'uBgMode'), useScene ? 2 : useImage ? 1 : 0);
     var sh = this.shadowPlan();
@@ -6013,6 +6022,25 @@ var VideoEffects = (function () {
   //     arrives, with the model's label list and the mask's shape.
 
   var DIAG_KEY = 'seg-diagnostic';
+  // Silhouette prior (see SIL_*): absent = the default (on for phones, off
+  // elsewhere), 'on' / 'off' force it; strength is how far the colour model may
+  // take the matte away, 0-1. Diagnosis only, set from the diagnostic panel or
+  // Settings → Advanced → Segmentation debug.
+  var SIL_KEY = 'silhouette-prior';
+  var SIL_STRENGTH_KEY = 'silhouette-strength';
+  function readSilMode() {
+    try {
+      var v = localStorage.getItem(SIL_KEY);
+      return v === 'on' || v === 'off' ? v : 'default';
+    } catch (e) { return 'default'; }
+  }
+  function readSilStrength() {
+    try {
+      var v = parseFloat(localStorage.getItem(SIL_STRENGTH_KEY));
+      if (isFinite(v)) return Math.max(0, Math.min(1, v));
+    } catch (e) { /* storage unavailable */ }
+    return SIL_STRENGTH;
+  }
   var DIAG_OVERLAY_MAX = 960;   // the panel's canvas, in px of its long side
   var DIAG_INFO_MS = 250;       // the numbers repaint at most this often
   var DIAG_CHANGED = 26;        // |delta| of 26/255 (~10%) counts as "changed"
@@ -6149,6 +6177,26 @@ var VideoEffects = (function () {
     tintLabel.appendChild(tint);
     tintLabel.appendChild(document.createTextNode(' tint visible band'));
     bar.appendChild(tintLabel);
+
+    var silSel = document.createElement('select');
+    silSel.setAttribute('aria-label', 'Silhouette prior');
+    silSel.style.cssText = 'flex:1 1 auto;min-width:0;font:inherit;padding:6px;min-height:36px';
+    [['default', 'Silhouette: default'], ['on', 'Silhouette: on'], ['off', 'Silhouette: off']].forEach(function (v) {
+      var o = document.createElement('option');
+      o.value = v[0]; o.textContent = v[1];
+      silSel.appendChild(o);
+    });
+    silSel.value = readSilMode();
+    silSel.addEventListener('change', function () { setDebug(SIL_KEY, silSel.value === 'default' ? null : silSel.value); });
+    bar.appendChild(silSel);
+    var silStr = document.createElement('input');
+    silStr.type = 'range'; silStr.min = '0'; silStr.max = '1'; silStr.step = '0.05';
+    silStr.setAttribute('aria-label', 'Silhouette prior strength');
+    silStr.title = 'Silhouette prior strength';
+    silStr.style.cssText = 'flex:1 1 120px;min-width:80px';
+    silStr.value = String(readSilStrength());
+    silStr.addEventListener('input', function () { setDebug(SIL_STRENGTH_KEY, silStr.value); });
+    bar.appendChild(silStr);
 
     function button(text, fn) {
       var b = document.createElement('button');
@@ -6317,6 +6365,12 @@ var VideoEffects = (function () {
         ' · pixels changed >10% ' + diagPct(st.changed) +
         ' · crossing 50% ' + diagPct(st.flips));
     }
+    var ap = _active;
+    lines.push('silhouette prior: ' + ap.silMode + (ap.silhouette ? ' (running' : ' (not running') +
+      (ap.silhouette && !ap.refOn ? ', Fixed camera is off' : '') + ')' +
+      (ap.silhouette ? ' · colour model ' + (ap.silOn ? 'ready' : 'learning') +
+        ' · person ' + (ap.silNf || 0) + ' px, room ' + (ap.silNg || 0) + ' px · strength ' +
+        ap.silStrength.toFixed(2) : ''));
     lines.push('person pixels = high mask values. Sitting still, "crossing 50%" ' +
       'should be close to 0; speckle there is the model, not the pipeline.');
     if (_diag.error) lines.push('diagnostic error: ' + _diag.error);
@@ -6648,7 +6702,7 @@ var VideoEffects = (function () {
   // `storage` listener below applies it here. A URL parameter (?segengine=,
   // ?maskcut=, ?segdiag=1) still outranks the stored value for that visit.
   var DEBUG_KEYS = ['segmentation-engine', 'longpipe-blur', 'longpipe-preset',
-                    'longpipe-dilate', 'mask-cut', DIAG_KEY];
+                    'longpipe-dilate', 'mask-cut', SIL_KEY, SIL_STRENGTH_KEY, DIAG_KEY];
 
   function readDebug(key) {
     try { return localStorage.getItem(key); } catch (e) { return null; }
@@ -6679,6 +6733,8 @@ var VideoEffects = (function () {
         if (p.engine === 'longpipe' && p.segmenter && p.segmenter.setSource) p.segmenter.setSource(p.raw);
       } else if (key === 'longpipe-dilate') {
         p.applyEdge();
+      } else if (key === SIL_KEY || key === SIL_STRENGTH_KEY) {
+        p.applySilhouette();
       } else if (key === 'mask-cut') {
         p.maskCut = p.engine === 'longpipe' ? 0 : readMaskCut();
       }
@@ -6781,6 +6837,15 @@ var VideoEffects = (function () {
     number('MediaPipe mask cut (0-0.94)',
       'MediaPipe values at or under this are background. Blank = 0.78; 0 turns the cut off. Not used by Longpipe.',
       'mask-cut', 0, 0.94, 0.01, '0.78');
+    select('Silhouette prior',
+      'Where you usually are in the picture plus the colours you have against the room\'s, used to clean the matte\'s edge band (no room picture needed). Default = on for phones, off elsewhere. Needs Fixed camera on.',
+      SIL_KEY,
+      [['default', 'Default (phones)'], ['on', 'On'], ['off', 'Off']],
+      function () { return readSilMode(); },
+      function (v) { setDebug(SIL_KEY, v === 'default' ? null : v); });
+    number('Silhouette prior strength (0-1)',
+      'How far the colour model may take the matte away in the band. Blank = ' + SIL_STRENGTH + '.',
+      SIL_STRENGTH_KEY, 0, 1, 0.05, String(SIL_STRENGTH));
     toggle('Segmentation diagnostic panel',
       'Shows each stage of the cut-out (camera, raw mask, dilated, feathered, final) with the engine\'s own numbers. Opens when the camera is on.',
       'toggle-seg-diagnostic', DIAG_KEY);

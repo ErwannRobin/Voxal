@@ -383,3 +383,26 @@ test('Hide shrinks the panel to a chip, stops taking pictures, and the chip brin
   await page.getByRole('button', { name: 'Seg' }).click();
   await expect(page.locator('#seg-diagnostic canvas')).toBeVisible();
 });
+
+test('the silhouette prior is switched and tuned from the panel, and reported in it', async ({ page }) => {
+  await start(page);
+  await page.evaluate(() => VideoEffects.openDiagnostic('grid'));
+  expect(await page.evaluate(() => window.__untilInferences(2))).toBe(true);
+  // Off by default on a desktop browser.
+  expect(await page.evaluate(() => VideoEffects.active().silhouette)).toBe(false);
+  await page.locator('#seg-diagnostic').getByLabel('Silhouette prior', { exact: true }).selectOption('on');
+  await page.locator('#seg-diagnostic').getByLabel('Silhouette prior strength').fill('0.35');
+  const on = await page.evaluate(() => ({
+    running: VideoEffects.active().silhouette,
+    strength: VideoEffects.active().silStrength,
+    stored: [localStorage.getItem('silhouette-prior'), localStorage.getItem('silhouette-strength')],
+  }));
+  expect(on.running).toBe(true);
+  expect(on.strength).toBeCloseTo(0.35, 2);
+  expect(on.stored).toEqual(['on', '0.35']);
+  await expect(page.locator('#seg-diagnostic pre')).toContainText('silhouette prior: on (running');
+  // Back to the default clears the stored value.
+  await page.locator('#seg-diagnostic').getByLabel('Silhouette prior', { exact: true }).selectOption('default');
+  expect(await page.evaluate(() => [VideoEffects.active().silhouette, localStorage.getItem('silhouette-prior')]))
+    .toEqual([false, null]);
+});

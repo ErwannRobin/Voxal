@@ -519,7 +519,11 @@ histogram mass on the room side), not merely the person not to have been seen
 with it, and is switched off where `P` is high; colours neither side has seen
 read as neutral (`SIL_EPS`). Without that, a shirt the model only half-found
 (Longpipe's key-derived mask does this) read as "not you" and the body was cut.
-`localStorage['silhouette-prior'] = 'off'` turns it off for diagnosis. Needs `SIL_MIN_FG`
+Diagnosis switches: `silhouette-prior` (`on` / `off`; absent = on for phones,
+off elsewhere, so it can be tried on a desktop) and `silhouette-strength`
+(0-1, default `SIL_STRENGTH`), set from the segmentation diagnostic panel (a
+select and a slider in its bar, and a status line: running, colour model
+ready, pixels learned) or Settings → Advanced → Segmentation debug. Needs `SIL_MIN_FG`
 / `SIL_MIN_BG` pixels of each before it speaks, and no picture of the room, so a
 moving camera does not break it. Limit: a persistent model error teaches the
 prior that the error is you; it fixes flicker and edges, not a limb the model
