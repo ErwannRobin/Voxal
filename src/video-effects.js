@@ -333,6 +333,16 @@ var VideoEffects = (function () {
   var LEARN_STABLE_HI    = 0.20;    // …and over which it counts as changed
   var LEARN_TRUST_LO     = 0.35;
   var LEARN_TRUST_HI     = 0.70;
+  // A held camera (phones): how the learned picture follows it. The shift
+  // between the camera and the picture is estimated on the CPU from two small
+  // lumas (coarse then fine, person excluded), at most every MOTION_MS; past
+  // MOTION_REANCHOR (a fraction of the frame) the picture is re-sampled onto
+  // the current view and the shift starts again from 0.
+  var MOTION_FINE        = 128;
+  var MOTION_MS          = 66;
+  var MOTION_SEARCH      = 5;      // coarse pixels each way of the last estimate (~8% of the frame)
+  var MOTION_REANCHOR    = 0.06;
+  var MOTION_MIN_VALID   = 0.25;   // share of the frame that must be comparable
   var LEARN_MIN_FRAMES   = 45;      // masks seen before the learned picture is consulted at all
 
   var IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
@@ -2023,6 +2033,8 @@ var VideoEffects = (function () {
   // on a live camera flickers, and this costs one frame of lag at most.
   // Everything here stays in the mask's own convention (image rows top first,
   // sampled at vUv), so the composite samples it with `flip` like the mask.
+  var INSIDE_GLSL = 'float inside(vec2 t) { return step(0.0, t.x) * step(t.x, 1.0) * step(0.0, t.y) * step(t.y, 1.0); }';
+
   function fragRefDiff() {
     function f(v) { return v.toFixed(4); }
     return [
@@ -2035,7 +2047,9 @@ var VideoEffects = (function () {
       'uniform vec3 uGain;',
       'uniform vec2 uOff;',
       'uniform float uAlpha;',
+      'uniform vec2 uShift;',
       'out vec4 outColor;',
+      INSIDE_GLSL,
       'void main() {',
       '  vec3 c = texture(uCam, vUv + vec2(-uOff.x, -uOff.y)).rgb;',
       '  c += texture(uCam, vUv + vec2( uOff.x, -uOff.y)).rgb;',
@@ -2048,11 +2062,14 @@ var VideoEffects = (function () {
       // The plate's alpha is how far it is trusted here: 1 everywhere for a
       // captured picture, per pixel for the learned one. Colour is averaged
       // weighted by it, so a pixel not yet learned cannot bleed black in.
-      '  vec4 q = texture(uPlate, vUv + vec2(-uOff.x, -uOff.y));',
-      '  vec4 acc = vec4(q.rgb * q.a, q.a);',
-      '  q = texture(uPlate, vUv + vec2( uOff.x, -uOff.y)); acc += vec4(q.rgb * q.a, q.a);',
-      '  q = texture(uPlate, vUv + vec2(-uOff.x,  uOff.y)); acc += vec4(q.rgb * q.a, q.a);',
-      '  q = texture(uPlate, vUv + vec2( uOff.x,  uOff.y)); acc += vec4(q.rgb * q.a, q.a);',
+      // uShift: the plate's pixel p is the camera's p + uShift (0 for a
+      // still camera and for a captured picture).
+      '  vec2 pv0 = vUv - uShift;',
+      '  vec2 t = pv0 + vec2(-uOff.x, -uOff.y); float w = inside(t); vec4 q = texture(uPlate, t);',
+      '  vec4 acc = vec4(q.rgb * q.a * w, q.a * w);',
+      '  t = pv0 + vec2( uOff.x, -uOff.y); w = inside(t); q = texture(uPlate, t); acc += vec4(q.rgb * q.a * w, q.a * w);',
+      '  t = pv0 + vec2(-uOff.x,  uOff.y); w = inside(t); q = texture(uPlate, t); acc += vec4(q.rgb * q.a * w, q.a * w);',
+      '  t = pv0 + vec2( uOff.x,  uOff.y); w = inside(t); q = texture(uPlate, t); acc += vec4(q.rgb * q.a * w, q.a * w);',
       '  vec3 p = clamp(acc.rgb / max(acc.a, 0.001) * uGain, 0.0, 1.0);',
       '  float trust = smoothstep(' + f(LEARN_TRUST_LO) + ', ' + f(LEARN_TRUST_HI) + ', acc.a * 0.25);',
       '  vec3 Y = vec3(0.2126, 0.7152, 0.0722);',
@@ -2094,6 +2111,23 @@ var VideoEffects = (function () {
   // box-samples the learned picture itself, and softening it twice would make
   // every edge in the room read as "different". uGo is 0 until the model has
   // produced a mask, so the first frames cannot learn you.
+  // Re-sample the learned picture onto the current view (see MOTION_REANCHOR):
+  // the new pixel p is the old one at p - uShift, and nothing outside it.
+  var FRAG_REF_SHIFT = [
+    '#version 300 es',
+    'precision mediump float;',
+    'in vec2 vUv;',
+    'uniform sampler2D uSrc;',
+    'uniform vec2 uShift;',
+    'out vec4 outColor;',
+    INSIDE_GLSL,
+    'void main() {',
+    '  vec2 t = vUv - uShift;',
+    '  vec4 q = texture(uSrc, t);',
+    '  outColor = vec4(q.rgb, q.a * inside(t));',
+    '}'
+  ].join('\n');
+
   var FRAG_REF_LEARN = [
     '#version 300 es',
     'precision mediump float;',
@@ -2103,11 +2137,17 @@ var VideoEffects = (function () {
     'uniform sampler2D uMask;',
     'uniform sampler2D uCore;',
     'uniform float uGo;',
+    'uniform vec2 uShift;',
     'out vec4 outColor;',
+    INSIDE_GLSL,
     'void main() {',
-    '  vec3 c = texture(uCam, vUv).rgb;',
+    // The camera pixel this plate pixel is looking at, and whether the camera
+    // sees it at all.
+    '  vec2 cv = vUv + uShift;',
+    '  float vis = inside(cv);',
+    '  vec3 c = texture(uCam, cv).rgb;',
     '  vec4 pv = texture(uPrev, vUv);',
-    '  float room = uGo * (1.0 - smoothstep(0.03, 0.15, texture(uMask, vUv).r));',
+    '  float room = uGo * vis * (1.0 - smoothstep(0.03, 0.15, texture(uMask, cv).r));',
     '  vec3 Y = vec3(0.2126, 0.7152, 0.0722);',
     '  float yc = dot(c, Y), yp = dot(pv.rgb, Y);',
     '  float lum = abs(yc - yp) / max(max(yc, yp), 0.08);',
@@ -2119,7 +2159,7 @@ var VideoEffects = (function () {
     '  float conf = pv.a;',
     '  bool unseen = conf < 0.004;',
     '  conf += ' + LEARN_UP.toFixed(5) + ' * still * room - ' + LEARN_DOWN.toFixed(5) + ' * (1.0 - still) * room;',
-    '  conf *= mix(1.0, 0.6, smoothstep(' + REF_CORE_LO.toFixed(2) + ', ' + REF_CORE_HI.toFixed(2) + ', texture(uCore, vUv).r));',
+    '  conf *= mix(1.0, 0.6, smoothstep(' + REF_CORE_LO.toFixed(2) + ', ' + REF_CORE_HI.toFixed(2) + ', texture(uCore, cv).r) * vis);',
     '  conf = clamp(conf, 0.0, 1.0);',
     '  vec3 plate = pv.rgb;',
     // Follow the camera: at once where nothing is known or trust is nearly
@@ -2738,6 +2778,15 @@ var VideoEffects = (function () {
     this.refCapture = null;
     this.refStateSent = null;
     this.learnFrames = 0;
+    // A held camera: the learned picture is followed across the view instead
+    // of assuming the camera is still. Off on desktop, where nothing moves and
+    // the CPU readback would be pure cost.
+    this.motionComp = IS_MOBILE;
+    this.shift = [0, 0];
+    this.motionAnchor = null;
+    this.motionPerson = null;
+    this.lastMotion = 0;
+    this.reanchors = 0;
 
     this.frames = 0;
     this.windowStart = 0;
@@ -2969,6 +3018,7 @@ var VideoEffects = (function () {
     this.pComp = program(gl, FRAG_COMPOSITE);
     this.pRef  = program(gl, FRAG_REF_DIFF);
     this.pLearn = program(gl, FRAG_REF_LEARN);
+    this.pShift = program(gl, FRAG_REF_SHIFT);
     this.pErode = program(gl, FRAG_ERODE);
 
     this.texCam = texture(gl, 1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
@@ -3143,6 +3193,8 @@ var VideoEffects = (function () {
   Processor.prototype.clearLearned = function () {
     var gl = this.gl;
     this.learnFrames = 0;
+    this.shift = [0, 0];
+    this.motionAnchor = null;
     if (!gl || !this.fbLearnA) return;
     [this.fbLearnA, this.fbLearnB].forEach(function (fb) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
@@ -3162,18 +3214,172 @@ var VideoEffects = (function () {
     return null;
   };
 
-  // One learning step, from draw(). A phone is held, not fixed: nothing would
-  // ever be still, so it would only cost.
-  Processor.prototype.learnStep = function () {
-    if (!this.refOn || IS_MOBILE || this.refCapture) return;
+  // --- following a held camera ---------------------------------------------
+
+  // How far the camera has moved since the learned picture was anchored, as a
+  // translation in UV: the picture's pixel p is the camera's p + shift. Found
+  // by matching two small lumas (the anchor's and now), excluding wherever the
+  // model sees a person, coarse first and then refined at twice the size, with
+  // a parabola through the best score's neighbours for the sub-pixel part.
+  //
+  // Translation only. A held camera also turns and drifts in depth, but over
+  // the fraction of a second between estimates, and the few percent of the
+  // frame before a re-anchor, the translation is the part that matters; the
+  // rest shows up as a difference and costs trust, not correctness.
+  function motionLuma(px, n) {
+    var out = new Float32Array(n), mean = 0;
+    for (var i = 0, j = 0; i < n; i++, j += 4) {
+      var v = (0.299 * px[j] + 0.587 * px[j + 1] + 0.114 * px[j + 2]) / 255;
+      out[i] = v; mean += v;
+    }
+    mean /= n;
+    for (var k = 0; k < n; k++) out[k] -= mean;   // exposure drift is not motion
+    return out;
+  }
+
+  // Mean squared difference of C(x) against A(x - s) over the pixels that are
+  // inside both and not person; Infinity when too few are comparable.
+  function motionScore(A, C, w, h, sx, sy, person, pshift, pw) {
+    var x0 = Math.max(0, sx), x1 = Math.min(w, w + sx);
+    var y0 = Math.max(0, sy), y1 = Math.min(h, h + sy);
+    var sum = 0, n = 0;
+    for (var y = y0; y < y1; y++) {
+      for (var x = x0; x < x1; x++) {
+        if (person && person[(y >> pshift) * pw + (x >> pshift)]) continue;
+        var d = C[y * w + x] - A[(y - sy) * w + (x - sx)];
+        sum += d * d; n++;
+      }
+    }
+    return n >= MOTION_MIN_VALID * w * h ? sum / n : Infinity;
+  }
+
+  // Best integer shift in a square around (cx, cy) and its sub-pixel offset.
+  function motionSearch(A, C, w, h, cx, cy, R, person, pshift, pw) {
+    var best = Infinity, bx = cx, by = cy, grid = {};
+    for (var dy = -R; dy <= R; dy++) {
+      for (var dx = -R; dx <= R; dx++) {
+        var sc = motionScore(A, C, w, h, cx + dx, cy + dy, person, pshift, pw);
+        grid[(cx + dx) + ',' + (cy + dy)] = sc;
+        if (sc < best) { best = sc; bx = cx + dx; by = cy + dy; }
+      }
+    }
+    if (best === Infinity) return null;
+    function sub(l, c, r) {
+      var den = l - 2 * c + r;
+      if (!isFinite(l) || !isFinite(r) || den <= 1e-12) return 0;
+      return Math.max(-0.5, Math.min(0.5, 0.5 * (l - r) / den));
+    }
+    return {
+      x: bx + sub(grid[(bx - 1) + ',' + by], best, grid[(bx + 1) + ',' + by]),
+      y: by + sub(grid[bx + ',' + (by - 1)], best, grid[bx + ',' + (by + 1)]),
+      ix: bx, iy: by, score: best
+    };
+  }
+
+  Processor.prototype.motionSizes = function () {
+    if (this.motionFW) return;
+    var k = MOTION_FINE / Math.max(this.refW, this.refH);
+    this.motionFW = Math.max(8, Math.round(this.refW * k / 2) * 2);
+    this.motionFH = Math.max(8, Math.round(this.refH * k / 2) * 2);
+    this.motionCW = this.motionFW >> 1;
+    this.motionCH = this.motionFH >> 1;
+    this.motionCanvas = document.createElement('canvas');
+    this.motionCanvas.width = this.motionFW; this.motionCanvas.height = this.motionFH;
+    this.motionCtx = this.motionCanvas.getContext('2d', { willReadFrequently: true });
+  };
+
+  // The model's mask, boiled down to the coarse grid: person where it is
+  // somewhat sure, plus one pixel round it (the mask lags a moving person).
+  // Called from the segmentation callback, the only place the mask is in hand.
+  Processor.prototype.motionNote = function (mask, mw, mh) {
+    this.motionSizes();
+    var cw = this.motionCW, ch = this.motionCH;
+    var raw = new Uint8Array(cw * ch), out = new Uint8Array(cw * ch);
+    for (var y = 0; y < ch; y++) {
+      var my = Math.min(mh - 1, Math.floor((y + 0.5) * mh / ch));
+      for (var x = 0; x < cw; x++) {
+        var mx = Math.min(mw - 1, Math.floor((x + 0.5) * mw / cw));
+        raw[y * cw + x] = mask[my * mw + mx] >= 48 ? 1 : 0;
+      }
+    }
+    for (var yy = 0; yy < ch; yy++) {
+      for (var xx = 0; xx < cw; xx++) {
+        var hit = 0;
+        for (var oy = -1; oy <= 1 && !hit; oy++) {
+          for (var ox = -1; ox <= 1; ox++) {
+            var qx = xx + ox, qy = yy + oy;
+            if (qx >= 0 && qx < cw && qy >= 0 && qy < ch && raw[qy * cw + qx]) { hit = 1; break; }
+          }
+        }
+        out[yy * cw + xx] = hit;
+      }
+    }
+    this.motionPerson = out;
+  };
+
+  // From draw(): re-estimate the shift (throttled), and re-anchor the learned
+  // picture when the camera has gone far enough that it would run out of view.
+  Processor.prototype.motionStep = function (now) {
+    if (!this.motionComp || now - this.lastMotion < MOTION_MS) return;
+    this.lastMotion = now;
+    this.motionSizes();
+    var fw = this.motionFW, fh = this.motionFH, cw = this.motionCW, ch = this.motionCH;
+    var px;
+    try {
+      this.motionCtx.drawImage(this.video, 0, 0, fw, fh);
+      px = this.motionCtx.getImageData(0, 0, fw, fh).data;
+    } catch (e) { return; }
+    var F = motionLuma(px, fw * fh), Cc = new Float32Array(cw * ch);
+    for (var y = 0; y < ch; y++) {
+      for (var x = 0; x < cw; x++) {
+        var i = (2 * y) * fw + 2 * x;
+        Cc[y * cw + x] = (F[i] + F[i + 1] + F[i + fw] + F[i + fw + 1]) * 0.25;
+      }
+    }
+    if (!this.motionAnchor) { this.motionAnchor = { f: F, c: Cc }; this.shift = [0, 0]; return; }
+    var person = this.motionPerson;
+    // Centred on where it was last time: what has to fit in the search is how
+    // far the camera moved since the last estimate, not since the anchor.
+    var pcx = Math.round(this.shift[0] * cw), pcy = Math.round(this.shift[1] * ch);
+    var co = motionSearch(this.motionAnchor.c, Cc, cw, ch, pcx, pcy, MOTION_SEARCH, person, 0, cw);
+    if (!co) return;
+    var fi = motionSearch(this.motionAnchor.f, F, fw, fh, co.ix * 2, co.iy * 2, 2, person, 1, cw);
+    if (!fi) return;
+    this.shift = [fi.x / fw, fi.y / fh];
+    if (Math.max(Math.abs(this.shift[0]), Math.abs(this.shift[1])) > MOTION_REANCHOR) {
+      this.reanchor(F, Cc);
+    }
+  };
+
+  // Re-sample the learned picture onto the current view and start the shift
+  // again from 0. One bilinear resample: it softens the picture slightly, once.
+  Processor.prototype.reanchor = function (F, Cc) {
+    var gl = this.gl;
+    gl.useProgram(this.pShift);
+    this.bindTex(this.pShift, 'uSrc', 0, this.texLearnA);
+    gl.uniform2f(uloc(gl, this.pShift, 'uShift'), this.shift[0], this.shift[1]);
+    this.drawQuad(this.fbLearnB, this.refW, this.refH);
+    var lt = this.texLearnA, lf = this.fbLearnA;
+    this.texLearnA = this.texLearnB; this.fbLearnA = this.fbLearnB;
+    this.texLearnB = lt; this.fbLearnB = lf;
+    this.shift = [0, 0];
+    this.motionAnchor = { f: F, c: Cc };
+    this.reanchors++;
+  };
+
+  // One learning step, from draw().
+  Processor.prototype.learnStep = function (now) {
+    if (!this.refOn || this.refCapture) return;
     var gl = this.gl;
     if (this.maskPrimed) this.learnFrames++;
+    this.motionStep(now);
     gl.useProgram(this.pLearn);
     this.bindTex(this.pLearn, 'uCam', 0, this.texCam);
     this.bindTex(this.pLearn, 'uPrev', 1, this.texLearnA);
     this.bindTex(this.pLearn, 'uMask', 2, this.texMaskA);
     this.bindTex(this.pLearn, 'uCore', 3, this.texCore);
     gl.uniform1f(uloc(gl, this.pLearn, 'uGo'), this.maskPrimed ? 1 : 0);
+    gl.uniform2f(uloc(gl, this.pLearn, 'uShift'), this.shift[0], this.shift[1]);
     this.drawQuad(this.fbLearnB, this.refW, this.refH);
     var lt = this.texLearnA, lf = this.fbLearnA;
     this.texLearnA = this.texLearnB; this.fbLearnA = this.fbLearnB;
@@ -3957,6 +4163,7 @@ var VideoEffects = (function () {
           if (self.keyed) self.keyedCorner(data, mask.width, mask.height, now);
           // Read here and nowhere else: the mask's lifetime ends with this
           // callback.
+          if (self.motionComp) self.motionNote(data, mask.width, mask.height);
           if (self.refLoaded) self.referenceStats(data, mask.width, mask.height, now);
           if (self.sceneId) {
             self.buildSoft();
@@ -4080,7 +4287,7 @@ var VideoEffects = (function () {
     // the blended mask eroded by REF_CORE_ERODE, as two 3-tap min passes per
     // axis at half that stride (taps at 0, ±s, ±2s — no gaps for a sliver to
     // slip through). The work pair is scratch, exactly as for the dilate.
-    if (this.refLoaded || (this.refOn && !IS_MOBILE)) {
+    if (this.refLoaded || this.refOn) {
       var es = REF_CORE_ERODE / 2;
       gl.useProgram(this.pErode);
       this.bindTex(this.pErode, 'uTex', 0, this.texMaskS);
@@ -4172,7 +4379,7 @@ var VideoEffects = (function () {
 
     // The empty-room reference: ease its weight toward whether it should be
     // used, and while it carries any weight, compare this frame to it.
-    this.learnStep();
+    this.learnStep(now);
     var refSrc = this.referenceSource();
     var refWant = refSrc ? 1 : 0;
     this.refWeight += (refWant - this.refWeight) * REF_FADE;
@@ -4186,6 +4393,7 @@ var VideoEffects = (function () {
       // The learned picture follows the camera's exposure by itself.
       var rg = learned ? [1, 1, 1] : this.refGain;
       gl.uniform3f(uloc(gl, this.pRef, 'uGain'), rg[0], rg[1], rg[2]);
+      gl.uniform2f(uloc(gl, this.pRef, 'uShift'), learned ? this.shift[0] : 0, learned ? this.shift[1] : 0);
       gl.uniform2f(uloc(gl, this.pRef, 'uOff'), 0.25 / this.refW, 0.25 / this.refH);
       gl.uniform1f(uloc(gl, this.pRef, 'uAlpha'), REF_TEMPORAL);
       this.drawQuad(this.fbRefB, this.refW, this.refH);
@@ -4639,7 +4847,7 @@ var VideoEffects = (function () {
       if (f) try { gl.deleteFramebuffer(f); } catch (e) { /* ignore */ }
     });
     [this.pDown, this.pBlur, this.pFeather, this.pMix, this.pDilate, this.pComp,
-     this.pRef, this.pLearn, this.pErode].forEach(function (p) {
+     this.pRef, this.pLearn, this.pShift, this.pErode].forEach(function (p) {
       if (p) try { gl.deleteProgram(p); } catch (e) { /* ignore */ }
     });
     [this.texScene, this.texSoftA, this.texSoftB].concat(this.texSceneOut || []).forEach(function (t) {

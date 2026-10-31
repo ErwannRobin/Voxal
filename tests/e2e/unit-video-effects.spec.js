@@ -1621,6 +1621,78 @@ test.describe('the empty-room reference', () => {
 
   // The desktop preferences window stores the switch but holds no picture —
   // the main window does, so switching it off THERE has to forget it HERE.
+  // A held camera: the same room, panned. Blocks of random colour (stripes
+  // would match themselves a period away), drawn `__pan` px to the right.
+  test('follows a camera that is held, not fixed', async ({ page }) => {
+    await seedEffectsRoom(page);
+    await installScene(page);
+    await page.evaluate(() => {
+      window.__pan = 0;
+      window.__mkVideoStream = function () {
+        const c = document.createElement('canvas');
+        c.width = 320; c.height = 240;
+        const ctx = c.getContext('2d');
+        const cell = (i, j) => {
+          let h = (i * 374761393 + j * 668265263) >>> 0;
+          h = ((h ^ (h >>> 13)) * 1274126177) >>> 0;
+          return h;
+        };
+        let n = 0;
+        const paint = () => {
+          for (let j = 0; j < 15; j++) {
+            for (let i = -4; i < 25; i++) {
+              const h = cell(i, j);
+              ctx.fillStyle = 'rgb(' + (h & 255) + ',' + ((h >> 8) & 255) + ',' + ((h >> 16) & 255) + ')';
+              ctx.fillRect(i * 16 + window.__pan, j * 16, 16, 16);
+            }
+          }
+          ctx.fillStyle = '#fff';
+          ctx.fillRect((n++ * 7) % 320, 0, 2, 1);
+        };
+        paint();
+        const stream = c.captureStream(15);
+        const timer = setInterval(paint, 40);
+        stream.getVideoTracks()[0].addEventListener('ended', () => clearInterval(timer));
+        return stream;
+      };
+    });
+    const seen = await page.evaluate(async () => {
+      VideoEffects.setReference(true);
+      VideoEffects.writeMode('blur');
+      await startVideoShare();
+      const pr = VideoEffects.active();
+      pr.motionComp = true;
+      window.__voxalSegStub = { empty: true };
+      await __waitFor(() => pr.referenceSource() === 'learned', 15000);
+      await __sleep(7000);
+      const trust = () => {
+        const gl = pr.gl, px = new Uint8Array(4);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, pr.fbLearnA);
+        gl.readPixels(Math.floor(pr.refW * 0.5), Math.floor(pr.refH * 0.5), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        return px[3] / 255;
+      };
+      const before = trust();
+      // A small pan: the shift follows it.
+      window.__pan = 12;
+      await __sleep(1500);
+      const small = { shift: pr.shift.slice(), trust: trust(), reanchors: pr.reanchors };
+      // A big one: the picture is re-anchored and the trust survives it.
+      for (let x = 16; x <= 40; x += 4) { window.__pan = x; await __sleep(100); }
+      await __sleep(2500);
+      const big = { shift: pr.shift.slice(), trust: trust(), reanchors: pr.reanchors };
+      return { before, small, big };
+    });
+    expect(seen.before).toBeGreaterThan(0.7);
+    // 12 px of 320.
+    expect(Math.abs(seen.small.shift[0] - 12 / 320)).toBeLessThan(0.008);
+    expect(Math.abs(seen.small.shift[1])).toBeLessThan(0.008);
+    expect(seen.small.trust).toBeGreaterThan(0.6);
+    expect(seen.big.reanchors).toBeGreaterThan(seen.small.reanchors);
+    expect(Math.max(Math.abs(seen.big.shift[0]), Math.abs(seen.big.shift[1]))).toBeLessThan(0.06);
+    expect(seen.big.trust).toBeGreaterThan(0.6);
+  });
+
   test('switching it off in the preferences window forgets the picture', async ({ page }) => {
     await seedEffectsRoom(page);
     await installScene(page);
