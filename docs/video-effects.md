@@ -501,6 +501,47 @@ correctness. A captured picture is not followed (it stays a still-camera
 reference and goes stale when the phone moves — then the learned one takes
 over). Not yet done: gyro help for fast motion, a panorama larger than the view.
 
+**The silhouette prior (phones).** Somebody holding a phone sits in about the
+same place in the picture whatever the room does behind them, so on a phone
+(`silhouette`, tied to *Fixed camera*) there is a second, alignment-free helper.
+`silhouetteNote()`, from the segmentation callback, keeps a slow average of the
+model's mask at 128 wide (`P`: where you usually are; `SIL_UP` 0.04 /
+`SIL_DOWN` 0.10 per inference) and, every `SIL_MS`, builds two 8×8×8 colour
+histograms from the camera at the same size: colours well inside the habitual
+silhouette (and the model agreeing) against colours well outside it. The ratio,
+smoothed over neighbouring bins, goes to the composite as a 512×1 lookup
+(`uSilC`: person-likeness, how well known). In the band only (never inside the
+eroded core) a colour the room has and you have not is taken away, one you have
+and the room has not is kept or given back where `P` is high; ambiguous colours
+change nothing. It runs AFTER the hair filter, which would otherwise pull a
+taken-away pixel back toward its model-confident neighbours. Taking away needs the room to be KNOWN to have the colour (`SIL_KNOWN` of
+histogram mass on the room side), not merely the person not to have been seen
+with it, and is switched off where `P` is high; colours neither side has seen
+read as neutral (`SIL_EPS`). Without that, a shirt the model only half-found
+(Longpipe's key-derived mask does this) read as "not you" and the body was cut.
+**A head implies a body.** Longpipe can lose the torso under a face it found
+(some shirts). `findHead()` takes the topmost real run of person in the model's
+mask and its widest run until a row jumps wider (the shoulders, if the model did
+find them); the result is smoothed and dropped only after 8 inferences without a
+head. Under it `bodyShape()` (GLSL twin in the composite) expects a torso: neck
+0.8, shoulders 2.7 head-widths wide, straight down to the bottom of the picture.
+There, anything that is not a colour the room is KNOWN to have (`lc.g`) is given
+back to the matte. The same shape, 1.3× wider, is kept out of the room
+histogram, so the shirt never teaches the room its colour. Limits: an object
+behind the person that the room histogram has never seen below the head reads as
+torso; a cropped or lying person has no such torso. The panel's status line says
+whether a head was found.
+
+Diagnosis switches: `silhouette-prior` (`on` / `off`; absent = on for phones,
+off elsewhere, so it can be tried on a desktop) and `silhouette-strength`
+(0-1, default `SIL_STRENGTH`), set from the segmentation diagnostic panel (a
+select and a slider in its bar, and a status line: running, colour model
+ready, pixels learned) or Settings → Advanced → Segmentation debug. Needs `SIL_MIN_FG`
+/ `SIL_MIN_BG` pixels of each before it speaks, and no picture of the room, so a
+moving camera does not break it. Limit: a persistent model error teaches the
+prior that the error is you; it fixes flicker and edges, not a limb the model
+never finds.
+
 **It removes what it recognises.** The difference goes through a second
 smoothstep (`REF_HARDEN_*`) so a pixel that matches the room goes to 0 rather
 than keeping a faint sharp halo, the "ask the reference" window starts earlier
