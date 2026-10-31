@@ -18,7 +18,7 @@ help:
 	@echo "  build-debug  Build the Tauri desktop app (debug bundle — registers voxal:// scheme)"
 	@echo "  build-web    Bundle the web version into dist/"
 	@echo "  seg-assets   Stage the background-effects runtime into src/assets/seg"
-	@echo "  rvm-assets   Stage the EXPERIMENTAL RVM matting engine (GPL-3.0, never shipped) into src/assets/rvm"
+	@echo "  rvm-assets   Stage the EXPERIMENTAL RVM matting engine (GPL-3.0; local + web previews only) into src/assets/rvm"
 	@echo "  matting-footage Build the matting benchmark's footage (known alpha) into bench-results/matting"
 	@echo "  matting-bench Score MediaPipe / Longpipe / RVM on it through the real pipeline; ARGS=... passes options"
 	@echo "  promo-assets Re-embed the icon and fonts in docs/promo.html (the 30 s film)"
@@ -161,7 +161,8 @@ seg-assets:
 	@sh seg-assets.sh
 
 # The matting evaluation's RVM engine (docs/matting-evaluation.md). GPL-3.0
-# weights: staged for local benchmarking only, gitignored, deleted before every
+# weights: staged for local benchmarking and for web PREVIEW deploys
+# (vercel-build.sh; production only with RVM_ASSETS=1), gitignored, deleted before every
 # desktop build (rvm-clean) and stripped from the mobile apps (cap-sync).
 rvm-assets:
 	@sh scripts/rvm-assets.sh $(ARGS)

@@ -13,6 +13,16 @@ set -e
 # devDependencies before running this).
 sh seg-assets.sh
 
+# The experimental RVM matting engine (docs/matting-evaluation.md, opt-in with
+# ?segengine=rvm), staged for EVALUATION on preview deploys only. Its weights
+# are GPL-3.0, so a production deploy does not carry them unless RVM_ASSETS=1 is
+# set on purpose. ~100 MB of ONNX Runtime Web + the MobileNetV3 models.
+if [ "${VERCEL_ENV:-}" = "preview" ] || [ "${RVM_ASSETS:-}" = "1" ]; then
+  sh scripts/rvm-assets.sh
+else
+  rm -rf src/assets/rvm
+fi
+
 # Stamp the commit and build time for the about panel. Mirrors the Makefile's
 # gen-build-info target, but reads Vercel's env var — the deploy is built from a
 # shallow checkout where `git rev-parse` is not dependable.
