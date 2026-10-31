@@ -63,3 +63,7 @@ src/build-info.js
 # node_modules by `make seg-assets` (and by vercel.json on deploy). The model
 # and the preset artwork next to it ARE committed — they are small.
 src/assets/seg/vision_*
+
+# The matting evaluation's RVM engine (`make rvm-assets`): GPL-3.0 weights and
+# the ONNX Runtime they run on. Never committed, never shipped.
+src/assets/rvm/
