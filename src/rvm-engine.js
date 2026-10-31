@@ -163,6 +163,8 @@ var RvmEngine = (function () {
     var url = new URL(cfg.base + 'rvm_' + cfg.model + '.onnx', document.baseURI).href;
     return loadOrt(cfg.base).then(function (ort) {
       self.ort = ort;
+      // Tests hand the model's bytes in with the runtime stub.
+      if (ort.modelBytes) return ort.modelBytes;
       return fetch(url).then(function (r) {
         if (!r.ok) throw new Error('RVM model: HTTP ' + r.status + ' (run make rvm-assets)');
         return r.arrayBuffer();

@@ -924,6 +924,10 @@ var VideoEffects = (function () {
       var o = longpipeDilateOverride();
       e.dilate = o !== null ? o : LONGPIPE_DILATE_BASE + e.feather * 0.5;
     }
+    // The matting bench's A/B switch: { feather, lo, hi } replace the profile's.
+    if (typeof window !== 'undefined' && window.__voxalEdgeOverride) {
+      Object.keys(window.__voxalEdgeOverride).forEach(function (k) { e[k] = window.__voxalEdgeOverride[k]; });
+    }
     return e;
   }
 
@@ -2272,6 +2276,7 @@ var VideoEffects = (function () {
     'uniform float uDecon;',
     'uniform float uHair;',
     'uniform float uMotion;',
+    'uniform float uLinear;',
     // Segmentation diagnostic only (see "The segmentation diagnostic"): 1
     // prints the matte `m` this shader is about to mix with, as grey. Always 0
     // in normal use, which makes the branch below dead.
@@ -2408,7 +2413,10 @@ var VideoEffects = (function () {
     '    bg = texture(uBlur, flip).rgb;',
     '  }',
     '  if (uBgMode > 1.5 && uWrap > 0.0) sharp = sceneLight(sharp, flip, vUv, soft);',
-    '  outColor = vec4(mix(bg, sharp, m), 1.0);',
+    // uLinear: mix in (approximately, gamma 2) linear light, the way a lens
+    // mixed the person and the room in the first place. Off = the sRGB mix.
+    '  if (uLinear > 0.5) outColor = vec4(sqrt(mix(bg * bg, sharp * sharp, m)), 1.0);',
+    '  else outColor = vec4(mix(bg, sharp, m), 1.0);',
     '}'
   ].join('\n');
 
@@ -4278,8 +4286,10 @@ var VideoEffects = (function () {
     gl.useProgram(this.pMix);
     this.bindTex(this.pMix, 'uPrev', 0, this.texMaskS);
     this.bindTex(this.pMix, 'uNext', 1, this.texMaskRaw);
-    gl.uniform1f(uloc(gl, this.pMix, 'uAlphaUp'), this.maskPrimed ? MASK_ALPHA_UP : 1.0);
-    gl.uniform1f(uloc(gl, this.pMix, 'uAlphaDown'), this.maskPrimed ? MASK_ALPHA_DOWN : 1.0);
+    // window.__voxalMaskBlend = [up, down]: the matting bench's A/B switch.
+    var mb = window.__voxalMaskBlend || [MASK_ALPHA_UP, MASK_ALPHA_DOWN];
+    gl.uniform1f(uloc(gl, this.pMix, 'uAlphaUp'), this.maskPrimed ? mb[0] : 1.0);
+    gl.uniform1f(uloc(gl, this.pMix, 'uAlphaDown'), this.maskPrimed ? mb[1] : 1.0);
     gl.uniform1f(uloc(gl, this.pMix, 'uCut'), this.maskCut);
     this.drawQuad(this.fbMaskSB, W, H);
 
@@ -4318,7 +4328,8 @@ var VideoEffects = (function () {
 
     // With the empty-room reference in use the band reaches a little further:
     // the reference can only give back what is inside it.
-    var dilate = this.edge.dilate + (this.refWeight > 0.5 ? REF_DILATE_EXTRA : 0);
+    var dilate = (typeof window.__voxalDilate === 'number' ? window.__voxalDilate : this.edge.dilate) +
+      (this.refWeight > 0.5 ? REF_DILATE_EXTRA : 0);
     gl.useProgram(this.pDilate);
     this.bindTex(this.pDilate, 'uTex', 0, this.texMaskS);
     gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), dilate / W, 0);
@@ -4470,9 +4481,10 @@ var VideoEffects = (function () {
     gl.uniform2f(uloc(gl, this.pComp, 'uShadow'), sh.cast, sh.contact);
     gl.uniform1f(uloc(gl, this.pComp, 'uWrap'), useScene && this.scene ? this.scene.wrap : 0);
     gl.uniform2f(uloc(gl, this.pComp, 'uEdge'), this.edge.lo, this.edge.hi);
-    gl.uniform1f(uloc(gl, this.pComp, 'uDecon'), this.decon);
+    gl.uniform1f(uloc(gl, this.pComp, 'uDecon'), typeof window.__voxalDecon === 'number' ? window.__voxalDecon : this.decon);
     gl.uniform1f(uloc(gl, this.pComp, 'uMotion'), window.__voxalNoEdgeMotion ? 0 : Math.min(1, Math.max(0, this.look.motion || 0)));
     gl.uniform1f(uloc(gl, this.pComp, 'uHair'), window.__voxalNoHairRefine ? 0 : HAIR_MIX);
+    gl.uniform1f(uloc(gl, this.pComp, 'uLinear'), window.__voxalLinearComposite ? 1 : 0);
     filmUniform(gl, this.pComp, this.look.exposure);
     var x = this.bgXform();
     gl.uniform4f(uloc(gl, this.pComp, 'uBgXform'), x[0], x[1], x[2], x[3]);

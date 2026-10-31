@@ -7,7 +7,8 @@
 //   node scripts/matting-bench.mjs                         quality: all engines, all rooms, 640x360 + 1280x720
 //   node scripts/matting-bench.mjs --engines mediapipe,rvm --rooms living --res 1280x720 --frames 120
 //   node scripts/matting-bench.mjs --realtime              performance: the Processor's own loop at 30 fps
-//   node scripts/matting-bench.mjs --variants              compositing fixes, A/B on one engine
+//   node scripts/matting-bench.mjs --variants              compositing switches, A/B (ALL_VARIANTS)
+//   node scripts/matting-bench.mjs --variant-names shipped,linear,linear&dilate0   chosen ones; a&b combines
 //   node scripts/matting-bench.mjs --swiftshader           software GL (default: the real GPU, ANGLE/Metal on a Mac)
 //   node scripts/matting-bench.mjs --headed --label m5
 //
@@ -61,6 +62,7 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--frames') opt.frames = +args[++i];
   else if (a === '--realtime') opt.realtime = true;
   else if (a === '--variants') opt.variants = true;
+  else if (a === '--variant-names') { opt.variants = true; opt.variantNames = args[++i].split(','); }
   else if (a === '--swiftshader') opt.swiftshader = true;
   else if (a === '--headed') opt.headed = true;
   else if (a === '--label') opt.label = args[++i];
@@ -211,9 +213,20 @@ async function main() {
 
 // Compositing variants for --variants: each a set of window flags the GL
 // pipeline reads (video-effects.js). 'shipped' is the baseline.
-const VARIANTS = [
-  { name: 'shipped', flags: {} }
+const ALL_VARIANTS = [
+  { name: 'shipped', flags: {} },
+  { name: 'linear', flags: { __voxalLinearComposite: true } },
+  { name: 'nohair', flags: { __voxalNoHairRefine: true } },
+  { name: 'nodecon', flags: { __voxalDecon: 0 } },
+  { name: 'decon1', flags: { __voxalDecon: 1 } },
+  { name: 'dilate0', flags: { __voxalDilate: 0 } },
+  { name: 'dilate1.5', flags: { __voxalDilate: 1.5 } },
+  { name: 'noblend', flags: { __voxalMaskBlend: [1, 1] } },
+  { name: 'blend-sym', flags: { __voxalMaskBlend: [0.6, 0.6] } }
 ];
+const VARIANTS = opt.variantNames ? ALL_VARIANTS.filter((v) => opt.variantNames.includes(v.name)).concat(
+  opt.variantNames.filter((n) => n.includes('&')).map((n) => ({ name: n,
+    flags: Object.assign({}, ...n.split('&').map((p) => ALL_VARIANTS.find((v) => v.name === p).flags)) }))) : ALL_VARIANTS;
 
 function fmt(v, d = 1) { return v === null || v === undefined ? '–' : v.toFixed(d); }
 
