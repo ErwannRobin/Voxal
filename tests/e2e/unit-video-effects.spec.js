@@ -1918,8 +1918,11 @@ test.describe('edge decontamination', () => {
     await seedEffectsRoom(page);
     await installRoom(page, 3);
     const seen = await measure(page);
-    // Less of the old wall in the band with the pass on than off.
-    expect(seen.redOn).toBeLessThan(seen.redOff - 30);
+    // Less of the old wall in the band with the pass on than off. The margin
+    // follows the halo: at the old 3-texel dilate the band held more wall
+    // (redOff ~570) and the pass took ~60 out; at 1.5 it holds ~490 and the
+    // pass takes 24-37 out (docs/matting-evaluation.md).
+    expect(seen.redOn).toBeLessThan(seen.redOff - 15);
   });
 });
 

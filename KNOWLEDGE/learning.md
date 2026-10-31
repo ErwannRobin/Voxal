@@ -507,3 +507,11 @@ Design: `docs/video-effects.md`. Preview any scene/look headlessly with `make sc
 - **Soft focus** (`softFocus()` in `LIGHT_GLSL`, `SOFT_FOCUS`/`SOFT_FOCUS_LOD`): the scene takes a coarser mip of itself next to the person, scaled by `soft`, the scene's alpha and `uWrap`. The scene is not blurred anywhere else. Untuned.
 
 - Scene chip previews are static JPEGs (`src/assets/scenes/`), not rendered at runtime: the runtime thumbnails were skipped on software GPUs and delayed everywhere, so users saw only the gradient swatches. Re-run `scripts/scene-preview.mjs --gpu --size 320x180 --time 37` (then `sips --resampleWidth 192`) when a scene's look changes.
+
+## Matting evaluation (RVM prototype, `docs/matting-evaluation.md`)
+
+- **RVM is GPL-3.0, weights included** (no separate weight licence). Never commit or ship them: `make rvm-assets` stages ONNX Runtime Web + the `.onnx` files (sha256-pinned) into gitignored `src/assets/rvm/`; desktop builds run `rvm-clean`, `build-web` and `cap-sync` strip it. `src/rvm-engine.js` is inert without them (falls back to MediaPipe).
+- **ORT-Web 1.30's WebGPU AveragePool has no `ceil_mode`**, and the error comes from the first `session.run()`, not from `InferenceSession.create()` — a fallback must catch it there. RVM's three source-pyramid pools are switched to floor in the model bytes (`patchCeilMode()`); equivalent while the downsampled input is a multiple of 8 (WebGPU and WASM give identical scores).
+- **Headless Playwright Chromium is SwiftShader by default, even on a Mac**: `--enable-gpu --use-angle=metal --enable-unsafe-webgpu` gives the real GPU and a WebGPU adapter. Anything timed without them measures the CPU.
+- Bench footage is a keyed green-screen clip: its ground truth carries an olive/magenta rim at the hair (keyer spill), identical in the input and the truth, so it costs every engine the same; judge rims on the stills with that in mind.
+- `git checkout -b X origin/main` makes `origin/main` X's upstream; with `push.default=upstream`, `git push -u origin X` then pushes to **main**. Branch with `--no-track` (or push `X:refs/heads/X`).

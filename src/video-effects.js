@@ -82,7 +82,15 @@ var VideoEffects = (function () {
   //
   // It also has to cover half of the composite's soft band, which now reaches
   // further inward than it used to — see MASK_EDGE_LO / MASK_EDGE_HI.
-  var MASK_DILATE = 3;
+  //
+  // Measured against a known alpha (docs/matting-evaluation.md, make
+  // matting-bench), 3 erred far too far outward: the ground truth itself, fed
+  // through this pipeline at 3, left ~47% of the old room in the edge band —
+  // worse than MediaPipe's own mask did, so the halo round the hair was this
+  // dilate, not the model. 1.5 halved that halo and cut the composite's error
+  // by ~40%, for an edge band ~5/255 tighter inside; 0 removed the halo but
+  // ate the edge (inner error x5).
+  var MASK_DILATE = 1.5;
 
   // Feather radius, in mask pixels, and the window the composite maps that
   // feather through.
@@ -176,11 +184,17 @@ var VideoEffects = (function () {
   // a texel and the blur starts skipping instead of blurring.
   var BLUR_PASSES_MAX = 6;
 
-  // Temporal blend weights, per inference. Growing is nearly immediate so the
-  // mask keeps up with a moving head; shrinking takes several inferences, which
-  // is what stops the model's frame-to-frame noise turning into a boiling edge.
-  var MASK_ALPHA_UP   = 0.85;
-  var MASK_ALPHA_DOWN = 0.20;
+  // Temporal blend weight, per inference: how far the mask moves toward the
+  // newest one. It used to be asymmetric (0.85 to grow, 0.20 to shrink) so a
+  // dropped pixel had to prove itself for several inferences; measured against
+  // a known alpha, that slow shrink is a trail of the old room behind every
+  // movement, and a symmetric 0.6 scored better on BOTH the composite's error
+  // and its frame-to-frame error (flicker and trailing together) for MediaPipe
+  // and Longpipe (docs/matting-evaluation.md). A recurrent matting model (RVM)
+  // is already temporally consistent: blending it again only adds the trail,
+  // so it is not blended at all (maskBlendFor()).
+  var MASK_BLEND = 0.6;
+  function maskBlendFor(engine) { return engine === 'rvm' ? 1 : MASK_BLEND; }
 
   // The confidence cut. The model's mask is not 0/1: where it is unsure (a
   // lamp over the head, the rim of a shoulder, a wisp of hair) it says 20-70%,
@@ -907,10 +921,14 @@ var VideoEffects = (function () {
 
   // Longpipe's mask is a matte whose 50% point already sits on the silhouette,
   // where MediaPipe's sits inside it. The dilate that wins that margin back for
-  // MediaPipe (MASK_DILATE, ~15 px at 1280 wide) is then a halo of the old room
-  // all round the person, so the matte is dilated by about a texel instead.
-  // `longpipe-dilate` (texels, 0-4) overrides it for comparing on a device.
-  var LONGPIPE_DILATE_BASE = 0.3;
+  // MediaPipe (MASK_DILATE) is then a halo of the old room all round the
+  // person, so the matte is dilated by half a texel at the middle of the
+  // slider (it was one: measured, half a texel cut the composite's error by
+  // ~27% and halved the halo, for a slightly tighter edge; 0 ate the edge).
+  // RVM's matte is finer still and is not dilated at all (0 scored best on
+  // every composite measure). `longpipe-dilate` (texels, 0-4) overrides
+  // Longpipe's for comparing on a device.
+  var MATTE_DILATE_PER_FEATHER = 0.36;
   function longpipeDilateOverride() {
     try {
       var v = parseFloat(localStorage.getItem('longpipe-dilate'));
@@ -919,9 +937,16 @@ var VideoEffects = (function () {
   }
   function edgeProfileFor(engine) {
     var e = edgeProfile(readSharpness());
+    // RVM's alpha is a matte too (and a finer one): same edge as Longpipe's.
     if (engine === 'longpipe') {
       var o = longpipeDilateOverride();
-      e.dilate = o !== null ? o : LONGPIPE_DILATE_BASE + e.feather * 0.5;
+      e.dilate = o !== null ? o : MATTE_DILATE_PER_FEATHER * e.feather;
+    } else if (engine === 'rvm') {
+      e.dilate = 0;
+    }
+    // The matting bench's A/B switch: { feather, lo, hi } replace the profile's.
+    if (typeof window !== 'undefined' && window.__voxalEdgeOverride) {
+      Object.keys(window.__voxalEdgeOverride).forEach(function (k) { e[k] = window.__voxalEdgeOverride[k]; });
     }
     return e;
   }
@@ -1769,8 +1794,10 @@ var VideoEffects = (function () {
 
   // The engine a new Processor starts with. Longpipe unless MediaPipe was
   // chosen (localStorage / ?segengine=mediapipe) or the Longpipe script is
-  // missing — that case is MediaPipe, silently.
+  // missing — that case is MediaPipe, silently. The experimental RVM only when
+  // chosen by name (see rvm-engine.js).
   function selectedEngine() {
+    if (typeof RvmEngine !== 'undefined' && RvmEngine.selected()) return 'rvm';
     return typeof LongpipeEngine !== 'undefined' && LongpipeEngine.selected() === 'longpipe'
       ? 'longpipe' : 'mediapipe';
   }
@@ -1780,6 +1807,16 @@ var VideoEffects = (function () {
   // experiment: the reason is kept for the diagnostic panel.
   function createSegmenter(raw, engine, video) {
     var want = engine || selectedEngine();
+    if (want === 'rvm' && (!window.__voxalSegStub || window.__voxalRvmStub) && typeof RvmEngine !== 'undefined') {
+      return RvmEngine.create(raw, video).then(function (seg) {
+        _engineFallback = null;
+        return seg;
+      }, function (e) {
+        _engineFallback = (e && e.message) || String(e);
+        console.warn('[VideoEffects] RVM unavailable, using MediaPipe: ' + _engineFallback);
+        return createMediaPipeSegmenter();
+      });
+    }
     if (want === 'longpipe' && (!window.__voxalSegStub || window.__voxalLongpipeStub) && typeof LongpipeEngine !== 'undefined') {
       return LongpipeEngine.create(raw, video).then(function (seg) {
         _engineFallback = null;
@@ -2259,6 +2296,9 @@ var VideoEffects = (function () {
     'uniform float uDecon;',
     'uniform float uHair;',
     'uniform float uMotion;',
+    'uniform float uLinear;',
+    'uniform sampler2D uFg;',
+    'uniform float uFgOn;',
     // Segmentation diagnostic only (see "The segmentation diagnostic"): 1
     // prints the matte `m` this shader is about to mix with, as grey. Always 0
     // in normal use, which makes the branch below dead.
@@ -2380,6 +2420,13 @@ var VideoEffects = (function () {
     '      }',
     '    }',
     '  }',
+    // A matting model's own estimate of the person's colour (RVM's fgr), in
+    // the band where the camera pixel is part room: the colour the pixel would
+    // have with nothing behind it, so the new background is mixed with the
+    // person alone. Only where the matte is partial; never for the blur.
+    '  if (uFgOn > 0.5 && uBgMode > 0.5 && m > 0.0 && m < 1.0) {',
+    '    sharp = mix(sharp, texture(uFg, flip).rgb, 1.0 - smoothstep(0.75, 1.0, m));',
+    '  }',
     '  vec3 bg;',
     '  float soft = 0.0;',
     '  if (uBgMode > 1.5) {',
@@ -2395,7 +2442,10 @@ var VideoEffects = (function () {
     '    bg = texture(uBlur, flip).rgb;',
     '  }',
     '  if (uBgMode > 1.5 && uWrap > 0.0) sharp = sceneLight(sharp, flip, vUv, soft);',
-    '  outColor = vec4(mix(bg, sharp, m), 1.0);',
+    // uLinear: mix in (approximately, gamma 2) linear light, the way a lens
+    // mixed the person and the room in the first place. Off = the sRGB mix.
+    '  if (uLinear > 0.5) outColor = vec4(sqrt(mix(bg * bg, sharp * sharp, m)), 1.0);',
+    '  else outColor = vec4(mix(bg, sharp, m), 1.0);',
     '}'
   ].join('\n');
 
@@ -2885,18 +2935,19 @@ var VideoEffects = (function () {
     var self = this;
     this.segmenter = seg;
     this.engine = seg.engine || 'mediapipe';
-    this.maskCut = this.engine === 'longpipe' ? 0 : readMaskCut();
+    this.maskCut = this.engine === 'longpipe' || this.engine === 'rvm' ? 0 : readMaskCut();
     this.edge = edgeProfileFor(this.engine);
     this.maskPrimed = false;
-    if (this.engine === 'longpipe') {
-      // A Longpipe that dies mid-call hands the camera back to MediaPipe.
+    if (this.engine === 'longpipe' || this.engine === 'rvm') {
+      // An experimental engine that dies mid-call hands the camera back to MediaPipe.
+      var name = this.engine === 'rvm' ? 'RVM' : 'Longpipe';
       seg.onFail = function (e) {
         if (self.segmenter !== seg || self.stopped) return;
         _engineFallback = (e && e.message) || String(e);
-        console.warn('[VideoEffects] Longpipe failed, back to MediaPipe: ' + _engineFallback);
+        console.warn('[VideoEffects] ' + name + ' failed, back to MediaPipe: ' + _engineFallback);
         self.swapSegmenter('mediapipe');
       };
-      this.syncDirect();
+      if (this.engine === 'longpipe') this.syncDirect();
     }
   };
 
@@ -4160,6 +4211,7 @@ var VideoEffects = (function () {
           var data = mask.getAsUint8Array();
           if (self.refCapture) self.captureSawMask(data);
           self.uploadMask(data, mask.width, mask.height);
+          if (result.rvm && result.rvm.fg) self.uploadFg(result.rvm);
           if (self.keyed) self.keyedCorner(data, mask.width, mask.height, now);
           // Read here and nowhere else: the mask's lifetime ends with this
           // callback.
@@ -4264,8 +4316,11 @@ var VideoEffects = (function () {
     gl.useProgram(this.pMix);
     this.bindTex(this.pMix, 'uPrev', 0, this.texMaskS);
     this.bindTex(this.pMix, 'uNext', 1, this.texMaskRaw);
-    gl.uniform1f(uloc(gl, this.pMix, 'uAlphaUp'), this.maskPrimed ? MASK_ALPHA_UP : 1.0);
-    gl.uniform1f(uloc(gl, this.pMix, 'uAlphaDown'), this.maskPrimed ? MASK_ALPHA_DOWN : 1.0);
+    // window.__voxalMaskBlend = [up, down]: the matting bench's A/B switch.
+    var mbw = maskBlendFor(this.engine);
+    var mb = window.__voxalMaskBlend || [mbw, mbw];
+    gl.uniform1f(uloc(gl, this.pMix, 'uAlphaUp'), this.maskPrimed ? mb[0] : 1.0);
+    gl.uniform1f(uloc(gl, this.pMix, 'uAlphaDown'), this.maskPrimed ? mb[1] : 1.0);
     gl.uniform1f(uloc(gl, this.pMix, 'uCut'), this.maskCut);
     this.drawQuad(this.fbMaskSB, W, H);
 
@@ -4304,7 +4359,8 @@ var VideoEffects = (function () {
 
     // With the empty-room reference in use the band reaches a little further:
     // the reference can only give back what is inside it.
-    var dilate = this.edge.dilate + (this.refWeight > 0.5 ? REF_DILATE_EXTRA : 0);
+    var dilate = (typeof window.__voxalDilate === 'number' ? window.__voxalDilate : this.edge.dilate) +
+      (this.refWeight > 0.5 ? REF_DILATE_EXTRA : 0);
     gl.useProgram(this.pDilate);
     this.bindTex(this.pDilate, 'uTex', 0, this.texMaskS);
     gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), dilate / W, 0);
@@ -4335,6 +4391,17 @@ var VideoEffects = (function () {
     // feedback above to come back.
     this.maskPrimed = true;
     if (dg) this.diagMarkFresh();
+  };
+
+  // RVM's foreground colour (RGBA, its input's size), for the composite's uFg.
+  Processor.prototype.uploadFg = function (r) {
+    var gl = this.gl;
+    if (!gl) return;
+    if (!this.texFg) this.texFg = texture(gl, 0, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+    gl.bindTexture(gl.TEXTURE_2D, this.texFg);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, r.width, r.height, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+                  new Uint8Array(r.fg.buffer, r.fg.byteOffset, r.fg.length));
+    this.fgReady = true;
   };
 
   // Re-allocate just the mask ping-pong for a new mask shape, leaving the
@@ -4456,9 +4523,17 @@ var VideoEffects = (function () {
     gl.uniform2f(uloc(gl, this.pComp, 'uShadow'), sh.cast, sh.contact);
     gl.uniform1f(uloc(gl, this.pComp, 'uWrap'), useScene && this.scene ? this.scene.wrap : 0);
     gl.uniform2f(uloc(gl, this.pComp, 'uEdge'), this.edge.lo, this.edge.hi);
-    gl.uniform1f(uloc(gl, this.pComp, 'uDecon'), this.decon);
+    gl.uniform1f(uloc(gl, this.pComp, 'uDecon'), typeof window.__voxalDecon === 'number' ? window.__voxalDecon : this.decon);
     gl.uniform1f(uloc(gl, this.pComp, 'uMotion'), window.__voxalNoEdgeMotion ? 0 : Math.min(1, Math.max(0, this.look.motion || 0)));
     gl.uniform1f(uloc(gl, this.pComp, 'uHair'), window.__voxalNoHairRefine ? 0 : HAIR_MIX);
+    // RVM: mix in linear light with its own foreground colour in the band
+    // (together they took the old room's share of its edge from ~6% to ~2%).
+    // Both are switches for the bench on any engine.
+    var lin = typeof window.__voxalLinearComposite === 'boolean' ? window.__voxalLinearComposite : this.engine === 'rvm';
+    gl.uniform1f(uloc(gl, this.pComp, 'uLinear'), lin ? 1 : 0);
+    var fgOn = !!(this.fgReady && this.engine === 'rvm' && window.__voxalRvmFg !== false);
+    this.bindTex(this.pComp, 'uFg', 10, fgOn ? this.texFg : this.texImg);
+    gl.uniform1f(uloc(gl, this.pComp, 'uFgOn'), fgOn ? 1 : 0);
     filmUniform(gl, this.pComp, this.look.exposure);
     var x = this.bgXform();
     gl.uniform4f(uloc(gl, this.pComp, 'uBgXform'), x[0], x[1], x[2], x[3]);
@@ -4838,9 +4913,11 @@ var VideoEffects = (function () {
     [this.texCam, this.texImg, this.texBlurA, this.texBlurB, this.texMaskRaw,
      this.texMaskS, this.texMaskSB, this.texMaskA, this.texMaskB,
      this.texPlate, this.texRefA, this.texRefB, this.texLearnA, this.texLearnB,
-     this.texCore].forEach(function (t) {
+     this.texCore, this.texFg].forEach(function (t) {
       if (t) try { gl.deleteTexture(t); } catch (e) { /* ignore */ }
     });
+    this.texFg = null;
+    this.fgReady = false;
     [this.fbBlurA, this.fbBlurB, this.fbMaskS, this.fbMaskSB,
      this.fbMaskA, this.fbMaskB, this.fbRefA, this.fbRefB, this.fbLearnA, this.fbLearnB,
      this.fbCore].forEach(function (f) {
@@ -5953,7 +6030,9 @@ var VideoEffects = (function () {
       var eng = document.createElement('select');
       eng.setAttribute('aria-label', 'Segmentation engine');
       eng.style.cssText = 'flex:1 1 100%;min-width:0;font:inherit;padding:6px;min-height:36px';
-      [['longpipe', 'Engine: Longpipe (default)'], ['mediapipe', 'Engine: MediaPipe']].forEach(function (v) {
+      var engs = [['longpipe', 'Engine: Longpipe (default)'], ['mediapipe', 'Engine: MediaPipe']];
+      if (typeof RvmEngine !== 'undefined') engs.push(['rvm', 'Engine: RVM (experimental, needs make rvm-assets)']);
+      engs.forEach(function (v) {
         var o = document.createElement('option');
         o.value = v[0]; o.textContent = v[1];
         eng.appendChild(o);
@@ -6117,6 +6196,13 @@ var VideoEffects = (function () {
             ' · init ' + (s.initMs === null ? '–' : s.initMs + ' ms') + ' · edgeE ' + s.edgeE +
             '\nthe mask is read from Longpipe\'s OUTPUT stream, so it lags the camera by that pipeline\'s latency (not measured here)';
           if (s.errors && s.errors.length) t += '\nlongpipe errors: ' + s.errors.join(' | ');
+        }
+        if (s.engine === 'rvm') {
+          t += ' · ' + s.model + ' on ' + s.ep + ' · input ' + s.input + ' @ ' + s.ratio +
+            '\ninference ' + (s.inferMsP50 === null ? '–' : s.inferMsP50.toFixed(1) + ' ms p50 / ' + s.inferMsP95.toFixed(1) + ' p95') +
+            ' · masks ' + (s.maskHz === null ? '–' : s.maskHz + ' Hz') + ' · init ' + (s.initMs === null ? '–' : s.initMs + ' ms') +
+            '\nthe matte trails the camera by about one inference';
+          if (s.errors && s.errors.length) t += '\nrvm errors: ' + s.errors.join(' | ');
         }
         if (s.fallback) t += '\nfell back to MediaPipe: ' + s.fallback;
         _engLine = t;
@@ -6446,8 +6532,9 @@ var VideoEffects = (function () {
   // safe at any moment: with no camera running they only store the choice;
   // with one they swap the engine under it, keeping the canvas track.
   function setEngine(name) {
-    name = name === 'longpipe' ? 'longpipe' : 'mediapipe';
-    if (typeof LongpipeEngine !== 'undefined') LongpipeEngine.setSelected(name);
+    name = name === 'longpipe' || name === 'rvm' ? name : 'mediapipe';
+    if (typeof LongpipeEngine !== 'undefined') LongpipeEngine.setSelected(name === 'rvm' ? 'longpipe' : name);
+    if (typeof RvmEngine !== 'undefined') RvmEngine.setSelected(name === 'rvm');
     _engineFallback = null;
     if (!_active) return Promise.resolve(name);
     return _active.swapSegmenter(name).then(function () { return name; }, function (e) {
@@ -6508,7 +6595,7 @@ var VideoEffects = (function () {
       } else if (key === 'longpipe-dilate') {
         p.applyEdge();
       } else if (key === 'mask-cut') {
-        p.maskCut = p.engine === 'longpipe' ? 0 : readMaskCut();
+        p.maskCut = p.engine === 'longpipe' || p.engine === 'rvm' ? 0 : readMaskCut();
       }
     } catch (e) { /* a bad value must never take the camera down */ }
   }
@@ -6590,7 +6677,8 @@ var VideoEffects = (function () {
       select('Segmentation engine',
         'Longpipe is the default: it runs its own model on the GPU and its output is turned into a mask (see the diagnostic). MediaPipe is the fallback, and what a Longpipe that cannot start ends up on.',
         'segmentation-engine',
-        [['longpipe', 'Longpipe (default)'], ['mediapipe', 'MediaPipe']],
+        [['longpipe', 'Longpipe (default)'], ['mediapipe', 'MediaPipe']].concat(
+          typeof RvmEngine !== 'undefined' ? [['rvm', 'RVM (experimental; needs make rvm-assets, never shipped)']] : []),
         function () { return engine(); },
         function (v) { setEngine(v); });
       toggle('Longpipe blur',

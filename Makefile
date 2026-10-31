@@ -3,7 +3,7 @@
         coverage-api coverage-summary coverage-badge bench bench-app bench-audio bench-video \
         bench-report bench-publish bench-history \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
-        seg-assets emoji-data promo-assets scene-preview three-vendor
+        seg-assets rvm-assets rvm-clean matting-footage matting-bench emoji-data promo-assets scene-preview three-vendor
 
 # Default target
 help:
@@ -18,6 +18,9 @@ help:
 	@echo "  build-debug  Build the Tauri desktop app (debug bundle — registers voxal:// scheme)"
 	@echo "  build-web    Bundle the web version into dist/"
 	@echo "  seg-assets   Stage the background-effects runtime into src/assets/seg"
+	@echo "  rvm-assets   Stage the EXPERIMENTAL RVM matting engine (GPL-3.0, never shipped) into src/assets/rvm"
+	@echo "  matting-footage Build the matting benchmark's footage (known alpha) into bench-results/matting"
+	@echo "  matting-bench Score MediaPipe / Longpipe / RVM on it through the real pipeline; ARGS=... passes options"
 	@echo "  promo-assets Re-embed the icon and fonts in docs/promo.html (the 30 s film)"
 	@echo "  scene-preview Render the animated backgrounds to PNG (scene-previews/); ARGS=... passes options"
 	@echo "  three-vendor Rebuild src/assets/three/three.min.js from the pinned three version"
@@ -87,11 +90,11 @@ debug:
 	echo "→ Launching Voxal (debug)..."; \
 	open "$$APP"
 
-build: gen-build-info seg-assets
+build: gen-build-info seg-assets rvm-clean
 	@echo "→ Building release (unsigned, no updater artifacts). Use 'make build-signed' to sign."
 	npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
-build-signed: gen-build-info seg-assets
+build-signed: gen-build-info seg-assets rvm-clean
 	@export TAURI_SIGNING_PRIVATE_KEY="$${TAURI_SIGNING_PRIVATE_KEY:-$$(cat ~/.tauri/voxal.key 2>/dev/null)}"; \
 	if [ -z "$$TAURI_SIGNING_PRIVATE_KEY" ]; then \
 		echo "Error: No signing key found."; exit 1; \
@@ -103,7 +106,7 @@ build-signed: gen-build-info seg-assets
 	fi; \
 	npm run tauri build
 
-build-debug: gen-build-info seg-assets
+build-debug: gen-build-info seg-assets rvm-clean
 	npm run tauri build -- --debug
 	@echo ""
 	@echo "Debug bundle: src-tauri/target/debug/bundle/macos/Voxal.app"
@@ -157,6 +160,24 @@ three-vendor:
 seg-assets:
 	@sh seg-assets.sh
 
+# The matting evaluation's RVM engine (docs/matting-evaluation.md). GPL-3.0
+# weights: staged for local benchmarking only, gitignored, deleted before every
+# desktop build (rvm-clean) and stripped from the mobile apps (cap-sync).
+rvm-assets:
+	@sh scripts/rvm-assets.sh $(ARGS)
+
+rvm-clean:
+	@rm -rf src/assets/rvm
+
+# The matting evaluation: footage with a known alpha (public-domain clip and CC0
+# rooms, downloaded once into bench-results/), then every engine through the
+# real pipeline on it. ARGS=... passes options (see scripts/matting-bench.mjs).
+matting-footage:
+	@node scripts/matting-footage.mjs $(ARGS)
+
+matting-bench: seg-assets
+	@node scripts/matting-bench.mjs $(ARGS)
+
 run-web: gen-build-info seg-assets
 	@command -v npx >/dev/null 2>&1 || { echo "npx not found — install Node.js"; exit 1; }
 	@mkdir -p src/.well-known/appspecific
@@ -169,6 +190,7 @@ run-web: gen-build-info seg-assets
 build-web: gen-build-info seg-assets
 	mkdir -p dist
 	cp -r src/* dist/
+	@rm -rf dist/assets/rvm
 	@echo "Web app copied to dist/"
 
 # ── Mobile (Capacitor) ────────────────────────────────────────────────────────
@@ -182,6 +204,7 @@ cap-sync: gen-build-info
 	@# there is no background artwork to ship at all.)
 	@rm -f ios/App/App/public/assets/seg/vision_* \
 	      android/app/src/main/assets/public/assets/seg/vision_*
+	@rm -rf ios/App/App/public/assets/rvm android/app/src/main/assets/public/assets/rvm
 
 cap-ios: cap-sync
 	npx cap open ios

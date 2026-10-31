@@ -23,6 +23,7 @@ export default [
       // Vendored / generated — not ours to lint.
       'src/assets/peerjs.min.js',
       'src/assets/seg/**',
+      'src/assets/rvm/**',        // make rvm-assets: staged, gitignored (GPL-3.0 weights + ONNX Runtime)
       'src/assets/three/**',
       'src/emoji-data.js',
       'src/build-info.js',
@@ -62,6 +63,7 @@ export default [
         I18N: 'readonly', // src/i18n.js
         tr: 'readonly', // src/i18n.js
         LongpipeEngine: 'readonly', // src/longpipe-engine.js
+        RvmEngine: 'readonly',      // src/rvm-engine.js
         VideoEffects: 'readonly', // src/video-effects.js
         VideoScenes: 'readonly', // src/video-scenes.js
         DeviceTilt: 'readonly', // src/device-tilt.js

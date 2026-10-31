@@ -402,12 +402,12 @@ test.describe('through the real Processor and the diagnostic panel', () => {
 });
 
 test.describe('the edge of a matte', () => {
-  test('Longpipe is dilated by about a texel, MediaPipe by its tuned three, and the override wins', async ({ page }) => {
+  test('Longpipe is dilated by about half a texel, MediaPipe by its tuned constant, and the override wins', async ({ page }) => {
     const r = await page.evaluate(async () => {
       window.__voxalLongpipeStub = window.__mkLongpipeStub('#d9a080');
       const out = await VideoEffects.wrap(window.__camStream(), 'blur');
       const p = out._effectsProcessor;
-      const res = { mediapipe: p.edge.dilate };
+      const res = { mediapipe: p.edge.dilate, cfg: VideoEffects._edgeConfig.dilate };
       await VideoEffects.setEngine('longpipe');
       res.longpipe = p.edge.dilate;
       localStorage.setItem('longpipe-dilate', '2.5');
@@ -420,11 +420,12 @@ test.describe('the edge of a matte', () => {
       localStorage.setItem('segmentation-engine', 'mediapipe');
       return res;
     });
-    expect(r.mediapipe).toBeCloseTo(3, 5);
-    expect(r.longpipe).toBeLessThan(1.5);
-    expect(r.longpipe).toBeGreaterThan(0.5);
+    expect(r.mediapipe).toBeCloseTo(r.cfg, 5);
+    expect(r.longpipe).toBeLessThan(r.mediapipe);
+    expect(r.longpipe).toBeGreaterThan(0.25);
+    expect(r.longpipe).toBeLessThan(1);
     expect(r.override).toBe(2.5);
-    expect(r.back).toBeCloseTo(3, 5);
+    expect(r.back).toBeCloseTo(r.cfg, 5);
   });
 });
 
