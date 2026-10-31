@@ -273,7 +273,8 @@ ONNX Runtime WASM (~27 MB) — a download the mobile apps would also have to fet
 1. **Ship the compositing retune (done in this branch)**: MediaPipe dilate 1.5,
    Longpipe dilate 0.5, symmetric temporal blend 0.6. It improves every engine
    users have today, independently of model choice, and needs no new dependency.
-2. **Do not ship RVM.** GPL-3.0 weights; and even licence aside its matte arrives
+2. **Do not ship RVM to users.** (It is staged into web *preview* deploys only,
+   so it can be evaluated on real devices with `?segengine=rvm`; `vercel-build.sh`.) GPL-3.0 weights; and even licence aside its matte arrives
    2–3 frames late in real time, and it needs WebGPU. Keep it as an opt-in,
    never-shipped evaluation engine.
 3. **If a better matte is wanted, look for a permissively licensed matting model
