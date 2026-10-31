@@ -205,7 +205,7 @@ async function main() {
         }
         results.runs.push({ ...r, result: res, logs: logs.slice(-6) });
         const s = res.scores;
-        console.log(`${res.engine} mask ${res.maskSize}: maskMAE ${s.maskMAE.mean.toFixed(1)} band ${s.maskBandMAE.mean.toFixed(0)} dtSSD ${s.dtSSD ? s.dtSSD.mean.toFixed(2) : '–'} comp ${s.compMAE.mean.toFixed(2)} cdt ${s.compDt ? s.compDt.mean.toFixed(2) : '–'} leak ${s.leak ? s.leak.mean.toFixed(1) : '–'}% (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+        console.log(`${res.engine} mask ${res.maskSize}: maskMAE ${s.maskMAE.mean.toFixed(1)} band ${s.maskBandMAE.mean.toFixed(0)} dtSSD ${s.dtSSD ? s.dtSSD.mean.toFixed(2) : '–'} comp ${s.compMAE.mean.toFixed(2)} cdt ${s.compDt ? s.compDt.mean.toFixed(2) : '–'} leak ${s.leak ? s.leak.mean.toFixed(1) : '–'}% hole ${s.hole ? s.hole.mean.toFixed(2) : '–'} drop ${s.drop ? s.drop.mean.toFixed(2) : '–'} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
         if (setup.fallback) console.log('   fallback: ' + setup.fallback);
       }
     } catch (err) {
@@ -229,6 +229,8 @@ const ALL_VARIANTS = [
   { name: 'nohair', flags: { __voxalNoHairRefine: true } },
   { name: 'nodecon', flags: { __voxalDecon: 0 } },
   { name: 'decon1', flags: { __voxalDecon: 1 } },
+  { name: 'nofill', flags: { __voxalHoleFill: false } },
+  { name: 'nohold', flags: { __voxalHold: false } },
   { name: 'dilate0', flags: { __voxalDilate: 0 } },
   { name: 'dilate0.5', flags: { __voxalDilate: 0.5 } },
   { name: 'dilate1', flags: { __voxalDilate: 1 } },
@@ -240,7 +242,9 @@ const ALL_VARIANTS = [
   // A true matte needs no re-ramp: the composite's smoothstep(lo, hi) and the
   // feather were made for MediaPipe's confidence, not for an alpha.
   { name: 'edgeid', flags: { __voxalEdgeOverride: { lo: 0.0, hi: 1.0 } } },
-  { name: 'nofeather', flags: { __voxalEdgeOverride: { feather: 0 } } }
+  { name: 'nofeather', flags: { __voxalEdgeOverride: { feather: 0 } } },
+  { name: 'feather0.35', flags: { __voxalEdgeOverride: { feather: 0.35 } } },
+  { name: 'feather0.7', flags: { __voxalEdgeOverride: { feather: 0.7 } } }
 ];
 const VARIANTS = opt.variantNames ? ALL_VARIANTS.filter((v) => opt.variantNames.includes(v.name)).concat(
   opt.variantNames.filter((n) => n.includes('&')).map((n) => ({ name: n,
@@ -261,11 +265,11 @@ function report(results) {
   const q = results.runs.filter((r) => r.kind === 'quality' && r.result);
   if (q.length) {
     L.push('## Quality (lower is better, except IoU)', '');
-    L.push('| engine | variant | room | size | mask | maskMAE | band | IoU | dtSSD | flicker | comp | outer | mixed | inner | compDt | leak % | infer ms p50 |');
-    L.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
+    L.push('| engine | variant | room | size | mask | maskMAE | band | IoU | dtSSD | flicker | comp | outer | mixed | inner | compDt | leak % | hole ‰ | drop ‰ | infer ms p50 |');
+    L.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
     for (const r of q) {
       const s = r.result.scores, g = (k, d) => fmt(s[k] && s[k].mean, d);
-      L.push(`| ${r.name}${r.result.engine !== ENGINES[r.name].engine ? ' (ran ' + r.result.engine + ')' : ''} | ${r.variant} | ${r.room} | ${r.w}x${r.h} | ${r.result.maskSize} | ${g('maskMAE')} | ${g('maskBandMAE', 0)} | ${fmt(s.iou && s.iou.mean, 4)} | ${g('dtSSD', 2)} | ${g('flicker', 2)} | ${g('compMAE', 2)} | ${g('compOuter', 1)} | ${g('compMixed', 1)} | ${g('compInner', 1)} | ${g('compDt', 2)} | ${g('leak', 1)} | ${fmt(r.result.inferMsP50, 1)} |`);
+      L.push(`| ${r.name}${r.result.engine !== ENGINES[r.name].engine ? ' (ran ' + r.result.engine + ')' : ''} | ${r.variant} | ${r.room} | ${r.w}x${r.h} | ${r.result.maskSize} | ${g('maskMAE')} | ${g('maskBandMAE', 0)} | ${fmt(s.iou && s.iou.mean, 4)} | ${g('dtSSD', 2)} | ${g('flicker', 2)} | ${g('compMAE', 2)} | ${g('compOuter', 1)} | ${g('compMixed', 1)} | ${g('compInner', 1)} | ${g('compDt', 2)} | ${g('leak', 1)} | ${g('hole', 2)} | ${g('drop', 2)} | ${fmt(r.result.inferMsP50, 1)} |`);
     }
     L.push('');
   }
