@@ -343,6 +343,26 @@ var VideoEffects = (function () {
   var MOTION_SEARCH      = 5;      // coarse pixels each way of the last estimate (~8% of the frame)
   var MOTION_REANCHOR    = 0.06;
   var MOTION_MIN_VALID   = 0.25;   // share of the frame that must be comparable
+  // The silhouette prior (phones, `silhouette`): somebody holding a phone sits
+  // in roughly the same place in the picture, whatever the room does behind
+  // them. A slow average of the model's mask says WHERE they usually are
+  // (SIL_UP / SIL_DOWN per inference: slow to believe, quicker to forget), and
+  // the colours found there, against the colours found where they never are,
+  // say WHAT they look like — a colour model the matte's edge is then snapped
+  // to, with no picture of the room and no alignment, so a moving camera does
+  // not break it. A pixel counts as "you" for the model's colours only well
+  // inside the habitual silhouette (SIL_FG), as "room" only well outside it
+  // (SIL_BG); SIL_MIN_* pixels of each are needed before it speaks at all.
+  var SIL_LONG           = 128;   // fine enough that a pattern is not averaged into grey
+  var SIL_UP             = 0.04;
+  var SIL_DOWN           = 0.10;
+  var SIL_MS             = 250;
+  var SIL_FG             = 0.80;
+  var SIL_BG             = 0.05;
+  var SIL_MIN_FG         = 60;
+  var SIL_MIN_BG         = 100;
+  var SIL_MEMORY         = 0.5;    // share of the colour histograms kept from the last update
+  var SIL_STRENGTH       = 0.8;    // how far the colour model may take the matte away
   var LEARN_MIN_FRAMES   = 45;      // masks seen before the learned picture is consulted at all
 
   var IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
@@ -1762,6 +1782,15 @@ var VideoEffects = (function () {
             getAsUint8Array: function () { return new Uint8Array(w * h).fill(255); } }] });
           return;
         }
+        // `{ rect: [x0, y0, x1, y1] }` (fractions): an accurate silhouette.
+        if (s && s.rect) {
+          var rd = new Uint8Array(w * h);
+          for (var ry = Math.floor(s.rect[1] * h); ry < Math.floor(s.rect[3] * h); ry++) {
+            for (var rx = Math.floor(s.rect[0] * w); rx < Math.floor(s.rect[2] * w); rx++) rd[ry * w + rx] = 255;
+          }
+          cb({ confidenceMasks: [{ width: w, height: h, getAsUint8Array: function () { return rd; } }] });
+          return;
+        }
         cb({ confidenceMasks: [maskFor(w, h)] });
       }
     });
@@ -2259,6 +2288,9 @@ var VideoEffects = (function () {
     'uniform float uDecon;',
     'uniform float uHair;',
     'uniform float uMotion;',
+    'uniform sampler2D uSilP;',
+    'uniform sampler2D uSilC;',
+    'uniform float uSil;',
     // Segmentation diagnostic only (see "The segmentation diagnostic"): 1
     // prints the matte `m` this shader is about to mix with, as grey. Always 0
     // in normal use, which makes the branch below dead.
@@ -2313,6 +2345,24 @@ var VideoEffects = (function () {
     '      wsum += hw;',
     '    }',
     '    m = mix(m, acc / wsum, uHair);',
+    '  }',
+    // The silhouette prior, when there is one: in the band only (never inside
+    // the eroded core), a pixel whose colour the person has and the room has
+    // not is kept or given back where the person usually is; one the room has
+    // and the person has not is taken away. Neutral colours (both have them)
+    // change nothing. After the hair filter (which would pull a taken-away pixel back towards its model-confident neighbours) and before the keyed branch, like everything here.
+    '  if (uSil > 0.5) {',
+    '    float sCore = smoothstep(' + REF_CORE_LO.toFixed(4) + ', ' + REF_CORE_HI.toFixed(4) +
+      ', texture(uCore, flip).r);',
+    '    vec3 sc = clamp(texture(uSharp, flip).rgb, 0.0, 0.999);',
+    '    ivec3 qb = ivec3(sc * 8.0);',
+    '    vec2 lc = texelFetch(uSilC, ivec2(qb.r + 8 * qb.g + 64 * qb.b, 0), 0).rg;',
+    '    float want = smoothstep(0.20, 0.55, lc.r);',
+    '    float sp = texture(uSilP, flip).r;',
+    '    float sw = lc.g * (1.0 - sCore);',
+    '    float keep = 1.0 - 0.5 * smoothstep(0.60, 0.95, sp);',
+    '    m = m * mix(1.0, want, sw * keep * ' + SIL_STRENGTH.toFixed(2) + ');',
+    '    m = max(m, want * smoothstep(0.30, 0.70, sp) * sw * 0.9);',
     '  }',
     '  if (uDbg > 0.5) { outColor = vec4(vec3(m), 1.0); return; }',
     // The keyed frame. In flip space the top of the picture is y = 0, so the
@@ -2782,6 +2832,10 @@ var VideoEffects = (function () {
     // of assuming the camera is still. Off on desktop, where nothing moves and
     // the CPU readback would be pure cost.
     this.motionComp = IS_MOBILE;
+    this.silhouette = IS_MOBILE;
+    this.silOn = false;
+    this.silP = null;
+    this.silLast = 0;
     this.shift = [0, 0];
     this.motionAnchor = null;
     this.motionPerson = null;
@@ -3095,6 +3149,16 @@ var VideoEffects = (function () {
     this.fbLearnA = framebuffer(gl, this.texLearnA);
     this.fbLearnB = framebuffer(gl, this.texLearnB);
     this.clearLearned();
+    // The silhouette prior: where the person usually is (coarse, from the
+    // mask) and, per 8x8x8 colour bin, how person-like (R) and how well known
+    // (G) the colour is.
+    var sl = SIL_LONG / Math.max(this.refW, this.refH);
+    this.silW = Math.max(2, Math.round(this.refW * sl));
+    this.silH = Math.max(2, Math.round(this.refH * sl));
+    this.texSilP = texture(gl, this.silW, this.silH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
+    this.texSilC = texture(gl, 512, 1, gl.RG8, gl.RG, gl.UNSIGNED_BYTE);
+    this.silP = null;
+    this.silOn = false;
     // The core: the blended mask, eroded. Mask-sized, rebuilt per inference
     // while a reference is loaded.
     this.texCore = texture(gl, this.segW, this.segH, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
@@ -3212,6 +3276,98 @@ var VideoEffects = (function () {
     if (this.refLoaded && !this.refStale) return 'captured';
     if (this.learnFrames >= LEARN_MIN_FRAMES) return 'learned';
     return null;
+  };
+
+  // --- the silhouette prior -------------------------------------------------
+
+  // 3x3x3 box blur of a 512-bin histogram, so a colour on a bin boundary is not
+  // judged by its neighbour's luck.
+  function blurBins(h) {
+    var out = new Float32Array(512);
+    for (var b = 0; b < 8; b++) for (var g = 0; g < 8; g++) for (var r = 0; r < 8; r++) {
+      var sum = 0, n = 0;
+      for (var db = -1; db <= 1; db++) for (var dg = -1; dg <= 1; dg++) for (var dr = -1; dr <= 1; dr++) {
+        var rr = r + dr, gg = g + dg, bb = b + db;
+        if (rr < 0 || rr > 7 || gg < 0 || gg > 7 || bb < 0 || bb > 7) continue;
+        sum += h[rr + 8 * gg + 64 * bb]; n++;
+      }
+      out[r + 8 * g + 64 * b] = sum / n;
+    }
+    return out;
+  }
+
+  // From the segmentation callback, the one place the mask is in hand: fold it
+  // into the habitual-silhouette average, and at most every SIL_MS re-learn the
+  // person's and the room's colours from the camera at the same coarse size.
+  Processor.prototype.silhouetteNote = function (mask, mw, mh, now) {
+    var gl = this.gl;
+    if (!gl || !this.refOn) return;
+    var W = this.silW, H = this.silH, n = W * H;
+    if (!this.silP) {
+      this.silP = new Float32Array(n);
+      this.silCur = new Float32Array(n);
+      this.silF = new Float32Array(512);
+      this.silG = new Float32Array(512);
+      this.silCanvas = document.createElement('canvas');
+      this.silCanvas.width = W; this.silCanvas.height = H;
+      this.silCtx = this.silCanvas.getContext('2d', { willReadFrequently: true });
+      this.silBytes = new Uint8Array(n);
+      this.silTable = new Uint8Array(1024);
+      this.silFresh = true;
+    }
+    var P = this.silP, M = this.silCur, first = this.silFresh;
+    this.silFresh = false;
+    for (var y = 0; y < H; y++) {
+      var my = Math.min(mh - 1, Math.floor((y + 0.5) * mh / H));
+      for (var x = 0; x < W; x++) {
+        var mx = Math.min(mw - 1, Math.floor((x + 0.5) * mw / W));
+        var v = mask[my * mw + mx] / 255, i = y * W + x;
+        M[i] = v;
+        P[i] = first ? v : P[i] + (v - P[i]) * (v > P[i] ? SIL_UP : SIL_DOWN);
+        this.silBytes[i] = Math.round(P[i] * 255);
+      }
+    }
+    gl.bindTexture(gl.TEXTURE_2D, this.texSilP);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RED, gl.UNSIGNED_BYTE, this.silBytes);
+
+    if (now - this.silLast < SIL_MS) return;
+    this.silLast = now;
+    var px;
+    try {
+      this.silCtx.drawImage(this.video, 0, 0, W, H);
+      px = this.silCtx.getImageData(0, 0, W, H).data;
+    } catch (e) { return; }
+    var f = new Float32Array(512), g = new Float32Array(512), nf = 0, ng = 0;
+    for (var yy = 2; yy < H - 2; yy++) {
+      for (var xx = 2; xx < W - 2; xx++) {
+        var k = yy * W + xx;
+        // Well inside / well outside the habitual silhouette, with the
+        // neighbours agreeing, so an edge pixel never teaches either side.
+        var lo = 1, hi = 0;
+        for (var oy = -2; oy <= 2; oy++) for (var ox = -2; ox <= 2; ox++) {
+          var pv = P[k + oy * W + ox];
+          if (pv < lo) lo = pv;
+          if (pv > hi) hi = pv;
+        }
+        var bin = (px[k * 4] >> 5) + 8 * (px[k * 4 + 1] >> 5) + 64 * (px[k * 4 + 2] >> 5);
+        if (lo > SIL_FG && M[k] > 0.5) { f[bin]++; nf++; }
+        else if (hi < SIL_BG && M[k] < 0.1) { g[bin]++; ng++; }
+      }
+    }
+    this.silOn = nf >= SIL_MIN_FG && ng >= SIL_MIN_BG;
+    if (!this.silOn) return;
+    for (var b = 0; b < 512; b++) {
+      this.silF[b] = this.silF[b] * SIL_MEMORY + (f[b] / nf) * (1 - SIL_MEMORY);
+      this.silG[b] = this.silG[b] * SIL_MEMORY + (g[b] / ng) * (1 - SIL_MEMORY);
+    }
+    var fs = blurBins(this.silF), gs = blurBins(this.silG), t = this.silTable;
+    for (var c = 0; c < 512; c++) {
+      var mass = fs[c] + gs[c];
+      t[c * 2] = Math.round(255 * (fs[c] + 1e-5) / (mass + 2e-5));
+      t[c * 2 + 1] = Math.round(255 * Math.min(1, mass / 0.006));
+    }
+    gl.bindTexture(gl.TEXTURE_2D, this.texSilC);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 512, 1, gl.RG, gl.UNSIGNED_BYTE, t);
   };
 
   // --- following a held camera ---------------------------------------------
@@ -4163,6 +4319,7 @@ var VideoEffects = (function () {
           if (self.keyed) self.keyedCorner(data, mask.width, mask.height, now);
           // Read here and nowhere else: the mask's lifetime ends with this
           // callback.
+          if (self.silhouette) self.silhouetteNote(data, mask.width, mask.height, now);
           if (self.motionComp) self.motionNote(data, mask.width, mask.height);
           if (self.refLoaded) self.referenceStats(data, mask.width, mask.height, now);
           if (self.sceneId) {
@@ -4450,6 +4607,9 @@ var VideoEffects = (function () {
     this.bindTex(this.pComp, 'uSceneEnv', 9, this.texScene || this.texImg);
     this.bindTex(this.pComp, 'uSoft', 7, this.texSoftA || this.texMaskA);
     gl.uniform1f(uloc(gl, this.pComp, 'uRefOn'), this.refWeight);
+    this.bindTex(this.pComp, 'uSilP', 10, this.texSilP);
+    this.bindTex(this.pComp, 'uSilC', 11, this.texSilC);
+    gl.uniform1f(uloc(gl, this.pComp, 'uSil'), (this.silhouette && this.silOn && this.refOn && !this.paused) ? 1 : 0);
     gl.uniform1f(uloc(gl, this.pComp, 'uBgMode'), useScene ? 2 : useImage ? 1 : 0);
     var sh = this.shadowPlan();
     gl.uniform2f(uloc(gl, this.pComp, 'uShadowOff'), sh.offX, sh.offY);
@@ -4837,7 +4997,7 @@ var VideoEffects = (function () {
     this.diagRelease();
     [this.texCam, this.texImg, this.texBlurA, this.texBlurB, this.texMaskRaw,
      this.texMaskS, this.texMaskSB, this.texMaskA, this.texMaskB,
-     this.texPlate, this.texRefA, this.texRefB, this.texLearnA, this.texLearnB,
+     this.texPlate, this.texRefA, this.texRefB, this.texLearnA, this.texLearnB, this.texSilP, this.texSilC,
      this.texCore].forEach(function (t) {
       if (t) try { gl.deleteTexture(t); } catch (e) { /* ignore */ }
     });

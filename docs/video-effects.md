@@ -501,6 +501,25 @@ correctness. A captured picture is not followed (it stays a still-camera
 reference and goes stale when the phone moves — then the learned one takes
 over). Not yet done: gyro help for fast motion, a panorama larger than the view.
 
+**The silhouette prior (phones).** Somebody holding a phone sits in about the
+same place in the picture whatever the room does behind them, so on a phone
+(`silhouette`, tied to *Fixed camera*) there is a second, alignment-free helper.
+`silhouetteNote()`, from the segmentation callback, keeps a slow average of the
+model's mask at 128 wide (`P`: where you usually are; `SIL_UP` 0.04 /
+`SIL_DOWN` 0.10 per inference) and, every `SIL_MS`, builds two 8×8×8 colour
+histograms from the camera at the same size: colours well inside the habitual
+silhouette (and the model agreeing) against colours well outside it. The ratio,
+smoothed over neighbouring bins, goes to the composite as a 512×1 lookup
+(`uSilC`: person-likeness, how well known). In the band only (never inside the
+eroded core) a colour the room has and you have not is taken away, one you have
+and the room has not is kept or given back where `P` is high; ambiguous colours
+change nothing. It runs AFTER the hair filter, which would otherwise pull a
+taken-away pixel back toward its model-confident neighbours. Needs `SIL_MIN_FG`
+/ `SIL_MIN_BG` pixels of each before it speaks, and no picture of the room, so a
+moving camera does not break it. Limit: a persistent model error teaches the
+prior that the error is you; it fixes flicker and edges, not a limb the model
+never finds.
+
 **It removes what it recognises.** The difference goes through a second
 smoothstep (`REF_HARDEN_*`) so a pixel that matches the room goes to 0 rather
 than keeping a faint sharp halo, the "ask the reference" window starts earlier

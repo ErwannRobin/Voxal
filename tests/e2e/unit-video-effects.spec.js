@@ -1621,6 +1621,68 @@ test.describe('the empty-room reference', () => {
 
   // The desktop preferences window stores the switch but holds no picture —
   // the main window does, so switching it off THERE has to forget it HERE.
+  // Phones: no picture of the room at all. The model once saw the person
+  // accurately (a tight rectangle); its mask then goes wrong, keeping a wide
+  // oval of room round them. Where the person usually is, and the colours they
+  // have against the colours the room has, take the room back out of the oval.
+  test('the habitual silhouette and its colours take the wrongly kept room out of the band', async ({ page }) => {
+    await seedEffectsRoom(page);
+    await installScene(page);
+    // Stripes wider than the colour model's picture can see.
+    await page.evaluate(() => {
+      window.__mkVideoStream = function () {
+        const c = document.createElement('canvas');
+        c.width = 320; c.height = 240;
+        const ctx = c.getContext('2d');
+        let n = 0;
+        const paint = () => {
+          for (let x = 0; x < 320; x += 24) {
+            ctx.fillStyle = ((x / 24) % 2) ? '#f0d020' : '#2040d0';
+            ctx.fillRect(x, 0, 24, 240);
+          }
+          ctx.fillStyle = '#c89678';
+          ctx.fillRect(128, 84, 64, 156);
+          ctx.fillStyle = '#fff';
+          ctx.fillRect((n++ * 7) % 320, 0, 2, 1);
+        };
+        paint();
+        const stream = c.captureStream(15);
+        const timer = setInterval(paint, 40);
+        stream.getVideoTracks()[0].addEventListener('ended', () => clearInterval(timer));
+        return stream;
+      };
+    });
+    const seen = await page.evaluate(async () => {
+      VideoEffects.setReference(true);
+      VideoEffects.writeMode('blur');
+      window.__voxalSegStub = { rect: [0.4, 0.35, 0.6, 1.0] };
+      await startVideoShare();
+      const pr = VideoEffects.active();
+      pr.silhouette = true;
+      pr.learnFrames = 0;
+      const learned = await __waitFor(() => pr.silOn, 15000);
+      await __sleep(1500);
+      window.__voxalSegStub = true;           // the wide oval
+      await __sleep(500);
+      const band = { x: 93, y: 150 };
+      const withSil = { band: __probe(band.x, band.y), person: __probe(160, 170) };
+      pr.silhouette = false;
+      await __sleep(400);
+      const without = { band: __probe(band.x, band.y) };
+      return { learned, withSil, without };
+    });
+    expect(seen.learned).toBe(true);
+    // Sharp yellow without it; the blurred room (blue shows through) with it.
+    expect(seen.without.band[0]).toBeGreaterThan(200);
+    expect(seen.without.band[2]).toBeLessThan(80);
+    expect(seen.withSil.band[2]).toBeGreaterThan(90);
+    expect(seen.withSil.band[0]).toBeLessThan(200);
+    // And the person is untouched.
+    expect(Math.abs(seen.withSil.person[0] - 0xc8)).toBeLessThan(16);
+    expect(Math.abs(seen.withSil.person[1] - 0x96)).toBeLessThan(16);
+    expect(Math.abs(seen.withSil.person[2] - 0x78)).toBeLessThan(16);
+  });
+
   // A held camera: the same room, panned. Blocks of random colour (stripes
   // would match themselves a period away), drawn `__pan` px to the right.
   test('follows a camera that is held, not fixed', async ({ page }) => {
