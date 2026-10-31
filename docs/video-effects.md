@@ -519,6 +519,19 @@ histogram mass on the room side), not merely the person not to have been seen
 with it, and is switched off where `P` is high; colours neither side has seen
 read as neutral (`SIL_EPS`). Without that, a shirt the model only half-found
 (Longpipe's key-derived mask does this) read as "not you" and the body was cut.
+**A head implies a body.** Longpipe can lose the torso under a face it found
+(some shirts). `findHead()` takes the topmost real run of person in the model's
+mask and its widest run until a row jumps wider (the shoulders, if the model did
+find them); the result is smoothed and dropped only after 8 inferences without a
+head. Under it `bodyShape()` (GLSL twin in the composite) expects a torso: neck
+0.8, shoulders 2.7 head-widths wide, straight down to the bottom of the picture.
+There, anything that is not a colour the room is KNOWN to have (`lc.g`) is given
+back to the matte. The same shape, 1.3× wider, is kept out of the room
+histogram, so the shirt never teaches the room its colour. Limits: an object
+behind the person that the room histogram has never seen below the head reads as
+torso; a cropped or lying person has no such torso. The panel's status line says
+whether a head was found.
+
 Diagnosis switches: `silhouette-prior` (`on` / `off`; absent = on for phones,
 off elsewhere, so it can be tried on a desktop) and `silhouette-strength`
 (0-1, default `SIL_STRENGTH`), set from the segmentation diagnostic panel (a

@@ -353,6 +353,9 @@ var VideoEffects = (function () {
   // not break it. A pixel counts as "you" for the model's colours only well
   // inside the habitual silhouette (SIL_FG), as "room" only well outside it
   // (SIL_BG); SIL_MIN_* pixels of each are needed before it speaks at all.
+  // Proportions of the torso under a found head, in head widths (half widths
+  // of the neck and the shoulders) and the head's height / width.
+  var BODY_NECK = 0.40, BODY_SHOULDER = 1.35, BODY_HEAD_ASPECT = 1.3;
   var SIL_LONG           = 128;   // fine enough that a pattern is not averaged into grey
   var SIL_UP             = 0.04;
   var SIL_DOWN           = 0.10;
@@ -2294,6 +2297,8 @@ var VideoEffects = (function () {
     'uniform sampler2D uSilC;',
     'uniform float uSil;',
     'uniform float uSilStrength;',
+    'uniform vec4 uBody;',
+    'uniform float uBodyOn;',
     // Segmentation diagnostic only (see "The segmentation diagnostic"): 1
     // prints the matte `m` this shader is about to mix with, as grey. Always 0
     // in normal use, which makes the branch below dead.
@@ -2370,6 +2375,16 @@ var VideoEffects = (function () {
     '    m = m * mix(1.0, want, lc.g * (1.0 - sCore) * keep * uSilStrength);',
     // Giving back needs the PERSON to be known to have this colour (lc.b).
     '    m = max(m, want * smoothstep(0.30, 0.70, sp) * lc.b * (1.0 - sCore) * 0.9);',
+    // A head implies a body (see bodyShape()): under a found head, anything
+    // that is not a colour the room is known to have is the torso.
+    '    if (uBodyOn > 0.5) {',
+    '      float yn = uBody.y + uBody.w * 0.95;',
+    '      float ys = uBody.y + uBody.w * 1.45;',
+    '      float bt = smoothstep(yn, ys, flip.y);',
+    '      float bw = mix(' + BODY_NECK.toFixed(2) + ', ' + BODY_SHOULDER.toFixed(2) + ', bt) * uBody.z;',
+    '      float bs = step(yn, flip.y) * (1.0 - smoothstep(bw * 0.8, bw * 1.1, abs(flip.x - uBody.x)));',
+    '      m = max(m, bs * (1.0 - lc.g) * step(0.01, uSilStrength));',
+    '    }',
     '  }',
     '  if (uDbg > 0.5) { outColor = vec4(vec3(m), 1.0); return; }',
     // The keyed frame. In flip space the top of the picture is y = 0, so the
@@ -2843,6 +2858,8 @@ var VideoEffects = (function () {
     this.silOn = false;
     this.silP = null;
     this.silLast = 0;
+    this.silBody = null;
+    this.silBodyMiss = 0;
     this.shift = [0, 0];
     this.motionAnchor = null;
     this.motionPerson = null;
@@ -3296,6 +3313,61 @@ var VideoEffects = (function () {
     if (!this.silhouette) this.silOn = false;
   };
 
+  // A head implies a body. Where the model finds a head and loses the torso
+  // under it (Longpipe does, on some shirts), the torso is expected below the
+  // head: from the neck, widening to the shoulders and then straight down to
+  // the bottom of the picture. Proportions of an average person, in units of
+  // the head's width: neck 0.8 wide, shoulders 2.7 wide, the head 1.3 tall.
+
+  // Where the head is, from the model's mask on the coarse grid: the topmost
+  // row with a real run of person, and the widest run in the rows below it
+  // until a row jumps wider (shoulders: the model found the body after all).
+  // Returns [centre x, top y, head width (x), head height (y)] in UV, or null.
+  function findHead(M, W, H) {
+    var minRun = Math.max(3, Math.round(0.03 * W)), top = -1, y, x;
+    function widest(row) {
+      var best = 0, at = 0, start = -1;
+      for (x = 0; x <= W; x++) {
+        var on = x < W && M[row * W + x] > 0.5;
+        if (on && start < 0) start = x;
+        if (!on && start >= 0) {
+          if (x - start > best) { best = x - start; at = start + (x - start) / 2; }
+          start = -1;
+        }
+      }
+      return { w: best, at: at };
+    }
+    var limit = Math.round(0.8 * H);
+    for (y = 0; y < limit; y++) {
+      if (widest(y).w >= minRun) { top = y; break; }
+    }
+    if (top < 0) return null;
+    var best = 0, cx = 0, last = Math.min(H - 1, top + Math.round(0.25 * H));
+    for (y = top; y <= last; y++) {
+      var r = widest(y);
+      if (best > 0 && r.w > best * 1.35) break;
+      if (r.w > best) { best = r.w; cx = r.at; }
+    }
+    if (best < minRun) return null;
+    return [cx / W, top / H, best / W, BODY_HEAD_ASPECT * best / H];
+  }
+
+  // The torso hypothesis at a point, 0-1. GLSL in FRAG_COMPOSITE is this
+  // function, with `widen` 1; widen > 1 is the margin kept clear when learning
+  // what the ROOM looks like, so a shirt never teaches the room its colour.
+  function bodyShape(b, x, y, widen) {
+    var yn = b[1] + b[3] * 0.95, ys = b[1] + b[3] * 1.45;
+    if (y < yn) return 0;
+    var t = Math.max(0, Math.min(1, (y - yn) / (ys - yn)));
+    t = t * t * (3 - 2 * t);
+    var hw = (BODY_NECK + (BODY_SHOULDER - BODY_NECK) * t) * b[2] * widen;
+    var d = Math.abs(x - b[0]), e0 = hw * 0.8, e1 = hw * 1.1;
+    if (d <= e0) return 1;
+    if (d >= e1) return 0;
+    var u = (d - e0) / (e1 - e0);
+    return 1 - u * u * (3 - 2 * u);
+  }
+
   // 3x3x3 box blur of a 512-bin histogram, so a colour on a bin boundary is not
   // judged by its neighbour's luck.
   function blurBins(h) {
@@ -3346,6 +3418,17 @@ var VideoEffects = (function () {
     gl.bindTexture(gl.TEXTURE_2D, this.texSilP);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RED, gl.UNSIGNED_BYTE, this.silBytes);
 
+    // The head, smoothed; forgotten only after it has been missing a while, so
+    // one lost inference does not drop the body.
+    var head = findHead(M, W, H);
+    if (head) {
+      this.silBodyMiss = 0;
+      if (!this.silBody) this.silBody = head;
+      else for (var q = 0; q < 4; q++) this.silBody[q] += (head[q] - this.silBody[q]) * 0.3;
+    } else if (this.silBody && ++this.silBodyMiss > 8) {
+      this.silBody = null;
+    }
+
     if (now - this.silLast < SIL_MS) return;
     this.silLast = now;
     var px;
@@ -3367,7 +3450,8 @@ var VideoEffects = (function () {
         }
         var bin = (px[k * 4] >> 5) + 8 * (px[k * 4 + 1] >> 5) + 64 * (px[k * 4 + 2] >> 5);
         if (lo > SIL_FG && M[k] > 0.5) { f[bin]++; nf++; }
-        else if (hi < SIL_BG && M[k] < 0.1) { g[bin]++; ng++; }
+        else if (hi < SIL_BG && M[k] < 0.1 &&
+                 !(this.silBody && bodyShape(this.silBody, xx / W, yy / H, 1.3) > 0.01)) { g[bin]++; ng++; }
       }
     }
     this.silNf = nf; this.silNg = ng;
@@ -4630,6 +4714,9 @@ var VideoEffects = (function () {
     this.bindTex(this.pComp, 'uSilP', 10, this.texSilP);
     this.bindTex(this.pComp, 'uSilC', 11, this.texSilC);
     gl.uniform1f(uloc(gl, this.pComp, 'uSilStrength'), this.silStrength);
+    var sb = this.silBody;
+    gl.uniform4f(uloc(gl, this.pComp, 'uBody'), sb ? sb[0] : 0, sb ? sb[1] : 0, sb ? sb[2] : 0, sb ? sb[3] : 0);
+    gl.uniform1f(uloc(gl, this.pComp, 'uBodyOn'), sb ? 1 : 0);
     gl.uniform1f(uloc(gl, this.pComp, 'uSil'), (this.silhouette && this.silOn && this.refOn && !this.paused) ? 1 : 0);
     gl.uniform1f(uloc(gl, this.pComp, 'uBgMode'), useScene ? 2 : useImage ? 1 : 0);
     var sh = this.shadowPlan();
@@ -6370,7 +6457,8 @@ var VideoEffects = (function () {
       (ap.silhouette && !ap.refOn ? ', Fixed camera is off' : '') + ')' +
       (ap.silhouette ? ' · colour model ' + (ap.silOn ? 'ready' : 'learning') +
         ' · person ' + (ap.silNf || 0) + ' px, room ' + (ap.silNg || 0) + ' px · strength ' +
-        ap.silStrength.toFixed(2) : ''));
+        ap.silStrength.toFixed(2) + ' · head ' +
+        (ap.silBody ? 'found at ' + Math.round(ap.silBody[0] * 100) + '%/' + Math.round(ap.silBody[1] * 100) + '%, body expected under it' : 'not found') : ''));
     lines.push('person pixels = high mask values. Sitting still, "crossing 50%" ' +
       'should be close to 0; speckle there is the model, not the pipeline.');
     if (_diag.error) lines.push('diagnostic error: ' + _diag.error);
