@@ -230,6 +230,10 @@ H.step = async function (f) {
   var sAll = 0, nAll = 0, sBand = 0, nBand = 0, inter = 0, uni = 0, sSq = 0;
   var cOut = [0, 0], cMix = [0, 0], cIn = [0, 0], cAll = [0, 0], leakNum = 0, leakDen = 0;
   var dt = 0, dtn = 0, fl = 0, fln = 0, cdt = 0, cdtn = 0;
+  // Holes and dropouts, in the composite: of the deep interior (truth 1, clear
+  // of the edge band), the share where the old room shows through (error > 40),
+  // and the share that was right last frame and is wrong now.
+  var hDen = 0, hBad = 0, hDrop = 0, curBad = new Uint8Array(n), prevBad = H.prevBad;
   var gComp = new Float32Array(n * 3), prevOut = H.prevOut, prevComp = H.prevComp;
   for (var j = 0; j < n; j++) {
     if (ign[j]) continue;
@@ -256,6 +260,10 @@ H.step = async function (f) {
       lnum += (o - g) * dir; lden += dir * dir;
     }
     ce /= 3;
+    if (gt[j] >= 0.98 && band[j] === 0) {
+      hDen++;
+      if (ce > 40) { hBad++; curBad[j] = 1; if (prevBad && !prevBad[j]) hDrop++; }
+    }
     cAll[0] += ce; cAll[1]++;
     if (band[j] === 1) { cOut[0] += ce; cOut[1]++; }
     else if (band[j] === 2) { cMix[0] += ce; cMix[1]++; }
@@ -276,6 +284,8 @@ H.step = async function (f) {
   add('compInner', cIn[0], cIn[1]);
   if (leakDen) add('leak', leakNum / leakDen * 100 * 1000, 1000);
   if (cdtn) add('compDt', cdt, cdtn);
+  if (hDen) { add('hole', hBad * 1000, hDen); if (prevBad) add('drop', hDrop * 1000, hDen); }
+  H.prevBad = curBad;
   H.prevOut = new Uint8ClampedArray(out); H.prevComp = gComp;
   H.prevMask = m; H.prevGt = gt;
   return { f: f };
@@ -292,7 +302,7 @@ H.maskSnapshot = function () {
   var w = H.opt.w, h = H.opt.h, c = document.createElement('canvas');
   c.width = w; c.height = h;
   var x = c.getContext('2d'), id = x.createImageData(w, h);
-  for (var i = 0; i < w * h; i++) { var v = H.prevMask ? H.prevMask[i] * 255 : 0; id.data[i * 4] = id.data[i * 4 + 1] = id.data[i * 4 + 2] = v; id.data[i * 4 + 3] = 255; }
+  for (var i = 0; i < w * h; i++) { var v = H.prevMask ? H.prevMask[i] * 255 : 0; id.data[i * 4] = id.data[i * 4 + 1] = id.data[i * 4 + 2] = v; if (H.prevBad && H.prevBad[i]) { id.data[i * 4] = 255; id.data[i * 4 + 1] = id.data[i * 4 + 2] = 0; } id.data[i * 4 + 3] = 255; }
   x.putImageData(id, 0, 0);
   return c.toDataURL('image/png');
 };
