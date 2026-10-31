@@ -170,7 +170,37 @@ What the table says:
 * **The edge smoothstep and the feather stay**: an identity ramp eats the edge;
   no feather trades halo for flicker.
 
-Before/after over the full footage, as now shipped: see *After the retune* below.
+### After the retune (full footage, as now shipped)
+
+All three rooms, all 300 frames, same footage and settings as the first table;
+only the pipeline's defaults changed (mask scores are unchanged by construction).
+
+| Engine | camera | composite MAE | halo (outer) | hair (mixed) | eaten (inner) | leak % |
+|---|---|---|---|---|---|---|
+| MediaPipe | 640x360 | 2.37 → **1.51** | 45.2 → 21.6 | 29.0 → 25.6 | 2.9 → 7.9 | 38.0 → **11.4** |
+| MediaPipe | 1280x720 | 2.32 → **1.38** | 47.7 → 23.1 | 30.5 → 26.7 | 3.4 → 8.4 | 38.0 → **11.8** |
+| Longpipe (default) | 640x360 | 1.41 → **1.06** | 22.5 → 10.8 | 23.0 → 19.1 | 3.3 → 8.0 | 15.3 → **5.7** |
+| Longpipe (default) | 1280x720 | 1.29 → **0.91** | 24.1 → 11.7 | 24.2 → 20.1 | 3.8 → 8.6 | 16.0 → **5.8** |
+| RVM, 512 px | 640x360 | 1.18 → **0.81** | 16.0 → 2.4 | 22.4 → 14.8 | 2.0 → 6.6 | 17.1 → **1.3** |
+| RVM, 512 px | 1280x720 | 1.04 → **0.62** | 17.4 → 2.5 | 23.8 → 15.4 | 2.4 → 7.2 | 17.5 → **1.0** |
+| RVM, camera size | 1280x720 | 0.87 → **0.60** | 8.4 → 0.9 | 21.2 → 16.4 | 2.7 → 5.5 | 13.5 → **1.4** |
+
+The trade is explicit: the halo and the old room's colour go, and the edge sits a
+little tighter (eaten-edge error up ~5/255 on the inner ring), which is what the
+smaller dilate means. The frame-to-frame error of the composite fell with it
+(A/B table above).
+
+Hair, living room, frame 60 — truth | MediaPipe before | after | Longpipe before |
+after | RVM before | RVM at camera size, after:
+
+![Hair before and after](matting/hair-before-after.jpg)
+
+Kitchen, frame 225 — top: truth | MediaPipe before | after; bottom: Longpipe
+before | after | RVM at camera size, after:
+
+![Kitchen before and after](matting/kitchen-before-after.jpg)
+
+(The olive rim in the hair is in the ground truth itself: see Limitations.)
 
 ## Performance
 
