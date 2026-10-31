@@ -82,7 +82,15 @@ var VideoEffects = (function () {
   //
   // It also has to cover half of the composite's soft band, which now reaches
   // further inward than it used to — see MASK_EDGE_LO / MASK_EDGE_HI.
-  var MASK_DILATE = 3;
+  //
+  // Measured against a known alpha (docs/matting-evaluation.md, make
+  // matting-bench), 3 erred far too far outward: the ground truth itself, fed
+  // through this pipeline at 3, left ~47% of the old room in the edge band —
+  // worse than MediaPipe's own mask did, so the halo round the hair was this
+  // dilate, not the model. 1.5 halved that halo and cut the composite's error
+  // by ~40%, for an edge band ~5/255 tighter inside; 0 removed the halo but
+  // ate the edge (inner error x5).
+  var MASK_DILATE = 1.5;
 
   // Feather radius, in mask pixels, and the window the composite maps that
   // feather through.
@@ -176,11 +184,17 @@ var VideoEffects = (function () {
   // a texel and the blur starts skipping instead of blurring.
   var BLUR_PASSES_MAX = 6;
 
-  // Temporal blend weights, per inference. Growing is nearly immediate so the
-  // mask keeps up with a moving head; shrinking takes several inferences, which
-  // is what stops the model's frame-to-frame noise turning into a boiling edge.
-  var MASK_ALPHA_UP   = 0.85;
-  var MASK_ALPHA_DOWN = 0.20;
+  // Temporal blend weight, per inference: how far the mask moves toward the
+  // newest one. It used to be asymmetric (0.85 to grow, 0.20 to shrink) so a
+  // dropped pixel had to prove itself for several inferences; measured against
+  // a known alpha, that slow shrink is a trail of the old room behind every
+  // movement, and a symmetric 0.6 scored better on BOTH the composite's error
+  // and its frame-to-frame error (flicker and trailing together) for MediaPipe
+  // and Longpipe (docs/matting-evaluation.md). A recurrent matting model (RVM)
+  // is already temporally consistent: blending it again only adds the trail,
+  // so it is not blended at all (maskBlendFor()).
+  var MASK_BLEND = 0.6;
+  function maskBlendFor(engine) { return engine === 'rvm' ? 1 : MASK_BLEND; }
 
   // The confidence cut. The model's mask is not 0/1: where it is unsure (a
   // lamp over the head, the rim of a shoulder, a wisp of hair) it says 20-70%,
@@ -907,10 +921,14 @@ var VideoEffects = (function () {
 
   // Longpipe's mask is a matte whose 50% point already sits on the silhouette,
   // where MediaPipe's sits inside it. The dilate that wins that margin back for
-  // MediaPipe (MASK_DILATE, ~15 px at 1280 wide) is then a halo of the old room
-  // all round the person, so the matte is dilated by about a texel instead.
-  // `longpipe-dilate` (texels, 0-4) overrides it for comparing on a device.
-  var LONGPIPE_DILATE_BASE = 0.3;
+  // MediaPipe (MASK_DILATE) is then a halo of the old room all round the
+  // person, so the matte is dilated by half a texel at the middle of the
+  // slider (it was one: measured, half a texel cut the composite's error by
+  // ~27% and halved the halo, for a slightly tighter edge; 0 ate the edge).
+  // RVM's matte is finer still and is not dilated at all (0 scored best on
+  // every composite measure). `longpipe-dilate` (texels, 0-4) overrides
+  // Longpipe's for comparing on a device.
+  var MATTE_DILATE_PER_FEATHER = 0.36;
   function longpipeDilateOverride() {
     try {
       var v = parseFloat(localStorage.getItem('longpipe-dilate'));
@@ -920,9 +938,11 @@ var VideoEffects = (function () {
   function edgeProfileFor(engine) {
     var e = edgeProfile(readSharpness());
     // RVM's alpha is a matte too (and a finer one): same edge as Longpipe's.
-    if (engine === 'longpipe' || engine === 'rvm') {
+    if (engine === 'longpipe') {
       var o = longpipeDilateOverride();
-      e.dilate = o !== null ? o : LONGPIPE_DILATE_BASE + e.feather * 0.5;
+      e.dilate = o !== null ? o : MATTE_DILATE_PER_FEATHER * e.feather;
+    } else if (engine === 'rvm') {
+      e.dilate = 0;
     }
     // The matting bench's A/B switch: { feather, lo, hi } replace the profile's.
     if (typeof window !== 'undefined' && window.__voxalEdgeOverride) {
@@ -4297,7 +4317,8 @@ var VideoEffects = (function () {
     this.bindTex(this.pMix, 'uPrev', 0, this.texMaskS);
     this.bindTex(this.pMix, 'uNext', 1, this.texMaskRaw);
     // window.__voxalMaskBlend = [up, down]: the matting bench's A/B switch.
-    var mb = window.__voxalMaskBlend || [MASK_ALPHA_UP, MASK_ALPHA_DOWN];
+    var mbw = maskBlendFor(this.engine);
+    var mb = window.__voxalMaskBlend || [mbw, mbw];
     gl.uniform1f(uloc(gl, this.pMix, 'uAlphaUp'), this.maskPrimed ? mb[0] : 1.0);
     gl.uniform1f(uloc(gl, this.pMix, 'uAlphaDown'), this.maskPrimed ? mb[1] : 1.0);
     gl.uniform1f(uloc(gl, this.pMix, 'uCut'), this.maskCut);
@@ -4505,8 +4526,12 @@ var VideoEffects = (function () {
     gl.uniform1f(uloc(gl, this.pComp, 'uDecon'), typeof window.__voxalDecon === 'number' ? window.__voxalDecon : this.decon);
     gl.uniform1f(uloc(gl, this.pComp, 'uMotion'), window.__voxalNoEdgeMotion ? 0 : Math.min(1, Math.max(0, this.look.motion || 0)));
     gl.uniform1f(uloc(gl, this.pComp, 'uHair'), window.__voxalNoHairRefine ? 0 : HAIR_MIX);
-    gl.uniform1f(uloc(gl, this.pComp, 'uLinear'), window.__voxalLinearComposite ? 1 : 0);
-    var fgOn = !!(this.fgReady && this.engine === 'rvm' && window.__voxalRvmFg);
+    // RVM: mix in linear light with its own foreground colour in the band
+    // (together they took the old room's share of its edge from ~6% to ~2%).
+    // Both are switches for the bench on any engine.
+    var lin = typeof window.__voxalLinearComposite === 'boolean' ? window.__voxalLinearComposite : this.engine === 'rvm';
+    gl.uniform1f(uloc(gl, this.pComp, 'uLinear'), lin ? 1 : 0);
+    var fgOn = !!(this.fgReady && this.engine === 'rvm' && window.__voxalRvmFg !== false);
     this.bindTex(this.pComp, 'uFg', 10, fgOn ? this.texFg : this.texImg);
     gl.uniform1f(uloc(gl, this.pComp, 'uFgOn'), fgOn ? 1 : 0);
     filmUniform(gl, this.pComp, this.look.exposure);

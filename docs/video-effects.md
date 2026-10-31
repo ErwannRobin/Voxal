@@ -368,11 +368,20 @@ A single blend factor forces a choice between two bad outcomes. Blend slowly and
 the mask lags a moving head, clipping it. Blend quickly and the model's
 frame-to-frame noise goes straight through, so the blur boils.
 
-So the mask **grows fast and shrinks slowly** — 0.85 up, 0.20 down, per
+So the mask *used to* **grow fast and shrink slowly** — 0.85 up, 0.20 down, per
 inference. A pixel the model has just decided belongs to you is trusted almost
 immediately; one it has just dropped is given several inferences to prove it.
 That tracks motion without the flicker, because flicker is overwhelmingly pixels
 dropping out for a single inference and coming straight back.
+
+Measured against a known alpha (`make matting-bench`, docs/matting-evaluation.md),
+that slow shrink was a trail of the old room behind every movement, and it did not
+buy the stability it was for: a **symmetric 0.6** scored better on the composite's
+error *and* on its frame-to-frame error, for MediaPipe and Longpipe alike. The
+blend is now 0.6 both ways (`MASK_BLEND`), and RVM, a recurrent model that is
+already temporally consistent, is not blended at all (`maskBlendFor()`). The same
+measurement moved MediaPipe's dilate from 3 to 1.5 texels and Longpipe's from about
+one to half a texel (RVM: none) — see *Findings* in docs/matting-evaluation.md.
 
 ### Why the mask crosses the CPU
 
@@ -1618,7 +1627,7 @@ sticky at the top, so the buttons stay reachable on a phone.
 | **A** original | The camera frame, untouched |
 | **A′** model input | What the segmenter was actually handed: the 256-wide downscale, brightened in a dim room (`light-adapt`) |
 | **B** raw mask | `confidenceMasks[0].getAsUint8Array()` before anything touched it. Grey scale: white = person, black = background, greys = the model's uncertainty. Each model texel is a visible square (no interpolation) |
-| **C1** blended | After the temporal blend (grows 0.85 / shrinks 0.20 per inference) |
+| **C1** blended | After the temporal blend (0.6 per inference, both ways; none for RVM) |
 | **C2** dilated | After the 3-texel max filter |
 | **C3** feathered | After the feather blur — what the composite is given |
 | **C4** matte used | The composite shader's own `m`: smoothstep window + empty-room reference + hair refinement, i.e. the alpha it actually mixes with |
@@ -1705,7 +1714,7 @@ on a real camera (see the end of this section).
    camera. Changing the model is a separate decision.
 2. **B clean, a fragment appears in a later pane.** The stage that introduces it
    is the culprit:
-   - *C1*: the **temporal blend**. It grows 0.85 and shrinks 0.20, so a texel
+   - *C1*: the **temporal blend** (0.6 per inference both ways; it grew 0.85 and shrank 0.20 before the matting bench), so a texel
      the model fires on for a single inference is held up for several afterwards
      (a ratchet toward "person" on noisy input, by construction). If
      B flickers there (stability map bright, "crossing 50%" > 0) this is the

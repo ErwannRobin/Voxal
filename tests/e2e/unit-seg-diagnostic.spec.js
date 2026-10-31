@@ -232,6 +232,9 @@ test('stability numbers: an unchanged mask is stable, a changed one is counted',
 });
 
 test('the dilated pane is the dilated mask, not the feathered one', async ({ page }) => {
+  // A whole-texel stride, so the dilate is a pure max and its oval stays hard
+  // (a fractional one — the tuned 1.5 — samples between texels and greys the rim).
+  await page.evaluate(() => { window.__voxalDilate = 3; });
   await start(page);
   await page.evaluate(() => VideoEffects.openDiagnostic('dilated'));
   expect(await page.evaluate(() => window.__untilInferences(3))).toBe(true);
