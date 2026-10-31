@@ -11,6 +11,7 @@
 //   node scripts/matting-bench.mjs --variant-names shipped,linear,linear&dilate0   chosen ones; a&b combines
 //   node scripts/matting-bench.mjs --swiftshader           software GL (default: the real GPU, ANGLE/Metal on a Mac)
 //   node scripts/matting-bench.mjs --headed --label m5
+//   node scripts/matting-bench.mjs --render a/results.json[,b/results.json]   the report of saved runs (merged), again
 //
 // Engines: mediapipe | longpipe | rvm (MobileNetV3, 512 px input) |
 // rvm-hi (MobileNetV3, the camera's own size, RVM's recommended downsample) |
@@ -31,6 +32,7 @@
 //   flicker     |mask change| where the truth did not change, x1000
 //   comp*        |composite - truth composite| in 0-255 over: All / Outer ring (truth 0: halo) /
 //                Mixed (partial pixels: hair) / Inner ring (truth 1: eaten edge)
+//   compDt       the composite's frame-to-frame change against the truth's, over the edge band, 0-255: flicker and trailing
 //   leak         share of the OLD room left in the composite's edge band, % (0 = none; negative = over-corrected)
 //
 // Output: bench-results/matting/<label>-<date>/ (report.md, results.json, PNG stills).
@@ -69,6 +71,7 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--longpipe-wait-ms') opt.longpipeWaitMs = +args[++i];
   else if (a === '--seconds') opt.seconds = +args[++i];
   else if (a === '--stills') opt.stills = args[++i].split(',').map(Number);
+  else if (a === '--render') opt.render = args[++i];
   else { console.error('unknown option ' + a); process.exit(2); }
 }
 
@@ -202,7 +205,7 @@ async function main() {
         }
         results.runs.push({ ...r, result: res, logs: logs.slice(-6) });
         const s = res.scores;
-        console.log(`${res.engine} mask ${res.maskSize}: maskMAE ${s.maskMAE.mean.toFixed(1)} band ${s.maskBandMAE.mean.toFixed(0)} dtSSD ${s.dtSSD ? s.dtSSD.mean.toFixed(2) : '–'} comp ${s.compMAE.mean.toFixed(2)} leak ${s.leak ? s.leak.mean.toFixed(1) : '–'}% (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+        console.log(`${res.engine} mask ${res.maskSize}: maskMAE ${s.maskMAE.mean.toFixed(1)} band ${s.maskBandMAE.mean.toFixed(0)} dtSSD ${s.dtSSD ? s.dtSSD.mean.toFixed(2) : '–'} comp ${s.compMAE.mean.toFixed(2)} cdt ${s.compDt ? s.compDt.mean.toFixed(2) : '–'} leak ${s.leak ? s.leak.mean.toFixed(1) : '–'}% (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
         if (setup.fallback) console.log('   fallback: ' + setup.fallback);
       }
     } catch (err) {
@@ -230,11 +233,19 @@ const ALL_VARIANTS = [
   { name: 'dilate1.5', flags: { __voxalDilate: 1.5 } },
   { name: 'noblend', flags: { __voxalMaskBlend: [1, 1] } },
   { name: 'blend-sym', flags: { __voxalMaskBlend: [0.6, 0.6] } },
-  { name: 'rvmfg', flags: { __voxalRvmFg: true } }
+  { name: 'rvmfg', flags: { __voxalRvmFg: true } },
+  // A true matte needs no re-ramp: the composite's smoothstep(lo, hi) and the
+  // feather were made for MediaPipe's confidence, not for an alpha.
+  { name: 'edgeid', flags: { __voxalEdgeOverride: { lo: 0.0, hi: 1.0 } } },
+  { name: 'nofeather', flags: { __voxalEdgeOverride: { feather: 0 } } }
 ];
 const VARIANTS = opt.variantNames ? ALL_VARIANTS.filter((v) => opt.variantNames.includes(v.name)).concat(
   opt.variantNames.filter((n) => n.includes('&')).map((n) => ({ name: n,
-    flags: Object.assign({}, ...n.split('&').map((p) => ALL_VARIANTS.find((v) => v.name === p).flags)) }))) : ALL_VARIANTS;
+    flags: n.split('&').map((p) => ALL_VARIANTS.find((v) => v.name === p).flags).reduce((a, f) => {
+      const o = { ...a, ...f };
+      if (a.__voxalEdgeOverride && f.__voxalEdgeOverride) o.__voxalEdgeOverride = { ...a.__voxalEdgeOverride, ...f.__voxalEdgeOverride };
+      return o;
+    }, {}) }))) : ALL_VARIANTS;
 
 function fmt(v, d = 1) { return v === null || v === undefined ? '–' : v.toFixed(d); }
 
@@ -247,11 +258,11 @@ function report(results) {
   const q = results.runs.filter((r) => r.kind === 'quality' && r.result);
   if (q.length) {
     L.push('## Quality (lower is better, except IoU)', '');
-    L.push('| engine | variant | room | size | mask | maskMAE | band | IoU | dtSSD | flicker | comp | outer | mixed | inner | leak % | infer ms p50 |');
-    L.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
+    L.push('| engine | variant | room | size | mask | maskMAE | band | IoU | dtSSD | flicker | comp | outer | mixed | inner | compDt | leak % | infer ms p50 |');
+    L.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
     for (const r of q) {
       const s = r.result.scores, g = (k, d) => fmt(s[k] && s[k].mean, d);
-      L.push(`| ${r.name}${r.result.engine !== ENGINES[r.name].engine ? ' (ran ' + r.result.engine + ')' : ''} | ${r.variant} | ${r.room} | ${r.w}x${r.h} | ${r.result.maskSize} | ${g('maskMAE')} | ${g('maskBandMAE', 0)} | ${fmt(s.iou && s.iou.mean, 4)} | ${g('dtSSD', 2)} | ${g('flicker', 2)} | ${g('compMAE', 2)} | ${g('compOuter', 1)} | ${g('compMixed', 1)} | ${g('compInner', 1)} | ${g('leak', 1)} | ${fmt(r.result.inferMsP50, 1)} |`);
+      L.push(`| ${r.name}${r.result.engine !== ENGINES[r.name].engine ? ' (ran ' + r.result.engine + ')' : ''} | ${r.variant} | ${r.room} | ${r.w}x${r.h} | ${r.result.maskSize} | ${g('maskMAE')} | ${g('maskBandMAE', 0)} | ${fmt(s.iou && s.iou.mean, 4)} | ${g('dtSSD', 2)} | ${g('flicker', 2)} | ${g('compMAE', 2)} | ${g('compOuter', 1)} | ${g('compMixed', 1)} | ${g('compInner', 1)} | ${g('compDt', 2)} | ${g('leak', 1)} | ${fmt(r.result.inferMsP50, 1)} |`);
     }
     L.push('');
   }
@@ -277,4 +288,11 @@ function report(results) {
   return L.join('\n');
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+if (opt.render) {
+  const { readFileSync } = await import('node:fs');
+  const parts = opt.render.split(',').map((f) => JSON.parse(readFileSync(f, 'utf8')));
+  const merged = { ...parts[0], runs: parts.flatMap((p) => p.runs) };
+  console.log(report(merged));
+} else {
+  main().catch((e) => { console.error(e); process.exit(1); });
+}

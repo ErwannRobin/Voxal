@@ -137,7 +137,7 @@ H.setup = async function (opt) {
   H.out = document.createElement('canvas');
   H.out.width = w; H.out.height = h;
   H.outCtx = H.out.getContext('2d', { willReadFrequently: true });
-  H.prevMask = null; H.prevGt = null;
+  H.prevMask = null; H.prevGt = null; H.prevOut = null; H.prevComp = null;
   H.acc = {};
   H.maskSize = null;
   H.inferMs = [];
@@ -229,7 +229,8 @@ H.step = async function (f) {
   var band = bandOf(gt, w, h, Math.round(8 * w / 1280));
   var sAll = 0, nAll = 0, sBand = 0, nBand = 0, inter = 0, uni = 0, sSq = 0;
   var cOut = [0, 0], cMix = [0, 0], cIn = [0, 0], cAll = [0, 0], leakNum = 0, leakDen = 0;
-  var dt = 0, dtn = 0, fl = 0, fln = 0;
+  var dt = 0, dtn = 0, fl = 0, fln = 0, cdt = 0, cdtn = 0;
+  var gComp = new Float32Array(n * 3), prevOut = H.prevOut, prevComp = H.prevComp;
   for (var j = 0; j < n; j++) {
     if (ign[j]) continue;
     var e = m[j] - gt[j];
@@ -246,6 +247,10 @@ H.step = async function (f) {
     for (var c = 0; c < 3; c++) {
       var g = enc(a * LIN[gtF[k + c]] + (1 - a) * LIN[H.targetPx[k + c]]);
       var o = out[k + c];
+      gComp[j * 3 + c] = g;
+      // Temporal: the composite's frame-to-frame change against the truth's,
+      // over the edge band (where a matte flickers or trails).
+      if (prevOut && band[j]) { cdt += Math.abs((o - prevOut[k + c]) - (g - prevComp[j * 3 + c])); cdtn++; }
       ce += Math.abs(o - g);
       var dir = H.platePx[k + c] - H.targetPx[k + c];
       lnum += (o - g) * dir; lden += dir * dir;
@@ -270,6 +275,8 @@ H.step = async function (f) {
   add('compMixed', cMix[0], cMix[1]);
   add('compInner', cIn[0], cIn[1]);
   if (leakDen) add('leak', leakNum / leakDen * 100 * 1000, 1000);
+  if (cdtn) add('compDt', cdt, cdtn);
+  H.prevOut = new Uint8ClampedArray(out); H.prevComp = gComp;
   H.prevMask = m; H.prevGt = gt;
   return { f: f };
 };
