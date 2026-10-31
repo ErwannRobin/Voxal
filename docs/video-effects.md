@@ -459,6 +459,55 @@ A capture is refused (`reason: 'present'`) if the model calls more than
 `REF_PRESENT_MAX` (2%) of any frame during it a person: a reference with you in
 it would teach the pipeline that you are the room.
 
+**The room also learns itself** (`FRAG_REF_LEARN`, `learnStep()`), with no
+capture at all, whenever *Fixed camera* is on. A second ping-pong
+texture at the reference's size holds a learned picture whose alpha is per-pixel
+trust. Per frame and pixel:
+
+- **room and still** (same score as the reference): trust climbs by
+  `LEARN_UP` (~2 s at 30 fps to be believed) and the picture follows slow drift;
+- **room and changed**: trust falls fast and, nearly gone, the pixel is
+  re-seeded — a curtain or a passer-by never gets in, and a knocked camera
+  forgets itself within a second;
+- **the model's band round you**: frozen — nothing learned, nothing forgotten,
+  because that band is exactly where the reference decides, so the room behind
+  it must survive you stepping in front;
+- **deep inside you** (the same eroded core the composite protects): trust
+  collapses, so a limb the model missed for a while and learned as wall is
+  forgotten once the model finds it.
+
+`referenceSource()` picks the picture: the captured one while it is loaded and
+matches, the learned one otherwise (after `LEARN_MIN_FRAMES` masks). A pixel not
+yet trusted (`LEARN_TRUST_LO/HI`) gives the reference no opinion, so it only
+ever takes away where it is sure. Capturing stays the fast, exact way to start;
+learning is what fills in once the capture goes stale and what works for anybody
+who never captured. It is memory-only like the capture, and switching *Fixed
+camera* off clears it.
+
+**A held camera (phones).** A phone is never perfectly still, so on a phone
+(`motionComp`, off on desktop where it would be pure cost) the learned picture
+follows the camera across the view. `motionStep()` estimates a translation
+`shift` — the plate's pixel p is the camera's p + shift — at most every
+`MOTION_MS` (66 ms) by matching two small lumas (64 then 128 wide, mean removed
+so auto-exposure is not motion, wherever the model sees a person excluded, and
+a parabola for the sub-pixel part), searching `MOTION_SEARCH` pixels round the
+LAST estimate, so what must fit is the movement between estimates, not since
+the anchor. Learner and reference both sample through `shift` and give no trust
+to anything the camera cannot see. Past `MOTION_REANCHOR` (6% of the frame) the
+picture is re-sampled onto the current view (`FRAG_REF_SHIFT`, one bilinear
+softening) and the shift starts from 0. Translation only: a turn, a lean or
+parallax from near objects shows up as a difference and costs trust, not
+correctness. A captured picture is not followed (it stays a still-camera
+reference and goes stale when the phone moves — then the learned one takes
+over). Not yet done: gyro help for fast motion, a panorama larger than the view.
+
+**It removes what it recognises.** The difference goes through a second
+smoothstep (`REF_HARDEN_*`) so a pixel that matches the room goes to 0 rather
+than keeping a faint sharp halo, the "ask the reference" window starts earlier
+(`REF_SCORE_LO/HI` 0.08/0.22) and the protected core is eroded further
+(`REF_CORE_ERODE` 7, `REF_CORE_LO/HI` 0.70/0.98). Cost: a shirt the colour of the
+wall loses more of its edge than before.
+
 **Privacy.** The picture lives in a module-level variable, in memory only — it
 survives turning the camera off and on, and nothing else. It is never written
 to storage and never sent. Switching the setting off **forgets** it, not just
