@@ -194,7 +194,13 @@ var VideoEffects = (function () {
   // is already temporally consistent: blending it again only adds the trail,
   // so it is not blended at all (maskBlendFor()).
   var MASK_BLEND = 0.6;
+  // P3M-Net is an image matting model (no state between frames), so its matte
+  // is blended like the segmenters' (docs/p3m-evaluation.md).
   function maskBlendFor(engine) { return engine === 'rvm' ? 1 : MASK_BLEND; }
+
+  // Engines whose output is an alpha matte rather than a confidence: no
+  // MediaPipe cut, and they fall back to MediaPipe if they die mid-call.
+  function isMatteEngine(engine) { return engine === 'longpipe' || engine === 'rvm' || engine === 'p3m'; }
 
   // The confidence cut. The model's mask is not 0/1: where it is unsure (a
   // lamp over the head, the rim of a shoulder, a wisp of hair) it says 20-70%,
@@ -968,6 +974,13 @@ var VideoEffects = (function () {
       return isFinite(v) ? Math.max(0, Math.min(4, v)) : null;
     } catch (e) { return null; }
   }
+  var P3M_DILATE = 0;
+  function p3mDilateOverride() {
+    try {
+      var v = parseFloat(localStorage.getItem('p3m-dilate'));
+      return isFinite(v) ? Math.max(0, Math.min(4, v)) : null;
+    } catch (e) { return null; }
+  }
   function edgeProfileFor(engine) {
     var e = edgeProfile(readSharpness());
     // RVM's alpha is a matte too (and a finer one): same edge as Longpipe's.
@@ -976,6 +989,12 @@ var VideoEffects = (function () {
       e.dilate = o !== null ? o : MATTE_DILATE_PER_FEATHER * e.feather;
     } else if (engine === 'rvm') {
       e.dilate = 0;
+    } else if (engine === 'p3m') {
+      // P3M-Net's alpha already reaches the silhouette's outside: grown,
+      // it is a halo (measured with the matting bench, docs/p3m-evaluation.md).
+      // `p3m-dilate` (texels, 0-4) overrides it for comparing on a device.
+      var po = p3mDilateOverride();
+      e.dilate = po !== null ? po : P3M_DILATE;
     }
     if (engine === 'longpipe' || engine === 'rvm') e.feather *= MATTE_FEATHER_SCALE;
     // The matting bench's A/B switch: { feather, lo, hi } replace the profile's.
@@ -1838,8 +1857,10 @@ var VideoEffects = (function () {
   // The engine a new Processor starts with. Longpipe unless MediaPipe was
   // chosen (localStorage / ?segengine=mediapipe) or the Longpipe script is
   // missing — that case is MediaPipe, silently. The experimental RVM only when
-  // chosen by name (see rvm-engine.js).
+  // chosen by name (see rvm-engine.js), and the same for the experimental
+  // P3M-Net (p3m-engine.js).
   function selectedEngine() {
+    if (typeof P3mEngine !== 'undefined' && P3mEngine.selected()) return 'p3m';
     if (typeof RvmEngine !== 'undefined' && RvmEngine.selected()) return 'rvm';
     return typeof LongpipeEngine !== 'undefined' && LongpipeEngine.selected() === 'longpipe'
       ? 'longpipe' : 'mediapipe';
@@ -1850,6 +1871,16 @@ var VideoEffects = (function () {
   // experiment: the reason is kept for the diagnostic panel.
   function createSegmenter(raw, engine, video) {
     var want = engine || selectedEngine();
+    if (want === 'p3m' && (!window.__voxalSegStub || window.__voxalP3mStub) && typeof P3mEngine !== 'undefined') {
+      return P3mEngine.create(raw, video).then(function (seg) {
+        _engineFallback = null;
+        return seg;
+      }, function (e) {
+        _engineFallback = (e && e.message) || String(e);
+        console.warn('[VideoEffects] P3M-Net unavailable, using MediaPipe: ' + _engineFallback);
+        return createMediaPipeSegmenter();
+      });
+    }
     if (want === 'rvm' && (!window.__voxalSegStub || window.__voxalRvmStub) && typeof RvmEngine !== 'undefined') {
       return RvmEngine.create(raw, video).then(function (seg) {
         _engineFallback = null;
@@ -3091,12 +3122,12 @@ var VideoEffects = (function () {
     var self = this;
     this.segmenter = seg;
     this.engine = seg.engine || 'mediapipe';
-    this.maskCut = this.engine === 'longpipe' || this.engine === 'rvm' ? 0 : readMaskCut();
+    this.maskCut = isMatteEngine(this.engine) ? 0 : readMaskCut();
     this.edge = edgeProfileFor(this.engine);
     this.maskPrimed = false;
-    if (this.engine === 'longpipe' || this.engine === 'rvm') {
+    if (isMatteEngine(this.engine)) {
       // An experimental engine that dies mid-call hands the camera back to MediaPipe.
-      var name = this.engine === 'rvm' ? 'RVM' : 'Longpipe';
+      var name = { rvm: 'RVM', p3m: 'P3M-Net', longpipe: 'Longpipe' }[this.engine];
       seg.onFail = function (e) {
         if (self.segmenter !== seg || self.stopped) return;
         _engineFallback = (e && e.message) || String(e);
@@ -3110,10 +3141,11 @@ var VideoEffects = (function () {
   // Change engine under a running camera: no new track, no renegotiation (the
   // canvas track is the same). The old engine keeps feeding the last mask until
   // the new one is up; a failed swap leaves the old one running.
-  Processor.prototype.swapSegmenter = function (engine) {
+  // `reopen` builds a new one of the same engine (a P3M-Net size or model change).
+  Processor.prototype.swapSegmenter = function (engine, reopen) {
     var self = this;
     if (this.stopped || this._swapping) return Promise.resolve(this.engine);
-    if (engine === this.engine) return Promise.resolve(this.engine);
+    if (engine === this.engine && !reopen) return Promise.resolve(this.engine);
     this._swapping = true;
     var old = this.segmenter;
     return createSegmenter(this.raw, engine, this.video).then(function (seg) {
@@ -6424,6 +6456,7 @@ var VideoEffects = (function () {
       eng.style.cssText = 'flex:1 1 100%;min-width:0;font:inherit;padding:6px;min-height:36px';
       var engs = [['longpipe', 'Engine: Longpipe (default)'], ['mediapipe', 'Engine: MediaPipe']];
       if (typeof RvmEngine !== 'undefined') engs.push(['rvm', 'Engine: RVM (experimental, needs make rvm-assets)']);
+      if (typeof P3mEngine !== 'undefined') engs.push(['p3m', 'Engine: P3M-Net (experimental, needs make p3m-assets)']);
       engs.forEach(function (v) {
         var o = document.createElement('option');
         o.value = v[0]; o.textContent = v[1];
@@ -6615,6 +6648,15 @@ var VideoEffects = (function () {
             ' · masks ' + (s.maskHz === null ? '–' : s.maskHz + ' Hz') + ' · init ' + (s.initMs === null ? '–' : s.initMs + ' ms') +
             '\nthe matte trails the camera by about one inference';
           if (s.errors && s.errors.length) t += '\nrvm errors: ' + s.errors.join(' | ');
+        }
+        if (s.engine === 'p3m') {
+          t += ' · ' + s.model + ' (' + s.modelMB + ' MB' + (s.cached ? ', cached' : '') + ') on ' + s.ep + ' · input ' + s.input +
+            '\ninference ' + (s.inferMsP50 === null ? '–' : s.inferMsP50.toFixed(1) + ' ms p50 / ' + s.inferMsP95.toFixed(1) + ' p95') +
+            ' · masks ' + (s.maskHz === null ? '–' : s.maskHz + ' Hz') +
+            '\nload ' + (s.loadMs === null ? '–' : s.loadMs + ' ms') + ' · session ' + (s.sessionMs === null ? '–' : s.sessionMs + ' ms') +
+            ' · first run ' + (s.firstRunMs === null ? '–' : s.firstRunMs + ' ms') + ' · init ' + (s.initMs === null ? '–' : s.initMs + ' ms') +
+            '\nthe matte trails the camera by about one inference';
+          if (s.errors && s.errors.length) t += '\np3m errors: ' + s.errors.join(' | ');
         }
         if (s.fallback) t += '\nfell back to MediaPipe: ' + s.fallback;
         _engLine = t;
@@ -6951,9 +6993,10 @@ var VideoEffects = (function () {
   // safe at any moment: with no camera running they only store the choice;
   // with one they swap the engine under it, keeping the canvas track.
   function setEngine(name) {
-    name = name === 'longpipe' || name === 'rvm' ? name : 'mediapipe';
-    if (typeof LongpipeEngine !== 'undefined') LongpipeEngine.setSelected(name === 'rvm' ? 'longpipe' : name);
+    name = name === 'longpipe' || name === 'rvm' || name === 'p3m' ? name : 'mediapipe';
+    if (typeof LongpipeEngine !== 'undefined') LongpipeEngine.setSelected(name === 'rvm' || name === 'p3m' ? 'longpipe' : name);
     if (typeof RvmEngine !== 'undefined') RvmEngine.setSelected(name === 'rvm');
+    if (typeof P3mEngine !== 'undefined') P3mEngine.setSelected(name === 'p3m');
     _engineFallback = null;
     if (!_active) return Promise.resolve(name);
     return _active.swapSegmenter(name).then(function () { return name; }, function (e) {
@@ -6982,7 +7025,8 @@ var VideoEffects = (function () {
   // `storage` listener below applies it here. A URL parameter (?segengine=,
   // ?maskcut=, ?segdiag=1) still outranks the stored value for that visit.
   var DEBUG_KEYS = ['segmentation-engine', 'longpipe-blur', 'longpipe-preset',
-                    'longpipe-dilate', 'mask-cut', SIL_KEY, SIL_STRENGTH_KEY, DIAG_KEY];
+                    'longpipe-dilate', 'mask-cut', SIL_KEY, SIL_STRENGTH_KEY, DIAG_KEY,
+                    'p3m-size', 'p3m-model', 'p3m-dilate'];
 
   function readDebug(key) {
     try { return localStorage.getItem(key); } catch (e) { return null; }
@@ -7011,12 +7055,18 @@ var VideoEffects = (function () {
       } else if (key === 'longpipe-preset') {
         // The preset is read when the pipeline is built: reopen it.
         if (p.engine === 'longpipe' && p.segmenter && p.segmenter.setSource) p.segmenter.setSource(p.raw);
-      } else if (key === 'longpipe-dilate') {
+      } else if (key === 'longpipe-dilate' || key === 'p3m-dilate') {
         p.applyEdge();
       } else if (key === SIL_KEY || key === SIL_STRENGTH_KEY) {
         p.applySilhouette();
+      } else if (key === 'p3m-size' || key === 'p3m-model') {
+        // Read when the session is built: build a new one, the old one keeps
+        // feeding the picture until it is up.
+        if (p.engine === 'p3m') p.swapSegmenter('p3m', true).catch(function (e) {
+          _engineFallback = (e && e.message) || String(e);
+        });
       } else if (key === 'mask-cut') {
-        p.maskCut = p.engine === 'longpipe' || p.engine === 'rvm' ? 0 : readMaskCut();
+        p.maskCut = isMatteEngine(p.engine) ? 0 : readMaskCut();
       }
     } catch (e) { /* a bad value must never take the camera down */ }
   }
@@ -7099,7 +7149,8 @@ var VideoEffects = (function () {
         'Longpipe is the default: it runs its own model on the GPU and its output is turned into a mask (see the diagnostic). MediaPipe is the fallback, and what a Longpipe that cannot start ends up on.',
         'segmentation-engine',
         [['longpipe', 'Longpipe (default)'], ['mediapipe', 'MediaPipe']].concat(
-          typeof RvmEngine !== 'undefined' ? [['rvm', 'RVM (experimental; needs make rvm-assets, never shipped)']] : []),
+          typeof RvmEngine !== 'undefined' ? [['rvm', 'RVM (experimental; needs make rvm-assets, never shipped)']] : [],
+          typeof P3mEngine !== 'undefined' ? [['p3m', 'P3M-Net (experimental; needs make p3m-assets)']] : []),
         function () { return engine(); },
         function (v) { setEngine(v); });
       toggle('Longpipe blur',
@@ -7114,6 +7165,23 @@ var VideoEffects = (function () {
       number('Longpipe edge dilate (texels)',
         'How far the Longpipe mask is grown before feathering. Blank = automatic (about 1). Raise it if a thin line of the old room shows; 0 for none.',
         'longpipe-dilate', 0, 4, 0.1, 'auto');
+    }
+    if (typeof P3mEngine !== 'undefined') {
+      select('P3M-Net input size',
+        'The long side of the picture P3M-Net sees (multiples of 32). Larger is finer hair and a slower matte: see docs/p3m-evaluation.md. Applies by rebuilding its session.',
+        'p3m-size',
+        [['', 'Auto (' + P3mEngine.DEFAULT_SIZE + ')'], ['256', '256'], ['320', '320'], ['384', '384'], ['512', '512'], ['640', '640']],
+        function () { var v = readDebug('p3m-size'); return ['256', '320', '384', '512', '640'].indexOf(v) >= 0 ? v : ''; },
+        function (v) { setDebug('p3m-size', v || null); });
+      select('P3M-Net model file',
+        'Half-float weights (78 MB, float32 arithmetic) is the default; float32 weights are 156 MB for the same picture. Half-float arithmetic needs make p3m-assets ARGS=--fp16 and changes the alpha.',
+        'p3m-model',
+        [['', 'Half-float weights (default)'], ['fp32', 'Float32 (156 MB)'], ['fp16', 'Half-float arithmetic']],
+        function () { var v = readDebug('p3m-model'); return v === 'fp32' || v === 'fp16' ? v : ''; },
+        function (v) { setDebug('p3m-model', v || null); });
+      number('P3M-Net edge dilate (texels)',
+        'How far the P3M-Net matte is grown before feathering. Blank = automatic (0).',
+        'p3m-dilate', 0, 4, 0.1, 'auto');
     }
     number('MediaPipe mask cut (0-0.94)',
       'MediaPipe values at or under this are background. Blank = 0.78; 0 turns the cut off. Not used by Longpipe.',
@@ -9068,6 +9136,7 @@ var VideoEffects = (function () {
     DIAGNOSTIC_KEY: DIAG_KEY,
     setEngine: setEngine,
     renderDebugOptions: renderDebugOptions,
+    setDebug: setDebug,
     DEBUG_KEYS: DEBUG_KEYS,
     engine: engine,
     engineStats: engineStats,
