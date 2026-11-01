@@ -6456,7 +6456,7 @@ var VideoEffects = (function () {
       eng.style.cssText = 'flex:1 1 100%;min-width:0;font:inherit;padding:6px;min-height:36px';
       var engs = [['longpipe', 'Engine: Longpipe (default)'], ['mediapipe', 'Engine: MediaPipe']];
       if (typeof RvmEngine !== 'undefined') engs.push(['rvm', 'Engine: RVM (experimental, needs make rvm-assets)']);
-      if (typeof P3mEngine !== 'undefined') engs.push(['p3m', 'Engine: P3M-Net (experimental, needs make p3m-assets)']);
+      if (typeof P3mEngine !== 'undefined') engs.push(['p3m', 'Engine: P3M-Net (experimental, 78 MB download)']);
       engs.forEach(function (v) {
         var o = document.createElement('option');
         o.value = v[0]; o.textContent = v[1];
@@ -7150,7 +7150,7 @@ var VideoEffects = (function () {
         'segmentation-engine',
         [['longpipe', 'Longpipe (default)'], ['mediapipe', 'MediaPipe']].concat(
           typeof RvmEngine !== 'undefined' ? [['rvm', 'RVM (experimental; needs make rvm-assets, never shipped)']] : [],
-          typeof P3mEngine !== 'undefined' ? [['p3m', 'P3M-Net (experimental; needs make p3m-assets)']] : []),
+          typeof P3mEngine !== 'undefined' ? [['p3m', 'P3M-Net (experimental; 78 MB download, needs WebGPU)']] : []),
         function () { return engine(); },
         function (v) { setEngine(v); });
       toggle('Longpipe blur',

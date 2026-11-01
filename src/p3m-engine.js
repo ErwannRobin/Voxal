@@ -3,10 +3,11 @@
 //
 // Off unless localStorage['segmentation-engine'] is 'p3m' (or ?segengine=p3m).
 // Nothing here loads, runs or downloads otherwise. The model is not in the
-// repository: `make p3m-assets` converts the official checkpoint to ONNX and
-// stages it, with the ONNX Runtime Web build that runs it, into the gitignored
-// src/assets/p3m/. P3M-Net is MIT (code and weights) — it is kept out of the
-// repository and the builds for its size (78 MB at the smallest), not its
+// repository: the web deploy downloads it at build time with the ONNX Runtime
+// Web build that runs it (scripts/p3m-fetch.sh, `make p3m-fetch` locally), into
+// the gitignored src/assets/p3m/; `make p3m-assets` converts the official
+// checkpoint instead. P3M-Net is MIT (code and weights) — it is kept out of the
+// repository and the desktop / mobile builds for its size (78 MB), not its
 // licence. Without the files create() rejects and video-effects.js falls back
 // to MediaPipe, exactly as for an RVM or a Longpipe that cannot start.
 //
@@ -32,7 +33,9 @@ var P3mEngine = (function () {
   var EP_KEY = 'p3m-ep';                   // webgpu (default) | wasm (only when asked for: see open())
   var SIZE_KEY = 'p3m-size';               // long side of the network's input, px (default DEFAULT_SIZE)
   var ORT_FILE = 'ort.all.min.mjs';
-  var CACHE_NAME = 'voxal-p3m-v1';         // Cache Storage: 78-156 MB is not left to the HTTP cache's mercy
+  // Cache Storage: 78-156 MB is not left to the HTTP cache's mercy. Bump with
+  // the model (scripts/p3m-fetch.sh): a cached file is served by URL.
+  var CACHE_NAME = 'voxal-p3m-v1';
   // w16: weights stored as half floats, computed in float32 (78 MB, the fp32
   // graph's alpha to ~1e-5). fp32: 156 MB. fp16: half-float compute, only
   // with `make p3m-assets ARGS=--fp16` — its alpha drifts by 1-2.6% on average.
@@ -102,7 +105,7 @@ var P3mEngine = (function () {
   function fetchModel(url) {
     function net() {
       return fetch(url).then(function (r) {
-        if (!r.ok) throw new Error('P3M-Net model: HTTP ' + r.status + ' (run make p3m-assets)');
+        if (!r.ok) throw new Error('P3M-Net model: HTTP ' + r.status + ' (run make p3m-fetch)');
         return r;
       });
     }

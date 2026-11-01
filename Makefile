@@ -3,7 +3,7 @@
         coverage-api coverage-summary coverage-badge bench bench-app bench-audio bench-video \
         bench-report bench-publish bench-history \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
-        seg-assets rvm-assets rvm-clean p3m-assets p3m-clean matting-footage matting-bench emoji-data promo-assets scene-preview three-vendor
+        seg-assets rvm-assets rvm-clean p3m-assets p3m-fetch p3m-clean matting-footage matting-bench emoji-data promo-assets scene-preview three-vendor
 
 # Default target
 help:
@@ -19,7 +19,8 @@ help:
 	@echo "  build-web    Bundle the web version into dist/"
 	@echo "  seg-assets   Stage the background-effects runtime into src/assets/seg"
 	@echo "  rvm-assets   Stage the EXPERIMENTAL RVM matting engine (GPL-3.0, never shipped) into src/assets/rvm"
-	@echo "  p3m-assets   Convert + stage the EXPERIMENTAL P3M-Net matting engine (MIT, 78 MB, never shipped) into src/assets/p3m"
+	@echo "  p3m-fetch    Download the EXPERIMENTAL P3M-Net engine (model + ONNX Runtime, sha256-pinned) into src/assets/p3m"
+	@echo "  p3m-assets   Convert P3M-Net from its official checkpoint yourself (needs PyTorch) into src/assets/p3m"
 	@echo "  matting-footage Build the matting benchmark's footage (known alpha) into bench-results/matting"
 	@echo "  matting-bench Score MediaPipe / Longpipe / RVM on it through the real pipeline; ARGS=... passes options"
 	@echo "  promo-assets Re-embed the icon and fonts in docs/promo.html (the 30 s film)"
@@ -171,10 +172,14 @@ rvm-clean:
 	@rm -rf src/assets/rvm
 
 # The P3M-Net evaluation's engine (docs/p3m-evaluation.md). MIT, but 78-156 MB
-# of converted weights: staged for local testing only, gitignored, deleted
-# before every desktop build (p3m-clean; the checkpoint and the conversion venv
-# stay in .cache/p3m, so restaging is a quick re-export) and stripped from
-# build-web and the mobile apps.
+# of converted weights, never committed. The web deploy downloads them
+# (vercel-build.sh → p3m-fetch); locally either download the published model
+# (p3m-fetch) or convert the official checkpoint yourself (p3m-assets). Deleted
+# before every desktop build (p3m-clean) and stripped from build-web and the
+# mobile apps: the web deploy is the only build that carries them.
+p3m-fetch:
+	@sh scripts/p3m-fetch.sh
+
 p3m-assets:
 	@sh scripts/p3m-assets.sh $(ARGS)
 

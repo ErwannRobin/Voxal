@@ -13,6 +13,16 @@ set -e
 # devDependencies before running this).
 sh seg-assets.sh
 
+# The EXPERIMENTAL P3M-Net engine's model (78 MB) and ONNX Runtime Web (29 MB),
+# downloaded and sha256-checked (docs/p3m-evaluation.md). Served same-origin and
+# fetched by a browser only when someone picks P3M-Net in Settings → Advanced.
+# Never fatal: without the files P3M-Net falls back to MediaPipe, and an
+# experiment must not be able to break a deploy.
+if ! sh scripts/p3m-fetch.sh; then
+  rm -rf src/assets/p3m
+  echo "⚠ P3M-Net files unavailable; deploying without them (it falls back to MediaPipe)"
+fi
+
 # Stamp the commit and build time for the about panel. Mirrors the Makefile's
 # gen-build-info target, but reads Vercel's env var — the deploy is built from a
 # shallow checkout where `git rev-parse` is not dependable.

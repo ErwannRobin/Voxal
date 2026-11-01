@@ -29,9 +29,16 @@ either.
 | [ViTAE-Transformer/P3M-Net](https://github.com/ViTAE-Transformer/P3M-Net) (IJCV 2023: ViTAE-S, Swin-T) | MIT | Not evaluated, see *Choice of variant* |
 | ONNX Runtime Web 1.30.0 | MIT | Same pinned build as the RVM experiment |
 
-Unlike RVM (GPL-3.0), P3M-Net could ship. It is kept out of the repository and
-of every build anyway, for **size**: 78 MB (half-float weights) or 156 MB
-(float32), plus ~27 MB of ONNX Runtime WASM.
+Unlike RVM (GPL-3.0), P3M-Net can ship. It is kept out of the repository for
+**size** — 78 MB (half-float weights) or 156 MB (float32), plus 29 MB of ONNX
+Runtime — and of the desktop and mobile builds. The **web deploy carries it**:
+`vercel-build.sh` downloads the converted model from the
+[`p3m-model-v1`](https://github.com/ErwannRobin/Voxal/releases/tag/p3m-model-v1)
+prerelease asset and ONNX Runtime from jsDelivr, both sha256-pinned
+(`scripts/p3m-fetch.sh`). A prerelease, so the desktop updater's
+`releases/latest` never sees it. A browser downloads the files only when
+somebody picks P3M-Net; a failed download at build time deploys without them
+(P3M-Net then falls back to MediaPipe).
 
 ## Choice of variant and runtime
 
@@ -77,6 +84,11 @@ of every build anyway, for **size**: 78 MB (half-float weights) or 156 MB
   `.cache/p3m/`, converts, verifies, and stages the ONNX files with ORT-Web
   (sha256-pinned) in the gitignored `src/assets/p3m/`. Desktop builds delete it
   (`p3m-clean`), `build-web` and `cap-sync` strip it.
+* `make p3m-fetch` (`scripts/p3m-fetch.sh`): downloads the file that conversion
+  produced (published as a prerelease asset) and the three ONNX Runtime files
+  the WebGPU path loads, sha256-pinned. The web deploy runs it
+  (`vercel-build.sh`, never fatal); `/assets/p3m/` is cached a day
+  (`vercel.json`), and the engine keeps the model in Cache Storage anyway.
 * `src/p3m-engine.js`: the engine, shaped like MediaPipe's ImageSegmenter so the
   Processor treats it like the others (same interface as `rvm-engine.js`).
   Asynchronous inference (one in flight, the newest matte handed over),
@@ -288,11 +300,13 @@ settings (Safari 26.6.2 is on the test Mac). What is known:
 ## How to try it on your own camera
 
 ```sh
-make p3m-assets          # once: ~1 GB venv + 158 MB checkpoint in .cache/p3m, 78 MB model in src/assets/p3m
+make p3m-fetch           # download the published model + ONNX Runtime (107 MB) into src/assets/p3m
+# or: make p3m-assets    # convert the official checkpoint yourself (~1 GB venv + 158 MB checkpoint in .cache/p3m)
 make run-web             # or make dev (desktop); the files are served from src/
 ```
 
-Settings → Advanced → Segmentation debug → *Segmentation engine* → **P3M-Net**,
+On the web deploy nothing is needed: the files are there. Settings → Advanced →
+Segmentation debug → *Segmentation engine* → **P3M-Net**,
 then turn the camera on with a background. Switch between MediaPipe, Longpipe
 and P3M-Net there (or in the diagnostic panel: *Segmentation diagnostic panel*
 on, or `?segdiag=1`) while the camera runs: the picture changes in place, same
