@@ -3,7 +3,7 @@
         coverage-api coverage-summary coverage-badge bench bench-app bench-audio bench-video \
         bench-report bench-publish bench-history \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
-        seg-assets rvm-assets rvm-clean matting-footage matting-bench emoji-data promo-assets scene-preview three-vendor
+        seg-assets rvm-assets rvm-clean p3m-assets p3m-clean matting-footage matting-bench emoji-data promo-assets scene-preview three-vendor
 
 # Default target
 help:
@@ -19,6 +19,7 @@ help:
 	@echo "  build-web    Bundle the web version into dist/"
 	@echo "  seg-assets   Stage the background-effects runtime into src/assets/seg"
 	@echo "  rvm-assets   Stage the EXPERIMENTAL RVM matting engine (GPL-3.0, never shipped) into src/assets/rvm"
+	@echo "  p3m-assets   Convert + stage the EXPERIMENTAL P3M-Net matting engine (MIT, 78 MB, never shipped) into src/assets/p3m"
 	@echo "  matting-footage Build the matting benchmark's footage (known alpha) into bench-results/matting"
 	@echo "  matting-bench Score MediaPipe / Longpipe / RVM on it through the real pipeline; ARGS=... passes options"
 	@echo "  promo-assets Re-embed the icon and fonts in docs/promo.html (the 30 s film)"
@@ -90,11 +91,11 @@ debug:
 	echo "→ Launching Voxal (debug)..."; \
 	open "$$APP"
 
-build: gen-build-info seg-assets rvm-clean
+build: gen-build-info seg-assets rvm-clean p3m-clean
 	@echo "→ Building release (unsigned, no updater artifacts). Use 'make build-signed' to sign."
 	npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
-build-signed: gen-build-info seg-assets rvm-clean
+build-signed: gen-build-info seg-assets rvm-clean p3m-clean
 	@export TAURI_SIGNING_PRIVATE_KEY="$${TAURI_SIGNING_PRIVATE_KEY:-$$(cat ~/.tauri/voxal.key 2>/dev/null)}"; \
 	if [ -z "$$TAURI_SIGNING_PRIVATE_KEY" ]; then \
 		echo "Error: No signing key found."; exit 1; \
@@ -106,7 +107,7 @@ build-signed: gen-build-info seg-assets rvm-clean
 	fi; \
 	npm run tauri build
 
-build-debug: gen-build-info seg-assets rvm-clean
+build-debug: gen-build-info seg-assets rvm-clean p3m-clean
 	npm run tauri build -- --debug
 	@echo ""
 	@echo "Debug bundle: src-tauri/target/debug/bundle/macos/Voxal.app"
@@ -169,6 +170,17 @@ rvm-assets:
 rvm-clean:
 	@rm -rf src/assets/rvm
 
+# The P3M-Net evaluation's engine (docs/p3m-evaluation.md). MIT, but 78-156 MB
+# of converted weights: staged for local testing only, gitignored, deleted
+# before every desktop build (p3m-clean; the checkpoint and the conversion venv
+# stay in .cache/p3m, so restaging is a quick re-export) and stripped from
+# build-web and the mobile apps.
+p3m-assets:
+	@sh scripts/p3m-assets.sh $(ARGS)
+
+p3m-clean:
+	@rm -rf src/assets/p3m
+
 # The matting evaluation: footage with a known alpha (public-domain clip and CC0
 # rooms, downloaded once into bench-results/), then every engine through the
 # real pipeline on it. ARGS=... passes options (see scripts/matting-bench.mjs).
@@ -190,7 +202,7 @@ run-web: gen-build-info seg-assets
 build-web: gen-build-info seg-assets
 	mkdir -p dist
 	cp -r src/* dist/
-	@rm -rf dist/assets/rvm
+	@rm -rf dist/assets/rvm dist/assets/p3m
 	@echo "Web app copied to dist/"
 
 # ── Mobile (Capacitor) ────────────────────────────────────────────────────────
@@ -205,6 +217,7 @@ cap-sync: gen-build-info
 	@rm -f ios/App/App/public/assets/seg/vision_* \
 	      android/app/src/main/assets/public/assets/seg/vision_*
 	@rm -rf ios/App/App/public/assets/rvm android/app/src/main/assets/public/assets/rvm
+	@rm -rf ios/App/App/public/assets/p3m android/app/src/main/assets/public/assets/p3m
 
 cap-ios: cap-sync
 	npx cap open ios

@@ -67,3 +67,8 @@ src/assets/seg/vision_*
 # The matting evaluation's RVM engine (`make rvm-assets`): GPL-3.0 weights and
 # the ONNX Runtime they run on. Never committed, never shipped.
 src/assets/rvm/
+
+# The P3M-Net evaluation's engine (`make p3m-assets`): MIT, but 78-156 MB of
+# converted weights plus ONNX Runtime, and the PyTorch venv that converts them.
+src/assets/p3m/
+.cache/p3m/
