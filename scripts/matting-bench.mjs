@@ -15,8 +15,11 @@
 //
 // Engines: mediapipe | longpipe | rvm (MobileNetV3, 512 px input) |
 // rvm-hi (MobileNetV3, the camera's own size, RVM's recommended downsample) |
-// rvm-resnet (ResNet50, 512 px). RVM needs `make rvm-assets` (resnet:
-// ARGS=--with-resnet); Longpipe fetches its weights from cdn.longpipe.dev.
+// rvm-resnet (ResNet50, 512 px) | p3m (P3M-Net ResNet-34, its default input) |
+// p3m-<N> (P3M-Net at N px on the long side) | p3m-fp32 / p3m-fp16 / p3m-wasm.
+// RVM needs `make rvm-assets` (resnet: ARGS=--with-resnet), P3M-Net
+// `make p3m-assets` (fp16: ARGS=--fp16); Longpipe fetches its weights from
+// cdn.longpipe.dev.
 //
 // Quality mode steps the Processor by hand, one frame at a time: each engine
 // is given exactly frame N and its mask for frame N is composited onto frame N
@@ -83,6 +86,15 @@ const ENGINES = {
   'rvm-hi': { engine: 'rvm', rvm: { model: 'mobilenetv3_fp32', size: 'camera' } },
   'rvm-resnet': { engine: 'rvm', rvm: { model: 'resnet50_fp32', size: 512 } },
   'rvm-wasm': { engine: 'rvm', rvm: { model: 'mobilenetv3_fp32', size: 512, ep: 'wasm' } },
+  p3m: { engine: 'p3m', p3m: {} },
+  'p3m-256': { engine: 'p3m', p3m: { size: 256 } },
+  'p3m-320': { engine: 'p3m', p3m: { size: 320 } },
+  'p3m-384': { engine: 'p3m', p3m: { size: 384 } },
+  'p3m-512': { engine: 'p3m', p3m: { size: 512 } },
+  'p3m-640': { engine: 'p3m', p3m: { size: 640 } },
+  'p3m-fp32': { engine: 'p3m', p3m: { model: 'fp32' } },
+  'p3m-fp16': { engine: 'p3m', p3m: { model: 'fp16' } },
+  'p3m-wasm': { engine: 'p3m', p3m: { ep: 'wasm' } },
   // The ground truth through the pipeline: no model error, only the
   // pipeline's own. -mp keeps MediaPipe's settings (cut, dilate 3), -matte
   // a matte engine's (no cut, dilate ~1), at the mask sizes the engines use.
@@ -178,7 +190,7 @@ async function main() {
     try {
       if (r.kind === 'realtime') {
         const res = await page.evaluate((o) => window.H.realtime(o),
-          { engine: e.engine, rvm: rvmFor(e, r.w), w: r.w, h: r.h, seconds: opt.seconds });
+          { engine: e.engine, rvm: rvmFor(e, r.w), p3m: e.p3m, w: r.w, h: r.h, seconds: opt.seconds });
         const cdp = await ctx.newCDPSession(page);
         await cdp.send('Performance.enable');
         const pm = Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map((m) => [m.name, m.value]));
@@ -187,7 +199,7 @@ async function main() {
         console.log(`${res.engine} out ${res.outFps.toFixed(1)} fps, mask age p50 ${res.maskAgeMsP50 === null ? '–' : res.maskAgeMsP50.toFixed(0)} ms (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
       } else {
         const setup = await page.evaluate((o) => window.H.setup(o), {
-          engine: e.engine, rvm: rvmFor(e, r.w), room: r.room, w: r.w, h: r.h,
+          engine: e.engine, rvm: rvmFor(e, r.w), p3m: e.p3m, room: r.room, w: r.w, h: r.h,
           flags: { ...(e.flags || {}), ...(r.flags || {}) }, longpipeWaitMs: opt.longpipeWaitMs,
           oracle: e.oracle, maskCut: e.maskCut
         });
@@ -280,7 +292,7 @@ function report(results) {
     L.push('|---|---|---|---|---|---|---|---|---|---|---|---|');
     for (const r of rt) {
       const x = r.result, st = x.stats || {};
-      const inf = st.engine === 'rvm' ? `${fmt(st.inferMsP50)}/${fmt(st.inferMsP95)}` : (st.engine === 'longpipe' && st.pipeline ? `its model ${fmt(st.pipeline.modelMs)}` : '–');
+      const inf = st.engine === 'rvm' || st.engine === 'p3m' ? `${fmt(st.inferMsP50)}/${fmt(st.inferMsP95)}` : (st.engine === 'longpipe' && st.pipeline ? `its model ${fmt(st.pipeline.modelMs)}` : '–');
       const hz = st.maskHz || (st.engine === 'mediapipe' ? x.segHz : null);
       L.push(`| ${r.name} | ${r.w}x${r.h} | ${x.engine} | ${fmt(x.startMs, 0)} | ${fmt(x.outFps)} | ${fmt(hz)} | ${inf} | ${fmt(x.runSegmentMsP50, 2)}/${fmt(x.runSegmentMsP95, 2)} | ${fmt(x.drawMsP50, 2)}/${fmt(x.drawMsP95, 2)} | ${fmt(x.maskAgeMsP50, 0)}/${fmt(x.maskAgeMsP95, 0)} | ${fmt(x.longTaskMsPerS, 0)} | ${fmt(x.jsHeapMB, 0)} |`);
     }

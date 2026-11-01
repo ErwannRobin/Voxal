@@ -382,6 +382,9 @@ blend is now 0.6 both ways (`MASK_BLEND`), and RVM, a recurrent model that is
 already temporally consistent, is not blended at all (`maskBlendFor()`). The same
 measurement moved MediaPipe's dilate from 3 to 1.5 texels and Longpipe's from about
 one to half a texel (RVM: none) — see *Findings* in docs/matting-evaluation.md.
+The experimental P3M-Net engine (`segmentation-engine=p3m`, an image matting
+model, so not recurrent) keeps the 0.6 blend and gets no dilate; measured the same
+way in docs/p3m-evaluation.md.
 
 ### Why the mask crosses the CPU
 

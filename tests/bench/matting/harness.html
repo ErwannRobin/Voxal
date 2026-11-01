@@ -9,6 +9,7 @@
 <script src="/video-scenes.js"></script>
 <script src="/longpipe-engine.js"></script>
 <script src="/rvm-engine.js"></script>
+<script src="/p3m-engine.js"></script>
 <script src="/video-effects.js"></script>
 </head>
 <body>
@@ -94,6 +95,7 @@ H.setup = async function (opt) {
     if (opt.rvm.size) localStorage.setItem('rvm-size', String(opt.rvm.size));
     if (opt.rvm.ratio) localStorage.setItem('rvm-ratio', String(opt.rvm.ratio));
   }
+  if (opt.p3m) Object.keys(opt.p3m).forEach(function (k) { localStorage.setItem('p3m-' + k, String(opt.p3m[k])); });
   Object.keys(opt.flags || {}).forEach(function (k) { window[k] = opt.flags[k]; });
   H.opt = opt;
   H.manifest = await (await fetch('/__footage/manifest.json')).json();
@@ -169,6 +171,10 @@ H.maskFor = async function () {
     var r = await real.inferFrame(H.cam);
     H.inferMs.push(r.ms);
     got = { width: r.width, height: r.height, data: r.data, rvm: r };
+  } else if (eng === 'p3m') {
+    var r3 = await real.inferFrame(H.cam);
+    H.inferMs.push(r3.ms);
+    got = { width: r3.width, height: r3.height, data: r3.data };
   } else if (eng === 'longpipe') {
     // Longpipe runs its own pipeline on the stream: give it time to see this
     // frame (it is held still meanwhile), then read its output.
@@ -337,6 +343,7 @@ H.realtime = async function (opt) {
   localStorage.setItem('longpipe-blur', '0');
   localStorage.setItem('bg-reference', 'off');
   if (opt.rvm) Object.keys(opt.rvm).forEach(function (k) { localStorage.setItem('rvm-' + k, String(opt.rvm[k])); });
+  if (opt.p3m) Object.keys(opt.p3m).forEach(function (k) { localStorage.setItem('p3m-' + k, String(opt.p3m[k])); });
   var w = opt.w, h = opt.h, room = opt.room || 'living';
   var frames = [];
   for (var f = 0; f < 60; f++) frames.push(await loadImage('/__footage/' + room + '/' + String(f * 5).padStart(4, '0') + '.jpg'));
@@ -364,7 +371,8 @@ H.realtime = async function (opt) {
         orig.call(seg, fr, ts, function (res) {
           // The frame this matte was computed from: RVM says when its
           // inference started; MediaPipe answers on this frame.
-          lastMaskAt = res && res.rvm ? res.rvm.at : performance.now();
+          var at = res && (res.rvm || res.p3m);
+          lastMaskAt = at ? at.at : performance.now();
           cb(res);
         });
       };

@@ -4,6 +4,16 @@ Things to implement or investigate, ordered roughly by priority.
 
 ---
 
+## 🧪 P3M-Net matting experiment (`docs/p3m-evaluation.md`)
+
+Experimental engine behind Settings → Advanced → Segmentation debug (`make p3m-assets`). Not a default candidate as is.
+- **Try it on a real webcam**: glasses, dark hair on a dark room, hands over the face, lighting changes — none are in the bench footage.
+- **Device numbers**: Safari 26 (enable *Allow remote automation* to script it), an iPhone/iPad with WebGPU, an Android phone. Nothing measured off an M5.
+- If pursued: temporal prior / trimap smoothing for its region flips, hybrid global-384 / local-512 inference, a cheaper unpool (~30% of its GPU time), start on MediaPipe and hand over when loaded.
+- Better bet: a permissively licensed recurrent matting model with RVM's shape.
+
+---
+
 ## 🎬 Scene engine v2 (Three.js scenes) — what is left
 
 The six scenes were rebuilt on Three.js in PR #210 (`docs/scene-engine.md`).
