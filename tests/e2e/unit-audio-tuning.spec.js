@@ -164,8 +164,9 @@ test.describe('tuning the incoming audio receiver', () => {
 
 test.describe('camera bitrate on this device', () => {
   test('a desktop gets the full ceiling', async ({ page }) => {
+    // Full HD is the default; the 720p ceiling is what "off" falls back to.
     const seen = await page.evaluate(() => ({
-      cap: cameraMaxBitrate(),
+      cap: (localStorage.setItem('video-resolution', 'off'), cameraMaxBitrate()),
       full: CAMERA_MAX_BITRATE,
       mobile: IS_MOBILE_DEVICE,
     }));
