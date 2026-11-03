@@ -54,7 +54,7 @@ var VideoEffects = (function () {
   // filenames never change: without this in the URL and the cache name, a
   // browser that cached 1.1.0's binary pairs it with 1.1.1's loader and dies on
   // `wasmExports["eg"].value`.
-  var SEG_RUNTIME_VERSION = '1.1.1';
+  var SEG_RUNTIME_VERSION = '1.2.0';
   var CACHE_PREFIX = 'voxal-seg-';
   var CACHE_NAME  = CACHE_PREFIX + SEG_RUNTIME_VERSION;
   var MODEL_FILE  = 'selfie_segmenter_landscape.tflite';
