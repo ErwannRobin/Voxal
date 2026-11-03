@@ -154,6 +154,7 @@ test.describe('device selection', () => {
 test.describe('camera constraints', () => {
   test('capture is capped, and never with exact dimensions', async ({ page }) => {
     const c = await page.evaluate(() => {
+      localStorage.setItem('video-resolution', 'off'); // 720p: Full HD is the default
       localStorage.removeItem('camera-device-id');
       return selectedCameraConstraints();
     });
@@ -166,6 +167,7 @@ test.describe('camera constraints', () => {
 
   test('a chosen camera is pinned alongside the cap', async ({ page }) => {
     const c = await page.evaluate(() => {
+      localStorage.setItem('video-resolution', 'off'); // 720p: Full HD is the default
       localStorage.setItem('camera-device-id', 'cam-9');
       const out = selectedCameraConstraints();
       localStorage.removeItem('camera-device-id');

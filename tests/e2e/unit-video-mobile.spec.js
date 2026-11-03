@@ -1176,11 +1176,23 @@ test.describe('the talk hint on a touch screen', () => {
 });
 
 test.describe('capture and bitrate caps are mobile-aware', () => {
-  test('a desktop keeps 720p30 and the full bitrate', async ({ page }) => {
+  test('a desktop keeps 720p30 and the full bitrate once Full HD is off', async ({ page }) => {
     await page.goto('/');
+    await page.evaluate(() => localStorage.setItem('video-resolution', 'off'));
     const cap = await page.evaluate(() => cameraCaptureCap());
     expect(cap.height.max).toBe(720);
     expect(await page.evaluate(() => cameraMaxBitrate())).toBe(600000);
+  });
+
+  test('a desktop defaults to Full HD: 1080p30 at the Full HD bitrate', async ({ page }) => {
+    await page.goto('/');
+    const seen = await page.evaluate(() => ({
+      cap: cameraCaptureCap(), rate: cameraMaxBitrate(), fhd: CAMERA_MAX_BITRATE_FHD,
+    }));
+    expect(seen.cap.width).toEqual({ ideal: 1920, max: 1920 });
+    expect(seen.cap.height).toEqual({ ideal: 1080, max: 1080 });
+    expect(seen.cap.frameRate).toEqual({ ideal: 30, max: 30 });
+    expect(seen.rate).toBe(seen.fhd);
   });
 
   test('a phone captures smaller and uploads less', async ({ page }) => {
