@@ -515,3 +515,9 @@ Design: `docs/video-effects.md`. Preview any scene/look headlessly with `make sc
 - **Headless Playwright Chromium is SwiftShader by default, even on a Mac**: `--enable-gpu --use-angle=metal --enable-unsafe-webgpu` gives the real GPU and a WebGPU adapter. Anything timed without them measures the CPU.
 - Bench footage is a keyed green-screen clip: its ground truth carries an olive/magenta rim at the hair (keyer spill), identical in the input and the truth, so it costs every engine the same; judge rims on the stills with that in mind.
 - `git checkout -b X origin/main` makes `origin/main` X's upstream; with `push.default=upstream`, `git push -u origin X` then pushes to **main**. Branch with `--no-track` (or push `X:refs/heads/X`).
+
+## Dependency bumps (dependabot)
+
+- A default that changes (Full HD on by default) must update every test that asserted the old default, or EVERY open PR goes red on `E2E (unit)` and dependabot PRs look broken when main is. Pin the old behaviour in the test (`localStorage['video-resolution']='off'`), not the code. When all PRs fail the same tests, fix main first.
+- `@mediapipe/tasks-vision` bump → `SEG_RUNTIME_VERSION` in `video-effects.js` must move with it (`unit-seg-runtime-version.spec.js`). `three` bump → needs `make three-vendor` (vendored bundle) and a look at the scenes; hold it out of a grouped bump until then.
+- On macOS `sed -i` needs `-i ''`; without it the pattern is eaten as the backup suffix and an `&&` chain silently stops.

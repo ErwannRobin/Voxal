@@ -831,6 +831,7 @@ test.describe('which peer is sent which track', () => {
   });
 
   test('keyed senders get a share of the cap, but not on the frugal tier', async ({ page }) => {
+    await page.evaluate(() => localStorage.setItem('video-resolution', 'off')); // 600 kbps ceiling
     await seedSender(page);
     await ack(page, 'p1');
     const caps = await page.evaluate(() => {
