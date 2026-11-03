@@ -568,17 +568,17 @@ test.describe('scene preview', () => {
       return window.__pv.orbit.view();
     });
     expect(turned.yaw).toBeLessThan(0);
-    const back = await page.evaluate(async () => {
+    await page.evaluate(() => {
       const st = document.querySelector('#pv .scene-preview-stage');
       const r = st.getBoundingClientRect();
       const x = r.left + 40, y = r.top + 40;
       const at = (type) => new PointerEvent(type, { pointerType: 'touch', pointerId: 8, isPrimary: true,
         button: 0, clientX: x, clientY: y, bubbles: true, cancelable: true });
       for (let i = 0; i < 2; i++) { st.dispatchEvent(at('pointerdown')); window.dispatchEvent(at('pointerup')); }
-      await new Promise((r2) => setTimeout(r2, 600));
-      return window.__pv.orbit.view();
     });
-    expect(back).toBeNull();
+    // The recentre eases back over time; on a software GPU the page is slow to
+    // produce the frames that advance it, so wait for the end state, not 600 ms.
+    await expect.poll(() => page.evaluate(() => window.__pv.orbit.view()), { timeout: 20_000 }).toBeNull();
   });
 
   test('full window: over the page at the window\'s shape, icons for open and close, and Escape brings it back @slow-gl', async ({ page }) => {

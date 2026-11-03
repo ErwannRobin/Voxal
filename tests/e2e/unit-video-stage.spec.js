@@ -931,6 +931,7 @@ test.describe('video mode is a real setting', () => {
 
 test.describe('capture and sender limits', () => {
   test('camera capture is capped, and never with exact dimensions', async ({ page }) => {
+    await page.evaluate(() => localStorage.setItem('video-resolution', 'off')); // 720p
     const c = await callFn(page, 'selectedCameraConstraints');
     expect(c.width).toEqual({ ideal: 1280, max: 1280 });
     expect(c.height).toEqual({ ideal: 720, max: 720 });
@@ -940,7 +941,10 @@ test.describe('capture and sender limits', () => {
   });
 
   test('a selected device id survives alongside the cap', async ({ page }) => {
-    await page.evaluate(() => localStorage.setItem('camera-device-id', 'cam-7'));
+    await page.evaluate(() => {
+      localStorage.setItem('video-resolution', 'off'); // 720p
+      localStorage.setItem('camera-device-id', 'cam-7');
+    });
     const c = await callFn(page, 'selectedCameraConstraints');
     expect(c.deviceId).toEqual({ exact: 'cam-7' });
     expect(c.height).toEqual({ ideal: 720, max: 720 });
@@ -954,6 +958,7 @@ test.describe('capture and sender limits', () => {
 
   test('tunes camera senders for motion and screens for legibility', async ({ page }) => {
     const applied = await page.evaluate(() => {
+      localStorage.setItem('video-resolution', 'off'); // the 720p ceiling
       const make = () => {
         const track = { kind: 'video', contentHint: '' };
         let params = { encodings: [{}] };
