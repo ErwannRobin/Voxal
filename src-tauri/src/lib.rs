@@ -171,10 +171,11 @@ fn read_battery() -> (Option<u8>, Option<bool>) {
 async fn get_device_stats() -> Result<DeviceStats, String> {
     // CPU usage needs two samples spaced by at least the platform minimum, and
     // sysinfo refreshes are blocking — run the whole thing off the async runtime.
-    tauri::async_runtime::spawn_blocking(|| {
+    tauri::async_runtime::spawn_blocking(|| -> Result<DeviceStats, String> {
         use sysinfo::{get_current_pid, ProcessesToUpdate, System};
 
-        let mut sys = System::new();
+        // 0.40: building a `System` is fallible (it can fail to reach the OS).
+        let mut sys = System::new().map_err(|e| e.to_string())?;
         sys.refresh_memory();
         sys.refresh_cpu_all();
         let pid = get_current_pid().ok();
@@ -196,7 +197,7 @@ async fn get_device_stats() -> Result<DeviceStats, String> {
 
         let (battery_level, battery_charging) = read_battery();
 
-        DeviceStats {
+        Ok(DeviceStats {
             mem_app,
             mem_total: Some(sys.total_memory()),
             mem_used: Some(sys.used_memory()),
@@ -206,10 +207,10 @@ async fn get_device_stats() -> Result<DeviceStats, String> {
             battery_charging,
             net_type: read_net_type(),
             low_power: read_low_power(),
-        }
+        })
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
