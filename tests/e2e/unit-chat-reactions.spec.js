@@ -86,6 +86,10 @@ test('it flies to the peek of the message it reacted to', async ({ page }) => {
 
 test('with the panel open it flies to the row in the transcript', async ({ page }) => {
   await page.evaluate(() => { toggleChatPanel(true, { focus: false }); });
+  // The drawer slides in. The row's rect is read in window coordinates, so
+  // measured mid-slide (a slow CI machine) it is not where the glyph flew to.
+  await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {}))));
+  await page.waitForTimeout(400); // CSS transitions that outlive getAnimations() on some engines
   await say(page, 'the-host:1', 'the message');
   // The message's own peek is dropped so the row is the only target left.
   await page.evaluate(() => {
