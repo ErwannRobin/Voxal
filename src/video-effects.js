@@ -929,6 +929,14 @@ var VideoEffects = (function () {
   // every composite measure). `longpipe-dilate` (texels, 0-4) overrides
   // Longpipe's for comparing on a device.
   var MATTE_DILATE_PER_FEATHER = 0.36;
+  // The feather is halved for a matte engine, after the dilate above has been
+  // taken from the full one. A matte's own edge is already a ramp, and
+  // MediaPipe's feather on top of it spread the old room into a halo: measured
+  // on the matting footage (Longpipe, 1280x720), the halo error fell 13 -> 7.6
+  // and the composite's error 14% for +3% frame-to-frame edge change; no
+  // feather at all gained a little more halo and cost 9% on flicker. RVM:
+  // halo 2.2 -> 0.8, composite -3%.
+  var MATTE_FEATHER_SCALE = 0.5;
   function longpipeDilateOverride() {
     try {
       var v = parseFloat(localStorage.getItem('longpipe-dilate'));
@@ -944,6 +952,7 @@ var VideoEffects = (function () {
     } else if (engine === 'rvm') {
       e.dilate = 0;
     }
+    if (engine === 'longpipe' || engine === 'rvm') e.feather *= MATTE_FEATHER_SCALE;
     // The matting bench's A/B switch: { feather, lo, hi } replace the profile's.
     if (typeof window !== 'undefined' && window.__voxalEdgeOverride) {
       Object.keys(window.__voxalEdgeOverride).forEach(function (k) { e[k] = window.__voxalEdgeOverride[k]; });
@@ -2033,22 +2042,91 @@ var VideoEffects = (function () {
   // dropped is given several inferences to prove it. Motion is tracked without
   // the flicker, because flicker is overwhelmingly pixels dropping out for a
   // frame and coming straight back.
+  //
+  // One exception to "shrinks as fast as it grows" (HOLD_*): a pixel that was
+  // CONFIDENTLY person (>= HOLD_FROM) and is dropped outright (< HOLD_TO) while
+  // the camera's own picture has not changed there lets go slowly. Nothing in
+  // the image moved, so nothing about the body did; the model flinched. A real
+  // movement changes the picture under the pixel, which turns the hold off.
+  var HOLD_FROM  = 0.9;
+  var HOLD_TO    = 0.5;
+  var HOLD_RATIO = 0.3;
   var FRAG_MASK_MIX = [
     '#version 300 es',
     'precision mediump float;',
     'in vec2 vUv;',
     'uniform sampler2D uPrev;',
     'uniform sampler2D uNext;',
+    'uniform sampler2D uCamNow;',
+    'uniform sampler2D uCamPrev;',
+    'uniform vec2 uCamTexel;',
     'uniform float uAlphaUp;',
     'uniform float uAlphaDown;',
     'uniform float uCut;',
+    'uniform float uHold;',
     'out vec4 outColor;',
+    'float luma(sampler2D t, vec2 uv) { return dot(texture(t, uv).rgb, vec3(0.2126, 0.7152, 0.0722)); }',
     'void main() {',
     '  float p = texture(uPrev, vUv).r;',
     '  float n = texture(uNext, vUv).r;',
     '  if (uCut > 0.0) n = smoothstep(uCut, uCut + ' + MASK_CUT_RAMP.toFixed(3) + ', n);',
     '  float a = (n > p) ? uAlphaUp : uAlphaDown;',
+    '  if (uHold > 0.0 && p >= ' + HOLD_FROM.toFixed(2) + ' && n < ' + HOLD_TO.toFixed(2) + ') {',
+    '    float d = 0.0;',
+    '    for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {',
+    '      vec2 o = vec2(float(x), float(y)) * uCamTexel;',
+    '      d += abs(luma(uCamNow, vUv + o) - luma(uCamPrev, vUv + o));',
+    '    }',
+    '    float still = 1.0 - smoothstep(0.02, 0.06, d / 9.0);',
+    '    a *= mix(1.0, ' + HOLD_RATIO.toFixed(2) + ', still * uHold);',
+    '  }',
     '  outColor = vec4(mix(p, n, a), 0.0, 0.0, 1.0);',
+    '}'
+  ].join('\n');
+
+  // Holes. The model's mask is not always solid inside you: a pattern on a
+  // shirt, a pair of glasses, a hand across the chest, a window's light on the
+  // face can each pull a pocket of the mask down to 0-50% in the middle of the
+  // body, and the room shows through it. Nothing about that is an edge, so
+  // nothing downstream (dilate, feather, window) can win it back.
+  //
+  // A pocket is recognisable from the mask alone: it is ENCLOSED. From a
+  // pixel that is below HOLE_PERSON, march outward in eight directions; if every
+  // one of them meets person within HOLE_STEPS' last texel, the pixel is inside
+  // the person, and it is raised to the mean of what it met. An edge pixel, a
+  // gap between an arm and the body that opens to the room and the room itself
+  // all have at least one direction that leaves the frame or the person without
+  // meeting any, so they are left alone: it does not close the window between
+  // a raised arm and the torso. Derived each inference from the blended state,
+  // never written back to it.
+  var HOLE_PERSON = 0.7;
+  var HOLE_STEPS  = [1, 2, 3, 4, 6, 8, 11, 14];
+  var FRAG_HOLE_FILL = [
+    '#version 300 es',
+    'precision mediump float;',
+    'in vec2 vUv;',
+    'uniform sampler2D uTex;',
+    'uniform vec2 uTexel;',
+    'out vec4 outColor;',
+    'const vec2 D[8] = vec2[8](vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0),',
+    '                         vec2(0.7071, 0.7071), vec2(-0.7071, 0.7071), vec2(0.7071, -0.7071), vec2(-0.7071, -0.7071));',
+    'const float S[8] = float[8](' + HOLE_STEPS.map(function (v) { return v.toFixed(1); }).join(', ') + ');',
+    'void main() {',
+    '  float v = texture(uTex, vUv).r;',
+    '  if (v >= ' + HOLE_PERSON.toFixed(2) + ') { outColor = vec4(v, 0.0, 0.0, 1.0); return; }',
+    '  float acc = 0.0;',
+    '  for (int d = 0; d < 8; d++) {',
+    '    float hit = -1.0;',
+    '    for (int k = 0; k < 8; k++) {',
+    '      vec2 q = vUv + D[d] * S[k] * uTexel;',
+    '      if (q.x < 0.0 || q.x > 1.0 || q.y < 0.0 || q.y > 1.0) break;',
+    '      float s = texture(uTex, q).r;',
+    '      if (s >= ' + HOLE_PERSON.toFixed(2) + ') { hit = s; break; }',
+    '    }',
+    '    if (hit < 0.0) { outColor = vec4(v, 0.0, 0.0, 1.0); return; }',
+    '    acc += hit;',
+    '  }',
+    '  outColor = vec4(max(v, acc / 8.0), 0.0, 0.0, 1.0);',
     '}'
   ].join('\n');
 
@@ -3064,6 +3142,7 @@ var VideoEffects = (function () {
     this.pDown = program(gl, FRAG_DOWNSAMPLE);
     this.pBlur = program(gl, FRAG_BLUR);
     this.pFeather = program(gl, FRAG_FEATHER);
+    this.pHole = program(gl, FRAG_HOLE_FILL);
     this.pMix  = program(gl, FRAG_MASK_MIX);
     this.pDilate = program(gl, FRAG_DILATE);
     this.pComp = program(gl, FRAG_COMPOSITE);
@@ -3126,6 +3205,11 @@ var VideoEffects = (function () {
     this.fbMaskA = framebuffer(gl, this.texMaskA);
     this.fbMaskB = framebuffer(gl, this.texMaskB);
     this.maskPrimed = false;
+    // The model's own input, this inference's and the last one's: the mask
+    // blend asks them whether the picture changed under a pixel (HOLD_*).
+    this.texSegNow = texture(gl, 0, 0);
+    this.texSegPrev = texture(gl, 0, 0);
+    this.segSeen = 0;
 
     // The empty-room reference: the picture itself, a ping-pong pair for the
     // per-frame difference (the pair is the temporal blend's memory), and a
@@ -4313,9 +4397,22 @@ var VideoEffects = (function () {
     // So `uPrev` must be the previous *blended* mask, never a processed one.
     // The very first mask is taken whole, otherwise the first second of video
     // fades in from an empty matte.
+    // Uploaded first: texImage2D acts on whichever unit is active, so doing it
+    // between the binds below would replace one of them.
+    // The model's input, this inference and the last (see HOLD_*). The very
+    // first has nothing before it, so it is its own predecessor.
+    var held = window.__voxalHold !== false && this.maskPrimed && this.segSeen > 0;
+    var tn = this.texSegPrev; this.texSegPrev = this.texSegNow; this.texSegNow = tn;
+    gl.bindTexture(gl.TEXTURE_2D, this.texSegNow);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.segCanvas);
+    this.segSeen++;
     gl.useProgram(this.pMix);
     this.bindTex(this.pMix, 'uPrev', 0, this.texMaskS);
     this.bindTex(this.pMix, 'uNext', 1, this.texMaskRaw);
+    this.bindTex(this.pMix, 'uCamNow', 2, this.texSegNow);
+    this.bindTex(this.pMix, 'uCamPrev', 3, this.texSegPrev);
+    gl.uniform2f(uloc(gl, this.pMix, 'uCamTexel'), 1 / W, 1 / H);
+    gl.uniform1f(uloc(gl, this.pMix, 'uHold'), held ? 1 : 0);
     // window.__voxalMaskBlend = [up, down]: the matting bench's A/B switch.
     var mbw = maskBlendFor(this.engine);
     var mb = window.__voxalMaskBlend || [mbw, mbw];
@@ -4361,8 +4458,16 @@ var VideoEffects = (function () {
     // the reference can only give back what is inside it.
     var dilate = (typeof window.__voxalDilate === 'number' ? window.__voxalDilate : this.edge.dilate) +
       (this.refWeight > 0.5 ? REF_DILATE_EXTRA : 0);
+    var dilateSrc = this.texMaskS;
+    if (window.__voxalHoleFill !== false) {
+      gl.useProgram(this.pHole);
+      this.bindTex(this.pHole, 'uTex', 0, this.texMaskS);
+      gl.uniform2f(uloc(gl, this.pHole, 'uTexel'), 1 / W, 1 / H);
+      this.drawQuad(this.fbMaskSB, W, H);
+      dilateSrc = this.texMaskSB;
+    }
     gl.useProgram(this.pDilate);
-    this.bindTex(this.pDilate, 'uTex', 0, this.texMaskS);
+    this.bindTex(this.pDilate, 'uTex', 0, dilateSrc);
     gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), dilate / W, 0);
     this.drawQuad(this.fbMaskB, W, H);
 
@@ -4911,7 +5016,7 @@ var VideoEffects = (function () {
     if (!gl) return;
     this.diagRelease();
     [this.texCam, this.texImg, this.texBlurA, this.texBlurB, this.texMaskRaw,
-     this.texMaskS, this.texMaskSB, this.texMaskA, this.texMaskB,
+     this.texMaskS, this.texMaskSB, this.texMaskA, this.texMaskB, this.texSegNow, this.texSegPrev,
      this.texPlate, this.texRefA, this.texRefB, this.texLearnA, this.texLearnB,
      this.texCore, this.texFg].forEach(function (t) {
       if (t) try { gl.deleteTexture(t); } catch (e) { /* ignore */ }
