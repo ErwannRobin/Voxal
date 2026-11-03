@@ -4883,8 +4883,8 @@ var VideoEffects = (function () {
     this.bindTex(this.pComp, 'uSceneEnv', 9, this.texScene || this.texImg);
     this.bindTex(this.pComp, 'uSoft', 7, this.texSoftA || this.texMaskA);
     gl.uniform1f(uloc(gl, this.pComp, 'uRefOn'), this.refWeight);
-    this.bindTex(this.pComp, 'uSilP', 10, this.texSilP);
-    this.bindTex(this.pComp, 'uSilC', 11, this.texSilC);
+    this.bindTex(this.pComp, 'uSilP', 11, this.texSilP);
+    this.bindTex(this.pComp, 'uSilC', 12, this.texSilC);
     gl.uniform1f(uloc(gl, this.pComp, 'uSilStrength'), this.silStrength);
     var sb = this.silBody;
     gl.uniform4f(uloc(gl, this.pComp, 'uBody'), sb ? sb[0] : 0, sb ? sb[1] : 0, sb ? sb[2] : 0, sb ? sb[3] : 0);
