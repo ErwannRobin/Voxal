@@ -521,6 +521,7 @@ Design: `docs/video-effects.md`. Preview any scene/look headlessly with `make sc
 - A default that changes (Full HD on by default) must update every test that asserted the old default, or EVERY open PR goes red on `E2E (unit)` and dependabot PRs look broken when main is. Pin the old behaviour in the test (`localStorage['video-resolution']='off'`), not the code. When all PRs fail the same tests, fix main first.
 - `@mediapipe/tasks-vision` bump → `SEG_RUNTIME_VERSION` in `video-effects.js` must move with it (`unit-seg-runtime-version.spec.js`). `three` bump → needs `make three-vendor` (vendored bundle) and a look at the scenes; hold it out of a grouped bump until then.
 - On macOS `sed -i` needs `-i ''`; without it the pattern is eaten as the backup suffix and an `&&` chain silently stops.
+
 ## Edge blending (matting bench, 2026-10-31)
 
 - **Blur-fusion foreground estimation did not beat the line-projection decon** (`uDecon`): tried isotropic two-ring F/B averages + `F = Fh + m(I - mFh - (1-m)Bh)`, both matte-weighted and pure-sample-weighted. MediaPipe leak 21% vs decon's 15%, halo (outer) error 28 vs 25. The halo is the dilated matte, not the colour estimate: `dilate` moves it far more than any colour correction (MediaPipe dilate 0.5: leak 2.6%, outer 9, but inner/eaten edge 8.6 -> 15). Reverted; not worth the 34 taps.
