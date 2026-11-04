@@ -3,7 +3,7 @@
         coverage-api coverage-summary coverage-badge bench bench-app bench-audio bench-video \
         bench-report bench-publish bench-history \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
-        seg-assets rvm-assets rvm-clean p3m-assets p3m-fetch p3m-clean matting-footage matting-bench emoji-data promo-assets scene-preview three-vendor
+        seg-assets rvm-assets rvm-clean p3m-assets p3m-fetch p3m-clean matting-footage matting-bench emoji-data promo-assets promo-voice scene-preview three-vendor
 
 # Default target
 help:
@@ -23,7 +23,8 @@ help:
 	@echo "  p3m-assets   Convert P3M-Net from its official checkpoint yourself (needs PyTorch) into src/assets/p3m"
 	@echo "  matting-footage Build the matting benchmark's footage (known alpha) into bench-results/matting"
 	@echo "  matting-bench Score MediaPipe / Longpipe / RVM on it through the real pipeline; ARGS=... passes options"
-	@echo "  promo-assets Re-embed the icon and fonts in docs/promo.html (the 30 s film)"
+	@echo "  promo-assets Re-embed the icon and fonts in docs/promo.html (the films page)"
+	@echo "  promo-voice  Record the films' voice-over; ENGINE=say (drafts) | openai, FILMS=, LANGS= narrow it"
 	@echo "  scene-preview Render the animated backgrounds to PNG (scene-previews/); ARGS=... passes options"
 	@echo "  three-vendor Rebuild src/assets/three/three.min.js from the pinned three version"
 	@echo "  cap-sync     Sync web assets to iOS & Android"
@@ -133,9 +134,18 @@ emoji-data:
 	@node scripts/gen-emoji-data.mjs
 
 # Re-embeds the app icon and the two fonts at the end of docs/promo.html (the
-# 30-second film, a single self-contained page). Run it after the icon changes.
+# films page, a single self-contained file). Run it after the icon changes.
 promo-assets:
 	@node scripts/promo-assets.mjs
+
+# Records the voice-over of docs/promo.html from the narration block inside it:
+# one track per film and language. ENGINE=say (macOS, the default) makes local
+# drafts in docs/promo-voice/draft/, which git ignores — Apple's licence does
+# not allow publishing its voices; ENGINE=openai (needs OPENAI_API_KEY) makes
+# the tracks to publish, in docs/promo-voice/. FILMS= and LANGS= take
+# comma-separated lists (LANGS, not LANG: that one is the shell's locale).
+promo-voice:
+	@node scripts/promo-voice.mjs --engine $(or $(ENGINE),say) $(if $(FILMS),--film $(FILMS)) $(if $(LANGS),--lang $(LANGS))
 
 # Renders the six animated background scenes to PNG files (and a contact sheet)
 # in scene-previews/, so a change to src/video-scenes.js can be looked at.

@@ -73,3 +73,8 @@ src/assets/rvm/
 # converted weights plus ONNX Runtime, and the PyTorch venv that converts them.
 src/assets/p3m/
 .cache/p3m/
+
+# Voice-over drafts recorded with macOS `say` (make promo-voice): Apple's
+# licence allows its system voices for personal, non-commercial use only, so
+# they are never committed. Tracks to publish go to docs/promo-voice/ itself.
+docs/promo-voice/draft/
