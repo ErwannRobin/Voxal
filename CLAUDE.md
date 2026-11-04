@@ -38,7 +38,8 @@ make build-debug  # macOS debug bundle — registers voxal:// URL scheme
 make build        # Release build
 make seg-assets   # Stage the background-effects WASM runtime into src/assets/seg/
 make emoji-data   # Regenerate src/emoji-data.js (chat's emoji catalog) from Unicode
-make promo-assets # Re-embed the icon + fonts in docs/promo.html (the 30 s film)
+make promo-assets # Re-embed the icon + fonts in docs/promo.html (the films page)
+make promo-voice  # Record the films' voice-over: ENGINE=say (drafts) | openai, FILMS=, LANGS=
 make cap-sync     # Sync src/ assets to ios/ and android/ after any src/ change
 make cap-ios      # Open Xcode
 make cap-android  # Open Android Studio
@@ -278,20 +279,46 @@ keeps the header's buttons clear of an overlaid status bar. The immersive stage
 also lifts `.screen`'s 480px cap — the stage is `inset: 0` on the room, so the
 room's width IS the picture's width.
 
-### Promo film (`docs/promo.html`)
+### Promo films (`docs/promo.html`)
 
-A 30-second marketing film that is also its own exporter, in ONE self-contained
-page (served by GitHub Pages; opens from `file://` too). `renderFrame(ctx, W, H, t)`
+Two marketing films that are also their own exporter, in ONE self-contained
+page (served by GitHub Pages; opens from `file://` too): `intro` ("Voxal in
+30 s", the original cut) and `backgrounds` ("Virtual backgrounds", 48 s — the
+camera pipeline of `docs/virtual-backgrounds.md` step by step: segmentation,
+edge cleanup, the relit 3D scene, the composite's layers, keyed sending, the
+catalogue). `FILMS` is the registry: duration, `layout`, `scenes`, `chapters`,
+`hero`, background focus/hits, `score`. `renderFrame(ctx, W, H, t, { film, subs })`
 draws any frame from `t` alone — no clock, no state between frames, no
 `Math.random()` — in design units where the short side is 1080, so 16:9, 1:1 and
-9:16 share one timeline and only `LAYOUT(V)` differs. The soundtrack is
-synthesised once through an `OfflineAudioContext`. Export encodes with WebCodecs
-(H.264 or VP9, AAC or Opus) and writes the MP4/WebM with the page's own muxers
-(`MUX`); without WebCodecs it falls back to a real-time `MediaRecorder` pass. The
-fonts (Archivo, IBM Plex Mono) and the app icon sit base64 in the last
-`<script>`; `make promo-assets` rewrites that block. Everything else is edited in
-place — there is no build step. `tests/e2e/unit-promo.spec.js` pins determinism
-and the container layout.
+9:16 share one timeline and only the film's layout differs; with no `film` it is
+the original, pixel for pixel. In the second film everything inside the camera
+tile is in *picture units* (1000 tall, origin centre), and the person is ONE
+symmetric width function `personW(y)` from which the outline, the mask test and
+the blocky mask are all derived. Each score is synthesised once through an
+`OfflineAudioContext` from the shared `synthKit()`. Export encodes with
+WebCodecs (H.264 or VP9, AAC or Opus) and writes the MP4/WebM with the page's
+own muxers (`MUX`); without WebCodecs it falls back to a real-time
+`MediaRecorder` pass. With no narration the export is the original film under
+its original name (`voxal-30s-…`). The fonts (Archivo, IBM Plex Mono) and the
+app icon sit base64 in the last `<script>`; `make promo-assets` rewrites that
+block. Everything else is edited in place — there is no build step.
+
+**Narration** is a JSON block in the page (`<script type="application/json"
+id="narration">`): per film, cues with a start `t` and a slot `max`, the text
+in all 12 app languages, and per-language `spoken` spellings for the voice only.
+It drives the burned-in subtitles directly and the voice through
+`scripts/promo-voice.mjs` (`make promo-voice`), which records each line, fits
+it to its slot (ffmpeg `atempo`, up to 1.25×), places it, and writes one
+classic script per film and language that registers itself on `VOX_VOICE`
+(the only data loading that works from `file://`). `ENGINE=say` (macOS) writes
+**drafts** to `docs/promo-voice/draft/`, gitignored, because Apple's licence
+forbids publishing its system voices; `ENGINE=openai` (`OPENAI_API_KEY`) writes
+the publishable tracks to `docs/promo-voice/`, which the page prefers. Each
+recording carries `narrationHash()` of its lines (computed identically in the
+page and the script), so the page flags a stale one. The music ducks under
+each line (`mixNarration()`). `tests/e2e/unit-promo.spec.js` pins determinism,
+the container layout, the narration's coverage and slots, the mix, subtitle
+wrapping and the original file name.
 
 ### Presence (optional)
 

@@ -29,6 +29,7 @@ export default [
       'src/assets/three/**',
       'src/emoji-data.js',
       'src/build-info.js',
+      'docs/promo-voice/**',      // make promo-voice: generated voice tracks
     ],
   },
 

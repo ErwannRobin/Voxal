@@ -4,14 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Voxal in 30 Seconds</title>
-<meta name="description" content="A 30-second film about Voxal, drawn live in your browser. Export it as MP4 or WebM in 16:9, 1:1 or 9:16, at any size, frame rate and quality.">
+<meta name="description" content="Two short films about Voxal, drawn live in your browser: the 30-second introduction and how its virtual backgrounds work. Narrated in 12 languages, with optional subtitles. Export as MP4 or WebM in 16:9, 1:1 or 9:16, at any size, frame rate and quality.">
 <meta name="color-scheme" content="dark">
 <!--
-  One self-contained page: the film is drawn frame by frame on a canvas by
-  renderFrame(t), the soundtrack is synthesised offline, and the exporter
+  One self-contained page: each film is drawn frame by frame on a canvas by
+  renderFrame(t), its soundtrack is synthesised offline, and the exporter
   encodes both with WebCodecs and writes the MP4/WebM itself. The fonts
   (Archivo, IBM Plex Mono — both OFL) and the app icon are embedded at the
   end of the file, so it works offline and every export looks the same.
+
+  The one thing that is not in this file is the recorded voice-over: one
+  script per film and language under promo-voice/ (published) or
+  promo-voice/draft/ (local drafts, gitignored), made from the narration
+  block below by `make promo-voice`. Without them the films still play and
+  export with music and subtitles.
 -->
 <style>
   :root {
@@ -58,7 +64,8 @@
   .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font: 800 20px/1 var(--display); letter-spacing: 0.01em; }
   .brand:hover { text-decoration: none; }
   .brand img { width: 30px; height: 30px; border-radius: 8px; }
-  .crumb { font: 500 12px/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); padding: 6px 9px; border: 1px solid var(--line-2); border-radius: 999px; }
+  .films { flex: 0 1 auto; }
+  .films span { padding: 6px 12px; }
   .top nav { margin-left: auto; display: flex; gap: 18px; font-size: 14px; }
 
   /* ── Layout ── */
@@ -109,7 +116,7 @@
   .scrub:focus-visible { outline-offset: 0; border-radius: 8px; }
   .transport .spacer { flex: 0 0 auto; display: flex; gap: 8px; }
 
-  .chapters { list-style: none; padding: 0; margin: 18px 0 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+  .chapters { list-style: none; padding: 0; margin: 18px 0 0; display: grid; grid-template-columns: repeat(var(--chapters, 7), minmax(0, 1fr)); gap: 8px; }
   @media (max-width: 860px) { .chapters { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
   @media (max-width: 520px) { .chapters { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .chapters button {
@@ -166,7 +173,10 @@
 <div class="wrap">
   <header class="top">
     <a class="brand" href="https://web.voxal.app" target="_blank" rel="noopener"><img id="brand-icon" alt="" width="30" height="30"> Voxal</a>
-    <span class="crumb">The 30-second film</span>
+    <div class="seg films" id="film" role="radiogroup" aria-label="Film">
+      <label><input type="radio" name="film" id="film-intro" value="intro" checked><span>Voxal in 30 s</span></label>
+      <label><input type="radio" name="film" id="film-backgrounds" value="backgrounds"><span>Virtual backgrounds</span></label>
+    </div>
     <nav><a href="https://web.voxal.app" target="_blank" rel="noopener">Open Voxal ↗</a><a href="https://github.com/ErwannRobin/Voxal" target="_blank" rel="noopener">GitHub ↗</a></nav>
   </header>
 
@@ -180,7 +190,7 @@
 
       <div class="transport">
         <button class="icon-btn" id="play" aria-label="Play"><svg id="ico-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg><svg id="ico-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" hidden><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></button>
-        <span class="tc"><b id="tc">00:00.00</b> / 00:30.00</span>
+        <span class="tc"><b id="tc">00:00.00</b> / <span id="tc-dur">00:30.00</span></span>
         <div class="scrub" id="scrub" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="30" aria-valuenow="0">
           <div class="track"><div class="fill" id="fill"></div></div>
           <div id="ticks"></div>
@@ -253,6 +263,16 @@
         <p class="hint">A 180° shutter, like a film camera. Costs 4× or 8× the render time.</p>
       </fieldset>
 
+      <div class="field">
+        <label class="lab" for="lang">Narration</label>
+        <select id="lang"></select>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="with-voice" checked> Voice-over</label>
+          <label class="check"><input type="checkbox" id="with-subs"> Subtitles</label>
+        </div>
+        <p class="hint" id="voice-status" aria-live="polite"></p>
+      </div>
+
       <label class="check"><input type="checkbox" id="with-audio" checked> Include the soundtrack</label>
 
       <div class="summary" id="summary" aria-live="polite">—</div>
@@ -284,6 +304,270 @@
     <span>Voxal is free and open source · <a href="https://github.com/ErwannRobin/Voxal" target="_blank" rel="noopener">github.com/ErwannRobin/Voxal</a></span>
   </footer>
 </div>
+
+<!--
+  The narration: what is said, and where, in every language the app speaks.
+  One source for the subtitles drawn here and for `make promo-voice`, which
+  reads this block (by its id) to record the voice tracks.
+    t     when the line starts, in seconds of its film
+    max   how long it may last; a recording that runs longer is sped up (to
+          1.25×) by the generator, so a translation must fit its slot
+  `spoken` replaces a word only in what the voice says (a brand name some
+  engines spell out letter by letter); the subtitles keep the written form.
+  Change a line and its recordings go stale: the page says so until they are
+  made again.
+-->
+<script type="application/json" id="narration">
+{
+  "languages": [
+    { "code": "en", "name": "English" },
+    { "code": "fr", "name": "Français" },
+    { "code": "es", "name": "Español" },
+    { "code": "de", "name": "Deutsch" },
+    { "code": "pt", "name": "Português" },
+    { "code": "ro", "name": "Română" },
+    { "code": "ru", "name": "Русский", "spoken": { "Voxal": "Воксал" } },
+    { "code": "uk", "name": "Українська", "spoken": { "Voxal": "Воксал" } },
+    { "code": "id", "name": "Bahasa Indonesia" },
+    { "code": "zh", "name": "简体中文" },
+    { "code": "ja", "name": "日本語", "spoken": { "Voxal": "ヴォクサル" } },
+    { "code": "ar", "name": "العربية", "rtl": true, "spoken": { "Voxal": "فوكسال" } }
+  ],
+  "films": {
+    "intro": {
+      "dur": 30,
+      "cues": [
+        { "id": "i1", "t": 1.2, "max": 1.55, "text": {
+          "en": "Hold the button. Talk.",
+          "fr": "Maintiens le bouton. Parle.",
+          "es": "Mantén el botón. Habla.",
+          "de": "Taste halten. Sprechen.",
+          "pt": "Segure o botão. Fale.",
+          "ro": "Ține butonul. Vorbește.",
+          "ru": "Держи кнопку. Говори.",
+          "uk": "Тримай кнопку. Говори.",
+          "id": "Tahan tombolnya. Bicara.",
+          "zh": "按住按钮，说话。",
+          "ja": "ボタンを押して、話す。",
+          "ar": "اضغط، وتكلّم." } },
+        { "id": "i2", "t": 3.75, "max": 2.2, "text": {
+          "en": "Meet Voxal.",
+          "fr": "Voici Voxal.",
+          "es": "Esto es Voxal.",
+          "de": "Das ist Voxal.",
+          "pt": "Este é o Voxal.",
+          "ro": "Acesta e Voxal.",
+          "ru": "Это Voxal.",
+          "uk": "Це Voxal.",
+          "id": "Inilah Voxal.",
+          "zh": "这就是 Voxal。",
+          "ja": "これが Voxal。",
+          "ar": "هذا هو Voxal." } },
+        { "id": "i3", "t": 6.7, "max": 4.0, "text": {
+          "en": "Create a room, share the link, and start talking.",
+          "fr": "Crée un salon, partage le lien, et c'est parti.",
+          "es": "Crea una sala, comparte el enlace y empieza a hablar.",
+          "de": "Raum erstellen, Link teilen, lossprechen.",
+          "pt": "Crie uma sala, compartilhe o link e comece a falar.",
+          "ro": "Creează o cameră, trimite linkul și începe să vorbești.",
+          "ru": "Создай комнату, поделись ссылкой и говори.",
+          "uk": "Створи кімнату, поділися посиланням і говори.",
+          "id": "Buat ruang, bagikan tautannya, dan mulai bicara.",
+          "zh": "创建房间，分享链接，马上开聊。",
+          "ja": "ルームを作って、リンクを共有すれば、もう話せます。",
+          "ar": "أنشئ غرفة، شارك الرابط، وتحدّث." } },
+        { "id": "i4", "t": 11.9, "max": 4.65, "text": {
+          "en": "Your voice goes device to device, encrypted. No media server.",
+          "fr": "Ta voix va d'appareil à appareil, chiffrée. Aucun serveur média.",
+          "es": "Tu voz va de dispositivo a dispositivo, cifrada. Sin servidor de medios.",
+          "de": "Deine Stimme geht verschlüsselt von Gerät zu Gerät. Kein Medienserver.",
+          "pt": "Sua voz vai de aparelho para aparelho, criptografada. Sem servidor de mídia.",
+          "ro": "Vocea ta merge criptată, de la un dispozitiv la altul. Fără server media.",
+          "ru": "Голос идёт с устройства на устройство, в зашифрованном виде. Без медиасервера.",
+          "uk": "Голос іде з пристрою на пристрій, у зашифрованому вигляді. Без медіасервера.",
+          "id": "Suaramu langsung dari perangkat ke perangkat, terenkripsi. Tanpa server media.",
+          "zh": "你的声音加密后直接从设备传到设备，不经过媒体服务器。",
+          "ja": "声は暗号化され、端末から端末へ直接。サーバーなし。",
+          "ar": "صوتك مشفّر، من جهاز إلى جهاز، بلا خادم وسائط." } },
+        { "id": "i5", "t": 17.1, "max": 3.95, "text": {
+          "en": "When the host leaves, someone else takes over. The room stays.",
+          "fr": "Si l'hôte s'en va, quelqu'un d'autre prend le relais. Le salon reste.",
+          "es": "Si el anfitrión se va, otro toma el relevo. La sala sigue.",
+          "de": "Geht der Host, übernimmt jemand anderes. Der Raum bleibt.",
+          "pt": "Se o anfitrião sair, outra pessoa assume. A sala continua.",
+          "ro": "Dacă gazda pleacă, altcineva preia. Camera rămâne.",
+          "ru": "Если хост уходит, его место занимает другой. Комната остаётся.",
+          "uk": "Хост пішов — його замінить інший. Кімната лишається.",
+          "id": "Saat host pergi, orang lain mengambil alih. Ruangnya tetap ada.",
+          "zh": "主持人离开了，会有人接手，房间依然在。",
+          "ja": "ホストが抜けても、ほかの誰かが引き継ぎます。ルームはそのまま。",
+          "ar": "إن غادر المضيف تولّى غيره، وبقيت الغرفة." } },
+        { "id": "i6", "t": 21.55, "max": 3.35, "text": {
+          "en": "On any computer, any phone, or just a browser.",
+          "fr": "Sur ordinateur, sur mobile, ou juste un navigateur.",
+          "es": "En cualquier ordenador, cualquier móvil o solo un navegador.",
+          "de": "Auf jedem Computer, jedem Handy oder einfach im Browser.",
+          "pt": "Em qualquer computador, qualquer celular ou só no navegador.",
+          "ro": "Pe orice calculator, orice telefon sau doar în browser.",
+          "ru": "На любом компьютере, любом телефоне или просто в браузере.",
+          "uk": "На будь-якому комп'ютері, телефоні чи просто в браузері.",
+          "id": "Di komputer, ponsel, atau cukup di browser.",
+          "zh": "任何电脑、任何手机，或者只用浏览器。",
+          "ja": "どのパソコンでも、どのスマホでも、ブラウザだけでも。",
+          "ar": "على الحاسوب، أو الهاتف، أو المتصفح." } },
+        { "id": "i7", "t": 24.95, "max": 3.0, "text": {
+          "en": "No accounts, no installs, no server.",
+          "fr": "Pas de compte, rien à installer, pas de serveur.",
+          "es": "Sin cuentas, sin instalar nada, sin servidor.",
+          "de": "Kein Konto, keine Installation, kein Server.",
+          "pt": "Sem conta, sem instalação, sem servidor.",
+          "ro": "Fără conturi, fără instalare, fără server.",
+          "ru": "Без аккаунтов, без установки, без сервера.",
+          "uk": "Без акаунтів, без встановлення, без сервера.",
+          "id": "Tanpa akun, tanpa instalasi, tanpa server.",
+          "zh": "无需账号、无需安装、无需服务器。",
+          "ja": "アカウントも、インストールも、サーバーも不要。",
+          "ar": "بلا حساب، بلا تثبيت، بلا خادم." } },
+        { "id": "i8", "t": 28.05, "max": 1.9, "text": {
+          "en": "Free, and open source.",
+          "fr": "Gratuit et open source.",
+          "es": "Gratis y de código abierto.",
+          "de": "Kostenlos und Open Source.",
+          "pt": "Grátis, código aberto.",
+          "ro": "Gratuit și open source.",
+          "ru": "Бесплатно и с открытым кодом.",
+          "uk": "Безкоштовно й з відкритим кодом.",
+          "id": "Gratis dan sumber terbuka.",
+          "zh": "免费又开源。",
+          "ja": "無料で、オープンソース。",
+          "ar": "مجاني ومفتوح المصدر." } }
+      ]
+    },
+    "backgrounds": {
+      "dur": 48,
+      "cues": [
+        { "id": "b1", "t": 0.6, "max": 2.5, "text": {
+          "en": "Your camera sees your room.",
+          "fr": "Ta caméra voit ta pièce.",
+          "es": "Tu cámara ve tu habitación.",
+          "de": "Deine Kamera sieht dein Zimmer.",
+          "pt": "Sua câmera vê onde você está.",
+          "ro": "Camera video îți vede încăperea.",
+          "ru": "Камера видит твою комнату.",
+          "uk": "Камера бачить твою кімнату.",
+          "id": "Kameramu melihat ruanganmu.",
+          "zh": "摄像头看到的是你的房间。",
+          "ja": "カメラには、あなたの部屋が映っています。",
+          "ar": "الكاميرا ترى غرفتك." } },
+        { "id": "b2", "t": 3.3, "max": 2.4, "text": {
+          "en": "Voxal can put you anywhere.",
+          "fr": "Voxal peut t'emmener n'importe où.",
+          "es": "Voxal puede llevarte a cualquier parte.",
+          "de": "Voxal bringt dich überallhin.",
+          "pt": "O Voxal pode levar você a qualquer lugar.",
+          "ro": "Voxal te poate duce oriunde.",
+          "ru": "Voxal перенесёт тебя куда угодно.",
+          "uk": "Voxal перенесе тебе будь-куди.",
+          "id": "Voxal bisa membawamu ke mana saja.",
+          "zh": "Voxal 能把你带到任何地方。",
+          "ja": "Voxal なら、どこへでも行けます。",
+          "ar": "يأخذك Voxal إلى أي مكان." } },
+        { "id": "b3", "t": 6.0, "max": 5.6, "text": {
+          "en": "First, a small model finds you in every frame, right on your device.",
+          "fr": "D'abord, un petit modèle te repère dans chaque image, directement sur ton appareil.",
+          "es": "Primero, un pequeño modelo te encuentra en cada imagen, en tu propio dispositivo.",
+          "de": "Zuerst findet dich ein kleines Modell in jedem Bild, direkt auf deinem Gerät.",
+          "pt": "Primeiro, um pequeno modelo encontra você em cada quadro, no seu próprio aparelho.",
+          "ro": "Mai întâi, un model mic te găsește în fiecare cadru, chiar pe dispozitivul tău.",
+          "ru": "Сначала небольшая модель находит тебя в каждом кадре, прямо на твоём устройстве.",
+          "uk": "Спершу невелика модель знаходить тебе в кожному кадрі, просто на твоєму пристрої.",
+          "id": "Pertama, model kecil menemukanmu di setiap bingkai, langsung di perangkatmu.",
+          "zh": "首先，一个小模型在每一帧里找到你，全程在你的设备上完成。",
+          "ja": "まず、小さなモデルが毎フレームあなたを見つけます。処理はすべて端末の中です。",
+          "ar": "أولًا، يجدك نموذج صغير في كل لقطة، على جهازك مباشرةً." } },
+        { "id": "b4", "t": 12.8, "max": 5.2, "text": {
+          "en": "Then the edge is cleaned up: grown, softened, and held steady.",
+          "fr": "Puis le contour est nettoyé : élargi, adouci, et stabilisé.",
+          "es": "Después se limpia el borde: se amplía, se suaviza y se estabiliza.",
+          "de": "Dann wird die Kante bereinigt: erweitert, weichgezeichnet und ruhig gehalten.",
+          "pt": "Depois, a borda é limpa: ampliada, suavizada e estabilizada.",
+          "ro": "Apoi conturul e curățat: lărgit, estompat și ținut stabil.",
+          "ru": "Затем край очищается: расширяется, смягчается и держится ровно.",
+          "uk": "Потім край очищується: розширюється, пом'якшується й тримається рівно.",
+          "id": "Lalu tepinya dirapikan: diperlebar, dihaluskan, dan dibuat stabil.",
+          "zh": "然后清理边缘：扩展、柔化，并保持稳定。",
+          "ja": "次に輪郭を整えます。少し広げ、なめらかにし、ぶれないように保ちます。",
+          "ar": "ثم تُنظَّف الحواف: تُوسَّع قليلًا، وتُنعَّم، وتبقى ثابتة." } },
+        { "id": "b5", "t": 19.2, "max": 6.4, "text": {
+          "en": "The room behind you is a live 3D scene, lit to match the light on your face.",
+          "fr": "La pièce derrière toi est une scène 3D en direct, éclairée comme ton visage.",
+          "es": "La habitación detrás de ti es una escena 3D en vivo, iluminada como tu cara.",
+          "de": "Der Raum hinter dir ist eine lebendige 3D-Szene, beleuchtet wie dein Gesicht.",
+          "pt": "O ambiente atrás de você é uma cena 3D ao vivo, iluminada como o seu rosto.",
+          "ro": "Încăperea din spatele tău e o scenă 3D vie, luminată la fel ca fața ta.",
+          "ru": "Комната за тобой — живая 3D-сцена, освещённая так же, как твоё лицо.",
+          "uk": "Кімната за тобою — жива 3D-сцена, освітлена так само, як твоє обличчя.",
+          "id": "Ruangan di belakangmu adalah adegan 3D yang hidup, disinari sesuai cahaya di wajahmu.",
+          "zh": "你身后的房间是实时的 3D 场景，灯光与你脸上的光线一致。",
+          "ja": "背後の部屋はリアルタイムの 3D シーン。顔に当たる光に合わせて照らされます。",
+          "ar": "الغرفة خلفك مشهد ثلاثي الأبعاد حيّ، يُضاء بحسب الضوء على وجهك." } },
+        { "id": "b6", "t": 26.6, "max": 5.4, "text": {
+          "en": "You're placed in it, with your shadow on the room and its light on you.",
+          "fr": "Puis on t'y place, ton ombre sur la pièce, sa lumière sur toi.",
+          "es": "Luego te coloca dentro, con tu sombra en la escena y su luz sobre ti.",
+          "de": "Dann wirst du hineingesetzt, dein Schatten im Raum, sein Licht auf dir.",
+          "pt": "Então você entra na cena, com sua sombra no ambiente e a luz dele em você.",
+          "ro": "Apoi ești așezat în ea, cu umbra ta pe scenă și lumina ei pe tine.",
+          "ru": "Потом ты оказываешься в ней: твоя тень на сцене, её свет на тебе.",
+          "uk": "Потім ти опиняєшся в ній: твоя тінь на сцені, її світло на тобі.",
+          "id": "Lalu kamu ditempatkan di dalamnya, bayanganmu di ruangan dan cahayanya di dirimu.",
+          "zh": "接着把你放进场景：你的影子落在房间里，场景的光照在你身上。",
+          "ja": "そしてあなたをシーンの中へ。影は部屋に落ち、部屋の光があなたを包みます。",
+          "ar": "ثم توضع داخله، وظلك على الغرفة، وضوؤها عليك." } },
+        { "id": "b7", "t": 33.2, "max": 6.0, "text": {
+          "en": "In a call, Voxal can send just you, and let each screen draw the room itself.",
+          "fr": "En appel, Voxal peut n'envoyer que toi, et laisser chaque écran dessiner la pièce.",
+          "es": "En una llamada, Voxal puede enviar solo tu imagen y dejar que cada pantalla dibuje la escena.",
+          "de": "Im Anruf kann Voxal nur dich senden, und jeder Bildschirm zeichnet den Raum selbst.",
+          "pt": "Numa chamada, o Voxal pode enviar só você e deixar cada tela desenhar o ambiente.",
+          "ro": "Într-un apel, Voxal poate trimite doar imaginea ta, iar fiecare ecran desenează scena singur.",
+          "ru": "В звонке Voxal может отправлять только тебя, а сцену каждый экран нарисует сам.",
+          "uk": "У дзвінку Voxal може надсилати лише тебе, а сцену кожен екран намалює сам.",
+          "id": "Dalam panggilan, Voxal bisa mengirim dirimu saja, dan setiap layar menggambar ruangannya sendiri.",
+          "zh": "通话中，Voxal 可以只发送你的画面，让每块屏幕自己绘制场景。",
+          "ja": "通話では、あなただけを送り、部屋は相手の画面で描くこともできます。",
+          "ar": "في المكالمة، يرسلك Voxal وحدك، وترسم كل شاشة الغرفة بنفسها." } },
+        { "id": "b8", "t": 40.1, "max": 3.6, "text": {
+          "en": "Blur, six living scenes, or a world of your own.",
+          "fr": "Un flou, six scènes vivantes, ou un monde à toi.",
+          "es": "Desenfoque, seis escenas vivas o un mundo propio.",
+          "de": "Unschärfe, sechs lebendige Szenen oder deine eigene Welt.",
+          "pt": "Desfoque, seis cenas vivas ou um mundo só seu.",
+          "ro": "Estompare, șase scene vii sau o lume doar a ta.",
+          "ru": "Размытие, шесть живых сцен или твой собственный мир.",
+          "uk": "Розмиття, шість живих сцен або твій власний світ.",
+          "id": "Buram, enam adegan hidup, atau duniamu sendiri.",
+          "zh": "背景虚化、六个动态场景，或者你自己的世界。",
+          "ja": "ぼかし、六つの動くシーン、またはあなただけの世界。",
+          "ar": "تمويه، أو ستة مشاهد حيّة، أو عالمك الخاص." } },
+        { "id": "b9", "t": 44.4, "max": 2.4, "text": {
+          "en": "Voxal. Be anywhere.",
+          "fr": "Voxal. Sois où tu veux.",
+          "es": "Voxal. Donde tú quieras.",
+          "de": "Voxal. Sei, wo du willst.",
+          "pt": "Voxal. Esteja onde quiser.",
+          "ro": "Voxal. Fii oriunde.",
+          "ru": "Voxal. Будь где угодно.",
+          "uk": "Voxal. Будь де завгодно.",
+          "id": "Voxal. Di mana saja.",
+          "zh": "Voxal。想去哪儿，就去哪儿。",
+          "ja": "Voxal。どこへでも。",
+          "ar": "Voxal. كن أينما شئت." } }
+      ]
+    }
+  }
+}
+</script>
 
 <script>
 'use strict';
@@ -598,8 +882,24 @@ function cursor(ctx, x, y, s, press, alpha) {
 }
 
 /* ── Layout ─────────────────────────────────────────────────────────────── */
-// Every position that differs between the three frames lives here.
+// Every position that differs between the three frames lives here. With
+// subtitles burned in, what sits low in the frame moves up to make room for
+// them; without, the layout is the one the film was cut with.
 function LAYOUT(V) {
+  const L = LAYOUT_CUT(V);
+  if (!V.subs) return L;
+  if (V.kind === 'land') Object.assign(L.dev, { y: -60, head: { ...L.dev.head, y: -420 }, plat: 270, chips: 340 });
+  else if (V.kind === 'port') {
+    L.ringC = { ...L.ringC, y: 220, R: 260 };
+    L.win = { ...L.win, y: 150 };
+    Object.assign(L.dev, { y: -70, k: 0.92, plat: 380, chips: 440 });
+  } else {
+    L.ringC = { ...L.ringC, y: 168, R: 148 };
+    L.win = { ...L.win, y: 110 };
+  }
+  return L;
+}
+function LAYOUT_CUT(V) {
   const k = V.kind, hw = V.hw, hh = V.hh;
   if (k === 'land') return {
     btn: { x: 0, y: -10, R: 100 }, holdSize: 176,
@@ -680,10 +980,10 @@ const FOCUS = [
   [0, 0, 0], [3.2, 0, 0], [6.2, 0, -0.1], [7.2, 0.45, 0.05], [11.2, 0.45, 0.05],
   [16.8, 0.45, 0.05], [21.4, 0.45, 0.05], [22.2, 0, 0.05], [25.4, 0, 0], [30, 0, -0.1],
 ];
-function focusAt(t) {
-  for (let i = 1; i < FOCUS.length; i++) {
-    if (t <= FOCUS[i][0]) {
-      const a = FOCUS[i - 1], b = FOCUS[i], e = ease.io2(seg(t, a[0], b[0]));
+function focusAt(t, focus = FOCUS) {
+  for (let i = 1; i < focus.length; i++) {
+    if (t <= focus[i][0]) {
+      const a = focus[i - 1], b = focus[i], e = ease.io2(seg(t, a[0], b[0]));
       return [lerp(a[1], b[1], e), lerp(a[2], b[2], e)];
     }
   }
@@ -691,13 +991,14 @@ function focusAt(t) {
 }
 // Beats the picture lands on; each flares the light for a moment.
 const HITS = [[1.15, 0.8], [3.62, 1], [11.62, 0.5], [17.95, 0.55], [19.1, 0.45], [21.75, 0.45], [25.8, 0.7], [26.3, 0.7], [26.8, 0.8], [28.0, 1]];
-function energy(t) {
+function energy(t, hits = HITS) {
   let e = 0;
-  for (const [h, k] of HITS) { const d = t - h; if (d >= 0 && d < 1.4) e += k * Math.exp(-d * 3.2); }
+  for (const [h, k] of hits) { const d = t - h; if (d >= 0 && d < 1.4) e += k * Math.exp(-d * 3.2); }
   return e;
 }
 
-function drawBackground(ctx, V, t) {
+// `F` is the film (FILMS below): where its light sits and which beats flare it.
+function drawBackground(ctx, V, t, F) {
   const { hw, hh } = V;
   const base = ctx.createLinearGradient(0, -hh, 0, hh);
   base.addColorStop(0, '#08070f');
@@ -705,7 +1006,7 @@ function drawBackground(ctx, V, t) {
   ctx.fillStyle = base;
   ctx.fillRect(-hw, -hh, hw * 2, hh * 2);
 
-  const [fx, fy] = focusAt(t), en = energy(t);
+  const [fx, fy] = focusAt(t, F.focus), en = energy(t, F.hits);
   const m = Math.max(hw, hh);
   // The deep bed — two slow indigo masses.
   glow(ctx, -hw * 0.7 + Math.sin(t * 0.21) * hw * 0.15, -hh * 0.8 + Math.cos(t * 0.17) * hh * 0.1, m * 1.25, 'indigo', 0.55);
@@ -754,11 +1055,12 @@ function drawVignette(ctx, V) {
   ctx.fillRect(-hw, -hh, hw * 2, hh * 2);
 }
 
-function drawOverlay(ctx, V, t, grain) {
+function drawOverlay(ctx, V, t, grain, subs) {
   const { hw, hh } = V;
   // Fade up from black.
   const f = 1 - ease.out2(seg(t, 0, 0.45));
   if (f > 0) { ctx.fillStyle = `rgba(4,3,9,${f})`; ctx.fillRect(-hw, -hh, hw * 2, hh * 2); }
+  if (subs) drawSubtitles(ctx, V, t, subs);
   if (grain) drawGrain(ctx, V.W, V.H, t);
 }
 
@@ -2009,27 +2311,1222 @@ const CHAPTERS = [
   { t: 25.6, name: 'The promise' },
 ];
 
+/* ════════════════════════════════════════════════════════════════════════
+   Film 2 · "Virtual backgrounds", 48 s. How the camera background works, in
+   the order the pipeline runs it (docs/virtual-backgrounds.md): find the
+   person, clean the edge, draw and relight the room, put the person in it,
+   and — in a call — send the person alone so the other side draws the room.
+
+   Same rules as the first film: a pure function of t, in design units, one
+   timeline for every frame shape. Inside the camera tile everything is in
+   "picture units": the picture is 1000 tall with its origin at the centre,
+   so the person and every room keep their proportions at any tile size.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const BG_DUR = 48;
+
+function LAYOUT_BG(V) {
+  const k = V.kind, hw = V.hw, hh = V.hh;
+  if (k === 'land') return {
+    hero: { x: 0, y: 55, w: 1180, h: 664 },
+    tile: { x: 440, y: 30, w: 860, h: 484 },
+    cat: { x: 0, y: -10, w: 1000, h: 563 },
+    send: [{ x: 440, y: -215, w: 560, h: 315 }, { x: 440, y: 245, w: 560, h: 315 }],
+    title: { y: -395, size: 92 },
+    copy: { x: -hw + 150, y: -245, maxW: 620, head: 68, sub: 30, align: 'left' },
+    loupe: { x: 735, y: -318, r: 150 },
+    gap: { x: -34, y: -128 }, stack: [0.86, 0.2, -0.5, 0.5, 0.8],
+    chips: { y: 345, size: 22 },
+    bug: { x: -hw + 86, y: -hh + 82, s: 52 },
+    end: { x: 0, y: -175, s: 210 }, word: 170, tag: 46,
+  };
+  if (k === 'port') return {
+    hero: { x: 0, y: 30, w: 900, h: 1200 },
+    tile: { x: 0, y: 260, w: 860, h: 980 },
+    cat: { x: 0, y: -90, w: 820, h: 900 },
+    send: [{ x: 0, y: -20, w: 720, h: 405 }, { x: 0, y: 530, w: 720, h: 405 }],
+    title: { y: -730, size: 96 },
+    copy: { x: -hw + 90, y: -hh + 250, maxW: 900, head: 80, sub: 36, align: 'left' },
+    loupe: { x: 310, y: -90, r: 160 },
+    gap: { x: -16, y: -190 }, stack: [0.9, 0.18, -0.3, 0.5, 0.62],
+    chips: { y: 430, size: 26 },
+    bug: { x: -hw + 92, y: -hh + 150, s: 58 },
+    end: { x: 0, y: -240, s: 260 }, word: 160, tag: 44,
+  };
+  return {
+    hero: { x: 0, y: 60, w: 840, h: 630 },
+    tile: { x: 0, y: 178, w: 680, h: 510 },
+    cat: { x: 0, y: -40, w: 700, h: 525 },
+    send: [{ x: -190, y: 185, w: 340, h: 255 }, { x: 190, y: 185, w: 340, h: 255 }],
+    title: { y: -380, size: 74 },
+    copy: { x: -hw + 80, y: -hh + 135, maxW: 880, head: 50, sub: 24, align: 'left' },
+    loupe: { x: 250, y: 40, r: 118 },
+    gap: { x: -18, y: -96 }, stack: [0.86, 0.2, -0.5, 0.5, 0.74],
+    chips: { y: 290, size: 19 },
+    bug: { x: -hw + 78, y: -hh + 74, s: 46 },
+    end: { x: 0, y: -170, s: 200 }, word: 150, tag: 40,
+  };
+}
+
+function mixHex(a, b, t) {
+  const A = col(a), B = col(b), h = v => Math.round(v).toString(16).padStart(2, '0');
+  return '#' + h(A[0] + (B[0] - A[0]) * t) + h(A[1] + (B[1] - A[1]) * t) + h(A[2] + (B[2] - A[2]) * t);
+}
+
+// A filled path blurred at its edge, through the shadow of a copy drawn far
+// off the canvas: ctx.filter is not in every browser, a shadow is. Shadow
+// offsets and blur are in device pixels, so the copy is moved by the inverse
+// of the current transform — which is what keeps this right under a skew.
+function softFill(ctx, path, blur, color, dx = 0, dy = 0) {
+  const m = ctx.getTransform(), det = m.a * m.d - m.b * m.c;
+  if (!det) return;
+  const OFF = 20000;
+  ctx.save();
+  ctx.shadowColor = color;
+  ctx.shadowBlur = blur * Math.sqrt(Math.abs(det));
+  ctx.shadowOffsetX = OFF;
+  ctx.shadowOffsetY = 0;
+  ctx.translate(dx - m.d * OFF / det, dy + m.b * OFF / det);
+  ctx.fillStyle = '#000';
+  ctx.fill(path);
+  ctx.restore();
+}
+
+/* ── The person: one silhouette the mask, the matte and the drawing share ── */
+// Picture units. Symmetric, and at every height the person is one interval
+// [-W(y), W(y)] — so the outline, the mask test and the blocky mask are all
+// the same function, and can never disagree about where the person ends.
+const BP = { headY: -62, headRx: 126, headRy: 156, hairY: -108, hairRx: 146, hairRy: 132, earX: 122, earY: -40, neckW: 56, neckTop: 40, torsoTop: 160 };
+function torsoHalf(y) { return BP.neckW + (250 - BP.neckW) * ease.out2(seg(y, BP.torsoTop, 235)) + 95 * seg(y, 235, 520); }
+function personW(y, g = 0) {
+  let w = -1;
+  const e = (cy, rx, ry) => { const v = (y - cy) / (ry + g); if (v > -1 && v < 1) w = Math.max(w, (rx + g) * Math.sqrt(1 - v * v)); };
+  e(BP.headY, BP.headRx, BP.headRy);
+  e(BP.hairY, BP.hairRx, BP.hairRy);
+  const v = (y - BP.earY) / (40 + g);
+  if (v > -1 && v < 1) w = Math.max(w, BP.earX + (26 + g) * Math.sqrt(1 - v * v));
+  if (y >= BP.neckTop - g && y <= BP.torsoTop + 40) w = Math.max(w, BP.neckW + g);
+  if (y >= BP.torsoTop - g) w = Math.max(w, torsoHalf(Math.max(y, BP.torsoTop)) + g);
+  return w;
+}
+// A small, living sway. With `hz`, the pose a mask computed that often sees:
+// segmentation runs on a fraction of the frames, so the mask lags in steps.
+function personPose(t, hz = 0) {
+  const s = hz ? Math.floor(t * hz) / hz : t;
+  return { dx: Math.sin(s * 0.83) * 16 + Math.sin(s * 2.1 + 1) * 4, dy: Math.sin(s * 1.27 + 0.4) * 5 };
+}
+// The raw mask: a beat behind, and its edge crawls from one result to the next.
+function rawPose(t, calm = 0) {
+  const P = personPose(t, 12), n = Math.floor(t * 12);
+  return { dx: P.dx + noise1(n * 1.7) * 5 * (1 - calm), dy: P.dy, g: noise1(n * 2.3 + 9) * 3 * (1 - calm) };
+}
+let _PP = null;
+function personPaths() {
+  if (_PP) return _PP;
+  const outline = new Path2D();
+  const top = BP.hairY - BP.hairRy;
+  outline.moveTo(0, top);
+  const ys = [];
+  for (let y = top + 1; y < 540; y += y < -150 ? 2 : 5) ys.push(y);
+  ys.push(540);
+  for (const y of ys) { const w = personW(y); if (w >= 0) outline.lineTo(w, y); }
+  for (let i = ys.length - 1; i >= 0; i--) { const w = personW(ys[i]); if (w >= 0) outline.lineTo(-w, ys[i]); }
+  outline.closePath();
+  const head = new Path2D(); head.ellipse(0, BP.headY, BP.headRx, BP.headRy, 0, 0, TAU);
+  const hair = new Path2D(); hair.ellipse(0, BP.hairY, BP.hairRx, BP.hairRy, 0, 0, TAU);
+  const ears = new Path2D();
+  ears.ellipse(-BP.earX, BP.earY, 26, 40, 0, 0, TAU);
+  ears.moveTo(BP.earX + 26, BP.earY);
+  ears.ellipse(BP.earX, BP.earY, 26, 40, 0, 0, TAU);
+  const neck = new Path2D(); neck.rect(-BP.neckW, BP.neckTop, BP.neckW * 2, BP.torsoTop + 40 - BP.neckTop);
+  const torso = new Path2D();
+  torso.moveTo(-BP.neckW, BP.torsoTop);
+  for (let y = BP.torsoTop; y <= 540; y += 6) torso.lineTo(torsoHalf(y), y);
+  for (let y = 540; y >= BP.torsoTop; y -= 6) torso.lineTo(-torsoHalf(y), y);
+  torso.closePath();
+  const face = new Path2D(); face.rect(-400, -400, 800, 800); face.ellipse(0, -28, 108, 140, 0, 0, TAU);
+  const fringe = new Path2D();
+  fringe.moveTo(-114, -118); fringe.quadraticCurveTo(-36, -196, 58, -150); fringe.quadraticCurveTo(102, -130, 118, -84);
+  fringe.lineTo(146, -150); fringe.quadraticCurveTo(60, -262, -134, -150); fringe.closePath();
+  return (_PP = { outline, head, hair, ears, neck, torso, face, fringe });
+}
+// The mask as the model would hand it back: whole cells of size `c`.
+function blockyPath(M, g, c) {
+  const p = new Path2D();
+  for (let y = -500; y < 500; y += c) {
+    const w = personW(y + c / 2 - M.dy, g + (M.g || 0));
+    if (w < 0) continue;
+    const i0 = Math.ceil((M.dx - w) / c - 0.5), i1 = Math.floor((M.dx + w) / c - 0.5);
+    if (i1 >= i0) p.rect(i0 * c, y, (i1 - i0 + 1) * c, c);
+  }
+  return p;
+}
+
+// Light on the person: { color, side (-1 left … 1 right), k }.
+const LOOK_COOL = { warm: 0.12, side: 0.75 }; // the window, on the right
+const LOOK_WARM = { warm: 0.88, side: -0.7 }; // the lamp, on the left
+function lightColor(look) { return look.color || mixHex('#9fb8ff', '#ffb27a', look.warm); }
+// A lamp comes on at 23.6 s; the camera measures it, and the scene follows.
+function personLookAt(t) {
+  const e = ease.io2(seg(t, 23.6, 24.1));
+  return { warm: lerp(LOOK_COOL.warm, LOOK_WARM.warm, e), side: lerp(LOOK_COOL.side, LOOK_WARM.side, e), k: lerp(0.32, 0.55, e) };
+}
+function sceneLookAt(t) {
+  const e = ease.io2(seg(t, 24.0, 24.9));
+  return { warm: lerp(LOOK_COOL.warm, LOOK_WARM.warm, e), side: lerp(LOOK_COOL.side, LOOK_WARM.side, e) };
+}
+
+function drawPerson(ctx, P, t, o = {}) {
+  const PP = personPaths();
+  ctx.save();
+  ctx.translate(P.dx, P.dy);
+  if (o.matte) { ctx.fillStyle = o.matte; ctx.fill(PP.outline); ctx.restore(); return; }
+  // Neck, then the sweater over it, then the collar.
+  let g = ctx.createLinearGradient(0, BP.neckTop, 0, BP.torsoTop + 30);
+  g.addColorStop(0, '#9e5f48'); g.addColorStop(1, '#d4916f');
+  ctx.fillStyle = g; ctx.fill(PP.neck);
+  g = ctx.createLinearGradient(0, BP.torsoTop, 0, 520);
+  g.addColorStop(0, '#e2805b'); g.addColorStop(1, '#8c3e2f');
+  ctx.fillStyle = g; ctx.fill(PP.torso);
+  g = ctx.createRadialGradient(0, 330, 60, 0, 330, 420);
+  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(40,10,10,0.35)');
+  ctx.fillStyle = g; ctx.fill(PP.torso);
+  ctx.beginPath(); ctx.ellipse(0, BP.torsoTop - 2, BP.neckW + 14, 24, 0, 0.06 * Math.PI, 0.94 * Math.PI);
+  ctx.lineWidth = 15; ctx.lineCap = 'round'; ctx.strokeStyle = '#b4523b'; ctx.stroke();
+  // Head.
+  ctx.fillStyle = '#d9956f'; ctx.fill(PP.ears);
+  g = ctx.createRadialGradient(-38, -118, 10, -20, -70, 240);
+  g.addColorStop(0, '#f8c9a5'); g.addColorStop(1, '#d28c69');
+  ctx.fillStyle = g; ctx.fill(PP.head);
+  // Hair: a cap and the sides, never over the face.
+  ctx.save();
+  ctx.clip(PP.face, 'evenodd');
+  g = ctx.createLinearGradient(0, -240, 0, 20);
+  g.addColorStop(0, '#4a322b'); g.addColorStop(1, '#22171a');
+  ctx.fillStyle = g; ctx.fill(PP.hair);
+  ctx.restore();
+  ctx.fillStyle = '#2f201d'; ctx.fill(PP.fringe);
+  // Face.
+  const blink = (t % 4.3) < 0.12 ? 0.12 : 1;
+  ctx.fillStyle = '#2a1c22';
+  for (const sx of [-44, 44]) { ctx.beginPath(); ctx.ellipse(sx, -52, 9.5, 12.5 * blink, 0, 0, TAU); ctx.fill(); }
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = '#2b1d1b'; ctx.lineWidth = 7;
+  ctx.beginPath(); ctx.moveTo(-68, -90); ctx.quadraticCurveTo(-46, -102, -24, -96); ctx.moveTo(24, -96); ctx.quadraticCurveTo(46, -102, 68, -90); ctx.stroke();
+  ctx.strokeStyle = 'rgba(130,62,44,0.38)'; ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.moveTo(4, -38); ctx.quadraticCurveTo(13, -8, -3, -4); ctx.stroke();
+  ctx.strokeStyle = '#9b4a4a'; ctx.lineWidth = 6.5;
+  ctx.beginPath(); ctx.arc(0, 2, 36, 0.22 * Math.PI, 0.78 * Math.PI); ctx.stroke();
+  for (const sx of [-70, 70]) glow(ctx, sx, 4, 44, '#ff8a8a', 0.16);
+  // Flyaway strands: real, and too fine for a 256 px mask to see.
+  if (o.strands !== false) {
+    ctx.strokeStyle = 'rgba(43,29,27,0.85)'; ctx.lineWidth = 3.2;
+    ctx.beginPath();
+    ctx.moveTo(70, -226); ctx.quadraticCurveTo(118, -264, 162, -246);
+    ctx.moveTo(98, -212); ctx.quadraticCurveTo(152, -236, 180, -208);
+    ctx.moveTo(38, -236); ctx.quadraticCurveTo(70, -278, 112, -274);
+    ctx.stroke();
+  }
+  // The light that falls on the person, and the scene's light wrapping its edge.
+  if (o.light && o.light.k > 0) {
+    const Lt = o.light, sx = Lt.side * 420, c = lightColor(Lt);
+    ctx.save();
+    ctx.clip(PP.outline);
+    const lg = ctx.createLinearGradient(sx, 0, -sx * 0.5, 0);
+    lg.addColorStop(0, rgba(c, 0.42 * Lt.k)); lg.addColorStop(1, rgba(c, 0));
+    ctx.fillStyle = lg; ctx.fillRect(-500, -400, 1000, 1000);
+    ctx.restore();
+  }
+  if (o.wrap && o.wrap.k > 0) drawWrap(ctx, o.wrap);
+  ctx.restore();
+}
+function drawWrap(ctx, W) {
+  const PP = personPaths(), sx = W.side * 420, c = lightColor(W);
+  ctx.save();
+  ctx.clip(PP.outline);
+  const wg = ctx.createLinearGradient(sx, 0, -sx, 0);
+  wg.addColorStop(0, rgba(c, 0.9 * W.k)); wg.addColorStop(0.5, rgba(c, 0.32 * W.k)); wg.addColorStop(1, rgba(c, 0.1 * W.k));
+  ctx.strokeStyle = wg; ctx.lineWidth = 30; ctx.lineJoin = 'round';
+  ctx.stroke(PP.outline);
+  ctx.restore();
+}
+function drawPersonShadow(ctx, P, side, k) {
+  ctx.save();
+  ctx.translate(P.dx, P.dy);
+  softFill(ctx, personPaths().outline, 46, `rgba(4,2,10,${k})`, -side * 80, 26);
+  ctx.restore();
+}
+// Room, then shadow, then person lit by the room and wrapped in its light.
+function composite(ctx, pw, t, scene, look, k = 1, personLight) {
+  scene(ctx, pw, t, look);
+  const P = personPose(t);
+  if (k > 0) drawPersonShadow(ctx, P, look.side, 0.42 * k);
+  drawPerson(ctx, P, t, { light: personLight || { ...look, k: 0.55 }, wrap: { ...look, k: 0.75 * k } });
+}
+
+/* ── Rooms. All drawn, none of them pictures — like the app's own scenes ── */
+const BOOKS = ['#7a4b3a', '#3f5a6e', '#8d7a4a', '#4e6a4f', '#6e3f55', '#a0623d', '#5d5a7a'];
+// The room the camera actually sees: a shelf, a lamp, a window on the right.
+function picRoom(ctx, pw, t) {
+  const hw = pw / 2;
+  let g = ctx.createLinearGradient(0, -500, 0, 500);
+  g.addColorStop(0, '#473941'); g.addColorStop(1, '#2a2127');
+  ctx.fillStyle = g; ctx.fillRect(-hw, -500, pw, 1000);
+  const wx0 = Math.max(170, hw * 0.34), wx1 = Math.min(hw - 40, wx0 + 430), wy0 = -400, wy1 = 110;
+  glow(ctx, (wx0 + wx1) / 2, -150, 560, '#a9c6ea', 0.17);
+  g = ctx.createLinearGradient(0, wy0, 0, wy1);
+  g.addColorStop(0, '#dbe8f6'); g.addColorStop(1, '#9cb6d5');
+  ctx.fillStyle = g; ctx.fillRect(wx0, wy0, wx1 - wx0, wy1 - wy0);
+  ctx.fillStyle = 'rgba(70,82,104,0.2)';
+  for (let y = wy0 + 18; y < wy1; y += 34) ctx.fillRect(wx0, y, wx1 - wx0, 9);
+  ctx.strokeStyle = '#ece4da'; ctx.lineWidth = 16; ctx.strokeRect(wx0, wy0, wx1 - wx0, wy1 - wy0);
+  ctx.lineWidth = 10; ctx.beginPath(); ctx.moveTo((wx0 + wx1) / 2, wy0); ctx.lineTo((wx0 + wx1) / 2, wy1); ctx.stroke();
+  ctx.fillStyle = '#d8cfc4'; ctx.fillRect(wx0 - 24, wy1, wx1 - wx0 + 48, 18);
+  // Bookshelf.
+  const bx0 = -hw + 30, bx1 = bx0 + Math.min(hw * 0.52, 380);
+  ctx.fillStyle = '#563b2c'; ctx.fillRect(bx0, -430, bx1 - bx0, 960);
+  ctx.fillStyle = '#35241b'; ctx.fillRect(bx0 + 14, -416, bx1 - bx0 - 28, 932);
+  for (let s = 0; s < 5; s++) {
+    const sy = -280 + s * 150;
+    let x = bx0 + 24, i = 0;
+    while (x < bx1 - 46) {
+      const bw = 18 + rnd(s * 31 + i * 7.3) * 22, bh = 78 + rnd(s * 17 + i * 3.1) * 52;
+      ctx.fillStyle = BOOKS[(s * 3 + i) % BOOKS.length];
+      if (rnd(i * 5.7 + s * 1.3) > 0.86) { ctx.save(); ctx.translate(x + bw, sy); ctx.rotate(-0.22); ctx.fillRect(-bw, -bh, bw, bh); ctx.restore(); x += bw + 18; }
+      else { ctx.fillRect(x, sy - bh, bw, bh); x += bw + 3; }
+      i++;
+    }
+    ctx.fillStyle = '#5c4031'; ctx.fillRect(bx0 + 14, sy, bx1 - bx0 - 28, 14);
+  }
+  // A floor lamp between the shelf and the person.
+  const lx = Math.min(bx1 + 80, -230);
+  glow(ctx, lx, -230, 300, '#ffb470', 0.3);
+  ctx.strokeStyle = '#1e1716'; ctx.lineWidth = 8;
+  ctx.beginPath(); ctx.moveTo(lx, -190); ctx.lineTo(lx, 520); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(lx - 70, -190); ctx.lineTo(lx + 70, -190); ctx.lineTo(lx + 45, -282); ctx.lineTo(lx - 45, -282); ctx.closePath();
+  ctx.fillStyle = '#f3d6ad'; ctx.fill();
+  // A crooked poster and a plant, where there is wall for them.
+  if (wx0 - 200 > 150) {
+    ctx.save(); ctx.translate(wx0 - 120, -300); ctx.rotate(0.05);
+    ctx.fillStyle = '#e9e1d2'; ctx.fillRect(-70, -95, 140, 190);
+    ctx.fillStyle = '#c8553d'; ctx.beginPath(); ctx.arc(0, -10, 42, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#2f4858'; ctx.fillRect(-50, 50, 100, 12);
+    ctx.restore();
+  }
+  const px = Math.min(hw - 110, wx1 - 60);
+  ctx.fillStyle = '#7a4a34'; rr(ctx, px - 55, 390, 110, 120, 14); ctx.fill();
+  ctx.fillStyle = '#3f6b47';
+  for (let i = 0; i < 7; i++) {
+    ctx.save(); ctx.translate(px, 395); ctx.rotate(-1.2 + i * 0.4 + Math.sin(t * 0.7 + i) * 0.03);
+    ctx.beginPath(); ctx.ellipse(0, -95, 26, 95, 0, 0, TAU); ctx.fill(); ctx.restore();
+  }
+}
+// The same room through a strong blur: only its lights and colours survive.
+function sceneBlur(ctx, pw, t) {
+  const hw = pw / 2;
+  const g = ctx.createLinearGradient(0, -500, 0, 500);
+  g.addColorStop(0, '#4a3c44'); g.addColorStop(1, '#2c2329');
+  ctx.fillStyle = g; ctx.fillRect(-hw, -500, pw, 1000);
+  glow(ctx, Math.max(380, hw * 0.6), -150, 520, '#cfe0f2', 0.75);
+  glow(ctx, -hw + 200, 40, 460, '#6a4632', 0.8);
+  glow(ctx, Math.min(-230, -hw + 490), -230, 300, '#ffc690', 0.55);
+  glow(ctx, hw - 140, 430, 260, '#3f6b47', 0.6);
+}
+function ridgeY(x, y0, amp, f, seed) {
+  return y0 - amp * (0.6 * Math.abs(noise1(x * f + seed)) + 0.3 * noise1(x * f * 2.7 + seed * 1.7) + 0.12 * noise1(x * f * 7 + seed * 3));
+}
+function ridge(ctx, pw, y0, amp, f, seed, color, stroke) {
+  const hw = pw / 2;
+  ctx.beginPath();
+  if (!stroke) ctx.moveTo(-hw - 10, 520);
+  for (let x = -hw - 10; x <= hw + 10; x += 10) { if (stroke && x === -hw - 10) ctx.moveTo(x, ridgeY(x, y0, amp, f, seed)); else ctx.lineTo(x, ridgeY(x, y0, amp, f, seed)); }
+  if (stroke) { ctx.strokeStyle = color; ctx.stroke(); return; }
+  ctx.lineTo(hw + 10, 520); ctx.closePath();
+  ctx.fillStyle = color; ctx.fill();
+}
+// The Dolomites lake — the scene the film relights.
+function sceneMountain(ctx, pw, t, look = LOOK_WARM) {
+  const hw = pw / 2, H = 130, w = look.warm, side = look.side;
+  let g = ctx.createLinearGradient(0, -500, 0, H);
+  g.addColorStop(0, mixHex('#0f1233', '#2a1640', w)); g.addColorStop(0.62, mixHex('#3a4a9a', '#9a4f7a', w)); g.addColorStop(1, mixHex('#7290dd', '#f39566', w));
+  ctx.fillStyle = g; ctx.fillRect(-hw, -500, pw, H + 520);
+  const sa = 1 - w * 0.8;
+  for (let i = 0; i < 70; i++) {
+    const x = (rnd(i * 3.1) - 0.5) * 2400, y = -500 + rnd(i * 7.7) * 360;
+    if (x < -hw || x > hw) continue;
+    ctx.fillStyle = `rgba(255,255,255,${(0.3 + 0.3 * Math.sin(t * 2 + i)) * sa})`;
+    ctx.fillRect(x, y, 3, 3);
+  }
+  const sc = mixHex('#a8c0ff', '#ffb27a', w), sx = side * Math.min(hw * 0.6, 520), sy = H - 115 - (1 - w) * 30;
+  glow(ctx, sx, sy, 560, sc, 0.55);
+  ctx.beginPath(); ctx.arc(sx, sy, 44, 0, TAU); ctx.fillStyle = mixHex('#eef3ff', '#fff1d6', w); ctx.fill();
+  ridge(ctx, pw, H - 30, 150, 0.0042, 11, mixHex('#4c5aa0', '#a8637e', w));
+  ridge(ctx, pw, H - 5, 95, 0.0065, 23, mixHex('#2c3266', '#5c3352', w));
+  ridge(ctx, pw, H + 12, 45, 0.011, 37, mixHex('#171a3a', '#2a1a2c', w));
+  // The lake: the sky again, darker, with the far ridge and the sun in it.
+  ctx.save();
+  ctx.beginPath(); ctx.rect(-hw, H + 10, pw, 500); ctx.clip();
+  g = ctx.createLinearGradient(0, H + 10, 0, 500);
+  g.addColorStop(0, mixHex('#5a72c0', '#c97a5f', w)); g.addColorStop(1, '#0d0d24');
+  ctx.fillStyle = g; ctx.fillRect(-hw, H + 10, pw, 500);
+  ctx.save(); ctx.globalAlpha = 0.3; ctx.translate(0, H + 10); ctx.scale(1, -0.55); ctx.translate(0, -(H + 10));
+  ridge(ctx, pw, H - 30, 150, 0.0042, 11, mixHex('#4c5aa0', '#a8637e', w));
+  ctx.restore();
+  for (let i = 0; i < 11; i++) {
+    const y = H + 24 + i * 30, ww = (90 - i * 6 + Math.sin(t * 2.2 + i * 1.3) * 12);
+    ctx.fillStyle = rgba(sc, 0.4 * (1 - i / 11));
+    ctx.fillRect(sx - ww / 2, y, ww, 5);
+  }
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
+  for (let i = 0; i < 9; i++) { const y = H + 40 + i * 44, o = (t * 18 + i * 90) % 300; ctx.fillRect(-hw + o - 300, y, pw * 0.4, 2); ctx.fillRect(o + 200 - hw * 0.3, y + 14, pw * 0.25, 2); }
+  ctx.restore();
+}
+// The same lake, as the engine builds it: wireframe first.
+function wireMountain(ctx, pw, p, a) {
+  const hw = pw / 2, H = 130;
+  ctx.save();
+  ctx.globalAlpha *= a;
+  ctx.beginPath(); ctx.rect(-hw, -500, pw * ease.io2(p), 1000); ctx.clip();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = rgba('violetHi', 0.42);
+  for (let i = -16; i <= 16; i++) { ctx.beginPath(); ctx.moveTo(i * 22, H + 12); ctx.lineTo(i * 240, 520); ctx.stroke(); }
+  for (let j = 0; j <= 8; j++) { const y = H + 12 + (510 - H) * Math.pow(j / 8, 2.1); ctx.beginPath(); ctx.moveTo(-hw, y); ctx.lineTo(hw, y); ctx.stroke(); }
+  for (let j = 1; j <= 5; j++) { ctx.beginPath(); ctx.arc(0, H + 12, j * 150, Math.PI, TAU); ctx.stroke(); }
+  ctx.lineWidth = 3;
+  ridge(ctx, pw, H - 30, 150, 0.0042, 11, rgba('violetHi', 0.95), true);
+  ridge(ctx, pw, H - 5, 95, 0.0065, 23, rgba('violetHi', 0.7), true);
+  ridge(ctx, pw, H + 12, 45, 0.011, 37, rgba('violet', 0.8), true);
+  ctx.restore();
+}
+function sceneOffice(ctx, pw, t) {
+  const hw = pw / 2;
+  ctx.fillStyle = '#c9ced6'; ctx.fillRect(-hw, -500, pw, 1000);
+  const x0 = -hw + 60, x1 = hw - 60, y0 = -430, y1 = 260;
+  let g = ctx.createLinearGradient(0, y0, 0, y1);
+  g.addColorStop(0, '#bcd8f2'); g.addColorStop(1, '#e8f0f6');
+  ctx.fillStyle = g; ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+  for (let i = 0; i < 26; i++) {
+    const bx = x0 + i * ((x1 - x0) / 26), bh = 120 + rnd(i * 4.1) * 300, bw = (x1 - x0) / 26 + 6;
+    ctx.fillStyle = i % 3 ? '#9fb2c8' : '#8ba0b8';
+    ctx.fillRect(bx, y1 - bh, bw, bh);
+  }
+  ctx.fillStyle = '#2d3440';
+  for (let i = 0; i <= 4; i++) ctx.fillRect(x0 + i * ((x1 - x0) / 4) - 7, y0, 14, y1 - y0);
+  ctx.fillRect(x0, y0, x1 - x0, 14); ctx.fillRect(x0, y1 - 14, x1 - x0, 14); ctx.fillRect(x0, -90, x1 - x0, 10);
+  g = ctx.createLinearGradient(0, y1, 0, 500);
+  g.addColorStop(0, '#8a6b52'); g.addColorStop(1, '#5a4535');
+  ctx.fillStyle = g; ctx.fillRect(-hw, y1, pw, 500 - y1);
+  ctx.fillStyle = '#3f7a4f';
+  for (let i = 0; i < 6; i++) { ctx.beginPath(); ctx.ellipse(hw - 170 + Math.cos(i) * 40, y1 - 60 - i * 18, 22, 60, -0.6 + i * 0.25, 0, TAU); ctx.fill(); }
+}
+function sceneIsland(ctx, pw, t) {
+  const hw = pw / 2, H = 90;
+  let g = ctx.createLinearGradient(0, -500, 0, H);
+  g.addColorStop(0, '#2f8fd6'); g.addColorStop(1, '#bfe9f6');
+  ctx.fillStyle = g; ctx.fillRect(-hw, -500, pw, H + 500);
+  glow(ctx, -hw * 0.55, -300, 380, '#fff3c4', 0.7);
+  g = ctx.createLinearGradient(0, H, 0, 300);
+  g.addColorStop(0, '#3fb6c9'); g.addColorStop(1, '#1b7f9a');
+  ctx.fillStyle = g; ctx.fillRect(-hw, H, pw, 220);
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  for (let i = 0; i < 18; i++) { const x = (rnd(i * 2.7) - 0.5) * pw, y = H + 20 + rnd(i * 5.1) * 180, o = Math.sin(t * 2 + i) * 14; ctx.fillRect(x + o, y, 40 + rnd(i) * 50, 3); }
+  ctx.fillStyle = '#ecd6a6'; ctx.fillRect(-hw, 300, pw, 200);
+  const px = hw * 0.62;
+  ctx.strokeStyle = '#6b4a2f'; ctx.lineWidth = 30; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(px + 40, 520); ctx.quadraticCurveTo(px + 70, 100, px - 20, -230); ctx.stroke();
+  ctx.fillStyle = '#2d7a43';
+  for (let i = 0; i < 7; i++) {
+    ctx.save(); ctx.translate(px - 20, -230); ctx.rotate(-2.6 + i * 0.75 + Math.sin(t * 1.1 + i) * 0.04);
+    ctx.beginPath(); ctx.ellipse(130, 0, 140, 26, 0.25, 0, TAU); ctx.fill(); ctx.restore();
+  }
+}
+function sceneCafe(ctx, pw, t) {
+  const hw = pw / 2;
+  ctx.fillStyle = '#1d1426'; ctx.fillRect(-hw, -500, pw, 1000);
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 3;
+  for (let y = -480, r = 0; y < 200; y += 44, r++) { ctx.beginPath(); ctx.moveTo(-hw, y); ctx.lineTo(hw, y); ctx.stroke(); for (let x = -hw + (r % 2) * 60; x < hw; x += 120) { ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + 44); ctx.stroke(); } }
+  const fl = 0.85 + 0.15 * Math.sin(t * 13) * Math.sin(t * 7.3);
+  glow(ctx, -hw * 0.55, -300, 300, '#ff4fc8', 0.55 * fl);
+  ctx.save(); ctx.font = FD(110, 800); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.shadowColor = '#ff4fc8'; ctx.shadowBlur = 40 * ctx.getTransform().a;
+  ctx.fillStyle = `rgba(255,190,240,${fl})`; ctx.fillText('CAFÉ', -hw * 0.55, -300); ctx.restore();
+  ctx.strokeStyle = '#5ff0ff'; ctx.lineWidth = 10; ctx.shadowColor = '#5ff0ff';
+  ctx.save(); ctx.shadowBlur = 30 * ctx.getTransform().a; ctx.beginPath(); ctx.moveTo(hw * 0.35, -420); ctx.lineTo(hw * 0.35, -60); ctx.lineTo(hw * 0.85, -60); ctx.stroke(); ctx.restore();
+  for (let i = 0; i < 4; i++) { const x = -hw * 0.75 + i * hw * 0.5; ctx.strokeStyle = '#000'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x, -500); ctx.lineTo(x, -180); ctx.stroke(); glow(ctx, x, -160, 120, '#ffb15c', 0.6); }
+  ctx.fillStyle = '#3a2433'; ctx.fillRect(-hw, 230, pw, 270);
+  ctx.fillStyle = '#5a3a4f'; ctx.fillRect(-hw, 230, pw, 16);
+}
+function sceneCountry(ctx, pw, t) {
+  const hw = pw / 2;
+  let g = ctx.createLinearGradient(0, -500, 0, 100);
+  g.addColorStop(0, '#7fbde8'); g.addColorStop(1, '#f0efe0');
+  ctx.fillStyle = g; ctx.fillRect(-hw, -500, pw, 600);
+  glow(ctx, -hw * 0.4, -260, 400, '#fff2c0', 0.6);
+  const hill = (y0, amp, f, ph, color) => { ctx.beginPath(); ctx.moveTo(-hw - 10, 520); for (let x = -hw - 10; x <= hw + 10; x += 12) ctx.lineTo(x, y0 - amp * Math.sin(x * f + ph) - amp * 0.4 * Math.sin(x * f * 2.3 + ph * 2)); ctx.lineTo(hw + 10, 520); ctx.closePath(); ctx.fillStyle = color; ctx.fill(); };
+  hill(40, 50, 0.004, 1, '#a9c48a');
+  hill(130, 60, 0.006, 3, '#86aa62');
+  for (let i = 0; i < 9; i++) { const x = -hw + 80 + i * pw / 9, y = 130 - 60 * Math.sin(x * 0.006 + 3) - 24 * Math.sin(x * 0.0138 + 6) - 6; ctx.fillStyle = '#2f5a32'; ctx.beginPath(); ctx.ellipse(x, y - 70, 18, 72, 0, 0, TAU); ctx.fill(); }
+  hill(250, 40, 0.005, 5, '#6a9448');
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 2;
+  for (let i = 0; i < 14; i++) { const y = 290 + i * 16; ctx.beginPath(); ctx.moveTo(-hw, y + Math.sin(t + i) * 3); ctx.lineTo(hw, y + 20); ctx.stroke(); }
+}
+function sceneNeon(ctx, pw, t) {
+  const hw = pw / 2;
+  let g = ctx.createLinearGradient(0, -500, 0, 500);
+  g.addColorStop(0, '#07081a'); g.addColorStop(1, '#1a0b2a');
+  ctx.fillStyle = g; ctx.fillRect(-hw, -500, pw, 1000);
+  for (let i = 0; i < 16; i++) {
+    const bx = -hw + i * (pw / 16), bw = pw / 16 - 8, top = -360 + rnd(i * 3.3) * 380;
+    ctx.fillStyle = '#121433'; ctx.fillRect(bx, top, bw, 900);
+    for (let r = 0; r < 18; r++) for (let c = 0; c < 3; c++) {
+      if (rnd(i * 97 + r * 7 + c) < 0.55) continue;
+      ctx.fillStyle = rnd(i + r * 3 + c * 11) > 0.5 ? 'rgba(255,214,120,0.55)' : 'rgba(110,220,255,0.5)';
+      ctx.fillRect(bx + 8 + c * (bw - 16) / 3, top + 20 + r * 44, (bw - 16) / 3 - 6, 18);
+    }
+  }
+  glow(ctx, -hw * 0.6, 120, 360, '#ff3fa8', 0.45);
+  glow(ctx, hw * 0.65, -80, 360, '#3fe0ff', 0.4);
+  ctx.strokeStyle = 'rgba(170,220,255,0.28)'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < 70; i++) { const x = (rnd(i * 1.37) - 0.5) * pw, y = ((rnd(i * 2.9) * 1000 + t * 900) % 1100) - 550; ctx.moveTo(x, y); ctx.lineTo(x - 8, y + 46); }
+  ctx.stroke();
+}
+// The catalogue, as the background picker lists it.
+const BG_LOOKS = [
+  { name: 'Blur', draw: sceneBlur, light: { color: '#bcd0ea', side: 0.8, k: 0.3 }, shadow: 0 },
+  { name: 'Office', draw: sceneOffice, light: { color: '#dfeaff', side: 0.5, k: 0.4 } },
+  { name: 'Island', draw: sceneIsland, light: { color: '#ffe0a8', side: -0.6, k: 0.5 } },
+  { name: 'Cyber café', draw: sceneCafe, light: { color: '#ff7fd6', side: -0.6, k: 0.55 } },
+  { name: 'Mountain', draw: sceneMountain, light: { ...LOOK_WARM, k: 0.55 } },
+  { name: 'Countryside', draw: sceneCountry, light: { color: '#fff0c8', side: -0.4, k: 0.45 } },
+  { name: 'Neon rain', draw: sceneNeon, light: { color: '#6fe6ff', side: 0.7, k: 0.6 } },
+];
+const CAT_T0 = 39.5, CAT_STEP = 0.5;
+const KEY_GREEN = '#14b14a';
+function keyMarker(ctx, x, y) {
+  const c = 14;
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) { ctx.fillStyle = (i + j) % 2 ? '#ffffff' : '#000000'; ctx.fillRect(x + i * c, y + j * c, c, c); }
+}
+// What a keyed sender puts on the wire: the person over flat green, and two
+// corner markers the receiver finds before it cuts anything out.
+function keyedPicture(ctx, pw, t) {
+  const hw = pw / 2;
+  ctx.fillStyle = KEY_GREEN; ctx.fillRect(-hw, -500, pw, 1000);
+  drawPerson(ctx, personPose(t), t, { light: personLookAt(t) });
+  keyMarker(ctx, -hw + 26, -474);
+  keyMarker(ctx, hw - 26 - 56, -474);
+}
+function checker(ctx, pw, a = 1) {
+  const hw = pw / 2, c = 40;
+  ctx.fillStyle = '#121120'; ctx.fillRect(-hw, -500, pw, 1000);
+  if (a <= 0) return;
+  ctx.fillStyle = `rgba(40,38,64,${a})`;
+  for (let y = -500, r = 0; y < 500; y += c, r++) {
+    for (let i = Math.floor(-hw / c); i * c < hw; i++) if (((i + r) & 1) === 0) ctx.fillRect(i * c, y, c, c);
+  }
+}
+
+/* ── What the camera tile shows, step by step ───────────────────────────── */
+// 0–6 s: the camera's own picture, then the room is replaced.
+function contentIntro(ctx, pw, t) {
+  const P = personPose(t), hw = pw / 2;
+  picRoom(ctx, pw, t);
+  const rv = seg(t, 3.0, 4.1), back = ease.io2(seg(t, 5.3, 6.1));
+  let wrap = 0;
+  if (rv > 0 && back < 1) {
+    const cx = P.dx, cy = -90, R = ease.io2(rv) * (Math.hypot(hw, 500) + 160);
+    ctx.save();
+    ctx.globalAlpha *= 1 - back;
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.clip();
+    sceneMountain(ctx, pw, t, LOOK_COOL);
+    drawPersonShadow(ctx, P, LOOK_COOL.side, 0.36);
+    ctx.restore();
+    if (rv < 1) { ring(ctx, cx, cy, R, 7, rgba('violetHi', 0.8 * (1 - rv))); glow(ctx, cx, cy, R * 0.2 + 40, 'violetHi', 0.15 * (1 - rv)); }
+    wrap = ease.io2(seg(t, 3.4, 4.3)) * (1 - back);
+  }
+  drawPerson(ctx, P, t, { light: personLookAt(t), wrap: { ...LOOK_COOL, k: 0.7 * wrap } });
+}
+// 6–12.4 s: segmentation. A 256 px copy is read, the model answers with a
+// mask, and the mask arrives a little after the picture it was made from.
+function contentFind(ctx, pw, t) {
+  const P = personPose(t), M = personPose(t, 12), hw = pw / 2;
+  picRoom(ctx, pw, t);
+  drawPerson(ctx, P, t, { light: personLookAt(t) });
+  const scan = ease.io2(seg(t, 6.5, 7.7)), ys = -500 + scan * 1000;
+  const dark = ease.io2(seg(t, 7.7, 8.4)) * (1 - ease.io2(seg(t, 10.5, 11.3)));
+  const smooth = ease.io2(seg(t, 8.5, 9.3));
+  if (dark > 0) { ctx.fillStyle = `rgba(3,3,8,${0.96 * dark})`; ctx.fillRect(-hw, -500, pw, 1000); }
+  if (t < 9.4 && scan > 0) {
+    const c = 1000 / 18, n = Math.ceil(hw / c);
+    for (let y = -500; y < 500; y += c) {
+      if (y > ys) break;
+      const w = personW(y + c / 2 - M.dy);
+      for (let i = -n; i < n; i++) {
+        const cx = (i + 0.5) * c, inside = w >= 0 && Math.abs(cx - M.dx) <= w;
+        if (inside) {
+          ctx.fillStyle = mixc('violet', '#ffffff', dark, (0.55 + 0.45 * dark) * (1 - smooth));
+          ctx.fillRect(i * c + 2, y + 2, c - 4, c - 4);
+        } else if (dark < 1) {
+          ctx.strokeStyle = `rgba(255,255,255,${0.09 * (1 - dark)})`; ctx.lineWidth = 1.5;
+          ctx.strokeRect(i * c + 2, y + 2, c - 4, c - 4);
+        }
+      }
+    }
+    if (scan < 1) {
+      ctx.fillStyle = rgba('violetHi', 0.16); ctx.fillRect(-hw, ys - 60, pw, 60);
+      ctx.fillStyle = HEX.violetHi; ctx.fillRect(-hw, ys - 3, pw, 6);
+    }
+  }
+  if (smooth > 0 && dark > 0) {
+    ctx.save(); ctx.globalAlpha *= smooth * dark; ctx.translate(M.dx, M.dy);
+    softFill(ctx, personPaths().outline, 6, '#ffffff');
+    ctx.restore();
+  }
+  // The mask laid back over the picture — a step behind the person.
+  const over = seg(t, 10.6, 11.2) * (1 - seg(t, 11.7, 12.3));
+  if (over > 0) {
+    ctx.save(); ctx.translate(M.dx, M.dy);
+    ctx.globalAlpha *= over * 0.42; ctx.fillStyle = HEX.violet; ctx.fill(personPaths().outline);
+    ctx.globalAlpha = over; ctx.lineWidth = 5; ctx.strokeStyle = HEX.violetHi; ctx.stroke(personPaths().outline);
+    ctx.restore();
+  }
+}
+// The four steps of the edge, and when each takes over.
+const EDGE_STAGES = [['RAW MASK', 12.4], ['DILATE', 14.2], ['FEATHER', 15.4], ['TEMPORAL BLEND', 16.6]];
+function edgeStage(t) { let s = 0; EDGE_STAGES.forEach(([, a], i) => { if (t >= a) s = i; }); return s; }
+// The cut-out, edged the way stage `s` edges it.
+function cutout(ctx, pw, t, s) {
+  const P = personPose(t), PP = personPaths();
+  const M = rawPose(t, s >= 3 ? ease.io2(seg(t, 16.6, 17.6)) : s === 2 ? 0.5 : 0);
+  ctx.save();
+  if (s <= 1) ctx.clip(blockyPath(M, s === 1 ? 9 : 0, 1000 / 144));
+  else { ctx.translate(M.dx, M.dy); ctx.clip(PP.outline); ctx.translate(-M.dx, -M.dy); }
+  // A dilated mask takes a sliver of the room with it: that is the point.
+  picRoom(ctx, pw, t);
+  drawPerson(ctx, P, t, { light: personLookAt(t) });
+  ctx.restore();
+  if (s >= 3) {
+    const k = 1 - seg(t, 17.0, 17.9);
+    for (let j = 1; j <= 3; j++) {
+      const G = personPose(t - j / 12 * (1 + k * 3), 12);
+      ctx.save(); ctx.translate(G.dx + (G.dx - P.dx) * k * 3, G.dy);
+      ctx.globalAlpha *= 0.3 * k; ctx.lineWidth = 3; ctx.strokeStyle = HEX.violetHi; ctx.stroke(PP.outline);
+      ctx.restore();
+    }
+  }
+}
+// 12.4–18.8 s: cleaning the edge.
+function contentEdge(ctx, pw, t) {
+  checker(ctx, pw, 1);
+  const s = edgeStage(t), a = EDGE_STAGES[s][1];
+  const f = s > 0 ? seg(t, a, a + 0.25) : 1;
+  if (f < 1) cutout(ctx, pw, t, s - 1);
+  ctx.save(); ctx.globalAlpha *= f; cutout(ctx, pw, t, s); ctx.restore();
+  const was = 1 - seg(t, 12.4, 12.9);
+  if (was > 0) { ctx.save(); ctx.globalAlpha *= was; picRoom(ctx, pw, t); drawPerson(ctx, personPose(t), t, { light: personLookAt(t) }); ctx.restore(); }
+}
+// 18.8–26.4 s: the scene is built, then relit.
+function contentScene(ctx, pw, t) {
+  const P = personPose(t), hw = pw / 2;
+  ctx.fillStyle = '#05050b'; ctx.fillRect(-hw, -500, pw, 1000);
+  const chk = 1 - seg(t, 18.8, 19.4);
+  if (chk > 0) { ctx.save(); ctx.globalAlpha *= chk; checker(ctx, pw, 1); ctx.restore(); }
+  const wire = seg(t, 19.3, 20.6), fill = ease.io2(seg(t, 20.6, 21.6));
+  if (wire > 0 && fill < 1) wireMountain(ctx, pw, wire, 1 - fill * 0.6);
+  if (fill > 0) {
+    const top = lerp(520, -520, fill);
+    ctx.save(); ctx.beginPath(); ctx.rect(-hw, top, pw, 1100); ctx.clip();
+    sceneMountain(ctx, pw, t, sceneLookAt(t));
+    ctx.restore();
+    if (fill < 1) { ctx.fillStyle = rgba('violetHi', 0.9); ctx.fillRect(-hw, top - 3, pw, 6); glow(ctx, 0, top, 360, 'violetHi', 0.2); }
+  }
+  const sl = sceneLookAt(t);
+  drawPerson(ctx, P, t, { light: personLookAt(t), wrap: { ...sl, k: 0.7 * fill } });
+}
+// 26.4–32.9 s: the flat composite either side of the exploded view.
+function contentComposite(ctx, pw, t) {
+  const sh = seg(t, 26.4, 26.9) * (1 - seg(t, 26.7, 27.0)) + seg(t, 31.4, 31.7);
+  composite(ctx, pw, t, sceneMountain, LOOK_WARM, Math.max(sh, t > 31.5 ? 1 : 0), personLookAt(t));
+}
+// 32.9–39.4 s: what a keyed sender sends.
+function contentKeyed(ctx, pw, t) {
+  const g = ease.io2(seg(t, 32.9, 33.5)), back = ease.io2(seg(t, 38.9, 39.4));
+  if (g < 1 || back > 0) composite(ctx, pw, t, sceneMountain, LOOK_WARM, 1, personLookAt(t));
+  if (g > 0 && back < 1) { ctx.save(); ctx.globalAlpha *= g * (1 - back); keyedPicture(ctx, pw, t); ctx.restore(); }
+}
+// 39.4–44 s: every background in turn, cut on the beat.
+function catalogueLook(ctx, pw, t, j) {
+  if (j < 0) { composite(ctx, pw, t, sceneMountain, LOOK_WARM, 1, personLookAt(t)); return; }
+  const S = BG_LOOKS[j];
+  composite(ctx, pw, t, S.draw, S.light, S.shadow ?? 1, S.light);
+}
+function contentCatalogue(ctx, pw, t) {
+  const i = Math.min(BG_LOOKS.length - 1, Math.floor((t - CAT_T0) / CAT_STEP));
+  if (i < 0) { catalogueLook(ctx, pw, t, -1); return; }
+  const f = ease.io2(seg(t, CAT_T0 + i * CAT_STEP, CAT_T0 + i * CAT_STEP + 0.16));
+  if (f < 1) catalogueLook(ctx, pw, t, i - 1);
+  if (f > 0) {
+    const hw = pw / 2, x = -hw + pw * f;
+    ctx.save(); ctx.beginPath(); ctx.rect(-hw, -500, pw * f, 1000); ctx.clip();
+    catalogueLook(ctx, pw, t, i);
+    ctx.restore();
+    if (f < 1) { ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.fillRect(x - 3, -500, 6, 1000); }
+  }
+}
+function bgContent(ctx, pw, t) {
+  if (t < 6.2) return contentIntro(ctx, pw, t);
+  if (t < 12.4) return contentFind(ctx, pw, t);
+  if (t < 18.8) return contentEdge(ctx, pw, t);
+  if (t < 26.4) return contentScene(ctx, pw, t);
+  if (t < 32.9) return contentComposite(ctx, pw, t);
+  if (t < 39.4) return contentKeyed(ctx, pw, t);
+  return contentCatalogue(ctx, pw, t);
+}
+
+/* ── The tile, and what is drawn around it ──────────────────────────────── */
+function bgPose(L, t) {
+  const P = (a, b, e) => ({ x: lerp(a.x, b.x, e), y: lerp(a.y, b.y, e), w: lerp(a.w, b.w, e), h: lerp(a.h, b.h, e) });
+  if (t < 5.3) return L.hero;
+  if (t < 6.1) return P(L.hero, L.tile, ease.io3(seg(t, 5.3, 6.1)));
+  if (t < 32.7) return L.tile;
+  if (t < 33.4) return P(L.tile, L.send[0], ease.io3(seg(t, 32.7, 33.4)));
+  if (t < 39.1) return L.send[0];
+  if (t < 39.8) return P(L.send[0], L.cat, ease.io3(seg(t, 39.1, 39.8)));
+  if (t < 43.9) return L.cat;
+  const e = ease.in3(seg(t, 43.9, 44.25)), E = L.end;
+  return P(L.cat, { x: E.x, y: E.y, w: E.s * 1.6, h: E.s * 0.9 }, e);
+}
+// A picture-units point inside tile T, in design units.
+function tileToWorld(T, px, py) { const k = T.h / 1000; return [T.x + px * k, T.y + py * k]; }
+function drawTile(ctx, T, alpha, content, scale = 1) {
+  if (alpha <= 0) return;
+  const w = T.w * scale, h = T.h * scale, r = Math.min(w, h) * 0.045;
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  ctx.save();
+  const m = ctx.getTransform();
+  ctx.shadowColor = 'rgba(0,0,0,0.55)';
+  ctx.shadowBlur = 70 * Math.abs(m.a);
+  ctx.shadowOffsetY = 26 * Math.abs(m.d);
+  rr(ctx, T.x - w / 2, T.y - h / 2, w, h, r);
+  ctx.fillStyle = '#05040a'; ctx.fill();
+  ctx.restore();
+  ctx.save();
+  rr(ctx, T.x - w / 2, T.y - h / 2, w, h, r); ctx.clip();
+  ctx.translate(T.x, T.y);
+  ctx.scale(h / 1000, h / 1000);
+  content(ctx, 1000 * w / h);
+  ctx.restore();
+  rr(ctx, T.x - w / 2, T.y - h / 2, w, h, r);
+  ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(177,166,255,0.3)'; ctx.stroke();
+  ctx.restore();
+}
+// A small label in the tile's top-left corner, like a camera's own overlay.
+function tileTag(ctx, T, text, a, o = {}) {
+  if (a <= 0) return;
+  const size = Math.max(12, Math.min(16, T.h * 0.03));
+  const x = T.x - T.w / 2 + 20, y = T.y - T.h / 2 + 26;
+  ctx.save();
+  ctx.globalAlpha *= a;
+  let dx = 0;
+  if (o.rec) { ctx.beginPath(); ctx.arc(x + 8, y, 7, 0, TAU); ctx.fillStyle = HEX.red; ctx.globalAlpha *= 0.55 + 0.45 * Math.round((Math.sin(o.t * 6) + 1) / 2); ctx.fill(); dx = 22; }
+  ctx.restore();
+  pill(ctx, x + dx, y, text, { size, alpha: a, bg: 'rgba(6,5,12,0.62)', fg: HEX.soft });
+}
+function bgTagFor(t) {
+  if (t > 0.6 && t < 3.0) return ['CAMERA · 1280 × 720 · 30 FPS', seg(t, 0.6, 0.9) * (1 - seg(t, 2.8, 3.0)), true];
+  if (t > 3.6 && t < 5.3) return ['SCENE · DOLOMITES LAKE', seg(t, 3.6, 3.9) * (1 - seg(t, 5.1, 5.3))];
+  if (t > 6.4 && t < 12.3) return ['MODEL INPUT · 256 × 144 · 12 Hz', seg(t, 6.4, 6.7) * (1 - seg(t, 12.0, 12.3))];
+  if (t > 12.7 && t < 18.6) return ['CUT-OUT · THE ROOM IS GONE', seg(t, 12.7, 13.0) * (1 - seg(t, 18.3, 18.6))];
+  if (t > 19.0 && t < 26.3) return ['SCENE · DOLOMITES LAKE · LIVE 3D', seg(t, 19.0, 19.3) * (1 - seg(t, 26.0, 26.3))];
+  if (t > 31.7 && t < 32.7) return ['COMPOSITE · 30 FPS', seg(t, 31.7, 31.9) * (1 - seg(t, 32.5, 32.7))];
+  if (t > 33.5 && t < 39.0) return ['WHAT YOU SEND', seg(t, 33.5, 33.8) * (1 - seg(t, 38.7, 39.0))];
+  return null;
+}
+function layerExplode(t) { return ease.io3(seg(t, 26.7, 27.6)) * (1 - ease.io3(seg(t, 30.9, 31.6))); }
+
+function bgTileScene(ctx, V, t, L) {
+  const ex = layerExplode(t);
+  if (ex > 0) { bgLayers(ctx, V, t, L, ex); return; }
+  const T = bgPose(L, t);
+  const a = clamp((t - 0.2) * 3) * (1 - ease.in2(seg(t, 43.9, 44.2)));
+  const pop = t < 1.5 ? lerp(0.9, 1, spring(t - 0.2, 2, 0.6)) : 1;
+  drawTile(ctx, T, a, (c, pw) => bgContent(c, pw, t), pop);
+  const tag = bgTagFor(t);
+  if (tag) tileTag(ctx, T, tag[0], tag[1] * a, { rec: tag[2], t });
+  if (t > 31.6 && t < 32.4) shock(ctx, T.x, T.y, T.h * 0.3, 31.6, t, { grow: T.w * 0.5, dur: 0.8, lw: 4, alpha: 0.6 });
+}
+
+// Step 4 · the picture pulled apart into the four things it is made of.
+function bgLayers(ctx, V, t, L, ex) {
+  const T = L.tile, k = T.h / 1000, pw = 1000 * T.w / T.h, r = Math.min(T.w, T.h) * 0.045;
+  const Sx = L.stack, sc = lerp(1, Sx[4], ex);
+  const M = [lerp(1, Sx[0], ex) * sc, lerp(0, Sx[1], ex) * sc, lerp(0, Sx[2], ex) * sc, lerp(1, Sx[3], ex) * sc];
+  const P = personPose(t), look = LOOK_WARM, pl = personLookAt(t);
+  const layers = [
+    ['SCENE', c => sceneMountain(c, pw, t, look), true],
+    ['SHADOW', c => drawPersonShadow(c, P, look.side, 0.9)],
+    ['YOU', c => drawPerson(c, P, t, { light: pl })],
+    ['LIGHT WRAP', c => { c.save(); c.translate(P.dx, P.dy); drawWrap(c, { ...look, k: 1 }); c.restore(); }],
+  ];
+  const anchors = [];
+  layers.forEach(([name, draw, solid], i) => {
+    const off = (i - 1.5) * ex;
+    const cx = T.x + off * L.gap.x, cy = T.y + off * L.gap.y;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.transform(M[0], M[1], M[2], M[3], 0, 0);
+    rr(ctx, -T.w / 2, -T.h / 2, T.w, T.h, r);
+    if (solid) { ctx.save(); ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = 50 * V.s; ctx.fillStyle = '#05040a'; ctx.fill(); ctx.restore(); }
+    else { ctx.fillStyle = `rgba(190,180,255,${0.1 * ex})`; ctx.fill(); }
+    ctx.save();
+    rr(ctx, -T.w / 2, -T.h / 2, T.w, T.h, r); ctx.clip();
+    ctx.scale(k, k);
+    draw(ctx);
+    ctx.restore();
+    rr(ctx, -T.w / 2, -T.h / 2, T.w, T.h, r);
+    ctx.lineWidth = 2 / sc; ctx.strokeStyle = rgba('violetHi', solid ? 0.3 : 0.25 + 0.4 * ex); ctx.stroke();
+    ctx.restore();
+    anchors.push([cx + M[0] * T.w / 2, cy + M[1] * T.w / 2, name]);
+  });
+  // Labels, one by one, once the stack is open.
+  anchors.forEach(([x, y, name], i) => {
+    const a = seg(t, 27.35 + i * 0.25, 27.6 + i * 0.25) * clamp(ex * 3 - 2);
+    if (a <= 0) return;
+    ctx.save();
+    ctx.globalAlpha *= a;
+    ctx.strokeStyle = rgba('violetHi', 0.6); ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(x + 6, y); ctx.lineTo(x + 26, y); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x + 4, y, 4, 0, TAU); ctx.fillStyle = HEX.violetHi; ctx.fill();
+    ctx.restore();
+    pill(ctx, x + 30, y, name, { size: V.kind === 'sq' ? 13 : 15, alpha: a, bg: HEX.violet, fg: '#ffffff' });
+  });
+}
+
+function bgTitles(ctx, V, t, L) {
+  const S = L.title;
+  const f = FD(S.size, 800);
+  slotLine(ctx, 'Your room.', 0, S.y + S.size * 0.36, S.size, seg(t, 0.7, 1.4), seg(t, 2.75, 3.05), { font: f, align: 'center', color: HEX.text });
+  slotLine(ctx, [['Any', HEX.text], ['where.', HEX.violetHi]], 0, S.y + S.size * 0.36, S.size, seg(t, 3.35, 4.0), seg(t, 5.1, 5.45), { font: f, align: 'center' });
+}
+
+// A badge under the tile's bottom edge, inside it.
+function tileBadge(ctx, T, text, a, o = {}) {
+  if (a <= 0) return;
+  const size = Math.max(12, Math.min(17, T.h * 0.032));
+  const y = T.y + T.h / 2 - size * 2;
+  ctx.save();
+  ctx.font = FM(size);
+  const tw = measureT(ctx, text, size * 0.08) + size * 1.3 + (o.icon ? size * 1.5 : 0);
+  ctx.restore();
+  const x0 = T.x - tw / 2;
+  pill(ctx, x0 + (o.icon ? size * 1.5 : 0), y, text, { size, alpha: a, bg: o.bg || 'rgba(6,5,12,0.72)', fg: o.fg || HEX.text, border: o.border });
+  if (o.icon) { ctx.save(); ctx.globalAlpha *= a; ctx.beginPath(); ctx.arc(x0 + size * 0.75, y, size * 0.95, 0, TAU); ctx.fillStyle = o.bg || 'rgba(6,5,12,0.72)'; ctx.fill(); icon(ctx, o.icon, x0 + size * 0.75, y, size * 1.05, o.fg || HEX.text, 2.4); ctx.restore(); }
+}
+
+function bgFindHud(ctx, V, t, L) {
+  const T = L.tile;
+  tileBadge(ctx, T, 'ON THIS DEVICE · NOTHING UPLOADED', ease.out3(seg(t, 9.5, 9.9)) * (1 - seg(t, 11.9, 12.3)), { icon: 'lock', bg: 'rgba(18,58,42,0.92)', fg: '#c9f7da', border: rgba('green', 0.5) });
+}
+
+// Step 2 · a magnifier on the hairline, showing the matte itself.
+function bgLoupe(ctx, V, t, L) {
+  const T = L.tile, Lp = L.loupe, k = T.h / 1000;
+  const open = ease.outBack(seg(t, 12.7, 13.2), 1.2) * (1 - ease.in3(seg(t, 18.0, 18.4)));
+  const s = edgeStage(t);
+  // The stage strip, inside the tile.
+  const sa = seg(t, 12.8, 13.2) * (1 - seg(t, 18.1, 18.5));
+  if (sa > 0) {
+    const size = Math.max(12, Math.min(16, T.h * 0.03)), tr = size * 0.1;
+    ctx.save();
+    ctx.globalAlpha *= sa;
+    ctx.font = FM(size);
+    const names = EDGE_STAGES.map(e => e[0].replace('RAW MASK', 'RAW').replace('TEMPORAL BLEND', 'BLEND'));
+    const ws = names.map(n => measureT(ctx, n, tr)), gap = size * 2.2;
+    const total = ws.reduce((a, b) => a + b, 0) + gap * (names.length - 1);
+    const y = T.y + T.h / 2 - size * 2;
+    rr(ctx, T.x - total / 2 - size, y - size * 1.05, total + size * 2, size * 2.1, size * 1.05);
+    ctx.fillStyle = 'rgba(6,5,12,0.72)'; ctx.fill();
+    let x = T.x - total / 2;
+    names.forEach((n, i) => {
+      ctx.fillStyle = i === s ? HEX.violetHi : i < s ? HEX.soft : HEX.faint;
+      ctx.textBaseline = 'middle';
+      fillT(ctx, n, x, y + 1, tr);
+      if (i < names.length - 1) { ctx.fillStyle = HEX.faint; fillT(ctx, '→', x + ws[i] + gap / 2 - size * 0.3, y + 1); }
+      x += ws[i] + gap;
+    });
+    ctx.restore();
+  }
+  if (open <= 0) return;
+  const P = personPose(t);
+  const ang = -0.62, ex = P.dx + Math.cos(ang) * BP.hairRx, ey = P.dy + BP.hairY + Math.sin(ang) * BP.hairRy;
+  const [wx, wy] = tileToWorld(T, ex, ey);
+  const R = Lp.r * open, Z = 5.4;
+  ctx.save();
+  // Connector.
+  const dx = wx - Lp.x, dy = wy - Lp.y, d = Math.hypot(dx, dy) || 1;
+  ctx.strokeStyle = rgba('violetHi', 0.7 * clamp(open)); ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(Lp.x + dx / d * R, Lp.y + dy / d * R); ctx.lineTo(wx, wy); ctx.stroke();
+  ring(ctx, wx, wy, 12 * clamp(open), 2.5, rgba('violetHi', 0.9));
+  // Lens.
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 40 * V.s;
+  ctx.beginPath(); ctx.arc(Lp.x, Lp.y, R, 0, TAU); ctx.fillStyle = '#000'; ctx.fill();
+  ctx.restore();
+  ctx.beginPath(); ctx.arc(Lp.x, Lp.y, R, 0, TAU); ctx.clip();
+  ctx.translate(Lp.x, Lp.y);
+  ctx.scale(k * Z, k * Z);
+  ctx.translate(-ex, -ey);
+  const PP = personPaths(), c = 1000 / 144;
+  const stageMatte = (st, al) => {
+    if (al <= 0) return;
+    ctx.save();
+    ctx.globalAlpha *= al;
+    const M = rawPose(t, st >= 3 ? ease.io2(seg(t, 16.6, 17.6)) : st === 2 ? 0.5 : 0);
+    if (st === 1) { ctx.fillStyle = HEX.violet; ctx.fill(blockyPath(M, 9, c)); }
+    if (st <= 1) { ctx.fillStyle = '#ffffff'; ctx.fill(blockyPath(M, 0, c)); }
+    else {
+      if (st === 3) {
+        const kk = 1 - seg(t, 17.0, 17.9);
+        for (let j = 3; j >= 1; j--) { const G = personPose(t - j / 12 * (1 + kk * 3), 12); ctx.save(); ctx.globalAlpha *= 0.35 * kk; ctx.translate(G.dx + (G.dx - P.dx) * kk * 3, G.dy); softFill(ctx, PP.outline, 9, HEX.violetHi); ctx.restore(); }
+      }
+      ctx.save(); ctx.translate(M.dx, M.dy); softFill(ctx, PP.outline, st === 2 ? 11 : 9, '#ffffff'); ctx.restore();
+    }
+    ctx.restore();
+  };
+  const a0 = EDGE_STAGES[s][1], f = s > 0 ? seg(t, a0, a0 + 0.25) : 1;
+  if (f < 1) stageMatte(s - 1, 1);
+  stageMatte(s, f);
+  // The pixel grid of the mask, while the mask is still made of pixels.
+  const ga = s <= 1 ? 1 : 1 - f;
+  if (ga > 0) {
+    ctx.strokeStyle = `rgba(124,106,247,${0.35 * ga})`; ctx.lineWidth = 0.4;
+    const span = R / (k * Z);
+    ctx.beginPath();
+    for (let x = Math.floor((ex - span) / c) * c; x < ex + span; x += c) { ctx.moveTo(x, ey - span); ctx.lineTo(x, ey + span); }
+    for (let y = Math.floor((ey - span) / c) * c; y < ey + span; y += c) { ctx.moveTo(ex - span, y); ctx.lineTo(ex + span, y); }
+    ctx.stroke();
+  }
+  ctx.restore();
+  ring(ctx, Lp.x, Lp.y, R, 3, HEX.violetHi);
+  ring(ctx, Lp.x, Lp.y, R + 7, 1.5, rgba('violetHi', 0.35));
+  pill(ctx, Lp.x, Lp.y + R + 30, EDGE_STAGES[s][0], { size: V.kind === 'sq' ? 13 : 15, align: 'center', alpha: clamp(open), bg: HEX.violet, fg: '#ffffff' });
+}
+
+// Step 3 · the camera measures the light on the face; the scene follows.
+function bgRelightHud(ctx, V, t, L) {
+  const T = L.tile, a = seg(t, 21.7, 22.1) * (1 - seg(t, 25.6, 26.0));
+  if (a <= 0) return;
+  const P = personPose(t), k = T.h / 1000;
+  const [fx, fy] = tileToWorld(T, P.dx, -45);
+  const R = 120 * k;
+  ctx.save();
+  ctx.globalAlpha *= a;
+  ctx.translate(fx, fy);
+  ctx.rotate(t * 0.6);
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 2;
+  ctx.setLineDash([R * 0.5, R * 0.285]);
+  ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.stroke();
+  ctx.setLineDash([]);
+  for (let i = 0; i < 4; i++) { const an = i * Math.PI / 2; ctx.beginPath(); ctx.moveTo(Math.cos(an) * R * 0.82, Math.sin(an) * R * 0.82); ctx.lineTo(Math.cos(an) * R * 1.12, Math.sin(an) * R * 1.12); ctx.stroke(); }
+  ctx.restore();
+  const pl = personLookAt(t);
+  const txt = `LIGHT ${pl.side < 0 ? '←' : '→'} ${pl.warm > 0.5 ? 'WARM' : 'COOL'}`;
+  const size = V.kind === 'sq' ? 13 : 15;
+  pill(ctx, fx, fy + R + 30, txt, { size, align: 'center', alpha: a, bg: 'rgba(6,5,12,0.72)', fg: pl.warm > 0.5 ? '#ffd2a8' : '#cfe0ff' });
+  pill(ctx, fx, fy + R + 30 + size * 2.1, 'MEASURED 4× A SECOND', { size: size - 2, align: 'center', alpha: a * 0.9, bg: 'rgba(6,5,12,0.5)', fg: HEX.muted });
+  // The scene catching up.
+  const sa = seg(t, 24.2, 24.5) * (1 - seg(t, 25.6, 26.0));
+  if (sa > 0) {
+    const sl = sceneLookAt(t), pw = 1000 * T.w / T.h;
+    const [sx, sy] = tileToWorld(T, sl.side * Math.min(pw / 2 * 0.6, 520), 15 - (1 - sl.warm) * 30);
+    pill(ctx, sx, sy - 70 * k - 10, 'SCENE RELIT', { size, align: 'center', alpha: sa, bg: HEX.violet, fg: '#ffffff' });
+  }
+}
+
+// Step 5 · keyed sending: the person over green goes out; the room is drawn
+// on the other side, from a scene id and a few numbers.
+function bgKeyed(ctx, V, t, L) {
+  const A = L.send[0], B = L.send[1];
+  const ba = ease.out3(seg(t, 33.0, 33.6)) * (1 - seg(t, 38.7, 39.2));
+  if (ba <= 0) return;
+  // The link.
+  const vert = Math.abs(B.y - A.y) > Math.abs(B.x - A.x);
+  const p0 = vert ? [A.x, A.y + A.h / 2] : [A.x + A.w / 2, A.y], p1 = vert ? [B.x, B.y - B.h / 2] : [B.x - B.w / 2, B.y];
+  ctx.save();
+  ctx.globalAlpha *= ba;
+  ctx.setLineDash([3, 9]); ctx.lineCap = 'round'; ctx.lineWidth = 3; ctx.strokeStyle = rgba('violetHi', 0.55);
+  ctx.beginPath(); ctx.moveTo(p0[0], p0[1]); ctx.lineTo(p1[0], p1[1]); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+  // Frames on the wire: three a second, green and the person.
+  for (let m = 0; ; m++) {
+    const te = 33.5 + m / 3;
+    if (te > 38.6 || te > t) break;
+    const p = (t - te) / 0.75;
+    if (p <= 0 || p >= 1) continue;
+    const e = ease.io2(p), x = lerp(p0[0], p1[0], e), y = lerp(p0[1], p1[1], e);
+    ctx.save();
+    ctx.globalAlpha *= ba * Math.sin(p * Math.PI);
+    rr(ctx, x - 22, y - 14, 44, 28, 6); ctx.fillStyle = KEY_GREEN; ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y - 3, 6, 0, TAU); ctx.moveTo(x + 12, y + 14); ctx.arc(x, y + 14, 12, 0, Math.PI, true); ctx.fillStyle = '#e2805b'; ctx.fill();
+    ctx.restore();
+  }
+  // The scene itself goes once, as an id and its light.
+  const ip = seg(t, 34.0, 34.9);
+  if (ip > 0 && ip < 1) {
+    const e = ease.io2(ip), x = lerp(p0[0], p1[0], e) + (vert ? 0 : 0), y = lerp(p0[1], p1[1], e);
+    pill(ctx, x + (vert ? 40 : 0), y + (vert ? 0 : -40), 'SCENE ID + LIGHT', { size: V.kind === 'sq' ? 12 : 14, alpha: Math.sin(ip * Math.PI) * 1.4 * ba, bg: HEX.violet, fg: '#ffffff' });
+  }
+  // The receiver's tile.
+  const key = ease.io2(seg(t, 34.8, 35.9));
+  drawTile(ctx, B, ba, (c, pw) => {
+    const hw = pw / 2;
+    keyedPicture(c, pw, t);
+    if (key > 0) {
+      c.save(); c.beginPath(); c.rect(-hw, -500, pw * key, 1000); c.clip();
+      composite(c, pw, t, sceneMountain, LOOK_WARM, 1, personLookAt(t));
+      c.restore();
+      if (key < 1) { c.fillStyle = 'rgba(255,255,255,0.9)'; c.fillRect(-hw + pw * key - 3, -500, 6, 1000); }
+    }
+  }, lerp(0.9, 1, ba));
+  tileTag(ctx, B, key >= 1 ? 'ROOM DRAWN ON THEIR SCREEN' : 'WHAT THEY RECEIVE', ba * seg(t, 33.5, 33.8));
+  tileBadge(ctx, B, 'THE ROOM IS NOT SENT', seg(t, 36.0, 36.4) * ba, { bg: HEX.violet, fg: '#ffffff' });
+}
+
+function bgCopy(ctx, V, t, L) {
+  drawCopy(ctx, V, L, t, { eyebrow: 'STEP 1 · FIND YOU', head: 'It finds you.', sub: 'A small model picks you out of every frame, on your own device.', cap: 'MEDIAPIPE · 256 px · 10–15× A SECOND', tIn: 6.3, tOut: 11.95 });
+  drawCopy(ctx, V, L, t, { eyebrow: 'STEP 2 · THE EDGE', head: 'A clean edge.', sub: 'Each mask is grown, softened and blended with the last, so the edge never crawls.', cap: 'DILATE · FEATHER · TEMPORAL BLEND', tIn: 12.6, tOut: 18.35 });
+  drawCopy(ctx, V, L, t, { eyebrow: 'STEP 3 · THE ROOM', head: 'A room that’s alive.', sub: 'Not a photo: a 3D scene drawn live on your GPU, relit to match the light on your face.', cap: 'THREE.JS · WEBGL2 · 0 BYTES OF ARTWORK', tIn: 19.0, tOut: 25.9 });
+  drawCopy(ctx, V, L, t, { eyebrow: 'STEP 4 · THE PICTURE', head: 'You, in the room.', sub: 'Your shadow falls on the scene, and its light wraps around your edge.', cap: 'SCENE · SHADOW · YOU · LIGHT WRAP', tIn: 26.6, tOut: 32.3 });
+  drawCopy(ctx, V, L, t, { eyebrow: 'IN A CALL', head: 'Send just you.', sub: 'A peer that can draw the scene gets you over flat green, and draws the room itself.', cap: 'KEYED VIDEO · DIRECT CONNECTIONS ONLY', tIn: 33.4, tOut: 38.75 });
+}
+
+// Step 6 · the catalogue, named as the picker names it.
+function bgCatalogue(ctx, V, t, L) {
+  const S = L.title, size = S.size * 0.82;
+  slotLine(ctx, 'Pick a room.', 0, S.y + size * 0.36 + 10, size, seg(t, 39.5, 40.1), seg(t, 43.6, 43.95), { font: FD(size, 800), align: 'center', color: HEX.text });
+  const names = BG_LOOKS.map(l => l.name).concat(['+ Your 360° photo or 3D model']);
+  const cur = Math.floor((t - CAT_T0) / CAT_STEP);
+  const size2 = L.chips.size;
+  ctx.font = FT(size2, 600);
+  const padX = size2 * 0.9, h = size2 * 2, gap = 12;
+  const ws = names.map(c => ctx.measureText(c).width + padX * 2);
+  const maxW = Math.min(V.hw * 2 - 100, 1400);
+  const rows = [[]];
+  let rw = 0;
+  ws.forEach((w, i) => { if (rw + w > maxW && rows[rows.length - 1].length) { rows.push([]); rw = 0; } rows[rows.length - 1].push(i); rw += w + gap; });
+  const out = seg(t, 43.6, 44.0);
+  rows.forEach((row, ri) => {
+    const total = row.reduce((s, i) => s + ws[i], 0) + gap * (row.length - 1);
+    let x = -total / 2;
+    const y = L.chips.y + ri * (h + 10);
+    row.forEach(i => {
+      const at = i < BG_LOOKS.length ? 39.55 + i * 0.06 : 43.0;
+      const a = seg(t, at, at + 0.25) * (1 - out);
+      if (a > 0) {
+        const on = i === cur || (i === BG_LOOKS.length && t >= 43.0);
+        const p = ease.outBack(seg(t, at, at + 0.35), 2);
+        ctx.save();
+        ctx.globalAlpha *= a;
+        ctx.translate(x + ws[i] / 2, y);
+        ctx.scale(lerp(0.7, 1, p), lerp(0.7, 1, p));
+        rr(ctx, -ws[i] / 2, -h / 2, ws[i], h, h / 2);
+        ctx.fillStyle = on ? HEX.violet : rgba('violet', 0.13); ctx.fill();
+        ctx.lineWidth = 1.5; ctx.strokeStyle = rgba('violet', on ? 0.9 : 0.45); ctx.stroke();
+        ctx.fillStyle = on ? '#ffffff' : '#e2ddff';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(names[i], 0, 1);
+        ctx.restore();
+      }
+      x += ws[i] + gap;
+    });
+  });
+}
+
+function bgClose(ctx, V, t, L) {
+  const E = L.end;
+  const wy = E.y + E.s / 2 + L.word * 0.92;
+  ctx.save();
+  ctx.font = FD(L.word, 800);
+  const w = ctx.measureText('Voxal').width;
+  ctx.restore();
+  slotLine(ctx, 'Voxal', -w / 2, wy, L.word, seg(t, 44.35, 45.0), 0, { font: FD(L.word, 800), color: HEX.text });
+  const ty = wy + L.tag * 1.6;
+  slotLine(ctx, 'Virtual backgrounds, made on your device.', 0, ty, L.tag, seg(t, 44.6, 45.2), 0, { font: FT(V.kind === 'port' ? L.tag * 0.86 : L.tag, 500), align: 'center', color: HEX.soft });
+  const ca = ease.outBack(seg(t, 44.85, 45.3), 1.6), cA = seg(t, 44.85, 45.05);
+  if (cA > 0) {
+    const cy = ty + L.tag * 1.9, size = L.tag * 0.86;
+    ctx.save();
+    ctx.globalAlpha *= cA;
+    ctx.translate(0, cy);
+    ctx.scale(lerp(0.8, 1, ca), lerp(0.8, 1, ca));
+    ctx.font = FT(size, 700);
+    const s = 'web.voxal.app', tw = ctx.measureText(s).width;
+    const pw = tw + size * 2.2, ph = size * 2.1;
+    glow(ctx, 0, 0, pw * 0.8, 'violet', 0.35);
+    rr(ctx, -pw / 2, -ph / 2, pw, ph, ph / 2);
+    ctx.fillStyle = HEX.violet; ctx.fill();
+    ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(s, 0, 2);
+    ctx.restore();
+    const fa = seg(t, 45.2, 45.6);
+    if (fa > 0) {
+      ctx.save();
+      ctx.globalAlpha *= fa;
+      ctx.font = FM(V.kind === 'land' ? 21 : 18);
+      ctx.fillStyle = HEX.soft;
+      const f = 'BLUR · SIX SCENES · YOUR OWN 360° PHOTOS & 3D MODELS', fw = measureT(ctx, f, 2);
+      ctx.textBaseline = 'middle';
+      fillT(ctx, f, -fw / 2, cy + ph / 2 + 52, 2);
+      ctx.restore();
+    }
+  }
+}
+
+// The corner mark through the explanation, and the icon of the end card.
+function bgHero(ctx, V, t, L) {
+  const G = L.bug, E = L.end;
+  const ba = seg(t, 5.9, 6.4) * (1 - seg(t, 43.5, 43.9));
+  if (ba > 0) {
+    glow(ctx, G.x, G.y, G.s * 1.7, 'violet', 0.22 * ba);
+    drawIconImage(ctx, G.x, G.y, G.s * lerp(0.7, 1, ease.outBack(seg(t, 5.9, 6.4))), ba);
+    ctx.save();
+    ctx.globalAlpha = ba;
+    ctx.font = FD(G.s * 0.58, 800);
+    ctx.fillStyle = HEX.text;
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Voxal', G.x + G.s * 0.72 + (1 - ease.out3(ba)) * 14, G.y + 2);
+    ctx.restore();
+  }
+  if (t >= 44.0) {
+    const k = ease.outBack(seg(t, 44.0, 44.6), 1.4), y = E.y + Math.sin(Math.max(0, t - 44.6) * 1.6) * 4 * seg(t, 44.6, 45.1);
+    glow(ctx, E.x, y, E.s * 1.7, 'violet', 0.22 + energy(t, BG_HITS) * 0.1);
+    shock(ctx, E.x, y, E.s * 0.55, 44.1, t, { grow: 620, dur: 1.3, lw: 4, alpha: 0.7 });
+    shock(ctx, E.x, y, E.s * 0.55, 45.05, t, { grow: 260, dur: 1.0, lw: 3, alpha: 0.5 });
+    drawIconImage(ctx, E.x, y, E.s * Math.max(0.01, k), clamp(seg(t, 44.0, 44.2)));
+  }
+}
+
+const BG_FOCUS = [[0, 0, 0.05], [5.3, 0, 0.05], [6.1, 0.42, 0.05], [39.1, 0.42, 0.05], [39.8, 0, 0], [43.9, 0, 0], [48, 0, -0.1]];
+const BG_HITS = [[3.1, 0.9], [7.8, 0.5], [9.6, 0.35], [14.2, 0.3], [15.4, 0.3], [16.6, 0.3], [20.6, 0.5], [24.0, 0.6], [31.6, 0.8], [34.9, 0.5], [39.5, 0.4], [41.5, 0.4], [44.1, 1]];
+const BG_SCENES = [
+  { a: 0, b: 6.4, draw: bgTitles },
+  { a: 0, b: 44.6, draw: bgTileScene },
+  { a: 6.2, b: 12.5, draw: bgFindHud },
+  { a: 12.5, b: 18.6, draw: bgLoupe },
+  { a: 18.8, b: 26.4, draw: bgRelightHud },
+  { a: 32.9, b: 39.4, draw: bgKeyed },
+  { a: 6.0, b: 39.2, draw: bgCopy },
+  { a: 39.3, b: 44.2, draw: bgCatalogue },
+  { a: 43.8, b: 48.01, draw: bgClose },
+];
+const BG_CHAPTERS = [
+  { t: 0, name: 'Your room' },
+  { t: 6.0, name: 'Find you' },
+  { t: 12.5, name: 'A clean edge' },
+  { t: 18.8, name: 'A living room' },
+  { t: 26.4, name: 'You, in it' },
+  { t: 32.8, name: 'Send just you' },
+  { t: 39.4, name: 'Pick a room' },
+];
+
+/* ── Subtitles ──────────────────────────────────────────────────────────── */
+// Burned in when asked for: the narration line that is being spoken, at the
+// bottom of the frame (above where social apps put their own buttons in
+// 9:16). Plain fillText, never the tracked fillT: tracking one glyph at a time
+// would break Arabic's joined letters. Scripts the embedded fonts do not cover
+// fall back to the system's, so those exports depend on the machine's fonts.
+function subTokens(text, lang) {
+  if (lang === 'zh' || lang === 'ja') {
+    if (typeof Intl !== 'undefined' && Intl.Segmenter) return Array.from(new Intl.Segmenter(lang, { granularity: 'word' }).segment(text), s => s.segment);
+    return Array.from(text);
+  }
+  return text.split(/(\s+)/).filter(Boolean);
+}
+function subLines(ctx, text, maxW, lang) {
+  const tok = subTokens(text, lang);
+  const full = ctx.measureText(text).width;
+  const n = Math.max(1, Math.ceil(full / maxW));
+  const fill = target => {
+    const lines = [];
+    let cur = '';
+    for (const tk of tok) {
+      const next = cur + tk;
+      const lead = /^[、。，．！？：；）」』,.!?:;)]/.test(tk);
+      if (cur.trim() && !lead && ctx.measureText(next.trim()).width > target) { lines.push(cur.trim()); cur = tk.replace(/^\s+/, ''); }
+      else cur = next;
+    }
+    if (cur.trim()) lines.push(cur.trim());
+    return lines;
+  };
+  // Balanced lines, not one long line and a widow — widened step by step
+  // until the words fall into as few lines as the full width would take.
+  let target = Math.min(maxW, full / n), lines = fill(target);
+  while (lines.length > n && target < maxW) { target = Math.min(maxW, target * 1.05); lines = fill(target); }
+  return lines;
+}
+function drawSubtitles(ctx, V, t, subs) {
+  const cue = subs.cues.find(c => t >= c.t - 0.15 && t <= c.t + c.dur + 0.3);
+  if (!cue) return;
+  const a = gate(t, cue.t, cue.t + cue.dur + 0.15, 0.12);
+  if (a <= 0) return;
+  const S = { land: { size: 40, maxW: 1240, bottom: 70 }, sq: { size: 34, maxW: 880, bottom: 58 }, port: { size: 42, maxW: 900, bottom: 300 } }[V.kind];
+  ctx.save();
+  ctx.globalAlpha = a;
+  ctx.font = FT(S.size, 600);
+  ctx.direction = subs.rtl ? 'rtl' : 'ltr';
+  const lines = subLines(ctx, cue.text, S.maxW, subs.lang);
+  const lh = S.size * 1.34, padX = S.size * 0.62, padY = S.size * 0.36;
+  const w = Math.max(...lines.map(l => ctx.measureText(l).width));
+  const yBottom = V.hh - S.bottom, top = yBottom - lines.length * lh - padY * 2;
+  rr(ctx, -w / 2 - padX, top, w + padX * 2, lines.length * lh + padY * 2, S.size * 0.38);
+  ctx.fillStyle = 'rgba(6,5,12,0.74)';
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  lines.forEach((ln, i) => ctx.fillText(ln, 0, top + padY + lh * (i + 0.5)));
+  ctx.restore();
+}
+
+/* ── The films ──────────────────────────────────────────────────────────── */
+const FILMS = {
+  intro: {
+    id: 'intro', slug: '30s', name: 'Voxal in 30 s', title: 'Voxal in 30 Seconds', dur: DUR, poster: 29.5,
+    layout: LAYOUT, scenes: SCENES, chapters: CHAPTERS, hero: drawHero, focus: FOCUS, hits: HITS, score: scoreIntro, tail: 29.2,
+  },
+  backgrounds: {
+    id: 'backgrounds', slug: 'backgrounds', name: 'Virtual backgrounds', title: 'Voxal: Virtual Backgrounds', dur: BG_DUR, poster: 46.5,
+    layout: LAYOUT_BG, scenes: BG_SCENES, chapters: BG_CHAPTERS, hero: bgHero, focus: BG_FOCUS, hits: BG_HITS, score: scoreBackgrounds, tail: 47.0,
+  },
+};
+
+// opt: { film: 'intro' | 'backgrounds' (default intro), subs: subtitles
+// (see subtitlesFor), grain: false to leave the grain out }.
 function renderFrame(ctx, W, H, t, opt = {}) {
-  t = clamp(t, 0, DUR);
+  const F = FILMS[opt.film] || FILMS.intro;
+  t = clamp(t, 0, F.dur);
   const s = Math.min(W, H) / 1080;
   const V = { W, H, s, hw: W / 2 / s, hh: H / 2 / s, t };
   V.kind = V.hw / V.hh > 1.3 ? 'land' : V.hw / V.hh < 0.77 ? 'port' : 'sq';
-  const L = LAYOUT(V);
+  V.subs = !!opt.subs;
+  const L = F.layout(V);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
   ctx.setLineDash([]);
   ctx.setTransform(s, 0, 0, s, W / 2, H / 2);
   ctx.imageSmoothingQuality = 'high';
-  drawBackground(ctx, V, t);
-  for (const sc of SCENES) {
+  drawBackground(ctx, V, t, F);
+  for (const sc of F.scenes) {
     if (t >= sc.a && t < sc.b) { ctx.save(); sc.draw(ctx, V, t, L); ctx.restore(); }
   }
   drawVignette(ctx, V);
   ctx.save();
-  drawHero(ctx, V, t, L);
+  F.hero(ctx, V, t, L);
   ctx.restore();
-  drawOverlay(ctx, V, t, opt.grain !== false);
+  drawOverlay(ctx, V, t, opt.grain !== false, opt.subs);
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -2042,10 +3539,10 @@ function renderFrame(ctx, W, H, t, opt = {}) {
 
 const AUDIO_SR = 48000;
 
-async function renderSoundtrack() {
-  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-  const ac = new OAC(2, Math.ceil(DUR * AUDIO_SR), AUDIO_SR);
-
+// The instruments and the bus, shared by both films' scores. Building them
+// creates the same nodes in the same order every time, so a score is the
+// same graph — and the same sound — whoever calls it.
+function synthKit(ac) {
   // Seeded noise: the same hiss every render.
   let seed = 0x9e3779b9;
   const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
@@ -2198,7 +3695,12 @@ async function renderSoundtrack() {
     o.connect(lp); lp.connect(g); g.connect(duck);
     o.start(t0); o.stop(t1 + 0.1);
   }
+  return { ac, out, tone, hiss, kick, boom, hat, clap, pluck, bell, whoosh, click, keyUp, roger, riser, pad, bass };
+}
 
+// The first film's score: 120 BPM in D major, cued to its own events.
+function scoreIntro(K) {
+  const { tone, hiss, kick, boom, hat, clap, pluck, bell, whoosh, click, keyUp, roger, riser, pad, bass } = K;
   // Harmony, section by section (Hz).
   const D3 = 146.83, E3 = 164.81, Fs3 = 185, G3 = 196, A3 = 220, B3 = 246.94, Cs4 = 277.18, D4 = 293.66, E4 = 329.63, Fs4 = 369.99, A4 = 440;
   pad(0.3, 6.3, [D3, A3, Cs4, E4, Fs4], 0.9, 1100);
@@ -2272,10 +3774,103 @@ async function renderSoundtrack() {
   hiss(28.0, 2.2, { type: 'highpass', f: 5000, gain: 0.08, wet: 1 });
   [587.33, 739.99, 880, 1174.66, 1479.98].forEach((f, i) => bell(28.0 + i * 0.09, f, 0.9 - i * 0.1, (i - 2) * 0.25));
   bell(28.95, 880, 0.6);
+}
 
+// The second film's score: calmer, 120 BPM in F, one section per step of the
+// pipeline, with the same walkie-talkie grammar of clicks and bells.
+function scoreBackgrounds(K) {
+  const { tone, hiss, kick, boom, hat, clap, pluck, bell, whoosh, click, roger, riser, pad, bass } = K;
+  const F2 = 87.31, A2 = 110, Bb2 = 116.54, C3 = 130.81, D3 = 146.83, E3 = 164.81, F3 = 174.61, G3 = 196, A3 = 220, Bb3 = 233.08,
+    C4 = 261.63, D4 = 293.66, E4 = 329.63, F4 = 349.23, G4 = 392, A4 = 440, Bb4 = 466.16, C5 = 523.25, D5 = 587.33, E5 = 659.25, F5 = 698.46,
+    G5 = 783.99, A5 = 880, C6 = 1046.5, E6 = 1318.51, F6 = 1396.91;
+  pad(0.2, 3.1, [F3, A3, C4, E4], 0.75, 900);
+  pad(3.0, 5.7, [F3, C4, E4, G4, A4], 0.95, 2000);
+  pad(5.6, 12.4, [D3, F3, A3, C4, E4], 1, 1300);
+  pad(12.4, 18.8, [Bb2, F3, A3, D4], 1, 1500);
+  pad(18.8, 23.9, [98, D3, F3, Bb3, A4], 1, 1400);
+  pad(23.9, 26.4, [C3, G3, Bb3, E4, A4], 1, 2100);
+  pad(26.4, 32.8, [F3, A3, C4, E4, G4], 1, 1800);
+  pad(32.8, 39.4, [A2, E3, G3, C4, D4], 1, 1600);
+  pad(39.4, 43.9, [Bb2, F3, A3, D4, E4], 1, 2200);
+  pad(44.1, 48.2, [F2, C3, A3, E4, G4, C5], 1.15, 2200);
+  bass(5.6, 12.4, 73.42, 0.7);
+  bass(12.4, 18.8, 58.27, 0.9);
+  bass(18.8, 23.9, 49, 1);
+  bass(23.9, 26.4, 65.41, 1);
+  bass(26.4, 32.8, 87.31 / 2, 1);
+  bass(32.8, 39.4, 55, 0.9);
+  bass(39.4, 43.6, 58.27, 1);
+  bass(44.1, 48, 87.31 / 2, 1.1);
+
+  // Rhythm: it gathers step by step, breathes in the call, drives the catalogue.
+  for (let t = 6.5; t < 12.3; t += 1) { kick(t, 0.4); hat(t + 0.5, 0.4); }
+  for (let t = 12.5; t < 18.6; t += 0.5) { kick(t, 0.5); hat(t + 0.25, 0.55, (Math.round(t * 2) % 2) ? 0.25 : -0.25); }
+  for (let t = 18.8; t < 26.3; t += 0.5) { kick(t, 0.6); hat(t + 0.25, 0.7); if (t > 20.5 && Math.round((t - 18.8) / 0.5) % 2 === 1) clap(t, 0.5); }
+  for (let t = 26.4; t < 32.6; t += 0.5) { kick(t, 0.7); hat(t + 0.25, 0.8, 0.2); if (Math.round((t - 26.4) / 0.5) % 2 === 1) clap(t, 0.6); }
+  for (let t = 26.4; t < 32.6; t += 0.25) if (Math.round(t * 4) % 2) hat(t, 0.3, -0.3);
+  for (let t = 32.8; t < 39.2; t += 1) { kick(t, 0.5); hat(t + 0.5, 0.5); }
+  for (let t = 39.5; t < 43.5; t += 0.5) { kick(t, 0.85); hat(t + 0.25, 0.9); if (Math.round((t - 39.5) / 0.5) % 2 === 1) clap(t, 0.7); }
+
+  // ─ Cues ─
+  click(0.6, 0.8);                                   // REC
+  hiss(0.2, 2.8, { type: 'lowpass', f: 700, gain: 0.012 }); // room tone
+  whoosh(2.6, 0.5, 0.9, true);                       // the room goes
+  kick(3.1, 0.7); boom(3.1, 0.6);
+  [A4, C5, E5, F5].forEach((f, i) => bell(3.1 + i * 0.07, f, 0.8 - i * 0.1, (i - 1.5) * 0.25));
+  hiss(3.1, 1.8, { type: 'highpass', f: 5000, gain: 0.05, wet: 1 });
+  [F4, A4, C5, E5, G5, E5, C5, A4, C5, E5, G5, A5, G5, E5].forEach((f, i) => pluck(3.5 + i * 0.125, f, 0.4, i % 2 ? 0.35 : -0.35));
+  whoosh(5.3, 0.7, 0.7);
+  // Step 1: the scan, the cells, the mask, the twelve-a-second ticks.
+  hiss(6.5, 1.25, { f: 400, to: 5000, q: 1.6, gain: 0.07, swell: 0.9, wet: 0.4 });
+  for (let i = 0; i < 24; i++) tone(6.55 + i * 0.05, [F5, G5, A5, C6, 1174.66][i % 5] * (i % 3 ? 1 : 0.5), 0.06, { gain: 0.014, pan: ((i * 7) % 5 - 2) * 0.2 });
+  tone(7.8, 120, 0.3, { to: 70, glide: 0.25, gain: 0.12 }); click(7.8, 0.6);
+  bell(8.6, C6, 0.5, 0.1);
+  for (let i = 0; i < 16; i++) hiss(9.3 + i / 12, 0.006, { type: 'highpass', f: 6000, gain: 0.025, pan: 0.3 });
+  bell(9.6, E6, 0.55, 0.2); tone(9.6, 1760, 0.08, { gain: 0.03 });
+  whoosh(11.4, 0.6, 0.6);
+  // Step 2: one click and one note per stage of the edge.
+  [[12.8, A4], [14.2, C5], [15.4, D5], [16.6, F5]].forEach(([t, f]) => { click(t, 0.7); pluck(t, f, 0.8, 0.15); });
+  whoosh(18.1, 0.6, 0.6);
+  // Step 3: the wireframe, the fill, the lamp, the scene relit.
+  [G4, Bb4, D5, F5, A5, F5, D5, Bb4, D5, F5, A5, C6].forEach((f, i) => pluck(19.4 + i * 0.1, f, 0.5, i % 2 ? 0.3 : -0.3));
+  whoosh(20.5, 1.0, 0.9, true);
+  bell(21.6, D5, 0.5, -0.2);
+  tone(21.8, 1760, 0.04, { gain: 0.03 }); tone(21.88, 2093, 0.04, { gain: 0.03 });
+  riser(23.0, 23.6, 0.35); click(23.6, 1);
+  [E5, G5, C6].forEach((f, i) => bell(24.0 + i * 0.08, f, 0.75, (i - 1) * 0.3)); boom(24.0, 0.4);
+  // Step 4: four layers out, one by one; then together again.
+  whoosh(26.55, 0.7, 0.7, true);
+  [F5, A5, C6, E6].forEach((f, i) => pluck(27.35 + i * 0.25, f, 0.7, (i - 1.5) * 0.25));
+  riser(30.6, 31.6, 0.7);
+  kick(31.6, 1); boom(31.6, 0.8); hiss(31.6, 0.08, { f: 2000, gain: 0.12 });
+  [F5, A5, C6].forEach((f, i) => bell(31.62 + i * 0.07, f, 0.8, (i - 1) * 0.3));
+  // Step 5: frames on the wire, the scene id, the room drawn on arrival.
+  whoosh(32.75, 0.6, 0.6);
+  for (let i = 0; i < 16; i++) tone(33.5 + i / 3, 2637, 0.03, { gain: 0.012, pan: 0.2 });
+  roger(34.0, 0.6);
+  bell(34.9, A5, 0.8, -0.1); bell(35.0, E6, 0.6, 0.2);
+  whoosh(38.8, 0.6, 0.6, true);
+  // The catalogue: a note per look, up the scale.
+  [F4, A4, C5, D5, F5, A5, C6].forEach((f, i) => pluck(39.5 + i * 0.5, f, 0.9, (i % 3 - 1) * 0.3));
+  bell(43.0, C6, 0.6, 0);
+  // The end card.
+  riser(43.5, 44.1, 0.9);
+  whoosh(43.9, 0.5, 0.6, true);
+  kick(44.1, 1.1); boom(44.1, 1.1);
+  hiss(44.1, 2.4, { type: 'highpass', f: 5000, gain: 0.08, wet: 1 });
+  [F5, A5, C6, F6].forEach((f, i) => bell(44.1 + i * 0.09, f, 0.9 - i * 0.12, (i - 1.5) * 0.25));
+  bell(45.05, A5, 0.6);
+}
+
+async function renderScore(id) {
+  const F = FILMS[id] || FILMS.intro;
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const ac = new OAC(2, Math.ceil(F.dur * AUDIO_SR), AUDIO_SR);
+  const K = synthKit(ac);
+  F.score(K);
   // A clean tail.
-  out.gain.setValueAtTime(0.66, 29.2);
-  out.gain.linearRampToValueAtTime(0.0001, DUR);
+  K.out.gain.setValueAtTime(0.66, F.tail);
+  K.out.gain.linearRampToValueAtTime(0.0001, F.dur);
 
   const buf = await ac.startRendering();
   // Mastering: take out any lone-sample click the graph may leave at a node
@@ -2293,6 +3888,118 @@ async function renderSoundtrack() {
   const target = 0.89;
   if (peak > 0) for (let c = 0; c < buf.numberOfChannels; c++) { const d = buf.getChannelData(c); const k = target / peak; for (let i = 0; i < d.length; i++) d[i] *= k; }
   return buf;
+}
+const renderSoundtrack = () => renderScore('intro');
+
+/* ════════════════════════════════════════════════════════════════════════
+   Narration. The lines live in the JSON block above the script; the voice
+   is recorded outside the page (`make promo-voice`), one file per film and
+   language, each a classic script that registers itself on VOX_VOICE — the
+   one way to load data that works from file:// as well as from a server.
+   The published folder wins over the drafts folder.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const NARRATION = JSON.parse(document.getElementById('narration').textContent);
+const LANGS = Object.fromEntries(NARRATION.languages.map(l => [l.code, l]));
+
+// What the voice says: the line, with the language's spoken-only spellings.
+function spokenText(cue, lang) {
+  let s = cue.text[lang] || '';
+  for (const [from, to] of Object.entries((LANGS[lang] && LANGS[lang].spoken) || {})) s = s.split(from).join(to);
+  return s;
+}
+// A fingerprint of one film's narration in one language, written into every
+// recording, so a recording made from older lines is recognised as stale.
+// scripts/promo-voice.mjs computes the same function.
+function narrationHash(film, lang) {
+  const cues = NARRATION.films[film].cues.map(c => [c.id, c.t, c.max, spokenText(c, lang)]);
+  let h = 2166136261;
+  for (const ch of JSON.stringify(cues)) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; }
+  return h.toString(16).padStart(8, '0');
+}
+
+const VOICE_DIRS = ['promo-voice/', 'promo-voice/draft/'];
+const _voices = {};
+function loadScript(src) {
+  return new Promise(resolve => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = () => resolve(true);
+    s.onerror = () => { s.remove(); resolve(false); };
+    document.head.appendChild(s);
+  });
+}
+// → { meta…, buffer: AudioBuffer at AUDIO_SR, stale } or null when no recording exists.
+function loadVoice(film, lang) {
+  const key = film + '/' + lang;
+  if (_voices[key]) return _voices[key];
+  return (_voices[key] = (async () => {
+    const reg = () => (window.VOX_VOICE || {})[key];
+    for (const dir of VOICE_DIRS) {
+      if (reg()) break;
+      await loadScript(`${dir}${film}-${lang}.js`);
+    }
+    const v = reg();
+    if (!v) return null;
+    return decodeVoice(v, film, lang);
+  })().catch(e => { console.error(e); return null; }));
+}
+async function decodeVoice(v, film, lang) {
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const ac = new OAC(1, 1, AUDIO_SR);
+  const bytes = b64ToBuf(v.audio.slice(v.audio.indexOf(',') + 1));
+  const buffer = await new Promise((res, rej) => { const p = ac.decodeAudioData(bytes, res, rej); if (p && p.catch) p.catch(rej); });
+  return { ...v, audio: undefined, buffer, stale: v.text !== narrationHash(film, lang) };
+}
+
+// The subtitles of one film in one language. With a recording, each line
+// stays up as long as it is actually spoken; without, for its slot.
+function subtitlesFor(film, lang, voice) {
+  const L = LANGS[lang];
+  if (!L) return null;
+  const said = voice && !voice.stale ? Object.fromEntries(voice.cues.map(c => [c.id, c])) : {};
+  return {
+    lang, rtl: !!L.rtl,
+    cues: NARRATION.films[film].cues.map(c => ({ t: c.t, dur: said[c.id] ? said[c.id].dur : c.max, text: c.text[lang] || c.text.en })),
+  };
+}
+
+// Music and voice, mixed: the music sits back while a line is spoken (a
+// smooth duck that starts just before the line and lets go after it), then
+// the whole is brought to the score's own −1 dBFS peak.
+const DUCK = { base: 0.85, under: 0.3, attack: 0.2, release: 0.55 };
+function duckGain(t, cues) {
+  let d = 0;
+  for (const c of cues) {
+    const up = seg(t, c.t - DUCK.attack, c.t), down = 1 - seg(t, c.t + c.dur, c.t + c.dur + DUCK.release);
+    d = Math.max(d, ease.io2(Math.min(up, down)));
+  }
+  return lerp(DUCK.base, DUCK.under, d);
+}
+function mixNarration(music, voice) {
+  const sr = music.sampleRate, n = music.length, ch = music.numberOfChannels;
+  const out = new AudioBuffer({ numberOfChannels: ch, length: n, sampleRate: sr });
+  const v = voice.buffer, vd = [];
+  for (let c = 0; c < v.numberOfChannels; c++) vd.push(v.getChannelData(c));
+  const vn = Math.min(n, v.length);
+  // The duck curve once, at 100 Hz, then interpolated per sample.
+  const step = sr / 100, curve = new Float32Array(Math.ceil(n / step) + 2);
+  for (let i = 0; i < curve.length; i++) curve[i] = duckGain(i / 100, voice.cues);
+  let peak = 0;
+  const outs = [];
+  for (let c = 0; c < ch; c++) {
+    const m = music.getChannelData(c), o = out.getChannelData(c), vc = vd[Math.min(c, vd.length - 1)];
+    for (let i = 0; i < n; i++) {
+      const p = i / step, j = p | 0, g = curve[j] + (curve[j + 1] - curve[j]) * (p - j);
+      const x = m[i] * g + (i < vn ? vc[i] : 0);
+      o[i] = x;
+      const a = x < 0 ? -x : x;
+      if (a > peak) peak = a;
+    }
+    outs.push(o);
+  }
+  if (peak > 0.89) { const k = 0.89 / peak; for (const o of outs) for (let i = 0; i < n; i++) o[i] *= k; }
+  return out;
 }
 
 // 16-bit PCM WAV, for the "soundtrack only" download.
@@ -2607,11 +4314,99 @@ function dims(aspect, short) {
 const player = {
   t: 0, playing: false, loop: true, sound: false,
   aspect: '16:9',
+  film: 'intro',
+  // Narration: a language ('' = none), and whether its voice and its
+  // subtitles are wanted. `voice` is the loaded recording, when there is one.
+  lang: '', voiceOn: true, subsOn: false, voice: null, voiceLoading: false,
   clockT0: 0, clockP0: 0,
-  audio: null, ac: null, src: null, audioBuf: null, audioStart: 0,
+  audio: null, ac: null, src: null, audioBuf: null, audioStart: 0, audioToken: 0,
 };
 const view = $('view');
 const vctx = view.getContext('2d', { alpha: false });
+const film = () => FILMS[player.film];
+const filmDur = () => film().dur;
+// Everything renderFrame needs besides the time, from the current choices.
+function frameOpts() {
+  const subs = player.lang && player.subsOn ? subtitlesFor(player.film, player.lang, player.voice) : null;
+  return { film: player.film, subs };
+}
+const voiceIncluded = () => !!(player.lang && player.voiceOn && player.voice && player.voice.buffer);
+
+// The scores take a few seconds to synthesise; each is made once.
+const _scores = {};
+const scoreFor = id => _scores[id] || (_scores[id] = renderScore(id));
+// Rebuild what the player and the exporter hear: the film's score, with the
+// narration mixed in when one is chosen and recorded.
+async function refreshAudio() {
+  const token = ++player.audioToken;
+  if (player.playing) player.t = Math.min(filmDur(), now());
+  stopAudio();
+  player.audioBuf = null;
+  player.voice = null;
+  player.voiceLoading = !!player.lang;
+  if (player.playing) startClock();
+  syncButtons();
+  updateVoiceStatus();
+  // The recording loads while the score is still being synthesised, and says
+  // so at once: the subtitles follow its timings before the sound is ready.
+  const voiceP = (player.lang ? loadVoice(player.film, player.lang) : Promise.resolve(null)).then(v => {
+    if (token !== player.audioToken) return v;
+    player.voice = v;
+    player.voiceLoading = false;
+    updateVoiceStatus();
+    draw();
+    return v;
+  });
+  let score;
+  try { score = await scoreFor(player.film); } catch (e) {
+    if (token !== player.audioToken) return;
+    console.error(e); $('sound-label').textContent = 'No sound'; $('with-audio').checked = false; $('with-audio').disabled = true; updateSummary(); return;
+  }
+  const voice = await voiceP;
+  if (token !== player.audioToken) return;
+  player.audioBuf = voiceIncluded() ? mixNarration(score, voice) : score;
+  $('wav').disabled = false;
+  if (player.playing) { player.t = Math.min(filmDur(), now()); startClock(); }
+  syncButtons();
+  updateVoiceStatus();
+  updateSummary();
+  draw();
+}
+function updateVoiceStatus() {
+  const el = $('voice-status'), L = LANGS[player.lang];
+  $('with-voice').disabled = $('with-subs').disabled = !L;
+  let msg = '';
+  if (!L) msg = 'Music only: the film as it was first cut.';
+  else if (player.voiceLoading) msg = 'Loading the voice…';
+  else if (!player.voice) msg = `No ${L.name} recording of this film yet — subtitles still work. Make one with: make promo-voice LANGS=${player.lang} FILMS=${player.film}`;
+  else {
+    const v = player.voice;
+    const who = v.engine === 'say' ? `macOS “${v.voice}”` : `${v.engine} ${v.model || ''} “${v.voice}”`.replace(/\s+/g, ' ');
+    msg = `Synthetic voice: ${who}.`;
+    if (!v.publishable) msg += ' Draft — Apple’s licence does not allow publishing it.';
+    if (v.stale) msg += ' The lines have changed since it was recorded: run make promo-voice again.';
+  }
+  el.textContent = msg;
+}
+function setFilm(id) {
+  if (!FILMS[id]) id = 'intro';
+  const changed = id !== player.film;
+  player.film = id;
+  document.querySelectorAll('input[name="film"]').forEach(i => { i.checked = i.value === id; });
+  document.title = film().title;
+  $('tc-dur').textContent = fmtTC(filmDur());
+  $('scrub').setAttribute('aria-valuemax', String(filmDur()));
+  buildChapters();
+  if (changed) {
+    // The other film's sound must not run on under this one.
+    stopAudio();
+    player.audioBuf = null;
+    player.t = Math.min(player.t, filmDur());
+    if (player.playing) startClock();
+    syncButtons();
+  }
+  draw();
+}
 
 function sizeView() {
   const r = view.getBoundingClientRect();
@@ -2631,15 +4426,15 @@ function sizeView() {
 
 function draw() {
   if (!ICON_IMG) return;
-  renderFrame(vctx, view.width, view.height, player.t);
-  const p = player.t / DUR;
+  renderFrame(vctx, view.width, view.height, player.t, frameOpts());
+  const p = player.t / filmDur();
   $('fill').style.width = p * 100 + '%';
   $('knob').style.left = p * 100 + '%';
   $('tc').textContent = fmtTC(player.t);
   $('scrub').setAttribute('aria-valuenow', player.t.toFixed(2));
   $('scrub').setAttribute('aria-valuetext', fmtTC(player.t));
   let cur = 0;
-  CHAPTERS.forEach((c, i) => { if (player.t >= c.t) cur = i; });
+  film().chapters.forEach((c, i) => { if (player.t >= c.t) cur = i; });
   document.querySelectorAll('#chapters button').forEach((b, i) => b.setAttribute('aria-current', i === cur ? 'true' : 'false'));
 }
 
@@ -2667,7 +4462,7 @@ function stopAudio() { if (player.src) { try { player.src.stop(); } catch (_) {}
 
 function play() {
   if (player.playing) return;
-  if (player.t >= DUR - 0.001) player.t = 0;
+  if (player.t >= filmDur() - 0.001) player.t = 0;
   player.playing = true;
   startClock();
   syncButtons();
@@ -2675,22 +4470,23 @@ function play() {
 }
 function pause() {
   if (!player.playing) return;
-  player.t = Math.min(DUR, now());
+  player.t = Math.min(filmDur(), now());
   player.playing = false;
   stopAudio();
   syncButtons();
   draw();
 }
 function seek(t) {
-  player.t = clamp(t, 0, DUR);
+  player.t = clamp(t, 0, filmDur());
   if (player.playing) startClock();
   draw();
 }
 function tick() {
   if (!player.playing) return;
   let t = now();
-  if (t >= DUR) {
-    if (player.loop) { player.t = 0; startClock(); t = 0; } else { player.t = DUR; player.playing = false; stopAudio(); syncButtons(); draw(); return; }
+  const D = filmDur();
+  if (t >= D) {
+    if (player.loop) { player.t = 0; startClock(); t = 0; } else { player.t = D; player.playing = false; stopAudio(); syncButtons(); draw(); return; }
   }
   player.t = Math.max(0, t);
   draw();
@@ -2729,10 +4525,13 @@ function setAspect(a) {
   requestAnimationFrame(sizeView);
 }
 
-function buildChrome() {
-  const ticks = $('ticks');
-  CHAPTERS.forEach((c, i) => {
-    if (i > 0) { const d = document.createElement('div'); d.className = 'tick'; d.style.left = (c.t / DUR) * 100 + '%'; ticks.appendChild(d); }
+function buildChapters() {
+  const ticks = $('ticks'), list = $('chapters'), F = film();
+  ticks.textContent = '';
+  list.textContent = '';
+  list.style.setProperty('--chapters', String(F.chapters.length));
+  F.chapters.forEach((c, i) => {
+    if (i > 0) { const d = document.createElement('div'); d.className = 'tick'; d.style.left = (c.t / F.dur) * 100 + '%'; ticks.appendChild(d); }
     const li = document.createElement('li');
     const b = document.createElement('button');
     b.type = 'button';
@@ -2741,12 +4540,14 @@ function buildChrome() {
     b.append(tt, nn);
     b.addEventListener('click', () => { seek(c.t + 0.001); });
     li.appendChild(b);
-    $('chapters').appendChild(li);
+    list.appendChild(li);
   });
+}
 
+function buildChrome() {
   const scrub = $('scrub');
   let dragging = false, wasPlaying = false;
-  const at = e => { const r = scrub.getBoundingClientRect(); return clamp((e.clientX - r.left) / r.width) * DUR; };
+  const at = e => { const r = scrub.getBoundingClientRect(); return clamp((e.clientX - r.left) / r.width) * filmDur(); };
   scrub.addEventListener('pointerdown', e => { dragging = true; wasPlaying = player.playing; pause(); scrub.setPointerCapture(e.pointerId); seek(at(e)); });
   scrub.addEventListener('pointermove', e => { if (dragging) seek(at(e)); });
   const end = () => { if (!dragging) return; dragging = false; if (wasPlaying) play(); };
@@ -2774,7 +4575,7 @@ function buildChrome() {
     else if (e.key === 'ArrowRight' && !onButton) { pause(); seek(player.t + (e.shiftKey ? 1 : 1 / 30)); }
     else if (e.key === 'ArrowLeft' && !onButton) { pause(); seek(player.t - (e.shiftKey ? 1 : 1 / 30)); }
     else if (e.key === 'Home') seek(0);
-    else if (e.key === 'End') { pause(); seek(DUR); }
+    else if (e.key === 'End') { pause(); seek(filmDur()); }
     else if (e.key === 'm' || e.key === 'M') toggleSound();
     else if (e.key === 'f' || e.key === 'F') toggleFull();
     else if (e.key === 'l' || e.key === 'L') { player.loop = !player.loop; syncButtons(); }
@@ -2863,34 +4664,55 @@ function settings() {
   let vcodec = format === 'mp4' ? (caps.avc ? 'H.264' : caps.vp9mp4 ? 'VP9' : 'recorder') : caps.vp9 ? 'VP9' : 'recorder';
   if (!caps.webcodecs) vcodec = 'recorder';
   const acodec = !withAudio ? null : format === 'mp4' ? (caps.aac ? 'AAC' : caps.opus ? 'Opus' : null) : caps.opus ? 'Opus' : null;
-  return { w, h, fps, format, q, blur, withAudio, bitrate, vcodec, acodec, frames: Math.round(DUR * fps) };
+  const dur = filmDur(), lang = player.lang;
+  const voice = voiceIncluded(), subs = !!(lang && player.subsOn);
+  return {
+    w, h, fps, format, q, blur, withAudio, bitrate, vcodec, acodec, frames: Math.round(dur * fps),
+    film: player.film, dur, lang, voice, subs, draft: voice && !player.voice.publishable, opts: frameOpts(),
+  };
+}
+// The file's name says what is in it. With no narration it is the original
+// film's name, unchanged: voxal-30s-1920x1080-30fps.mp4.
+function exportBase(s) {
+  let n = 'voxal-' + FILMS[s.film].slug;
+  if (s.voice || s.subs) n += '-' + s.lang + (s.voice ? '-vo' : '') + (s.subs ? '-subs' : '');
+  if (s.draft) n += '-draft';
+  return n;
 }
 
 function updateSummary() {
   if (!$('res').value) return;
   const s = settings();
-  const audioBytes = s.acodec ? (s.acodec === 'AAC' ? 192000 : 160000) * DUR / 8 : 0;
+  const audioBytes = s.acodec ? (s.acodec === 'AAC' ? 192000 : 160000) * s.dur / 8 : 0;
   // Encoders overshoot a thin target (the grain costs bits), hence the floor.
-  const est = (s.bitrate * 1.1 + 0.9e6 * (s.w * s.h) / 921600) * DUR / 8 + audioBytes;
+  const est = (s.bitrate * 1.1 + 0.9e6 * (s.w * s.h) / 921600) * s.dur / 8 + audioBytes;
   const codec = s.vcodec === 'recorder' ? 'browser recorder, real time' : s.vcodec + (s.acodec ? ' + ' + s.acodec : '');
   $('summary').innerHTML = '';
   const add = (label, value) => { const d = document.createElement('div'); d.append(label + ' '); const b = document.createElement('b'); b.textContent = value; d.appendChild(b); $('summary').appendChild(d); };
+  add('Film', `${FILMS[s.film].name} · ${fmtTC(s.dur)}`);
   add('Output', `${s.w} × ${s.h} · ${s.fps} fps · ${s.frames} frames`);
   add('Codec', codec);
   add('Bitrate', `${(s.bitrate / 1e6).toFixed(1)} Mb/s · about ${fmtBytes(est)}`);
+  if (s.lang) {
+    const parts = [];
+    if (s.voice && s.withAudio) parts.push('voice' + (s.draft ? ' (draft)' : ''));
+    if (s.subs) parts.push('subtitles');
+    add('Narration', `${LANGS[s.lang].name} · ${parts.length ? parts.join(' + ') : 'nothing to add yet'}`);
+  }
   if (s.blur > 1) add('Renders', `${s.frames * s.blur} (${s.blur} per frame)`);
 }
 
 /* ── Export ─────────────────────────────────────────────────────────────── */
 let job = null;
 
-function renderExportFrame(ctx, W, H, t, samples, fps, tmp) {
-  if (samples <= 1) { renderFrame(ctx, W, H, t); return; }
+function renderExportFrame(ctx, W, H, t, samples, fps, tmp, opts = {}) {
+  if (samples <= 1) { renderFrame(ctx, W, H, t, opts); return; }
   const tctx = tmp.getContext('2d', { alpha: false });
   const span = 0.5 / fps; // 180° shutter
+  const end = (FILMS[opts.film] || FILMS.intro).dur;
   for (let k = 0; k < samples; k++) {
-    const tk = clamp(t + ((k + 0.5) / samples - 0.5) * span, 0, DUR);
-    renderFrame(tctx, W, H, tk, { grain: false });
+    const tk = clamp(t + ((k + 0.5) / samples - 0.5) * span, 0, end);
+    renderFrame(tctx, W, H, tk, { ...opts, grain: false });
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = 1 / (k + 1);
@@ -2910,20 +4732,26 @@ function showError(msg) { $('error').textContent = msg; $('error').hidden = !msg
 
 async function exportVideo() {
   if (job) return;
-  const s = settings();
   showError('');
   $('result').hidden = true;
   $('progress').hidden = false;
   $('export').disabled = true;
   pause();
-  job = { cancelled: false, s };
+  job = { cancelled: false };
   const t0 = performance.now();
   try {
+    // The narration may still be loading: the file waits for what it will carry.
+    if ($('with-audio').checked) {
+      progress(0, 'Preparing the sound', '');
+      while (player.audioPending) { const p = player.audioPending; await p; if (p === player.audioPending) break; }
+    }
+    const s = settings();
+    job.s = s;
     let blob, ext;
     if (s.vcodec === 'recorder') ({ blob, ext } = await exportRealtime(s));
     else ({ blob, ext } = await exportWebCodecs(s));
     if (job.cancelled) throw new Error('cancelled');
-    const name = `voxal-30s-${s.w}x${s.h}-${s.fps}fps${s.blur > 1 ? '-mb' + s.blur : ''}.${ext}`;
+    const name = `${exportBase(s)}-${s.w}x${s.h}-${s.fps}fps${s.blur > 1 ? '-mb' + s.blur : ''}.${ext}`;
     const url = URL.createObjectURL(blob);
     const old = $('result-link').href;
     if (old && old.startsWith('blob:')) URL.revokeObjectURL(old);
@@ -2984,7 +4812,7 @@ async function exportWebCodecs(s) {
     if (job.cancelled) { try { venc.close(); } catch (_) {} return {}; }
     if (vErr) throw vErr;
     const t = i / fps;
-    renderExportFrame(ctx, w, h, t, s.blur, fps, tmp);
+    renderExportFrame(ctx, w, h, t, s.blur, fps, tmp, s.opts);
     const frame = new VideoFrame(canvas, { timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6 / fps) });
     venc.encode(frame, { keyFrame: i % gop === 0 });
     frame.close();
@@ -3051,7 +4879,8 @@ async function exportRealtime(s) {
   const canvas = document.createElement('canvas');
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext('2d', { alpha: false });
-  renderFrame(ctx, w, h, 0);
+  const D = s.dur;
+  renderFrame(ctx, w, h, 0, s.opts);
   const stream = canvas.captureStream(fps);
   let ac = null;
   if (s.withAudio && player.audioBuf) {
@@ -3078,9 +4907,9 @@ async function exportRealtime(s) {
     const step = () => {
       if (job.cancelled) { resolve(); return; }
       const t = (performance.now() - p0) / 1000;
-      if (t >= DUR) { renderFrame(ctx, w, h, DUR); resolve(); return; }
-      renderFrame(ctx, w, h, Math.max(0, t));
-      progress(t / DUR, `Recording ${fmtTC(Math.max(0, t))}`, 'real time');
+      if (t >= D) { renderFrame(ctx, w, h, D, s.opts); resolve(); return; }
+      renderFrame(ctx, w, h, Math.max(0, t), s.opts);
+      progress(t / D, `Recording ${fmtTC(Math.max(0, t))}`, 'real time');
       requestAnimationFrame(step);
     };
     requestAnimationFrame(step);
@@ -3106,14 +4935,44 @@ function saveStill() {
   const [w, h] = dims(player.aspect, +$('res').value);
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
-  renderFrame(c.getContext('2d', { alpha: false }), w, h, player.t);
-  c.toBlob(b => { if (b) saveBlob(b, `voxal-30s-${w}x${h}-${player.t.toFixed(2).replace('.', '_')}s.png`); }, 'image/png');
+  const s = settings();
+  renderFrame(c.getContext('2d', { alpha: false }), w, h, player.t, s.opts);
+  const base = 'voxal-' + FILMS[s.film].slug + (s.subs ? '-' + s.lang + '-subs' : '');
+  c.toBlob(b => { if (b) saveBlob(b, `${base}-${w}x${h}-${player.t.toFixed(2).replace('.', '_')}s.png`); }, 'image/png');
+}
+function saveWav() {
+  if (!player.audioBuf) return;
+  const s = settings();
+  const base = 'voxal-' + FILMS[s.film].slug + (s.voice ? '-' + s.lang + '-vo' + (s.draft ? '-draft' : '') : '');
+  saveBlob(audioBufferToWav(player.audioBuf), `${base}-soundtrack.wav`);
+}
+function requestAudio() { return (player.audioPending = refreshAudio()); }
+function fillLanguages() {
+  const sel = $('lang');
+  const none = document.createElement('option');
+  none.value = ''; none.textContent = 'None — music only';
+  sel.appendChild(none);
+  for (const l of NARRATION.languages) {
+    const o = document.createElement('option');
+    o.value = l.code; o.textContent = l.name; o.lang = l.code;
+    sel.appendChild(o);
+  }
 }
 
 /* ── Boot ───────────────────────────────────────────────────────────────── */
+// URL: ?film=backgrounds&lang=fr&subs=1&voice=0&aspect=9:16&t=12.5
 async function boot() {
   buildChrome();
+  fillLanguages();
   const q = new URLSearchParams(location.search);
+  setFilm(q.get('film'));
+  const lang = q.get('lang');
+  player.lang = LANGS[lang] ? lang : '';
+  player.subsOn = q.get('subs') === '1';
+  player.voiceOn = q.get('voice') !== '0';
+  $('lang').value = player.lang;
+  $('with-subs').checked = player.subsOn;
+  $('with-voice').checked = player.voiceOn;
   const a = q.get('aspect');
   setAspect(ASPECTS[a] ? a : '16:9');
   try {
@@ -3126,7 +4985,7 @@ async function boot() {
   $('brand-icon').src = window.VOX_ASSETS.icon;
   $('loading').hidden = true;
   const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  player.t = q.has('t') ? clamp(+q.get('t') || 0, 0, DUR) : reduce ? 29.5 : 0;
+  player.t = q.has('t') ? clamp(+q.get('t') || 0, 0, filmDur()) : reduce ? film().poster : 0;
   sizeView();
   syncButtons();
   if (!reduce && !q.has('t') && !q.has('still')) play();
@@ -3134,21 +4993,23 @@ async function boot() {
   ['aspect', 'fps', 'quality', 'format', 'blur'].forEach(n => document.querySelectorAll(`input[name="${n}"]`).forEach(i => i.addEventListener('change', () => {
     if (n === 'aspect') setAspect(i.value); else updateSummary();
   })));
+  document.querySelectorAll('input[name="film"]').forEach(i => i.addEventListener('change', () => {
+    setFilm(i.value); requestAudio(); updateSummary(); i.blur();
+  }));
+  $('lang').addEventListener('change', () => { player.lang = $('lang').value; requestAudio(); draw(); updateSummary(); });
+  $('with-voice').addEventListener('change', () => { player.voiceOn = $('with-voice').checked; requestAudio(); updateSummary(); });
+  $('with-subs').addEventListener('change', () => { player.subsOn = $('with-subs').checked; draw(); updateSummary(); });
   $('res').addEventListener('change', updateSummary);
   $('with-audio').addEventListener('change', updateSummary);
   $('export').addEventListener('click', exportVideo);
   $('cancel').addEventListener('click', () => { if (job) job.cancelled = true; });
   $('still').addEventListener('click', saveStill);
-  $('wav').addEventListener('click', () => { if (player.audioBuf) saveBlob(audioBufferToWav(player.audioBuf), 'voxal-30s-soundtrack.wav'); });
+  $('wav').addEventListener('click', saveWav);
   probeCaps();
 
   // The soundtrack takes a few seconds to synthesise; the film does not wait.
   $('wav').disabled = true;
-  renderSoundtrack().then(buf => {
-    player.audioBuf = buf;
-    $('wav').disabled = false;
-    syncButtons();
-  }).catch(e => { console.error(e); $('sound-label').textContent = 'No sound'; $('with-audio').checked = false; $('with-audio').disabled = true; updateSummary(); });
+  requestAudio();
 }
 document.addEventListener('DOMContentLoaded', boot);
 
