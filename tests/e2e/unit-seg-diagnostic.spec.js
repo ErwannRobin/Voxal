@@ -1,8 +1,8 @@
 import { test, expect } from './fixtures.js';
 
-// The segmentation diagnostic (VideoEffects.openDiagnostic()): a panel that
-// shows what each stage between MediaPipe and the screen produced for one
-// inference.
+// The segmentation diagnostic (VideoEffects.openDiagnostic()): a panel whose
+// Pipeline tab shows what each stage between the model and the screen produced
+// for one inference (the Engines tab is unit-seg-compare.spec.js).
 //
 // MediaPipe cannot run here (see unit-video-effects.spec.js), so
 // `__voxalSegStub` stands in for the model with a hard-edged centred oval —
@@ -326,12 +326,14 @@ test('a changed view applies to the next inference; an unknown view is refused',
     const refused = VideoEffects.setDiagnosticView('nope');
     const ok = VideoEffects.setDiagnosticView('heat');
     return { refused, ok, view: VideoEffects.diagnosticState().view,
-             tab: document.querySelector('#seg-diagnostic [aria-pressed="true"]').textContent };
+             tab: document.querySelector('#seg-diagnostic [aria-pressed="true"]').textContent,
+             stage: document.querySelector('#seg-diagnostic select[aria-label="One stage"]').value };
   });
   expect(r.refused).toBe(false);
   expect(r.ok).toBe(true);
   expect(r.view).toBe('heat');
-  expect(r.tab).toBe('Stability');
+  expect(r.tab).toBe('Pipeline');
+  expect(r.stage).toBe('heat');
 });
 
 for (const vp of [{ width: 390, height: 664 }, { width: 664, height: 340 }, { width: 320, height: 480 }]) {
@@ -350,7 +352,7 @@ for (const vp of [{ width: 390, height: 664 }, { width: 664, height: 340 }, { wi
         // The element at the control's centre must be the control itself: not
         // clipped, not under something.
         const hit = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2);
-        out.push({ name: b.textContent.slice(0, 8) || 'select', inside:
+        out.push({ name: b.getAttribute('aria-label') || b.textContent.slice(0, 8) || 'select', inside:
           q.top >= 0 && q.left >= 0 && q.bottom <= innerHeight && q.right <= innerWidth,
           hit: hit === b || b.contains(hit), h: Math.round(q.height) });
       }
@@ -361,7 +363,7 @@ for (const vp of [{ width: 390, height: 664 }, { width: 664, height: 340 }, { wi
       expect(c.hit, `${c.name} not covered`).toBe(true);
       expect(c.h, `${c.name} tall enough to tap`).toBeGreaterThanOrEqual(30);
     }
-    expect(r.out.map((c) => c.name)).toEqual(expect.arrayContaining(['Freeze', 'Save PNG', 'Hide', '✕']));
+    expect(r.out.map((c) => c.name)).toEqual(expect.arrayContaining(['Freeze', 'Save PNG', 'Hide', 'Close', 'Engines', 'Pipeline']));
   });
 }
 

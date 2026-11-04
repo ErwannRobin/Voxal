@@ -320,6 +320,36 @@ test.describe('turning the effect on and off mid-call', () => {
     expect(seen.stored).toBe('blur');
   });
 
+  // The segmentation diagnostic's Engines tab splits YOUR picture by engine:
+  // the self tile shows it, the call never does.
+  test("the diagnostic's split view reaches the self tile and nothing else", async ({ page }) => {
+    await seedEffectsRoom(page);
+    const seen = await page.evaluate(async () => {
+      await startVideoShare();
+      await applyVideoBackground('blur');
+      const out = localVideoStream;
+      const selfSrc = () => document.querySelector('.video-tile-self.video-tile-camera video').srcObject;
+      const before = selfSrc() === out;
+      window.__swaps = [];
+      VideoEffects.openDiagnostic('compare');
+      for (let i = 0; i < 100 && !VideoEffects.compareState().split.frames; i++) await new Promise((r) => setTimeout(r, 50));
+      const during = selfSrc();
+      const split = VideoEffects.selfView(out);
+      VideoEffects.closeDiagnostic();
+      return {
+        before, splitShown: during === split && split !== out,
+        after: selfSrc() === out,
+        swaps: window.__swaps.length,
+        sender: window.__sender.track === out.getVideoTracks()[0],
+      };
+    });
+    expect(seen.before).toBe(true);
+    expect(seen.splitShown).toBe(true);
+    expect(seen.after).toBe(true);
+    expect(seen.swaps).toBe(0);      // no sender was touched
+    expect(seen.sender).toBe(true);  // the call still gets the composite
+  });
+
   // The reason this whole design routes through a canvas. If this ever starts
   // swapping tracks, every peer's tile blinks each time somebody browses the
   // background chips.
