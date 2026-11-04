@@ -303,6 +303,29 @@ its original name (`voxal-30s-…`). The fonts (Archivo, IBM Plex Mono) and the
 app icon sit base64 in the last `<script>`; `make promo-assets` rewrites that
 block. Everything else is edited in place — there is no build step.
 
+**Shorter cuts.** "Virtual backgrounds" also comes in 15 s and 30 s
+(`FILMS['backgrounds-15' | 'backgrounds-30']`, the page's Length switch,
+`?film=backgrounds&cut=15`). A cut owns nothing but its edit — `makeCut(base,
+{ edl })` lists stretches of the 48 s timeline; it draws the original's frames
+at the mapped time, plays the original's score with every event moved
+(`remapKit`), and speaks the original's narration lines that lie wholly inside
+a kept stretch, from the original's recording (`cutVoice`, line by line). At a
+join the camera tile glides (`glide`) and its picture cross-fades
+(`cutJoin`). A join must fall where the captions of both stretches are out of
+frame; the spec checks no narration line straddles one. Steps in the copy are
+renumbered per cut (`steps`).
+
+**On-screen text** follows the Language menu too: every string the films draw
+goes through `TX('English')`, translated by the `screen-text` JSON block
+(keyed by the English; `*…*` marks the highlighted run, `{name}`-style
+placeholders are filled after lookup). With no language, or English, every
+frame is pixel-identical to the original. `RL` holds the frame's language:
+system font fallbacks per script (`LANG_FONTS`), Arabic drawn `rtl` without
+per-glyph tracking, Chinese/Japanese wrapped on `Intl.Segmenter` words, and
+a translation too wide for its place is narrowed (`maxW` / `fitDraw`), never
+the English. The spec draws every film through and fails on a line drawn
+without all 11 translations, or a translation nothing draws (`TX_SEEN`).
+
 **Narration** is a JSON block in the page (`<script type="application/json"
 id="narration">`): per film, cues with a start `t` and a slot `max`, the text
 in all 12 app languages, and per-language `spoken` spellings for the voice only.
@@ -318,7 +341,7 @@ recording carries `narrationHash()` of its lines (computed identically in the
 page and the script), so the page flags a stale one. The music ducks under
 each line (`mixNarration()`). `tests/e2e/unit-promo.spec.js` pins determinism,
 the container layout, the narration's coverage and slots, the mix, subtitle
-wrapping and the original file name.
+wrapping, the original file name, the on-screen translations and the cuts.
 
 ### Presence (optional)
 

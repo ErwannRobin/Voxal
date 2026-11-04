@@ -177,6 +177,11 @@
       <label><input type="radio" name="film" id="film-intro" value="intro" checked><span>Voxal in 30 s</span></label>
       <label><input type="radio" name="film" id="film-backgrounds" value="backgrounds"><span>Virtual backgrounds</span></label>
     </div>
+    <div class="seg films" id="cut" role="radiogroup" aria-label="Length" hidden>
+      <label><input type="radio" name="cut" id="cut-15" value="15"><span>15 s</span></label>
+      <label><input type="radio" name="cut" id="cut-30" value="30"><span>30 s</span></label>
+      <label><input type="radio" name="cut" id="cut-48" value="" checked><span>48 s</span></label>
+    </div>
     <nav><a href="https://web.voxal.app" target="_blank" rel="noopener">Open Voxal ↗</a><a href="https://github.com/ErwannRobin/Voxal" target="_blank" rel="noopener">GitHub ↗</a></nav>
   </header>
 
@@ -264,7 +269,7 @@
       </fieldset>
 
       <div class="field">
-        <label class="lab" for="lang">Narration</label>
+        <label class="lab" for="lang">Language</label>
         <select id="lang"></select>
         <div class="row">
           <label class="check"><input type="checkbox" id="with-voice" checked> Voice-over</label>
@@ -568,6 +573,119 @@
   }
 }
 </script>
+<!-- The film's on-screen words in every language but English, keyed by the
+     English line the drawing code passes to TX(). A "*…*" span is drawn in
+     the highlight colour; {key}, {n}, {name}, {dir} and {tone} are filled in. -->
+<script type="application/json" id="screen-text">
+{
+  "Hold.": {"fr": "Maintiens.", "es": "Mantén.", "de": "Halten.", "pt": "Segure.", "ro": "Ține.", "ru": "Держи.", "uk": "Тримай.", "id": "Tahan.", "zh": "按住。", "ja": "押して。", "ar": "اضغط."},
+  "Talk.": {"fr": "Parle.", "es": "Habla.", "de": "Sprechen.", "pt": "Fale.", "ro": "Vorbește.", "ru": "Говори.", "uk": "Говори.", "id": "Bicara.", "zh": "说话。", "ja": "話す。", "ar": "تكلّم."},
+  "HOLD {key} ANYWHERE TO TALK": {"fr": "MAINTIENS {key} N’IMPORTE OÙ POUR PARLER", "es": "MANTÉN {key} DONDE SEA PARA HABLAR", "de": "HALTE {key} ÜBERALL GEDRÜCKT ZUM SPRECHEN", "pt": "SEGURE {key} EM QUALQUER LUGAR PARA FALAR", "ro": "ȚINE {key} ORIUNDE PENTRU A VORBI", "ru": "ДЕРЖИ {key} ГДЕ УГОДНО, ЧТОБЫ ГОВОРИТЬ", "uk": "ТРИМАЙ {key} БУДЬ-ДЕ, ЩОБ ГОВОРИТИ", "id": "TAHAN {key} DI MANA SAJA UNTUK BICARA", "zh": "随时随地按住 {key} 说话", "ja": "どこでも {key} を押して話す", "ar": "اضغط {key} مطولًا في أي مكان للتحدث"},
+  "Space": {"fr": "Espace", "es": "Espacio", "de": "Leertaste", "pt": "Espaço", "ro": "Spațiu", "ru": "Пробел", "uk": "Пробіл", "id": "Spasi", "zh": "空格", "ja": "スペース", "ar": "مسافة"},
+  "Instant push-to-talk voice rooms.": {"fr": "Des salons vocaux push-to-talk, instantanés.", "es": "Salas de voz push-to-talk al instante.", "de": "Push-to-Talk-Sprachräume, sofort.", "pt": "Salas de voz push-to-talk na hora.", "ro": "Camere vocale push-to-talk, pe loc.", "ru": "Голосовые комнаты по нажатию — сразу.", "uk": "Голосові кімнати push-to-talk — одразу.", "id": "Ruang suara push-to-talk, seketika.", "zh": "即开即用的按键通话语音房间。", "ja": "すぐ使える、プッシュ・トゥ・トークのボイスルーム。", "ar": "غرف صوتية فورية بالضغط للتحدث."},
+  "Create a room.": {"fr": "Crée un salon.", "es": "Crea una sala.", "de": "Raum erstellen.", "pt": "Crie uma sala.", "ro": "Creează o cameră.", "ru": "Создай комнату.", "uk": "Створи кімнату.", "id": "Buat ruang.", "zh": "创建房间。", "ja": "ルームを作る。", "ar": "أنشئ غرفة."},
+  "Share the link.": {"fr": "Partage le lien.", "es": "Comparte el enlace.", "de": "Link teilen.", "pt": "Compartilhe o link.", "ro": "Trimite linkul.", "ru": "Поделись ссылкой.", "uk": "Поділися посиланням.", "id": "Bagikan tautan.", "zh": "分享链接。", "ja": "リンクを共有。", "ar": "شارك الرابط."},
+  "Start talking.": {"fr": "Commence à parler.", "es": "Empieza a hablar.", "de": "Lossprechen.", "pt": "Comece a falar.", "ro": "Începe să vorbești.", "ru": "Начни говорить.", "uk": "Почни говорити.", "id": "Mulai bicara.", "zh": "开始说话。", "ja": "話し始める。", "ar": "ابدأ الحديث."},
+  "P2P PUSH TO TALK COMMUNICATIONS": {"fr": "COMMUNICATIONS PUSH-TO-TALK P2P", "es": "COMUNICACIONES P2P DE PULSAR PARA HABLAR", "de": "P2P-PUSH-TO-TALK-KOMMUNIKATION", "pt": "COMUNICAÇÃO PUSH-TO-TALK P2P", "ro": "COMUNICARE PUSH-TO-TALK P2P", "ru": "P2P-ОБЩЕНИЕ ПО НАЖАТИЮ", "uk": "P2P-ЗВ’ЯЗОК PUSH-TO-TALK", "id": "KOMUNIKASI PUSH TO TALK P2P", "zh": "P2P 按键通话", "ja": "P2P プッシュ・トゥ・トーク通話", "ar": "اتصالات التحدث بالضغط من نظير إلى نظير"},
+  "Create Room": {"fr": "Créer un salon", "es": "Crear sala", "de": "Raum erstellen", "pt": "Criar sala", "ro": "Creează o cameră", "ru": "Создать комнату", "uk": "Створити кімнату", "id": "Buat Ruang", "zh": "创建房间", "ja": "ルームを作成", "ar": "إنشاء غرفة"},
+  "or join one": {"fr": "ou rejoins-en un", "es": "o únete a una", "de": "oder tritt einem bei", "pt": "ou entre em uma", "ro": "sau intră într-una", "ru": "или войди в другую", "uk": "або приєднайся", "id": "atau gabung ke salah satu", "zh": "或加入一个", "ja": "または参加する", "ar": "أو انضم إلى واحدة"},
+  "Room code…": {"fr": "Code du salon…", "es": "Código de sala…", "de": "Raumcode…", "pt": "Código da sala…", "ro": "Codul camerei…", "ru": "Код комнаты…", "uk": "Код кімнати…", "id": "Kode ruang…", "zh": "房间码…", "ja": "ルームコード…", "ar": "رمز الغرفة…"},
+  "Join": {"fr": "Rejoindre", "es": "Unirse", "de": "Beitreten", "pt": "Entrar", "ro": "Intră", "ru": "Войти", "uk": "Увійти", "id": "Gabung", "zh": "加入", "ja": "参加", "ar": "انضمام"},
+  "ROOM": {"fr": "SALON", "es": "SALA", "de": "RAUM", "pt": "SALA", "ro": "CAMERĂ", "ru": "КОМНАТА", "uk": "КІМНАТА", "id": "RUANG", "zh": "房间", "ja": "ルーム", "ar": "الغرفة"},
+  "Invite link copied": {"fr": "Lien d’invitation copié", "es": "Enlace de invitación copiado", "de": "Einladungslink kopiert", "pt": "Link de convite copiado", "ro": "Link de invitație copiat", "ru": "Приглашение скопировано", "uk": "Запрошення скопійовано", "id": "Tautan undangan disalin", "zh": "邀请链接已复制", "ja": "招待リンクをコピーしました", "ar": "تم نسخ رابط الدعوة"},
+  "You": {"fr": "Toi", "es": "Tú", "de": "Du", "pt": "Você", "ro": "Tu", "ru": "Ты", "uk": "Ти", "id": "Kamu", "zh": "你", "ja": "あなた", "ar": "أنت"},
+  "HOST": {"fr": "HÔTE", "es": "ANFITRIÓN", "de": "HOST", "pt": "ANFITRIÃO", "ro": "GAZDĂ", "ru": "ХОСТ", "uk": "ХОСТ", "id": "HOST", "zh": "房主", "ja": "ホスト", "ar": "المضيف"},
+  "Hold Space anywhere to talk": {"fr": "Maintiens Espace n’importe où pour parler", "es": "Mantén Espacio donde sea para hablar", "de": "Halte die Leertaste überall gedrückt zum Sprechen", "pt": "Segure Espaço em qualquer lugar para falar", "ro": "Ține Spațiu oriunde pentru a vorbi", "ru": "Держи Пробел где угодно, чтобы говорить", "uk": "Тримай Пробіл будь-де, щоб говорити", "id": "Tahan Spasi di mana saja untuk bicara", "zh": "随时随地按住空格键说话", "ja": "どこでもスペースを押して話す", "ar": "اضغط مسافة مطولًا في أي مكان للتحدث"},
+  "HOST LEFT": {"fr": "L’HÔTE EST PARTI", "es": "EL ANFITRIÓN SE FUE", "de": "HOST GEGANGEN", "pt": "O ANFITRIÃO SAIU", "ro": "GAZDA A PLECAT", "ru": "ХОСТ УШЁЛ", "uk": "ХОСТ ПІШОВ", "id": "HOST PERGI", "zh": "房主已离开", "ja": "ホストが退出", "ar": "غادر المضيف"},
+  "MEDIA SERVER": {"fr": "SERVEUR MÉDIA", "es": "SERVIDOR DE MEDIOS", "de": "MEDIENSERVER", "pt": "SERVIDOR DE MÍDIA", "ro": "SERVER MEDIA", "ru": "МЕДИАСЕРВЕР", "uk": "МЕДІАСЕРВЕР", "id": "SERVER MEDIA", "zh": "媒体服务器", "ja": "メディアサーバー", "ar": "خادم الوسائط"},
+  "DEPUTY": {"fr": "ADJOINT", "es": "ADJUNTO", "de": "STELLVERTRETER", "pt": "VICE", "ro": "ADJUNCT", "ru": "ЗАМЕСТИТЕЛЬ", "uk": "ЗАСТУПНИК", "id": "DEPUTI", "zh": "副手", "ja": "副ホスト", "ar": "النائب"},
+  "JOINED": {"fr": "A REJOINT", "es": "SE UNIÓ", "de": "BEIGETRETEN", "pt": "ENTROU", "ro": "A INTRAT", "ru": "ВОШЁЛ", "uk": "УВІЙШОВ", "id": "BERGABUNG", "zh": "已加入", "ja": "参加", "ar": "انضم"},
+  "PEER-TO-PEER": {"fr": "PAIR À PAIR", "es": "ENTRE PARES", "de": "PEER-TO-PEER", "pt": "PONTO A PONTO", "ro": "PEER-TO-PEER", "ru": "НАПРЯМУЮ", "uk": "НАПРЯМУ", "id": "PEER-TO-PEER", "zh": "点对点", "ja": "ピアツーピア", "ar": "من نظير إلى نظير"},
+  "Straight from\nyou to them.": {"fr": "Directement\nde toi à eux.", "es": "Directo\nde ti a ellos.", "de": "Direkt\nvon dir zu ihnen.", "pt": "Direto\nde você para eles.", "ro": "Direct\nde la tine la ei.", "ru": "Напрямую\nот тебя к ним.", "uk": "Напряму\nвід тебе до них.", "id": "Langsung\ndarimu ke mereka.", "zh": "从你\n直达他们。", "ja": "あなたから\n相手へ、直接。", "ar": "مباشرةً\nمنك إليهم."},
+  "Encrypted, device to device. Your voice never goes through a media server.": {"fr": "Chiffré, d’appareil à appareil. Ta voix ne passe jamais par un serveur média.", "es": "Cifrado, de dispositivo a dispositivo. Tu voz nunca pasa por un servidor de medios.", "de": "Verschlüsselt, von Gerät zu Gerät. Deine Stimme läuft nie über einen Medienserver.", "pt": "Criptografado, de aparelho para aparelho. Sua voz nunca passa por um servidor de mídia.", "ro": "Criptat, de la un dispozitiv la altul. Vocea ta nu trece niciodată printr-un server media.", "ru": "Шифрование от устройства к устройству. Голос никогда не идёт через медиасервер.", "uk": "Шифрування від пристрою до пристрою. Голос ніколи не йде через медіасервер.", "id": "Terenkripsi, dari perangkat ke perangkat. Suaramu tak pernah lewat server media.", "zh": "加密传输，设备直连设备。你的声音从不经过媒体服务器。", "ja": "暗号化して、端末から端末へ。声がメディアサーバーを通ることはありません。", "ar": "مشفّر، من جهاز إلى جهاز. صوتك لا يمر أبدًا عبر خادم وسائط."},
+  "WEBRTC · OPUS · 16 kHz": {"fr": "WEBRTC · OPUS · 16 kHz", "es": "WEBRTC · OPUS · 16 kHz", "de": "WEBRTC · OPUS · 16 kHz", "pt": "WEBRTC · OPUS · 16 kHz", "ro": "WEBRTC · OPUS · 16 kHz", "ru": "WEBRTC · OPUS · 16 кГц", "uk": "WEBRTC · OPUS · 16 кГц", "id": "WEBRTC · OPUS · 16 kHz", "zh": "WEBRTC · OPUS · 16 kHz", "ja": "WEBRTC · OPUS · 16 kHz", "ar": "WEBRTC · OPUS · 16 كيلوهرتز"},
+  "HOST MIGRATION": {"fr": "MIGRATION DE L’HÔTE", "es": "MIGRACIÓN DEL ANFITRIÓN", "de": "HOST-WECHSEL", "pt": "MIGRAÇÃO DO ANFITRIÃO", "ro": "MIGRAREA GAZDEI", "ru": "СМЕНА ХОСТА", "uk": "ЗМІНА ХОСТА", "id": "MIGRASI HOST", "zh": "房主迁移", "ja": "ホストの引き継ぎ", "ar": "انتقال المضيف"},
+  "The host leaves.\nThe room stays.": {"fr": "L’hôte s’en va.\nLe salon reste.", "es": "El anfitrión se va.\nLa sala sigue.", "de": "Der Host geht.\nDer Raum bleibt.", "pt": "O anfitrião sai.\nA sala fica.", "ro": "Gazda pleacă.\nCamera rămâne.", "ru": "Хост уходит.\nКомната остаётся.", "uk": "Хост іде.\nКімната лишається.", "id": "Host pergi.\nRuangnya tetap.", "zh": "房主离开了，\n房间还在。", "ja": "ホストが抜けても、\nルームは続く。", "ar": "يغادر المضيف.\nوتبقى الغرفة."},
+  "Another member takes over on the spot. Nobody has to reconnect.": {"fr": "Un autre membre prend aussitôt le relais. Personne n’a à se reconnecter.", "es": "Otro miembro toma el relevo al instante. Nadie tiene que volver a conectarse.", "de": "Ein anderes Mitglied übernimmt sofort. Niemand muss sich neu verbinden.", "pt": "Outro participante assume na hora. Ninguém precisa se reconectar.", "ro": "Alt membru preia pe loc. Nimeni nu trebuie să se reconecteze.", "ru": "Другой участник сразу берёт управление. Никому не нужно переподключаться.", "uk": "Інший учасник одразу бере керування. Нікому не треба перепідключатися.", "id": "Anggota lain langsung mengambil alih. Tak ada yang perlu menyambung ulang.", "zh": "其他成员当场接手，没有人需要重新连接。", "ja": "ほかのメンバーがその場で引き継ぎます。誰も接続し直す必要はありません。", "ar": "يتولى عضو آخر الأمر فورًا. لا أحد يحتاج إلى إعادة الاتصال."},
+  "DEPUTY → HOST · VOICE LINKS STAY UP": {"fr": "ADJOINT → HÔTE · LES LIAISONS VOCALES TIENNENT", "es": "ADJUNTO → ANFITRIÓN · LA VOZ NO SE CORTA", "de": "STELLVERTRETER → HOST · SPRACHVERBINDUNGEN BLEIBEN", "pt": "VICE → ANFITRIÃO · A VOZ NÃO CAI", "ro": "ADJUNCT → GAZDĂ · LEGĂTURILE VOCALE RĂMÂN", "ru": "ЗАМЕСТИТЕЛЬ → ХОСТ · ГОЛОС НЕ ПРЕРЫВАЕТСЯ", "uk": "ЗАСТУПНИК → ХОСТ · ГОЛОС НЕ ПЕРЕРИВАЄТЬСЯ", "id": "DEPUTI → HOST · SAMBUNGAN SUARA TETAP", "zh": "副手 → 房主 · 语音连接不中断", "ja": "副ホスト → ホスト · 音声はつながったまま", "ar": "النائب ← المضيف · تبقى روابط الصوت قائمة"},
+  "One room.": {"fr": "Un salon.", "es": "Una sala.", "de": "Ein Raum.", "pt": "Uma sala.", "ro": "O cameră.", "ru": "Одна комната.", "uk": "Одна кімната.", "id": "Satu ruang.", "zh": "一个房间，", "ja": "ひとつのルーム。", "ar": "غرفة واحدة."},
+  "Every device.": {"fr": "Tous les appareils.", "es": "Todos los dispositivos.", "de": "Jedes Gerät.", "pt": "Todos os aparelhos.", "ro": "Orice dispozitiv.", "ru": "Любое устройство.", "uk": "Будь-який пристрій.", "id": "Semua perangkat.", "zh": "所有设备。", "ja": "すべての端末で。", "ar": "كل الأجهزة."},
+  "Web": {"fr": "Web", "es": "Web", "de": "Web", "pt": "Web", "ro": "Web", "ru": "Веб", "uk": "Веб", "id": "Web", "zh": "网页", "ja": "Web", "ar": "الويب"},
+  "Video & screen sharing": {"fr": "Vidéo et partage d’écran", "es": "Vídeo y pantalla compartida", "de": "Video & Bildschirmfreigabe", "pt": "Vídeo e compartilhamento de tela", "ro": "Video și partajarea ecranului", "ru": "Видео и показ экрана", "uk": "Відео та показ екрана", "id": "Video & berbagi layar", "zh": "视频与屏幕共享", "ja": "ビデオと画面共有", "ar": "الفيديو ومشاركة الشاشة"},
+  "Noise suppression": {"fr": "Suppression du bruit", "es": "Supresión de ruido", "de": "Rauschunterdrückung", "pt": "Supressão de ruído", "ro": "Suprimarea zgomotului", "ru": "Шумоподавление", "uk": "Шумозаглушення", "id": "Peredam bising", "zh": "降噪", "ja": "ノイズ抑制", "ar": "كتم الضوضاء"},
+  "Background blur": {"fr": "Arrière-plan flou", "es": "Fondo desenfocado", "de": "Hintergrundunschärfe", "pt": "Fundo desfocado", "ro": "Fundal estompat", "ru": "Размытие фона", "uk": "Розмиття фону", "id": "Latar buram", "zh": "背景虚化", "ja": "背景ぼかし", "ar": "تمويه الخلفية"},
+  "Chat": {"fr": "Chat", "es": "Chat", "de": "Chat", "pt": "Chat", "ro": "Chat", "ru": "Чат", "uk": "Чат", "id": "Obrolan", "zh": "聊天", "ja": "チャット", "ar": "الدردشة"},
+  "Hands-free": {"fr": "Mains libres", "es": "Manos libres", "de": "Freisprechen", "pt": "Mãos livres", "ro": "Fără mâini", "ru": "Без рук", "uk": "Без рук", "id": "Bebas tangan", "zh": "免提", "ja": "ハンズフリー", "ar": "بلا لمس"},
+  "You are live": {"fr": "Tu es en direct", "es": "Estás en directo", "de": "Du bist live", "pt": "Você está ao vivo", "ro": "Ești în direct", "ru": "Ты в эфире", "uk": "Ти в ефірі", "id": "Kamu sedang bicara", "zh": "你正在说话", "ja": "あなたが話しています", "ar": "أنت على الهواء"},
+  "{name} is talking": {"fr": "{name} parle", "es": "{name} está hablando", "de": "{name} spricht", "pt": "{name} está falando", "ro": "{name} vorbește", "ru": "{name} говорит", "uk": "{name} говорить", "id": "{name} sedang bicara", "zh": "{name} 正在说话", "ja": "{name} が話しています", "ar": "{name} يتحدث"},
+  "Hold to talk": {"fr": "Maintiens pour parler", "es": "Mantén para hablar", "de": "Zum Sprechen halten", "pt": "Segure para falar", "ro": "Ține apăsat și vorbește", "ru": "Держи, чтобы говорить", "uk": "Тримай, щоб говорити", "id": "Tahan untuk bicara", "zh": "按住说话", "ja": "押して話す", "ar": "اضغط للتحدث"},
+  "ANY BROWSER": {"fr": "TOUT NAVIGATEUR", "es": "CUALQUIER NAVEGADOR", "de": "JEDER BROWSER", "pt": "QUALQUER NAVEGADOR", "ro": "ORICE BROWSER", "ru": "ЛЮБОЙ БРАУЗЕР", "uk": "БУДЬ-ЯКИЙ БРАУЗЕР", "id": "BROWSER APA SAJA", "zh": "任意浏览器", "ja": "どのブラウザでも", "ar": "أي متصفح"},
+  "*No *accounts.": {"fr": "*Pas de *compte.", "es": "*Sin *cuentas.", "de": "*Kein *Konto.", "pt": "*Sem *conta.", "ro": "*Fără *conturi.", "ru": "*Без *аккаунтов.", "uk": "*Без *акаунтів.", "id": "*Tanpa *akun.", "zh": "*无需*账号。", "ja": "アカウント*不要*。", "ar": "*بلا *حساب."},
+  "*No *installation.": {"fr": "*Rien *à installer.", "es": "*Sin *instalación.", "de": "*Keine *Installation.", "pt": "*Sem *instalação.", "ro": "*Fără *instalare.", "ru": "*Без *установки.", "uk": "*Без *встановлення.", "id": "*Tanpa *instalasi.", "zh": "*无需*安装。", "ja": "インストール*不要*。", "ar": "*بلا *تثبيت."},
+  "*No *server required.": {"fr": "*Pas de *serveur.", "es": "*Sin *servidor.", "de": "*Kein *Server nötig.", "pt": "*Sem *servidor.", "ro": "*Fără *server.", "ru": "*Без *сервера.", "uk": "*Без *сервера.", "id": "*Tanpa *server.", "zh": "*无需*服务器。", "ja": "サーバー*不要*。", "ar": "*بلا *خادم."},
+  "FREE & OPEN SOURCE · DESKTOP · MOBILE · WEB": {"fr": "GRATUIT ET OPEN SOURCE · ORDINATEUR · MOBILE · WEB", "es": "GRATIS Y DE CÓDIGO ABIERTO · ESCRITORIO · MÓVIL · WEB", "de": "KOSTENLOS & OPEN SOURCE · DESKTOP · MOBIL · WEB", "pt": "GRÁTIS E CÓDIGO ABERTO · DESKTOP · CELULAR · WEB", "ro": "GRATUIT ȘI OPEN SOURCE · DESKTOP · MOBIL · WEB", "ru": "БЕСПЛАТНО, ОТКРЫТЫЙ КОД · ПК · ТЕЛЕФОН · ВЕБ", "uk": "БЕЗКОШТОВНО, ВІДКРИТИЙ КОД · ПК · ТЕЛЕФОН · ВЕБ", "id": "GRATIS & SUMBER TERBUKA · DESKTOP · PONSEL · WEB", "zh": "免费开源 · 桌面 · 移动 · 网页", "ja": "無料・オープンソース · デスクトップ · モバイル · Web", "ar": "مجاني ومفتوح المصدر · الحاسوب · الهاتف · الويب"},
+  "Your room.": {"fr": "Ta pièce.", "es": "Tu habitación.", "de": "Dein Zimmer.", "pt": "Onde você está.", "ro": "Încăperea ta.", "ru": "Твоя комната.", "uk": "Твоя кімната.", "id": "Ruanganmu.", "zh": "你的房间。", "ja": "あなたの部屋。", "ar": "غرفتك."},
+  "Any*where.*": {"fr": "N’importe *où.*", "es": "Donde *quieras.*", "de": "Über*all.*", "pt": "Em qualquer *lugar.*", "ro": "Ori*unde.*", "ru": "Где *угодно.*", "uk": "Будь-*де.*", "id": "Di mana *saja.*", "zh": "任何*地方。*", "ja": "どこ*へでも。*", "ar": "في *أي مكان.*"},
+  "CAMERA · 1280 × 720 · 30 FPS": {"fr": "CAMÉRA · 1280 × 720 · 30 IPS", "es": "CÁMARA · 1280 × 720 · 30 FPS", "de": "KAMERA · 1280 × 720 · 30 FPS", "pt": "CÂMERA · 1280 × 720 · 30 FPS", "ro": "CAMERĂ · 1280 × 720 · 30 FPS", "ru": "КАМЕРА · 1280 × 720 · 30 К/С", "uk": "КАМЕРА · 1280 × 720 · 30 К/С", "id": "KAMERA · 1280 × 720 · 30 FPS", "zh": "摄像头 · 1280 × 720 · 30 FPS", "ja": "カメラ · 1280 × 720 · 30 FPS", "ar": "الكاميرا · 1280 × 720 · 30 FPS"},
+  "SCENE · DOLOMITES LAKE": {"fr": "SCÈNE · LAC DES DOLOMITES", "es": "ESCENA · LAGO EN LOS DOLOMITAS", "de": "SZENE · DOLOMITENSEE", "pt": "CENA · LAGO NAS DOLOMITAS", "ro": "SCENĂ · LAC ÎN DOLOMIȚI", "ru": "СЦЕНА · ОЗЕРО В ДОЛОМИТАХ", "uk": "СЦЕНА · ОЗЕРО В ДОЛОМІТАХ", "id": "ADEGAN · DANAU DOLOMIT", "zh": "场景 · 多洛米蒂湖", "ja": "シーン · ドロミテの湖", "ar": "المشهد · بحيرة الدولوميت"},
+  "MODEL INPUT · 256 × 144 · 12 Hz": {"fr": "ENTRÉE DU MODÈLE · 256 × 144 · 12 Hz", "es": "ENTRADA DEL MODELO · 256 × 144 · 12 Hz", "de": "MODELL-EINGABE · 256 × 144 · 12 Hz", "pt": "ENTRADA DO MODELO · 256 × 144 · 12 Hz", "ro": "INTRAREA MODELULUI · 256 × 144 · 12 Hz", "ru": "ВХОД МОДЕЛИ · 256 × 144 · 12 Гц", "uk": "ВХІД МОДЕЛІ · 256 × 144 · 12 Гц", "id": "INPUT MODEL · 256 × 144 · 12 Hz", "zh": "模型输入 · 256 × 144 · 12 Hz", "ja": "モデル入力 · 256 × 144 · 12 Hz", "ar": "مدخل النموذج · 256 × 144 · 12 هرتز"},
+  "CUT-OUT · THE ROOM IS GONE": {"fr": "DÉTOURAGE · LA PIÈCE A DISPARU", "es": "RECORTE · LA HABITACIÓN DESAPARECE", "de": "FREISTELLUNG · DER RAUM IST WEG", "pt": "RECORTE · O AMBIENTE SUMIU", "ro": "DECUPAJ · ÎNCĂPEREA A DISPĂRUT", "ru": "ВЫРЕЗКА · КОМНАТЫ БОЛЬШЕ НЕТ", "uk": "ВИРІЗКА · КІМНАТИ БІЛЬШЕ НЕМАЄ", "id": "POTONGAN · RUANGANNYA HILANG", "zh": "抠像 · 房间消失了", "ja": "切り抜き · 部屋が消えた", "ar": "القصّ · اختفت الغرفة"},
+  "SCENE · DOLOMITES LAKE · LIVE 3D": {"fr": "SCÈNE · LAC DES DOLOMITES · 3D EN DIRECT", "es": "ESCENA · LAGO EN LOS DOLOMITAS · 3D EN VIVO", "de": "SZENE · DOLOMITENSEE · LIVE-3D", "pt": "CENA · LAGO NAS DOLOMITAS · 3D AO VIVO", "ro": "SCENĂ · LAC ÎN DOLOMIȚI · 3D LIVE", "ru": "СЦЕНА · ОЗЕРО В ДОЛОМИТАХ · ЖИВОЕ 3D", "uk": "СЦЕНА · ОЗЕРО В ДОЛОМІТАХ · ЖИВЕ 3D", "id": "ADEGAN · DANAU DOLOMIT · 3D LANGSUNG", "zh": "场景 · 多洛米蒂湖 · 实时 3D", "ja": "シーン · ドロミテの湖 · リアルタイム 3D", "ar": "المشهد · بحيرة الدولوميت · ثلاثي الأبعاد حيّ"},
+  "COMPOSITE · 30 FPS": {"fr": "COMPOSITION · 30 IPS", "es": "COMPOSICIÓN · 30 FPS", "de": "KOMPOSIT · 30 FPS", "pt": "COMPOSIÇÃO · 30 FPS", "ro": "COMPOZIȚIE · 30 FPS", "ru": "КОМПОЗИЦИЯ · 30 К/С", "uk": "КОМПОЗИЦІЯ · 30 К/С", "id": "KOMPOSIT · 30 FPS", "zh": "合成 · 30 FPS", "ja": "合成 · 30 FPS", "ar": "التركيب · 30 FPS"},
+  "WHAT YOU SEND": {"fr": "CE QUE TU ENVOIES", "es": "LO QUE ENVÍAS", "de": "WAS DU SENDEST", "pt": "O QUE VOCÊ ENVIA", "ro": "CE TRIMIȚI", "ru": "ЧТО ТЫ ОТПРАВЛЯЕШЬ", "uk": "ЩО ТИ НАДСИЛАЄШ", "id": "YANG KAMU KIRIM", "zh": "你发送的画面", "ja": "あなたが送るもの", "ar": "ما ترسله"},
+  "SCENE": {"fr": "SCÈNE", "es": "ESCENA", "de": "SZENE", "pt": "CENA", "ro": "SCENĂ", "ru": "СЦЕНА", "uk": "СЦЕНА", "id": "ADEGAN", "zh": "场景", "ja": "シーン", "ar": "المشهد"},
+  "SHADOW": {"fr": "OMBRE", "es": "SOMBRA", "de": "SCHATTEN", "pt": "SOMBRA", "ro": "UMBRĂ", "ru": "ТЕНЬ", "uk": "ТІНЬ", "id": "BAYANGAN", "zh": "阴影", "ja": "影", "ar": "الظل"},
+  "YOU": {"fr": "TOI", "es": "TÚ", "de": "DU", "pt": "VOCÊ", "ro": "TU", "ru": "ТЫ", "uk": "ТИ", "id": "KAMU", "zh": "你", "ja": "あなた", "ar": "أنت"},
+  "LIGHT WRAP": {"fr": "HALO DE LUMIÈRE", "es": "LUZ ENVOLVENTE", "de": "LICHTSAUM", "pt": "LUZ DE CONTORNO", "ro": "LUMINĂ DE CONTUR", "ru": "СВЕТОВОЙ ОРЕОЛ", "uk": "СВІТЛОВИЙ ОРЕОЛ", "id": "LIMPAHAN CAHAYA", "zh": "光线包裹", "ja": "ライトラップ", "ar": "التفاف الضوء"},
+  "ON THIS DEVICE · NOTHING UPLOADED": {"fr": "SUR CET APPAREIL · RIEN N’EST ENVOYÉ", "es": "EN ESTE DISPOSITIVO · NADA SE SUBE", "de": "AUF DIESEM GERÄT · NICHTS WIRD HOCHGELADEN", "pt": "NESTE APARELHO · NADA É ENVIADO", "ro": "PE ACEST DISPOZITIV · NIMIC NU SE ÎNCARCĂ", "ru": "НА ЭТОМ УСТРОЙСТВЕ · НИЧЕГО НЕ ЗАГРУЖАЕТСЯ", "uk": "НА ЦЬОМУ ПРИСТРОЇ · НІЧОГО НЕ ВИВАНТАЖУЄТЬСЯ", "id": "DI PERANGKAT INI · TAK ADA YANG DIUNGGAH", "zh": "在本机完成 · 不上传任何内容", "ja": "この端末で処理 · アップロードなし", "ar": "على هذا الجهاز · لا يُرفع شيء"},
+  "RAW MASK": {"fr": "MASQUE BRUT", "es": "MÁSCARA BRUTA", "de": "ROHMASKE", "pt": "MÁSCARA BRUTA", "ro": "MASCĂ BRUTĂ", "ru": "СЫРАЯ МАСКА", "uk": "СИРА МАСКА", "id": "MASKER MENTAH", "zh": "原始遮罩", "ja": "生のマスク", "ar": "القناع الخام"},
+  "RAW": {"fr": "BRUT", "es": "BRUTA", "de": "ROH", "pt": "BRUTA", "ro": "BRUTĂ", "ru": "СЫРАЯ", "uk": "СИРА", "id": "MENTAH", "zh": "原始", "ja": "生", "ar": "خام"},
+  "DILATE": {"fr": "DILATATION", "es": "DILATACIÓN", "de": "ERWEITERN", "pt": "DILATAÇÃO", "ro": "DILATARE", "ru": "РАСШИРЕНИЕ", "uk": "РОЗШИРЕННЯ", "id": "PERLEBAR", "zh": "扩展", "ja": "膨張", "ar": "التوسيع"},
+  "FEATHER": {"fr": "ADOUCISSEMENT", "es": "SUAVIZADO", "de": "WEICHZEICHNEN", "pt": "SUAVIZAÇÃO", "ro": "ESTOMPARE", "ru": "РАСТУШЁВКА", "uk": "РОЗТУШУВАННЯ", "id": "PERHALUS", "zh": "羽化", "ja": "ぼかし", "ar": "التنعيم"},
+  "TEMPORAL BLEND": {"fr": "FONDU TEMPOREL", "es": "FUSIÓN TEMPORAL", "de": "ZEITLICHES MISCHEN", "pt": "MESCLA TEMPORAL", "ro": "AMESTEC TEMPORAL", "ru": "СГЛАЖИВАНИЕ ВО ВРЕМЕНИ", "uk": "ЗГЛАДЖУВАННЯ В ЧАСІ", "id": "PADUAN WAKTU", "zh": "时间混合", "ja": "時間ブレンド", "ar": "المزج الزمني"},
+  "BLEND": {"fr": "FONDU", "es": "FUSIÓN", "de": "MISCHEN", "pt": "MESCLA", "ro": "AMESTEC", "ru": "СГЛАЖИВАНИЕ", "uk": "ЗГЛАДЖУВАННЯ", "id": "PADUAN", "zh": "混合", "ja": "ブレンド", "ar": "المزج"},
+  "LIGHT {dir} {tone}": {"fr": "LUMIÈRE {dir} {tone}", "es": "LUZ {dir} {tone}", "de": "LICHT {dir} {tone}", "pt": "LUZ {dir} {tone}", "ro": "LUMINĂ {dir} {tone}", "ru": "СВЕТ {dir} {tone}", "uk": "СВІТЛО {dir} {tone}", "id": "CAHAYA {dir} {tone}", "zh": "光线 {dir} {tone}", "ja": "光 {dir} {tone}", "ar": "الضوء {dir} {tone}"},
+  "WARM": {"fr": "CHAUDE", "es": "CÁLIDA", "de": "WARM", "pt": "QUENTE", "ro": "CALDĂ", "ru": "ТЁПЛЫЙ", "uk": "ТЕПЛЕ", "id": "HANGAT", "zh": "暖", "ja": "暖色", "ar": "دافئ"},
+  "COOL": {"fr": "FROIDE", "es": "FRÍA", "de": "KÜHL", "pt": "FRIA", "ro": "RECE", "ru": "ХОЛОДНЫЙ", "uk": "ХОЛОДНЕ", "id": "DINGIN", "zh": "冷", "ja": "寒色", "ar": "بارد"},
+  "MEASURED 4× A SECOND": {"fr": "MESURÉE 4× PAR SECONDE", "es": "MEDIDA 4 VECES POR SEGUNDO", "de": "4× PRO SEKUNDE GEMESSEN", "pt": "MEDIDA 4× POR SEGUNDO", "ro": "MĂSURATĂ DE 4× PE SECUNDĂ", "ru": "ЗАМЕР 4 РАЗА В СЕКУНДУ", "uk": "ЗАМІР 4 РАЗИ НА СЕКУНДУ", "id": "DIUKUR 4× PER DETIK", "zh": "每秒测量 4 次", "ja": "毎秒 4 回測定", "ar": "يُقاس 4 مرات في الثانية"},
+  "SCENE RELIT": {"fr": "SCÈNE RÉÉCLAIRÉE", "es": "ESCENA REILUMINADA", "de": "SZENE NEU BELEUCHTET", "pt": "CENA REILUMINADA", "ro": "SCENĂ REILUMINATĂ", "ru": "СЦЕНА ПЕРЕОСВЕЩЕНА", "uk": "СЦЕНУ ПЕРЕОСВІТЛЕНО", "id": "ADEGAN DISINARI ULANG", "zh": "场景已重新打光", "ja": "シーンを再ライティング", "ar": "أُعيدت إضاءة المشهد"},
+  "SCENE ID + LIGHT": {"fr": "ID DE SCÈNE + LUMIÈRE", "es": "ID DE ESCENA + LUZ", "de": "SZENEN-ID + LICHT", "pt": "ID DA CENA + LUZ", "ro": "ID SCENĂ + LUMINĂ", "ru": "ID СЦЕНЫ + СВЕТ", "uk": "ID СЦЕНИ + СВІТЛО", "id": "ID ADEGAN + CAHAYA", "zh": "场景 ID + 光线", "ja": "シーン ID + 光", "ar": "معرّف المشهد + الضوء"},
+  "ROOM DRAWN ON THEIR SCREEN": {"fr": "PIÈCE DESSINÉE SUR LEUR ÉCRAN", "es": "HABITACIÓN DIBUJADA EN SU PANTALLA", "de": "RAUM AUF IHREM BILDSCHIRM GEZEICHNET", "pt": "AMBIENTE DESENHADO NA TELA DELES", "ro": "ÎNCĂPERE DESENATĂ PE ECRANUL LOR", "ru": "КОМНАТА НАРИСОВАНА У НИХ НА ЭКРАНЕ", "uk": "КІМНАТУ НАМАЛЬОВАНО НА ЇХНЬОМУ ЕКРАНІ", "id": "RUANGAN DIGAMBAR DI LAYAR MEREKA", "zh": "房间在对方屏幕上绘制", "ja": "部屋は相手の画面で描画", "ar": "الغرفة تُرسم على شاشتهم"},
+  "WHAT THEY RECEIVE": {"fr": "CE QU’ILS REÇOIVENT", "es": "LO QUE RECIBEN", "de": "WAS SIE EMPFANGEN", "pt": "O QUE ELES RECEBEM", "ro": "CE PRIMESC EI", "ru": "ЧТО ОНИ ПОЛУЧАЮТ", "uk": "ЩО ВОНИ ОТРИМУЮТЬ", "id": "YANG MEREKA TERIMA", "zh": "对方收到的画面", "ja": "相手が受け取るもの", "ar": "ما يستقبلونه"},
+  "THE ROOM IS NOT SENT": {"fr": "LA PIÈCE N’EST PAS ENVOYÉE", "es": "LA HABITACIÓN NO SE ENVÍA", "de": "DER RAUM WIRD NICHT GESENDET", "pt": "O AMBIENTE NÃO É ENVIADO", "ro": "ÎNCĂPEREA NU ESTE TRIMISĂ", "ru": "КОМНАТА НЕ ПЕРЕДАЁТСЯ", "uk": "КІМНАТА НЕ ПЕРЕДАЄТЬСЯ", "id": "RUANGANNYA TIDAK DIKIRIM", "zh": "房间不会被发送", "ja": "部屋は送信されません", "ar": "الغرفة لا تُرسَل"},
+  "STEP {n} · FIND YOU": {"fr": "ÉTAPE {n} · TE TROUVER", "es": "PASO {n} · ENCONTRARTE", "de": "SCHRITT {n} · DICH FINDEN", "pt": "PASSO {n} · ENCONTRAR VOCÊ", "ro": "PASUL {n} · GĂSIREA TA", "ru": "ШАГ {n} · НАЙТИ ТЕБЯ", "uk": "КРОК {n} · ЗНАЙТИ ТЕБЕ", "id": "LANGKAH {n} · MENEMUKANMU", "zh": "第 {n} 步 · 找到你", "ja": "ステップ {n} · あなたを見つける", "ar": "الخطوة {n} · العثور عليك"},
+  "It finds you.": {"fr": "Il te trouve.", "es": "Te encuentra.", "de": "Es findet dich.", "pt": "Ele encontra você.", "ro": "Te găsește.", "ru": "Находит тебя.", "uk": "Знаходить тебе.", "id": "Ia menemukanmu.", "zh": "它找到你。", "ja": "あなたを見つける。", "ar": "يجدك."},
+  "A small model picks you out of every frame, on your own device.": {"fr": "Un petit modèle te détoure dans chaque image, sur ton propre appareil.", "es": "Un pequeño modelo te separa en cada imagen, en tu propio dispositivo.", "de": "Ein kleines Modell stellt dich in jedem Bild frei, auf deinem eigenen Gerät.", "pt": "Um pequeno modelo recorta você em cada quadro, no seu próprio aparelho.", "ro": "Un model mic te decupează din fiecare cadru, chiar pe dispozitivul tău.", "ru": "Небольшая модель выделяет тебя в каждом кадре, прямо на твоём устройстве.", "uk": "Невелика модель виокремлює тебе в кожному кадрі, просто на твоєму пристрої.", "id": "Model kecil memisahkanmu di setiap bingkai, di perangkatmu sendiri.", "zh": "一个小模型在每一帧里把你抠出来，全在你自己的设备上。", "ja": "小さなモデルが毎フレームあなたを切り出します。処理はあなたの端末の中です。", "ar": "نموذج صغير يميّزك في كل لقطة، على جهازك أنت."},
+  "MEDIAPIPE · 256 px · 10–15× A SECOND": {"fr": "MEDIAPIPE · 256 px · 10 À 15× PAR SECONDE", "es": "MEDIAPIPE · 256 px · 10–15 VECES POR SEGUNDO", "de": "MEDIAPIPE · 256 px · 10–15× PRO SEKUNDE", "pt": "MEDIAPIPE · 256 px · 10–15× POR SEGUNDO", "ro": "MEDIAPIPE · 256 px · DE 10–15× PE SECUNDĂ", "ru": "MEDIAPIPE · 256 px · 10–15 РАЗ В СЕКУНДУ", "uk": "MEDIAPIPE · 256 px · 10–15 РАЗІВ НА СЕКУНДУ", "id": "MEDIAPIPE · 256 px · 10–15× PER DETIK", "zh": "MEDIAPIPE · 256 px · 每秒 10–15 次", "ja": "MEDIAPIPE · 256 px · 毎秒 10〜15 回", "ar": "MEDIAPIPE · 256 بكسل · 10–15 مرة في الثانية"},
+  "STEP {n} · THE EDGE": {"fr": "ÉTAPE {n} · LE CONTOUR", "es": "PASO {n} · EL BORDE", "de": "SCHRITT {n} · DIE KANTE", "pt": "PASSO {n} · A BORDA", "ro": "PASUL {n} · CONTURUL", "ru": "ШАГ {n} · КРАЙ", "uk": "КРОК {n} · КРАЙ", "id": "LANGKAH {n} · TEPI", "zh": "第 {n} 步 · 边缘", "ja": "ステップ {n} · 輪郭", "ar": "الخطوة {n} · الحافة"},
+  "A clean edge.": {"fr": "Un contour net.", "es": "Un borde limpio.", "de": "Eine saubere Kante.", "pt": "Uma borda limpa.", "ro": "Un contur curat.", "ru": "Чистый край.", "uk": "Чистий край.", "id": "Tepi yang rapi.", "zh": "干净的边缘。", "ja": "きれいな輪郭。", "ar": "حافة نظيفة."},
+  "Each mask is grown, softened and blended with the last, so the edge never crawls.": {"fr": "Chaque masque est élargi, adouci et fondu avec le précédent : le contour ne grésille jamais.", "es": "Cada máscara se amplía, se suaviza y se funde con la anterior, para que el borde nunca tiemble.", "de": "Jede Maske wird erweitert, weichgezeichnet und mit der vorigen gemischt, damit die Kante nie flimmert.", "pt": "Cada máscara é ampliada, suavizada e mesclada com a anterior, para a borda nunca tremer.", "ro": "Fiecare mască e lărgită, estompată și amestecată cu cea dinainte, ca marginea să nu tremure.", "ru": "Каждая маска расширяется, смягчается и смешивается с предыдущей, чтобы край не дрожал.", "uk": "Кожна маска розширюється, пом’якшується й змішується з попередньою, щоб край не тремтів.", "id": "Setiap masker diperlebar, dihaluskan, dan dipadukan dengan yang sebelumnya, agar tepinya tak bergetar.", "zh": "每张遮罩都会扩展、柔化，并与上一张混合，边缘从不抖动。", "ja": "マスクは毎回、少し広げ、ぼかし、前のものと混ぜるので、輪郭がちらつきません。", "ar": "يُوسَّع كل قناع ويُنعَّم ويُمزج بالسابق، فلا ترتجف الحافة أبدًا."},
+  "DILATE · FEATHER · TEMPORAL BLEND": {"fr": "DILATATION · ADOUCISSEMENT · FONDU TEMPOREL", "es": "DILATACIÓN · SUAVIZADO · FUSIÓN TEMPORAL", "de": "ERWEITERN · WEICHZEICHNEN · ZEITLICHES MISCHEN", "pt": "DILATAÇÃO · SUAVIZAÇÃO · MESCLA TEMPORAL", "ro": "DILATARE · ESTOMPARE · AMESTEC TEMPORAL", "ru": "РАСШИРЕНИЕ · РАСТУШЁВКА · СГЛАЖИВАНИЕ ВО ВРЕМЕНИ", "uk": "РОЗШИРЕННЯ · РОЗТУШУВАННЯ · ЗГЛАДЖУВАННЯ В ЧАСІ", "id": "PERLEBAR · PERHALUS · PADUAN WAKTU", "zh": "扩展 · 羽化 · 时间混合", "ja": "膨張 · ぼかし · 時間ブレンド", "ar": "التوسيع · التنعيم · المزج الزمني"},
+  "STEP {n} · THE ROOM": {"fr": "ÉTAPE {n} · LA PIÈCE", "es": "PASO {n} · LA HABITACIÓN", "de": "SCHRITT {n} · DER RAUM", "pt": "PASSO {n} · O AMBIENTE", "ro": "PASUL {n} · ÎNCĂPEREA", "ru": "ШАГ {n} · КОМНАТА", "uk": "КРОК {n} · КІМНАТА", "id": "LANGKAH {n} · RUANGAN", "zh": "第 {n} 步 · 房间", "ja": "ステップ {n} · 部屋", "ar": "الخطوة {n} · الغرفة"},
+  "A room that’s alive.": {"fr": "Une pièce vivante.", "es": "Una habitación viva.", "de": "Ein Raum, der lebt.", "pt": "Um ambiente vivo.", "ro": "O încăpere vie.", "ru": "Живая комната.", "uk": "Жива кімната.", "id": "Ruangan yang hidup.", "zh": "活的房间。", "ja": "生きている部屋。", "ar": "غرفة حيّة."},
+  "Not a photo: a 3D scene drawn live on your GPU, relit to match the light on your face.": {"fr": "Pas une photo : une scène 3D dessinée en direct par ta carte graphique, éclairée comme ton visage.", "es": "No es una foto: una escena 3D dibujada en vivo por tu GPU, iluminada como tu cara.", "de": "Kein Foto: eine 3D-Szene, live auf deiner GPU gezeichnet und beleuchtet wie dein Gesicht.", "pt": "Não é uma foto: uma cena 3D desenhada ao vivo pela sua GPU, iluminada como o seu rosto.", "ro": "Nu e o fotografie: o scenă 3D desenată live de placa ta video, luminată ca fața ta.", "ru": "Не фото, а 3D-сцена: твой GPU рисует её вживую и освещает так же, как твоё лицо.", "uk": "Не фото, а 3D-сцена: твій GPU малює її наживо й освітлює так само, як твоє обличчя.", "id": "Bukan foto: adegan 3D yang digambar langsung oleh GPU-mu, disinari sesuai cahaya di wajahmu.", "zh": "不是照片，而是由你的 GPU 实时绘制的 3D 场景，光照与你的脸一致。", "ja": "写真ではなく、GPU がリアルタイムに描く 3D シーン。顔に当たる光に合わせて照らします。", "ar": "ليست صورة، بل مشهد ثلاثي الأبعاد ترسمه وحدة الرسوميات مباشرةً، ويُضاء كما يُضاء وجهك."},
+  "THREE.JS · WEBGL2 · 0 BYTES OF ARTWORK": {"fr": "THREE.JS · WEBGL2 · 0 OCTET D’IMAGE", "es": "THREE.JS · WEBGL2 · 0 BYTES DE IMÁGENES", "de": "THREE.JS · WEBGL2 · 0 BYTES BILDMATERIAL", "pt": "THREE.JS · WEBGL2 · 0 BYTES DE IMAGEM", "ro": "THREE.JS · WEBGL2 · 0 OCTEȚI DE IMAGINI", "ru": "THREE.JS · WEBGL2 · 0 БАЙТ КАРТИНОК", "uk": "THREE.JS · WEBGL2 · 0 БАЙТІВ ЗОБРАЖЕНЬ", "id": "THREE.JS · WEBGL2 · 0 BYTE GAMBAR", "zh": "THREE.JS · WEBGL2 · 0 字节图片素材", "ja": "THREE.JS · WEBGL2 · 画像素材 0 バイト", "ar": "THREE.JS · WEBGL2 · صفر بايت من الصور"},
+  "STEP {n} · THE PICTURE": {"fr": "ÉTAPE {n} · L’IMAGE", "es": "PASO {n} · LA IMAGEN", "de": "SCHRITT {n} · DAS BILD", "pt": "PASSO {n} · A IMAGEM", "ro": "PASUL {n} · IMAGINEA", "ru": "ШАГ {n} · КАРТИНКА", "uk": "КРОК {n} · КАРТИНКА", "id": "LANGKAH {n} · GAMBAR", "zh": "第 {n} 步 · 画面", "ja": "ステップ {n} · 映像", "ar": "الخطوة {n} · الصورة"},
+  "You, in the room.": {"fr": "Toi, dans la pièce.", "es": "Tú, en la habitación.", "de": "Du, im Raum.", "pt": "Você, no ambiente.", "ro": "Tu, în încăpere.", "ru": "Ты — в комнате.", "uk": "Ти — у кімнаті.", "id": "Kamu, di ruangan.", "zh": "你，置身其中。", "ja": "あなたが、部屋の中に。", "ar": "أنت، داخل الغرفة."},
+  "Your shadow falls on the scene, and its light wraps around your edge.": {"fr": "Ton ombre tombe sur la scène, et sa lumière enveloppe ton contour.", "es": "Tu sombra cae sobre la escena y su luz envuelve tu contorno.", "de": "Dein Schatten fällt in die Szene, und ihr Licht legt sich um deinen Rand.", "pt": "Sua sombra cai sobre a cena, e a luz dela envolve o seu contorno.", "ro": "Umbra ta cade pe scenă, iar lumina ei îți învăluie conturul.", "ru": "Твоя тень падает на сцену, а её свет обнимает твой контур.", "uk": "Твоя тінь падає на сцену, а її світло огортає твій контур.", "id": "Bayanganmu jatuh di adegan, dan cahayanya membalut tepimu.", "zh": "你的影子落在场景上，场景的光包裹着你的轮廓。", "ja": "あなたの影がシーンに落ち、シーンの光があなたの輪郭を包みます。", "ar": "يقع ظلك على المشهد، ويلتف ضوؤه حول حوافك."},
+  "SCENE · SHADOW · YOU · LIGHT WRAP": {"fr": "SCÈNE · OMBRE · TOI · HALO DE LUMIÈRE", "es": "ESCENA · SOMBRA · TÚ · LUZ ENVOLVENTE", "de": "SZENE · SCHATTEN · DU · LICHTSAUM", "pt": "CENA · SOMBRA · VOCÊ · LUZ DE CONTORNO", "ro": "SCENĂ · UMBRĂ · TU · LUMINĂ DE CONTUR", "ru": "СЦЕНА · ТЕНЬ · ТЫ · СВЕТОВОЙ ОРЕОЛ", "uk": "СЦЕНА · ТІНЬ · ТИ · СВІТЛОВИЙ ОРЕОЛ", "id": "ADEGAN · BAYANGAN · KAMU · LIMPAHAN CAHAYA", "zh": "场景 · 阴影 · 你 · 光线包裹", "ja": "シーン · 影 · あなた · ライトラップ", "ar": "المشهد · الظل · أنت · التفاف الضوء"},
+  "IN A CALL": {"fr": "EN APPEL", "es": "EN UNA LLAMADA", "de": "IM ANRUF", "pt": "NUMA CHAMADA", "ro": "ÎNTR-UN APEL", "ru": "В ЗВОНКЕ", "uk": "У ДЗВІНКУ", "id": "DALAM PANGGILAN", "zh": "通话中", "ja": "通話では", "ar": "في المكالمة"},
+  "Send just you.": {"fr": "N’envoie que toi.", "es": "Envía solo tu imagen.", "de": "Nur dich senden.", "pt": "Envie só você.", "ro": "Trimite doar imaginea ta.", "ru": "Отправляй только себя.", "uk": "Надсилай лише себе.", "id": "Kirim dirimu saja.", "zh": "只发送你自己。", "ja": "あなただけを送る。", "ar": "أرسل نفسك فقط."},
+  "A peer that can draw the scene gets you over flat green, and draws the room itself.": {"fr": "Un participant qui sait dessiner la scène te reçoit sur fond vert uni, et dessine la pièce lui-même.", "es": "Quien puede dibujar la escena te recibe sobre verde liso y dibuja la habitación por su cuenta.", "de": "Wer die Szene zeichnen kann, bekommt dich vor reinem Grün und zeichnet den Raum selbst.", "pt": "Quem consegue desenhar a cena recebe você sobre verde liso e desenha o ambiente sozinho.", "ro": "Cine poate desena scena te primește pe verde uniform și desenează singur încăperea.", "ru": "Тот, кто умеет рисовать сцену, получает тебя на ровном зелёном фоне и рисует комнату сам.", "uk": "Той, хто вміє малювати сцену, отримує тебе на рівному зеленому тлі й малює кімнату сам.", "id": "Peserta yang bisa menggambar adegan menerimamu di atas hijau polos, lalu menggambar ruangannya sendiri.", "zh": "能绘制场景的一方收到的是纯绿背景上的你，再自己画出房间。", "ja": "シーンを描ける相手には、単色の緑の上のあなただけが届き、部屋は相手側で描かれます。", "ar": "من يستطيع رسم المشهد يستقبلك على خلفية خضراء صافية، ويرسم الغرفة بنفسه."},
+  "KEYED VIDEO · DIRECT CONNECTIONS ONLY": {"fr": "VIDÉO DÉTOURÉE · CONNEXIONS DIRECTES UNIQUEMENT", "es": "VÍDEO CON CROMA · SOLO CONEXIONES DIRECTAS", "de": "KEYING-VIDEO · NUR DIREKTE VERBINDUNGEN", "pt": "VÍDEO COM CHROMA KEY · SÓ CONEXÕES DIRETAS", "ro": "VIDEO CU FOND VERDE · DOAR CONEXIUNI DIRECTE", "ru": "ВИДЕО С ХРОМАКЕЕМ · ТОЛЬКО ПРЯМЫЕ СОЕДИНЕНИЯ", "uk": "ВІДЕО З ХРОМАКЕЄМ · ЛИШЕ ПРЯМІ З’ЄДНАННЯ", "id": "VIDEO CHROMA KEY · HANYA KONEKSI LANGSUNG", "zh": "抠像视频 · 仅限直连", "ja": "キー合成ビデオ · 直接接続のみ", "ar": "فيديو بمفتاح لوني · الاتصالات المباشرة فقط"},
+  "Pick a room.": {"fr": "Choisis ta pièce.", "es": "Elige una habitación.", "de": "Such dir einen Raum aus.", "pt": "Escolha um cenário.", "ro": "Alege o încăpere.", "ru": "Выбери комнату.", "uk": "Обери кімнату.", "id": "Pilih ruangan.", "zh": "选一个房间。", "ja": "部屋を選ぼう。", "ar": "اختر غرفة."},
+  "Blur": {"fr": "Flou", "es": "Desenfoque", "de": "Unschärfe", "pt": "Desfoque", "ro": "Estompare", "ru": "Размытие", "uk": "Розмиття", "id": "Buram", "zh": "虚化", "ja": "ぼかし", "ar": "تمويه"},
+  "Office": {"fr": "Bureau", "es": "Oficina", "de": "Büro", "pt": "Escritório", "ro": "Birou", "ru": "Офис", "uk": "Офіс", "id": "Kantor", "zh": "办公室", "ja": "オフィス", "ar": "مكتب"},
+  "Island": {"fr": "Île", "es": "Isla", "de": "Insel", "pt": "Ilha", "ro": "Insulă", "ru": "Остров", "uk": "Острів", "id": "Pulau", "zh": "海岛", "ja": "島", "ar": "جزيرة"},
+  "Cyber café": {"fr": "Cybercafé", "es": "Cibercafé", "de": "Internetcafé", "pt": "Cibercafé", "ro": "Internet café", "ru": "Киберкафе", "uk": "Кіберкафе", "id": "Kafe siber", "zh": "网络咖啡馆", "ja": "サイバーカフェ", "ar": "مقهى إنترنت"},
+  "Mountain": {"fr": "Montagne", "es": "Montaña", "de": "Berge", "pt": "Montanha", "ro": "Munte", "ru": "Горы", "uk": "Гори", "id": "Gunung", "zh": "山间", "ja": "山", "ar": "جبل"},
+  "Countryside": {"fr": "Campagne", "es": "Campo", "de": "Landschaft", "pt": "Campo", "ro": "La țară", "ru": "Деревня", "uk": "Село", "id": "Pedesaan", "zh": "乡村", "ja": "田園", "ar": "الريف"},
+  "Neon rain": {"fr": "Pluie néon", "es": "Lluvia de neón", "de": "Neonregen", "pt": "Chuva neon", "ro": "Ploaie neon", "ru": "Неоновый дождь", "uk": "Неоновий дощ", "id": "Hujan neon", "zh": "霓虹雨", "ja": "ネオンの雨", "ar": "مطر النيون"},
+  "+ Your 360° photo or 3D model": {"fr": "+ Ta photo 360° ou ton modèle 3D", "es": "+ Tu foto 360° o modelo 3D", "de": "+ Dein 360°-Foto oder 3D-Modell", "pt": "+ Sua foto 360° ou modelo 3D", "ro": "+ Fotografia ta 360° sau un model 3D", "ru": "+ Твоё фото 360° или 3D-модель", "uk": "+ Твоє фото 360° або 3D-модель", "id": "+ Foto 360° atau model 3D milikmu", "zh": "+ 你的 360° 照片或 3D 模型", "ja": "+ あなたの 360° 写真や 3D モデル", "ar": "+ صورتك بزاوية 360° أو نموذج ثلاثي الأبعاد"},
+  "Virtual backgrounds, made on your device.": {"fr": "Des arrière-plans virtuels, faits sur ton appareil.", "es": "Fondos virtuales, hechos en tu dispositivo.", "de": "Virtuelle Hintergründe, gemacht auf deinem Gerät.", "pt": "Fundos virtuais, feitos no seu aparelho.", "ro": "Fundaluri virtuale, create pe dispozitivul tău.", "ru": "Виртуальные фоны, созданные на твоём устройстве.", "uk": "Віртуальні фони, створені на твоєму пристрої.", "id": "Latar virtual, dibuat di perangkatmu.", "zh": "虚拟背景，在你的设备上生成。", "ja": "バーチャル背景を、あなたの端末で。", "ar": "خلفيات افتراضية، تُصنع على جهازك."},
+  "BLUR · SIX SCENES · YOUR OWN 360° PHOTOS & 3D MODELS": {"fr": "FLOU · SIX SCÈNES · TES PHOTOS 360° ET MODÈLES 3D", "es": "DESENFOQUE · SEIS ESCENAS · TUS FOTOS 360° Y MODELOS 3D", "de": "UNSCHÄRFE · SECHS SZENEN · DEINE 360°-FOTOS & 3D-MODELLE", "pt": "DESFOQUE · SEIS CENAS · SUAS FOTOS 360° E MODELOS 3D", "ro": "ESTOMPARE · ȘASE SCENE · FOTOGRAFII 360° ȘI MODELE 3D", "ru": "РАЗМЫТИЕ · ШЕСТЬ СЦЕН · ТВОИ ФОТО 360° И 3D-МОДЕЛИ", "uk": "РОЗМИТТЯ · ШІСТЬ СЦЕН · ТВОЇ ФОТО 360° І 3D-МОДЕЛІ", "id": "BURAM · ENAM ADEGAN · FOTO 360° & MODEL 3D MILIKMU", "zh": "虚化 · 六个场景 · 你自己的 360° 照片和 3D 模型", "ja": "ぼかし · 6 つのシーン · 自分の 360° 写真や 3D モデル", "ar": "تمويه · ستة مشاهد · صورك بزاوية 360° ونماذجك ثلاثية الأبعاد"}
+}
+</script>
 
 <script>
 'use strict';
@@ -635,19 +753,94 @@ const gate = (t, a, b, e = 0.08) => seg(t, a - e, a + e) * (1 - seg(t, b - e, b 
 // Archivo at 118% width for display (a broadcast grotesk — this is a radio
 // product), plain Archivo for text, IBM Plex Mono for the signal-path labels.
 // The same two families the project's docs pages already use.
-const FD = (px, w = 800) => `${w} ${px}px "Vox Display", "Archivo", "Helvetica Neue", Arial, sans-serif`;
-const FT = (px, w = 600) => `${w} ${px}px "Vox Text", "Archivo", -apple-system, "Segoe UI", sans-serif`;
-const FM = px => `500 ${px}px "Vox Mono", "IBM Plex Mono", ui-monospace, Menlo, monospace`;
+const FD = (px, w = 800) => `${w} ${px}px "Vox Display", "Archivo", ${RL.fb}"Helvetica Neue", Arial, sans-serif`;
+const FT = (px, w = 600) => `${w} ${px}px "Vox Text", "Archivo", ${RL.fb}-apple-system, "Segoe UI", sans-serif`;
+const FM = px => `500 ${px}px "Vox Mono", "IBM Plex Mono", ${RL.fb}ui-monospace, Menlo, monospace`;
+
+/* ── The film's own words, in the narration's language ──────────────────── */
+// English is the source: every TX('…') in the drawing code is the English
+// line itself, and SCREEN_TEXT (the JSON block above this script) holds its
+// translations, keyed by that English. renderFrame sets the language from
+// opt.lang for the frame it draws; with none (or English) every string, font
+// and layout is exactly the original's.
+let RL = { code: 'en', rtl: false, fb: '' };
+// The embedded fonts are Latin (and Plex Mono Cyrillic); other scripts come
+// from the system. They are named per language, ahead of the generic
+// fallbacks, so Chinese is not drawn with Japanese letterforms or back.
+const LANG_FONTS = {
+  zh: '"PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Noto Sans SC", "Microsoft YaHei", ',
+  ja: '"Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Noto Sans JP", "Yu Gothic", Meiryo, ',
+  ar: '"Geeza Pro", "Noto Sans Arabic", "Segoe UI", Tahoma, ',
+};
+function setRenderLang(code) {
+  const L = code && code !== 'en' && LANGS[code];
+  RL = L ? { code, rtl: !!L.rtl, fb: LANG_FONTS[code] || '' } : { code: 'en', rtl: false, fb: '' };
+}
+// TX('Your room.') → the line in the frame's language; TX('{n} a second', { n })
+// fills placeholders after the lookup, so translations can move them.
+const TX_SEEN = new Set();
+function TX(s, vars) {
+  TX_SEEN.add(s);
+  let out = (RL.code !== 'en' && SCREEN_TEXT[s] && SCREEN_TEXT[s][RL.code]) || s;
+  if (vars) for (const k in vars) out = out.split('{' + k + '}').join(vars[k]);
+  return out;
+}
+// A line in two colours: the *starred* part takes the highlight. Laid out
+// left to right, so a right-to-left language reverses the runs (slotLine).
+function runsOf(s, base, hl) {
+  const out = [];
+  s.split('*').forEach((p, i) => { if (p) out.push([p, i % 2 ? hl : base]); });
+  return out;
+}
+// Draws with draw(), narrowed about (ax, ay) when the text (w wide) is wider
+// than maxW. Only translations are: the English always fits.
+function fitDraw(ctx, w, maxW, ax, ay, draw) {
+  if (w <= maxW) { draw(); return; }
+  ctx.save();
+  ctx.translate(ax, ay); ctx.scale(maxW / w, maxW / w); ctx.translate(-ax, -ay);
+  draw();
+  ctx.restore();
+}
+const personName = id => (id === 'you' ? TX('You') : PEOPLE[id].name);
+// Arabic letters join: tracking them glyph by glyph would break every word.
+const RTL_RE = /[֐-ࣿיִ-﷿ﹰ-﻿]/;
+const CJK_RE = /[぀-ヿ㐀-鿿豈-﫿＀-￯]/;
 
 // Tracked text, laid out by hand: ctx.letterSpacing is not everywhere yet and
 // the film has to look the same in every browser that exports it.
-function measureT(ctx, s, tr = 0) { return ctx.measureText(s).width + (tr ? tr * (s.length - 1) : 0); }
+function measureT(ctx, s, tr = 0) { if (tr && RTL_RE.test(s)) tr = 0; return ctx.measureText(s).width + (tr ? tr * (s.length - 1) : 0); }
 function fillT(ctx, s, x, y, tr = 0) {
-  if (!tr) { ctx.fillText(s, x, y); return; }
+  if (!tr || RTL_RE.test(s)) { ctx.fillText(s, x, y); return; }
   let cx = x;
   for (const ch of s) { ctx.fillText(ch, cx, y); cx += ctx.measureText(ch).width + tr; }
 }
+// Chinese and Japanese put no spaces between words: they wrap at the word
+// boundaries Intl.Segmenter finds (or any character, without it), never
+// putting closing punctuation at the start of a line.
+const _segmenters = {}, _tokens = new Map();
+function cjkTokens(s) {
+  let tok = _tokens.get(s);
+  if (tok) return tok;
+  const lang = RL.code === 'ja' || /[぀-ヿ]/.test(s) ? 'ja' : 'zh';
+  if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+    const sg = _segmenters[lang] || (_segmenters[lang] = new Intl.Segmenter(lang, { granularity: 'word' }));
+    tok = Array.from(sg.segment(s), x => x.segment);
+  } else tok = Array.from(s);
+  _tokens.set(s, tok);
+  return tok;
+}
 function wrapText(ctx, s, maxW, tr = 0) {
+  if (CJK_RE.test(s)) {
+    const lines = [];
+    let line = '';
+    for (const tk of cjkTokens(s)) {
+      const test = line + tk;
+      const lead = /^[、。，．！？：；）」』,.!?:;)]/.test(tk);
+      if (line.trim() && !lead && measureT(ctx, test.trim(), tr) > maxW) { lines.push(line.trim()); line = tk.replace(/^\s+/, ''); } else line = test;
+    }
+    if (line.trim()) lines.push(line.trim());
+    return lines;
+  }
   const words = s.split(' '), lines = [];
   let line = '';
   for (const w of words) {
@@ -663,6 +856,7 @@ function wrapText(ctx, s, maxW, tr = 0) {
 function slotLine(ctx, runs, x, y, size, pIn, pOut, o = {}) {
   if (pIn <= 0 || pOut >= 1) return;
   if (typeof runs === 'string') runs = [[runs, o.color || HEX.text]];
+  else if (RL.rtl && runs.length > 1) runs = runs.slice().reverse();
   const tr = o.tr || 0;
   ctx.save();
   ctx.font = o.font;
@@ -671,6 +865,9 @@ function slotLine(ctx, runs, x, y, size, pIn, pOut, o = {}) {
   let w = 0;
   for (const r of runs) w += measureT(ctx, r[0], tr);
   if (runs.length > 1) w += tr * (runs.length - 1);
+  // A translation longer than the room the line was set for (o.maxW) is
+  // narrowed about its anchor; the original lines never reach it.
+  if (o.maxW && w > o.maxW) { const k = o.maxW / w; ctx.translate(x, y); ctx.scale(k, k); ctx.translate(-x, -y); }
   const x0 = o.align === 'center' ? x - w / 2 : o.align === 'right' ? x - w : x;
   const top = y - size * 1.02, h = size * 1.36;
   ctx.beginPath();
@@ -828,7 +1025,7 @@ function drawAvatar(ctx, x, y, r, id, o = {}) {
   ctx.font = FT(r * 0.92, 700);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(p.init, x, y + r * 0.05);
+  ctx.fillText(id === 'you' ? Array.from(personName(id))[0] : p.init, x, y + r * 0.05);
   ctx.restore();
 }
 
@@ -850,6 +1047,9 @@ function pill(ctx, x, y, text, o = {}) {
   ctx.font = o.font || FM(size);
   const tr = o.tr ?? size * 0.08;
   const w = measureT(ctx, text, tr) + size * 1.3, h = size * 1.75;
+  // Too long for where it sits (a translation): drawn smaller about its anchor.
+  const k = o.maxW && w > o.maxW ? o.maxW / w : 1;
+  if (k < 1) { ctx.translate(x, y); ctx.scale(k, k); ctx.translate(-x, -y); }
   const x0 = o.align === 'center' ? x - w / 2 : o.align === 'right' ? x - w : x;
   rr(ctx, x0, y - h / 2, w, h, h / 2);
   ctx.fillStyle = o.bg || rgba('violet', 0.18);
@@ -860,7 +1060,7 @@ function pill(ctx, x, y, text, o = {}) {
   ctx.textBaseline = 'middle';
   fillT(ctx, text, x0 + size * 0.65, y + size * 0.05, tr);
   ctx.restore();
-  return w;
+  return w * k;
 }
 
 function cursor(ctx, x, y, s, press, alpha) {
@@ -1157,6 +1357,10 @@ function sceneHold(ctx, V, t, L) {
     if (p <= 0) return;
     const e = ease.outExpo(p) * (1 - ease.in3(out));
     const w = ctx.measureText(word).width;
+    // Room for the word: beside the button sideways, the frame's width
+    // otherwise. Only a longer translation is ever narrowed to fit it.
+    const room = V.kind === 'land' ? V.hw - gap - 50 : V.hw * 2 - 100;
+    const k = w > room ? room / w : 1;
     ctx.save();
     ctx.globalAlpha = clamp(p * 3) * (1 - ease.in2(out));
     ctx.beginPath();
@@ -1165,19 +1369,22 @@ function sceneHold(ctx, V, t, L) {
       if (dir < 0) ctx.rect(-V.hw, -V.hh, x - R * 0.2 + V.hw, V.hh * 2);
       else ctx.rect(x + R * 0.2, -V.hh, V.hw, V.hh * 2);
       ctx.clip();
+      const ax = dir < 0 ? x - gap : x + gap, ay = y + size * 0.36;
+      if (k < 1) { ctx.translate(ax, ay); ctx.scale(k, k); ctx.translate(-ax, -ay); }
       const tx = dir < 0 ? x - gap - w : x + gap;
-      ctx.fillText(word, tx - dir * (1 - e) * (w + gap), y + size * 0.36);
+      ctx.fillText(word, tx - dir * (1 - e) * (w + gap), ay);
     } else {
       if (dir < 0) ctx.rect(-V.hw, -V.hh, V.hw * 2, y - R * 0.2 + V.hh);
       else ctx.rect(-V.hw, y + R * 0.2, V.hw * 2, V.hh);
       ctx.clip();
       const ty = dir < 0 ? y - gap - size * 0.1 : y + gap + size * 0.74;
+      if (k < 1) { ctx.translate(x, ty); ctx.scale(k, k); ctx.translate(-x, -ty); }
       ctx.fillText(word, x - w / 2, ty - dir * (1 - e) * (size + gap));
     }
     ctx.restore();
   };
-  drawWord('Hold.', inH, -1);
-  drawWord('Talk.', inT, 1);
+  drawWord(TX('Hold.'), inH, -1);
+  drawWord(TX('Talk.'), inT, 1);
   ctx.restore();
 
   // The app's own hint, with the default key held down in step.
@@ -1189,15 +1396,19 @@ function sceneHold(ctx, V, t, L) {
     ctx.globalAlpha *= hintA;
     ctx.font = FM(26);
     const tr = 26 * 0.06;
-    const a = 'HOLD', b = 'ANYWHERE TO TALK';
+    // The key sits where the language puts it in the sentence.
+    let [a, b] = TX('HOLD {key} ANYWHERE TO TALK').split('{key}').map(s => s.trim());
+    if (RL.rtl) [a, b] = [b, a];
     const kw = 150, kh = 56;
     const wa = measureT(ctx, a, tr), wb = measureT(ctx, b, tr);
-    const total = wa + 22 + kw + 22 + wb;
+    const ga = a ? 22 : 0, gb = b ? 22 : 0;
+    const total = wa + ga + kw + gb + wb, room = V.hw * 2 - 80;
+    if (total > room) { const k = room / total; ctx.translate(x, hy); ctx.scale(k, k); ctx.translate(-x, -hy); }
     let cx = x - total / 2;
     ctx.fillStyle = HEX.muted;
     ctx.textBaseline = 'middle';
     fillT(ctx, a, cx, hy, tr);
-    cx += wa + 22;
+    cx += wa + ga;
     // Keycap.
     const dip = press * 5;
     rr(ctx, cx, hy - kh / 2 + 6, kw, kh, 12);
@@ -1212,11 +1423,11 @@ function sceneHold(ctx, V, t, L) {
     ctx.fillStyle = mixc('#e7e4ff', '#ffffff', press);
     ctx.font = FT(24, 600);
     ctx.textAlign = 'center';
-    ctx.fillText('Space', cx + kw / 2, hy + dip);
+    ctx.fillText(TX('Space'), cx + kw / 2, hy + dip, kw - 16);
     ctx.textAlign = 'left';
     ctx.font = FM(26);
     ctx.fillStyle = HEX.muted;
-    fillT(ctx, b, cx + kw + 22, hy, tr);
+    fillT(ctx, b, cx + kw + gb, hy, tr);
     ctx.restore();
   }
 }
@@ -1329,16 +1540,26 @@ function sceneBrand(ctx, V, t, L) {
     cx += ctx.measureText(ch).width;
   }
   ctx.restore();
-  const tag = 'Instant push-to-talk voice rooms.';
-  const ty = wy + L.tag * 1.9;
-  const words = tag.split(' ');
+  brandTagline(ctx, V, t, wy + L.tag * 1.9, L.tag);
+}
+// The tagline, rising word by word. Chinese and Japanese rise by the words
+// the segmenter finds; Arabic is laid out from the right, still rising in
+// reading order.
+function brandTagline(ctx, V, t, ty, size) {
+  const tag = TX('Instant push-to-talk voice rooms.');
+  const cjk = CJK_RE.test(tag);
+  const words = cjk ? cjkTokens(tag) : tag.split(' ');
   ctx.save();
-  ctx.font = FT(L.tag, 500);
-  const sp = ctx.measureText(' ').width;
+  ctx.font = FT(size, 500);
+  const sp = cjk ? 0 : ctx.measureText(' ').width;
   let tw = 0; for (const x of words) tw += ctx.measureText(x).width; tw += sp * (words.length - 1);
+  const room = V.hw * 2 - 100;
+  if (tw > room) { const k = room / tw; ctx.translate(0, ty); ctx.scale(k, k); ctx.translate(0, -ty); }
   let tx = -tw / 2;
-  words.forEach((x, i) => {
-    slotLine(ctx, x, tx, ty, L.tag, seg(t, 4.3 + i * 0.06, 4.95 + i * 0.06), seg(t, 5.95, 6.28), { font: FT(L.tag, 500), color: HEX.soft });
+  const order = words.map((_, i) => (RL.rtl ? words.length - 1 - i : i));
+  order.forEach(i => {
+    const x = words[i];
+    slotLine(ctx, x, tx, ty, size, seg(t, 4.3 + i * 0.06, 4.95 + i * 0.06), seg(t, 5.95, 6.28), { font: FT(size, 500), color: HEX.soft });
     tx += ctx.measureText(x).width + sp;
   });
   ctx.restore();
@@ -1368,15 +1589,17 @@ function sceneCreate(ctx, V, t, L) {
   // The three steps, left (or above) — a real sequence, so it is numbered by
   // its own markers: pending, live, done.
   const S = L.steps;
-  const steps = [['Create a room.', 7.62], ['Share the link.', 8.3], ['Start talking.', 9.95]];
+  const steps = [[TX('Create a room.'), 7.62], [TX('Share the link.'), 8.3], [TX('Start talking.'), 9.95]];
   const outT = 10.95;
+  // Up to the app window sideways, up to the frame's edge otherwise.
+  const room = (V.kind === 'land' ? L.win.x - WIN_W * L.win.k / 2 : V.hw) - S.x - 50;
   steps.forEach(([text, at], i) => {
     const y = S.y + i * S.gap;
     const pin = seg(t, 6.6 + i * 0.1, 7.3 + i * 0.1), pout = seg(t, outT + i * 0.05, outT + 0.4 + i * 0.05);
     const next = i < 2 ? steps[i + 1][1] : 99;
     const live = seg(t, at - 0.05, at + 0.2), done = seg(t, next, next + 0.25);
     const color = done > 0 ? mixc('text', 'muted', done) : mixc('ghost', 'text', live);
-    slotLine(ctx, text, S.x, y, S.size, pin, pout, { font: FD(S.size, 800), color });
+    slotLine(ctx, text, S.x, y, S.size, pin, pout, { font: FD(S.size, 800), color, maxW: room });
     // Marker
     const mx = S.x - S.size * 0.62, my = y - S.size * 0.36, mr = S.size * 0.2;
     const ma = clamp(pin * 2) * (1 - clamp(pout * 2));
@@ -1481,10 +1704,10 @@ function drawWindow(ctx, t) {
     ctx.fillText('Voxal', 0, -92);
     ctx.font = FM(15);
     ctx.fillStyle = HEX.muted;
-    const cap = 'P2P PUSH TO TALK COMMUNICATIONS';
+    const cap = TX('P2P PUSH TO TALK COMMUNICATIONS');
     const cw = measureT(ctx, cap, 1.6);
     ctx.textAlign = 'left';
-    fillT(ctx, cap, -cw / 2, -48, 1.6);
+    fitDraw(ctx, cw, w - 60, 0, -48, () => fillT(ctx, cap, -cw / 2, -48, 1.6));
     // Create Room, pressed by the cursor at 7.62.
     const pr = gate(t, 7.6, 7.72, 0.04);
     rr(ctx, -210, 10, 420, 70, 16);
@@ -1504,13 +1727,14 @@ function drawWindow(ctx, t) {
     ctx.textAlign = 'center';
     ctx.font = FT(25, 600);
     ctx.fillStyle = '#ffffff';
-    ctx.fillText('Create Room', 0, 46);
+    ctx.fillText(TX('Create Room'), 0, 46, 390);
     ctx.strokeStyle = HEX.border;
     ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(-210, 128); ctx.lineTo(-70, 128); ctx.moveTo(70, 128); ctx.lineTo(210, 128); ctx.stroke();
     ctx.font = FT(19, 500);
+    const orJoin = TX('or join one'), og = clamp(ctx.measureText(orJoin).width / 2 + 14, 70, 196);
+    ctx.beginPath(); ctx.moveTo(-210, 128); ctx.lineTo(-og, 128); ctx.moveTo(og, 128); ctx.lineTo(210, 128); ctx.stroke();
     ctx.fillStyle = HEX.muted;
-    ctx.fillText('or join one', 0, 129);
+    ctx.fillText(orJoin, 0, 129, 392);
     rr(ctx, -210, 165, 290, 62, 14);
     ctx.fillStyle = HEX.raised;
     ctx.fill();
@@ -1518,7 +1742,7 @@ function drawWindow(ctx, t) {
     ctx.stroke();
     ctx.textAlign = 'left';
     ctx.fillStyle = HEX.faint;
-    ctx.fillText('Room code…', -188, 197);
+    ctx.fillText(TX('Room code…'), -188, 197, 250);
     rr(ctx, 96, 165, 114, 62, 14);
     ctx.fillStyle = HEX.raised;
     ctx.fill();
@@ -1527,7 +1751,7 @@ function drawWindow(ctx, t) {
     ctx.textAlign = 'center';
     ctx.font = FT(21, 600);
     ctx.fillStyle = HEX.text;
-    ctx.fillText('Join', 153, 197);
+    ctx.fillText(TX('Join'), 153, 197, 100);
     ctx.restore();
   }
   // Room view.
@@ -1559,7 +1783,8 @@ function drawRoom(ctx, t) {
   ctx.fillStyle = HEX.muted;
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
-  fillT(ctx, 'ROOM', -w / 2 + 80, -268, 1.8);
+  const roomW = measureT(ctx, TX('ROOM'), 1.8);
+  fitDraw(ctx, roomW, 150, -w / 2 + 80, -268, () => fillT(ctx, TX('ROOM'), -w / 2 + 80, -268, 1.8));
   const cp = gate(t, 8.28, 8.4, 0.04);
   rr(ctx, -80, -290, 250, 44, 11);
   ctx.fillStyle = mixc('raised', 'violetLo', cp);
@@ -1585,7 +1810,7 @@ function drawRoom(ctx, t) {
     icon(ctx, 'check', -142, ty, 20, HEX.green, 2.6);
     ctx.font = FT(19, 600);
     ctx.fillStyle = '#c9f7da';
-    ctx.fillText('Invite link copied', -120, ty + 1);
+    ctx.fillText(TX('Invite link copied'), -120, ty + 1, 280);
     ctx.restore();
   }
   ctx.strokeStyle = HEX.border;
@@ -1608,9 +1833,10 @@ function drawRoom(ctx, t) {
     ctx.font = FT(25, 600);
     ctx.fillStyle = HEX.text;
     ctx.textAlign = 'left';
-    ctx.fillText(PEOPLE[id].name, -172, y + 1);
-    const nw = ctx.measureText(PEOPLE[id].name).width;
-    if (id === 'you') pill(ctx, -172 + nw + 14, y, 'HOST', { size: 13 });
+    const name = personName(id);
+    ctx.fillText(name, -172, y + 1);
+    const nw = ctx.measureText(name).width;
+    if (id === 'you') pill(ctx, -172 + nw + 14, y, TX('HOST'), { size: 13 });
     if (talk > 0) { ctx.save(); ctx.globalAlpha *= talk; bars(ctx, 88, y, 26, 1, t, 3); ctx.restore(); }
     ctx.font = FM(15);
     ctx.fillStyle = HEX.muted;
@@ -1623,7 +1849,7 @@ function drawRoom(ctx, t) {
   ctx.font = FT(17, 500);
   ctx.fillStyle = HEX.muted;
   ctx.textAlign = 'center';
-  ctx.fillText('Hold Space anywhere to talk', 0, 294);
+  ctx.fillText(TX('Hold Space anywhere to talk'), 0, 294, w - 60);
 }
 
 /* ── Scenes 4 & 5 · 11–21.6 s · the mesh, then the host leaves ───────────── */
@@ -1784,7 +2010,7 @@ function sceneMesh(ctx, V, t, L) {
     ctx.fillStyle = HEX.red;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    const s = 'HOST LEFT', w = measureT(ctx, s, 2);
+    const s = TX('HOST LEFT'), w = measureT(ctx, s, 2);
     fillT(ctx, s, n.x - w / 2, n.y + C.node * 1.35 + 28, 2);
     ctx.restore();
   }
@@ -1795,7 +2021,7 @@ function sceneMesh(ctx, V, t, L) {
     const from = labelAnchor(L, nodeAt(V, L, 'you', LEAVE_T - 0.01));
     const to = labelAnchor(L, N.maya);
     const e = ease.io3(hop);
-    pill(ctx, lerp(from.px, to.px, e), lerp(from.py, to.py, e) - Math.sin(e * Math.PI) * 90, 'HOST', { size: 15, align: 'center', bg: HEX.violet, fg: '#ffffff' });
+    pill(ctx, lerp(from.px, to.px, e), lerp(from.py, to.py, e) - Math.sin(e * Math.PI) * 90, TX('HOST'), { size: 15, align: 'center', bg: HEX.violet, fg: '#ffffff' });
   }
 }
 
@@ -1818,8 +2044,8 @@ function drawGhostServer(ctx, x, y, k, a, strike) {
   ctx.font = FM(16);
   ctx.fillStyle = HEX.muted;
   ctx.textBaseline = 'middle';
-  const s = 'MEDIA SERVER', w = measureT(ctx, s, 1.8);
-  fillT(ctx, s, -w / 2, 94, 1.8);
+  const s = TX('MEDIA SERVER'), w = measureT(ctx, s, 1.8);
+  fitDraw(ctx, w, 300, 0, 94, () => fillT(ctx, s, -w / 2, 94, 1.8));
   if (strike > 0) {
     const e = ease.out3(strike);
     ctx.strokeStyle = HEX.red;
@@ -1851,7 +2077,7 @@ function drawNodeLabel(ctx, V, L, id, n, t, fade) {
   ctx.save();
   ctx.globalAlpha *= a;
   ctx.font = FT(24, 600);
-  const nw = ctx.measureText(P.name).width;
+  const name = personName(id), nw = ctx.measureText(name).width;
   // Role badge.
   let role = null;
   if (id === 'you' && t < 18.85) role = ['HOST', 1];
@@ -1860,21 +2086,22 @@ function drawNodeLabel(ctx, V, L, id, n, t, fade) {
     else if (t >= 17.35) role = ['DEPUTY', 0];
   }
   if (id === 'jonas' && t >= 19.45) role = ['DEPUTY', 0];
+  const roleText = role && TX(role[0]);
   ctx.font = FM(14);
-  const rw = role ? measureT(ctx, role[0], 1.2) + 14 * 1.3 + 12 : 0;
+  const rw = role ? measureT(ctx, roleText, 1.2) + 14 * 1.3 + 12 : 0;
   const total = nw + rw;
   const x0 = an.align === 'left' ? an.x : an.align === 'right' ? an.x - total : an.x - total / 2;
   ctx.font = FT(24, 600);
   ctx.fillStyle = HEX.text;
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
-  ctx.fillText(P.name, x0, an.y);
+  ctx.fillText(name, x0, an.y);
   if (role) {
     const pop = id === 'maya' ? (role[0] === 'HOST' ? spring(t - 19.3, 3, 0.4) : spring(t - 17.35, 3, 0.45)) : id === 'jonas' ? spring(t - 19.45, 3, 0.45) : 1;
     ctx.save();
     ctx.translate(x0 + nw + 12, an.y);
     ctx.scale(Math.max(0.01, pop), Math.max(0.01, pop));
-    pill(ctx, 0, 0, role[0], { size: 14, bg: role[1] ? HEX.violet : rgba('violet', 0.16), fg: role[1] ? '#ffffff' : HEX.violetHi, border: role[1] ? null : rgba('violet', 0.5) });
+    pill(ctx, 0, 0, roleText, { size: 14, bg: role[1] ? HEX.violet : rgba('violet', 0.16), fg: role[1] ? '#ffffff' : HEX.violetHi, border: role[1] ? null : rgba('violet', 0.5) });
     ctx.restore();
   }
   // Platform, small, under the name.
@@ -1885,7 +2112,7 @@ function drawNodeLabel(ctx, V, L, id, n, t, fade) {
   fillT(ctx, dv, dx0, an.y + 26, 1.4);
   if (id === 'sam') {
     const ja = seg(t, SAM_T + 0.2, SAM_T + 0.4) * (1 - seg(t, SAM_T + 1.6, SAM_T + 2));
-    if (ja > 0) { ctx.globalAlpha *= ja; pill(ctx, dx0 + dw + 12, an.y + 26, 'JOINED', { size: 12, bg: rgba('green', 0.15), fg: HEX.green }); }
+    if (ja > 0) { ctx.globalAlpha *= ja; pill(ctx, dx0 + dw + 12, an.y + 26, TX('JOINED'), { size: 12, bg: rgba('green', 0.15), fg: HEX.green }); }
   }
   ctx.restore();
 }
@@ -1896,10 +2123,10 @@ function drawCopy(ctx, V, L, t, spec) {
   let y = Cp.y;
   let k = 0;
   const items = [
-    ['eyebrow', spec.eyebrow, FM(22), 22, HEX.violetHi, 2.6, 34],
-    ['head', spec.head, FD(Cp.head, 800), Cp.head, HEX.text, 0, Cp.head * 1.08],
-    ['sub', spec.sub, FT(Cp.sub, 500), Cp.sub, HEX.soft, 0, Cp.sub * 1.4],
-    ['cap', spec.cap, FM(19), 19, HEX.muted, 2, 28],
+    ['eyebrow', spec.eyebrow && TX(spec.eyebrow, spec.vars), FM(22), 22, HEX.violetHi, 2.6, 34],
+    ['head', spec.head && TX(spec.head), FD(Cp.head, 800), Cp.head, HEX.text, 0, Cp.head * 1.08],
+    ['sub', spec.sub && TX(spec.sub), FT(Cp.sub, 500), Cp.sub, HEX.soft, 0, Cp.sub * 1.4],
+    ['cap', spec.cap && TX(spec.cap), FM(19), 19, HEX.muted, 2, 28],
   ];
   const gaps = { eyebrow: 28, head: 34, sub: 44, cap: 0 };
   for (const [kind, text, font, size, color, tr, lh] of items) {
@@ -1909,7 +2136,7 @@ function drawCopy(ctx, V, L, t, spec) {
     lines.forEach((line, li) => {
       y += li === 0 ? size * 0.82 : lh;
       const d = k * 0.075;
-      slotLine(ctx, line, Cp.x, y, size, seg(t, spec.tIn + d, spec.tIn + d + 0.75), seg(t, spec.tOut + k * 0.035, spec.tOut + k * 0.035 + 0.38), { font, color, tr });
+      slotLine(ctx, line, Cp.x, y, size, seg(t, spec.tIn + d, spec.tIn + d + 0.75), seg(t, spec.tOut + k * 0.035, spec.tOut + k * 0.035 + 0.38), { font, color, tr, maxW: Cp.maxW });
       if (kind === 'eyebrow') {
         const pa = seg(t, spec.tIn, spec.tIn + 0.3) * (1 - seg(t, spec.tOut, spec.tOut + 0.3));
         if (pa > 0) { ctx.save(); ctx.globalAlpha *= pa; ctx.fillStyle = HEX.violet; ctx.fillRect(Cp.x - 30, y - 15, 12, 12); ctx.restore(); }
@@ -1955,9 +2182,10 @@ function sceneDevices(ctx, V, t, L) {
   // Head.
   const hs = D.head.size;
   ctx.font = FD(hs, 800);
-  const headLines = V.kind === 'port' ? ['One room.', 'Every device.'] : ['One room. Every device.'];
+  const h1 = TX('One room.'), h2 = TX('Every device.');
+  const headLines = V.kind === 'port' ? [h1, h2] : [h1 + (CJK_RE.test(h1) ? '' : ' ') + h2];
   headLines.forEach((line, i) => {
-    slotLine(ctx, line, 0, D.head.y + i * hs * 1.08, hs, seg(t, 21.55 + i * 0.1, 22.3 + i * 0.1), seg(t, 25.25, 25.62), { font: FD(hs, 800), align: 'center', color: HEX.text });
+    slotLine(ctx, line, 0, D.head.y + i * hs * 1.08, hs, seg(t, 21.55 + i * 0.1, 22.3 + i * 0.1), seg(t, 25.25, 25.62), { font: FD(hs, 800), align: 'center', color: HEX.text, maxW: V.hw * 2 - 100 });
   });
 
   // Arcs between devices, and voice along them.
@@ -2022,12 +2250,12 @@ function sceneDevices(ctx, V, t, L) {
     if (na > 0) drawAvatar(ctx, x, y, from.r * lerp(1, 0.75, fly), id, { alpha: na, halo: 0.4 * fly });
   }
   // Platforms, then the rest of the kit.
-  const plat = ['macOS', 'Windows', 'Linux', 'iOS', 'Android', 'Web'];
+  const plat = ['macOS', 'Windows', 'Linux', 'iOS', 'Android', TX('Web')];
   ctx.font = FT(V.kind === 'sq' ? 26 : 30, 600);
   const dot = '  ·  ';
   const pline = plat.join(dot);
-  slotLine(ctx, pline, 0, D.plat, 30, seg(t, 22.35, 23.0), seg(t, 25.25, 25.6), { font: FT(V.kind === 'sq' ? 26 : 30, 600), align: 'center', color: HEX.soft });
-  const chips = ['Video & screen sharing', 'Noise suppression', 'Background blur', 'Chat', 'Hands-free'];
+  slotLine(ctx, pline, 0, D.plat, 30, seg(t, 22.35, 23.0), seg(t, 25.25, 25.6), { font: FT(V.kind === 'sq' ? 26 : 30, 600), align: 'center', color: HEX.soft, maxW: V.hw * 2 - 80 });
+  const chips = ['Video & screen sharing', 'Noise suppression', 'Background blur', 'Chat', 'Hands-free'].map(c => TX(c));
   drawChips(ctx, V, t, chips, D.chips, out);
 }
 
@@ -2100,12 +2328,12 @@ function roomScreen(ctx, sw, sh, id, t, small) {
     ctx.save();
     ctx.globalAlpha *= lvl;
     ctx.fillStyle = HEX.green;
-    const s = mine ? 'You are live' : PEOPLE[talking].name + ' is talking';
-    ctx.fillText(s, 0, ly);
+    const s = mine ? TX('You are live') : TX('{name} is talking', { name: PEOPLE[talking].name });
+    ctx.fillText(s, 0, ly, sw * 0.92);
     ctx.restore();
   } else {
     ctx.fillStyle = HEX.muted;
-    ctx.fillText('Hold to talk', 0, ly);
+    ctx.fillText(TX('Hold to talk'), 0, ly, sw * 0.92);
   }
 }
 
@@ -2217,7 +2445,7 @@ function drawDevice(ctx, id, t) {
   ctx.fillStyle = HEX.muted;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  const lab = { ios: 'IPHONE', android: 'ANDROID', laptop: 'WINDOWS', browser: 'ANY BROWSER' }[kind];
+  const lab = { ios: 'IPHONE', android: 'ANDROID', laptop: 'WINDOWS', browser: TX('ANY BROWSER') }[kind];
   const lh = kind === 'ios' || kind === 'android' ? 404 / 2 + 34 : kind === 'laptop' ? 262 / 2 + 50 : 276 / 2 + 34;
   const lw = measureT(ctx, lab, 1.8);
   fillT(ctx, lab, -lw / 2, lh, 1.8);
@@ -2226,7 +2454,7 @@ function drawDevice(ctx, id, t) {
 /* ── Scene 7 · 25.4–30 s · the promise, and the name ────────────────────── */
 function sceneClose(ctx, V, t, L) {
   const N = L.no;
-  const lines = [[['No ', HEX.violet], ['accounts.', HEX.text]], [['No ', HEX.violet], ['installation.', HEX.text]], [['No ', HEX.violet], ['server required.', HEX.text]]];
+  const lines = [TX('*No *accounts.'), TX('*No *installation.'), TX('*No *server required.')].map(l => runsOf(l, HEX.text, HEX.violet));
   const at = [25.8, 26.3, 26.8];
   const collapse = ease.in3(seg(t, 27.4, 27.85));
   lines.forEach((runs, i) => {
@@ -2238,7 +2466,7 @@ function sceneClose(ctx, V, t, L) {
     const s = lerp(1.08, 1, ease.out3(seg(t, at[i], at[i] + 0.35)));
     ctx.scale(s, s * (1 - collapse * 0.9));
     ctx.globalAlpha *= 1 - collapse;
-    slotLine(ctx, runs, 0, 0, N.size, pin, 0, { font: FD(N.size, 800), align: 'center' });
+    slotLine(ctx, runs, 0, 0, N.size, pin, 0, { font: FD(N.size, 800), align: 'center', maxW: V.hw * 2 - 120 });
     ctx.restore();
     // The line's own flash.
     const f = seg(t, at[i], at[i] + 0.5);
@@ -2254,7 +2482,7 @@ function sceneClose(ctx, V, t, L) {
   ctx.restore();
   slotLine(ctx, 'Voxal', -w / 2, wy, L.word, seg(t, 27.95, 28.6), 0, { font: FD(L.word, 800), color: HEX.text });
   const ty = wy + L.tag * 1.6;
-  slotLine(ctx, 'Instant push-to-talk voice rooms.', 0, ty, L.tag, seg(t, 28.2, 28.8), 0, { font: FT(L.tag, 500), align: 'center', color: HEX.soft });
+  slotLine(ctx, TX('Instant push-to-talk voice rooms.'), 0, ty, L.tag, seg(t, 28.2, 28.8), 0, { font: FT(L.tag, 500), align: 'center', color: HEX.soft, maxW: V.hw * 2 - 100 });
   // Call to action.
   const ca = ease.outBack(seg(t, 28.45, 28.9), 1.6), cA = seg(t, 28.45, 28.65);
   if (cA > 0) {
@@ -2282,9 +2510,9 @@ function sceneClose(ctx, V, t, L) {
       ctx.globalAlpha *= fa;
       ctx.font = FM(21);
       ctx.fillStyle = HEX.soft;
-      const f = 'FREE & OPEN SOURCE · DESKTOP · MOBILE · WEB', fw = measureT(ctx, f, 2.2);
+      const f = TX('FREE & OPEN SOURCE · DESKTOP · MOBILE · WEB'), fw = measureT(ctx, f, 2.2);
       ctx.textBaseline = 'middle';
-      fillT(ctx, f, -fw / 2, cy + ph / 2 + 52, 2.2);
+      fitDraw(ctx, fw, V.hw * 2 - 80, 0, cy + ph / 2 + 52, () => fillT(ctx, f, -fw / 2, cy + ph / 2 + 52, 2.2));
       ctx.restore();
     }
   }
@@ -2892,7 +3120,8 @@ function contentFind(ctx, pw, t) {
   }
 }
 // The four steps of the edge, and when each takes over.
-const EDGE_STAGES = [['RAW MASK', 12.4], ['DILATE', 14.2], ['FEATHER', 15.4], ['TEMPORAL BLEND', 16.6]];
+// [name, from, the name's short form in the stage strip]
+const EDGE_STAGES = [['RAW MASK', 12.4, 'RAW'], ['DILATE', 14.2], ['FEATHER', 15.4], ['TEMPORAL BLEND', 16.6, 'BLEND']];
 function edgeStage(t) { let s = 0; EDGE_STAGES.forEach(([, a], i) => { if (t >= a) s = i; }); return s; }
 // The cut-out, edged the way stage `s` edges it.
 function cutout(ctx, pw, t, s) {
@@ -2984,8 +3213,12 @@ function bgContent(ctx, pw, t) {
 }
 
 /* ── The tile, and what is drawn around it ──────────────────────────────── */
-function bgPose(L, t) {
-  const P = (a, b, e) => ({ x: lerp(a.x, b.x, e), y: lerp(a.y, b.y, e), w: lerp(a.w, b.w, e), h: lerp(a.h, b.h, e) });
+const lerpRect = (a, b, e) => ({ x: lerp(a.x, b.x, e), y: lerp(a.y, b.y, e), w: lerp(a.w, b.w, e), h: lerp(a.h, b.h, e) });
+// Where the tile is. A shorter cut sets L.pose while it glides the tile from
+// one kept stretch to the next (see makeCut); otherwise it follows the film.
+function bgPose(L, t) { return L.pose || bgPoseAt(L, t); }
+function bgPoseAt(L, t) {
+  const P = lerpRect;
   if (t < 5.3) return L.hero;
   if (t < 6.1) return P(L.hero, L.tile, ease.io3(seg(t, 5.3, 6.1)));
   if (t < 32.7) return L.tile;
@@ -3031,16 +3264,16 @@ function tileTag(ctx, T, text, a, o = {}) {
   let dx = 0;
   if (o.rec) { ctx.beginPath(); ctx.arc(x + 8, y, 7, 0, TAU); ctx.fillStyle = HEX.red; ctx.globalAlpha *= 0.55 + 0.45 * Math.round((Math.sin(o.t * 6) + 1) / 2); ctx.fill(); dx = 22; }
   ctx.restore();
-  pill(ctx, x + dx, y, text, { size, alpha: a, bg: 'rgba(6,5,12,0.62)', fg: HEX.soft });
+  pill(ctx, x + dx, y, text, { size, alpha: a, bg: 'rgba(6,5,12,0.62)', fg: HEX.soft, maxW: T.w - 40 - dx });
 }
 function bgTagFor(t) {
-  if (t > 0.6 && t < 3.0) return ['CAMERA · 1280 × 720 · 30 FPS', seg(t, 0.6, 0.9) * (1 - seg(t, 2.8, 3.0)), true];
-  if (t > 3.6 && t < 5.3) return ['SCENE · DOLOMITES LAKE', seg(t, 3.6, 3.9) * (1 - seg(t, 5.1, 5.3))];
-  if (t > 6.4 && t < 12.3) return ['MODEL INPUT · 256 × 144 · 12 Hz', seg(t, 6.4, 6.7) * (1 - seg(t, 12.0, 12.3))];
-  if (t > 12.7 && t < 18.6) return ['CUT-OUT · THE ROOM IS GONE', seg(t, 12.7, 13.0) * (1 - seg(t, 18.3, 18.6))];
-  if (t > 19.0 && t < 26.3) return ['SCENE · DOLOMITES LAKE · LIVE 3D', seg(t, 19.0, 19.3) * (1 - seg(t, 26.0, 26.3))];
-  if (t > 31.7 && t < 32.7) return ['COMPOSITE · 30 FPS', seg(t, 31.7, 31.9) * (1 - seg(t, 32.5, 32.7))];
-  if (t > 33.5 && t < 39.0) return ['WHAT YOU SEND', seg(t, 33.5, 33.8) * (1 - seg(t, 38.7, 39.0))];
+  if (t > 0.6 && t < 3.0) return [TX('CAMERA · 1280 × 720 · 30 FPS'), seg(t, 0.6, 0.9) * (1 - seg(t, 2.8, 3.0)), true];
+  if (t > 3.6 && t < 5.3) return [TX('SCENE · DOLOMITES LAKE'), seg(t, 3.6, 3.9) * (1 - seg(t, 5.1, 5.3))];
+  if (t > 6.4 && t < 12.3) return [TX('MODEL INPUT · 256 × 144 · 12 Hz'), seg(t, 6.4, 6.7) * (1 - seg(t, 12.0, 12.3))];
+  if (t > 12.7 && t < 18.6) return [TX('CUT-OUT · THE ROOM IS GONE'), seg(t, 12.7, 13.0) * (1 - seg(t, 18.3, 18.6))];
+  if (t > 19.0 && t < 26.3) return [TX('SCENE · DOLOMITES LAKE · LIVE 3D'), seg(t, 19.0, 19.3) * (1 - seg(t, 26.0, 26.3))];
+  if (t > 31.7 && t < 32.7) return [TX('COMPOSITE · 30 FPS'), seg(t, 31.7, 31.9) * (1 - seg(t, 32.5, 32.7))];
+  if (t > 33.5 && t < 39.0) return [TX('WHAT YOU SEND'), seg(t, 33.5, 33.8) * (1 - seg(t, 38.7, 39.0))];
   return null;
 }
 function layerExplode(t) { return ease.io3(seg(t, 26.7, 27.6)) * (1 - ease.io3(seg(t, 30.9, 31.6))); }
@@ -3051,7 +3284,11 @@ function bgTileScene(ctx, V, t, L) {
   const T = bgPose(L, t);
   const a = clamp((t - 0.2) * 3) * (1 - ease.in2(seg(t, 43.9, 44.2)));
   const pop = t < 1.5 ? lerp(0.9, 1, spring(t - 0.2, 2, 0.6)) : 1;
-  drawTile(ctx, T, a, (c, pw) => bgContent(c, pw, t), pop);
+  drawTile(ctx, T, a, (c, pw) => {
+    bgContent(c, pw, t);
+    // A cut's join: the stretch that ended fades out over the one beginning.
+    if (L.xfade) { c.save(); c.globalAlpha *= L.xfade.a; bgContent(c, pw, L.xfade.t); c.restore(); }
+  }, pop);
   const tag = bgTagFor(t);
   if (tag) tileTag(ctx, T, tag[0], tag[1] * a, { rec: tag[2], t });
   if (t > 31.6 && t < 32.4) shock(ctx, T.x, T.y, T.h * 0.3, 31.6, t, { grow: T.w * 0.5, dur: 0.8, lw: 4, alpha: 0.6 });
@@ -3064,10 +3301,10 @@ function bgLayers(ctx, V, t, L, ex) {
   const M = [lerp(1, Sx[0], ex) * sc, lerp(0, Sx[1], ex) * sc, lerp(0, Sx[2], ex) * sc, lerp(1, Sx[3], ex) * sc];
   const P = personPose(t), look = LOOK_WARM, pl = personLookAt(t);
   const layers = [
-    ['SCENE', c => sceneMountain(c, pw, t, look), true],
-    ['SHADOW', c => drawPersonShadow(c, P, look.side, 0.9)],
-    ['YOU', c => drawPerson(c, P, t, { light: pl })],
-    ['LIGHT WRAP', c => { c.save(); c.translate(P.dx, P.dy); drawWrap(c, { ...look, k: 1 }); c.restore(); }],
+    [TX('SCENE'), c => sceneMountain(c, pw, t, look), true],
+    [TX('SHADOW'), c => drawPersonShadow(c, P, look.side, 0.9)],
+    [TX('YOU'), c => drawPerson(c, P, t, { light: pl })],
+    [TX('LIGHT WRAP'), c => { c.save(); c.translate(P.dx, P.dy); drawWrap(c, { ...look, k: 1 }); c.restore(); }],
   ];
   const anchors = [];
   layers.forEach(([name, draw, solid], i) => {
@@ -3099,15 +3336,16 @@ function bgLayers(ctx, V, t, L, ex) {
     ctx.beginPath(); ctx.moveTo(x + 6, y); ctx.lineTo(x + 26, y); ctx.stroke();
     ctx.beginPath(); ctx.arc(x + 4, y, 4, 0, TAU); ctx.fillStyle = HEX.violetHi; ctx.fill();
     ctx.restore();
-    pill(ctx, x + 30, y, name, { size: V.kind === 'sq' ? 13 : 15, alpha: a, bg: HEX.violet, fg: '#ffffff' });
+    pill(ctx, x + 30, y, name, { size: V.kind === 'sq' ? 13 : 15, alpha: a, bg: HEX.violet, fg: '#ffffff', maxW: V.hw - x - 50 });
   });
 }
 
 function bgTitles(ctx, V, t, L) {
   const S = L.title;
   const f = FD(S.size, 800);
-  slotLine(ctx, 'Your room.', 0, S.y + S.size * 0.36, S.size, seg(t, 0.7, 1.4), seg(t, 2.75, 3.05), { font: f, align: 'center', color: HEX.text });
-  slotLine(ctx, [['Any', HEX.text], ['where.', HEX.violetHi]], 0, S.y + S.size * 0.36, S.size, seg(t, 3.35, 4.0), seg(t, 5.1, 5.45), { font: f, align: 'center' });
+  const maxW = V.hw * 2 - 100;
+  slotLine(ctx, TX('Your room.'), 0, S.y + S.size * 0.36, S.size, seg(t, 0.7, 1.4), seg(t, 2.75, 3.05), { font: f, align: 'center', color: HEX.text, maxW });
+  slotLine(ctx, runsOf(TX('Any*where.*'), HEX.text, HEX.violetHi), 0, S.y + S.size * 0.36, S.size, seg(t, 3.35, 4.0), seg(t, 5.1, 5.45), { font: f, align: 'center', maxW });
 }
 
 // A badge under the tile's bottom edge, inside it.
@@ -3120,13 +3358,15 @@ function tileBadge(ctx, T, text, a, o = {}) {
   const tw = measureT(ctx, text, size * 0.08) + size * 1.3 + (o.icon ? size * 1.5 : 0);
   ctx.restore();
   const x0 = T.x - tw / 2;
-  pill(ctx, x0 + (o.icon ? size * 1.5 : 0), y, text, { size, alpha: a, bg: o.bg || 'rgba(6,5,12,0.72)', fg: o.fg || HEX.text, border: o.border });
-  if (o.icon) { ctx.save(); ctx.globalAlpha *= a; ctx.beginPath(); ctx.arc(x0 + size * 0.75, y, size * 0.95, 0, TAU); ctx.fillStyle = o.bg || 'rgba(6,5,12,0.72)'; ctx.fill(); icon(ctx, o.icon, x0 + size * 0.75, y, size * 1.05, o.fg || HEX.text, 2.4); ctx.restore(); }
+  fitDraw(ctx, tw, T.w - 48, T.x, y, () => {
+    pill(ctx, x0 + (o.icon ? size * 1.5 : 0), y, text, { size, alpha: a, bg: o.bg || 'rgba(6,5,12,0.72)', fg: o.fg || HEX.text, border: o.border });
+    if (o.icon) { ctx.save(); ctx.globalAlpha *= a; ctx.beginPath(); ctx.arc(x0 + size * 0.75, y, size * 0.95, 0, TAU); ctx.fillStyle = o.bg || 'rgba(6,5,12,0.72)'; ctx.fill(); icon(ctx, o.icon, x0 + size * 0.75, y, size * 1.05, o.fg || HEX.text, 2.4); ctx.restore(); }
+  });
 }
 
 function bgFindHud(ctx, V, t, L) {
   const T = L.tile;
-  tileBadge(ctx, T, 'ON THIS DEVICE · NOTHING UPLOADED', ease.out3(seg(t, 9.5, 9.9)) * (1 - seg(t, 11.9, 12.3)), { icon: 'lock', bg: 'rgba(18,58,42,0.92)', fg: '#c9f7da', border: rgba('green', 0.5) });
+  tileBadge(ctx, T, TX('ON THIS DEVICE · NOTHING UPLOADED'), ease.out3(seg(t, 9.5, 9.9)) * (1 - seg(t, 11.9, 12.3)), { icon: 'lock', bg: 'rgba(18,58,42,0.92)', fg: '#c9f7da', border: rgba('green', 0.5) });
 }
 
 // Step 2 · a magnifier on the hairline, showing the matte itself.
@@ -3141,19 +3381,23 @@ function bgLoupe(ctx, V, t, L) {
     ctx.save();
     ctx.globalAlpha *= sa;
     ctx.font = FM(size);
-    const names = EDGE_STAGES.map(e => e[0].replace('RAW MASK', 'RAW').replace('TEMPORAL BLEND', 'BLEND'));
+    const names = EDGE_STAGES.map(e => TX(e[2] || e[0]));
+    if (RL.rtl) names.reverse();
     const ws = names.map(n => measureT(ctx, n, tr)), gap = size * 2.2;
     const total = ws.reduce((a, b) => a + b, 0) + gap * (names.length - 1);
     const y = T.y + T.h / 2 - size * 2;
+    const room = T.w - size * 2 - 40;
+    if (total > room) { const k = room / total; ctx.translate(T.x, y); ctx.scale(k, k); ctx.translate(-T.x, -y); }
     rr(ctx, T.x - total / 2 - size, y - size * 1.05, total + size * 2, size * 2.1, size * 1.05);
     ctx.fillStyle = 'rgba(6,5,12,0.72)'; ctx.fill();
     let x = T.x - total / 2;
-    names.forEach((n, i) => {
+    names.forEach((n, j) => {
+      const i = RL.rtl ? names.length - 1 - j : j;
       ctx.fillStyle = i === s ? HEX.violetHi : i < s ? HEX.soft : HEX.faint;
       ctx.textBaseline = 'middle';
       fillT(ctx, n, x, y + 1, tr);
-      if (i < names.length - 1) { ctx.fillStyle = HEX.faint; fillT(ctx, '→', x + ws[i] + gap / 2 - size * 0.3, y + 1); }
-      x += ws[i] + gap;
+      if (j < names.length - 1) { ctx.fillStyle = HEX.faint; fillT(ctx, RL.rtl ? '←' : '→', x + ws[j] + gap / 2 - size * 0.3, y + 1); }
+      x += ws[j] + gap;
     });
     ctx.restore();
   }
@@ -3210,7 +3454,7 @@ function bgLoupe(ctx, V, t, L) {
   ctx.restore();
   ring(ctx, Lp.x, Lp.y, R, 3, HEX.violetHi);
   ring(ctx, Lp.x, Lp.y, R + 7, 1.5, rgba('violetHi', 0.35));
-  pill(ctx, Lp.x, Lp.y + R + 30, EDGE_STAGES[s][0], { size: V.kind === 'sq' ? 13 : 15, align: 'center', alpha: clamp(open), bg: HEX.violet, fg: '#ffffff' });
+  pill(ctx, Lp.x, Lp.y + R + 30, TX(EDGE_STAGES[s][0]), { size: V.kind === 'sq' ? 13 : 15, align: 'center', alpha: clamp(open), bg: HEX.violet, fg: '#ffffff' });
 }
 
 // Step 3 · the camera measures the light on the face; the scene follows.
@@ -3231,16 +3475,16 @@ function bgRelightHud(ctx, V, t, L) {
   for (let i = 0; i < 4; i++) { const an = i * Math.PI / 2; ctx.beginPath(); ctx.moveTo(Math.cos(an) * R * 0.82, Math.sin(an) * R * 0.82); ctx.lineTo(Math.cos(an) * R * 1.12, Math.sin(an) * R * 1.12); ctx.stroke(); }
   ctx.restore();
   const pl = personLookAt(t);
-  const txt = `LIGHT ${pl.side < 0 ? '←' : '→'} ${pl.warm > 0.5 ? 'WARM' : 'COOL'}`;
+  const txt = TX('LIGHT {dir} {tone}', { dir: pl.side < 0 ? '←' : '→', tone: pl.warm > 0.5 ? TX('WARM') : TX('COOL') });
   const size = V.kind === 'sq' ? 13 : 15;
   pill(ctx, fx, fy + R + 30, txt, { size, align: 'center', alpha: a, bg: 'rgba(6,5,12,0.72)', fg: pl.warm > 0.5 ? '#ffd2a8' : '#cfe0ff' });
-  pill(ctx, fx, fy + R + 30 + size * 2.1, 'MEASURED 4× A SECOND', { size: size - 2, align: 'center', alpha: a * 0.9, bg: 'rgba(6,5,12,0.5)', fg: HEX.muted });
+  pill(ctx, fx, fy + R + 30 + size * 2.1, TX('MEASURED 4× A SECOND'), { size: size - 2, align: 'center', alpha: a * 0.9, bg: 'rgba(6,5,12,0.5)', fg: HEX.muted });
   // The scene catching up.
   const sa = seg(t, 24.2, 24.5) * (1 - seg(t, 25.6, 26.0));
   if (sa > 0) {
     const sl = sceneLookAt(t), pw = 1000 * T.w / T.h;
     const [sx, sy] = tileToWorld(T, sl.side * Math.min(pw / 2 * 0.6, 520), 15 - (1 - sl.warm) * 30);
-    pill(ctx, sx, sy - 70 * k - 10, 'SCENE RELIT', { size, align: 'center', alpha: sa, bg: HEX.violet, fg: '#ffffff' });
+    pill(ctx, sx, sy - 70 * k - 10, TX('SCENE RELIT'), { size, align: 'center', alpha: sa, bg: HEX.violet, fg: '#ffffff' });
   }
 }
 
@@ -3276,7 +3520,7 @@ function bgKeyed(ctx, V, t, L) {
   const ip = seg(t, 34.0, 34.9);
   if (ip > 0 && ip < 1) {
     const e = ease.io2(ip), x = lerp(p0[0], p1[0], e) + (vert ? 0 : 0), y = lerp(p0[1], p1[1], e);
-    pill(ctx, x + (vert ? 40 : 0), y + (vert ? 0 : -40), 'SCENE ID + LIGHT', { size: V.kind === 'sq' ? 12 : 14, alpha: Math.sin(ip * Math.PI) * 1.4 * ba, bg: HEX.violet, fg: '#ffffff' });
+    pill(ctx, x + (vert ? 40 : 0), y + (vert ? 0 : -40), TX('SCENE ID + LIGHT'), { size: V.kind === 'sq' ? 12 : 14, alpha: Math.sin(ip * Math.PI) * 1.4 * ba, bg: HEX.violet, fg: '#ffffff' });
   }
   // The receiver's tile.
   const key = ease.io2(seg(t, 34.8, 35.9));
@@ -3290,23 +3534,26 @@ function bgKeyed(ctx, V, t, L) {
       if (key < 1) { c.fillStyle = 'rgba(255,255,255,0.9)'; c.fillRect(-hw + pw * key - 3, -500, 6, 1000); }
     }
   }, lerp(0.9, 1, ba));
-  tileTag(ctx, B, key >= 1 ? 'ROOM DRAWN ON THEIR SCREEN' : 'WHAT THEY RECEIVE', ba * seg(t, 33.5, 33.8));
-  tileBadge(ctx, B, 'THE ROOM IS NOT SENT', seg(t, 36.0, 36.4) * ba, { bg: HEX.violet, fg: '#ffffff' });
+  tileTag(ctx, B, key >= 1 ? TX('ROOM DRAWN ON THEIR SCREEN') : TX('WHAT THEY RECEIVE'), ba * seg(t, 33.5, 33.8));
+  tileBadge(ctx, B, TX('THE ROOM IS NOT SENT'), seg(t, 36.0, 36.4) * ba, { bg: HEX.violet, fg: '#ffffff' });
 }
 
+// The steps are numbered as the cut being drawn has them (V.steps): a
+// shorter version that leaves one out counts on without it.
 function bgCopy(ctx, V, t, L) {
-  drawCopy(ctx, V, L, t, { eyebrow: 'STEP 1 · FIND YOU', head: 'It finds you.', sub: 'A small model picks you out of every frame, on your own device.', cap: 'MEDIAPIPE · 256 px · 10–15× A SECOND', tIn: 6.3, tOut: 11.95 });
-  drawCopy(ctx, V, L, t, { eyebrow: 'STEP 2 · THE EDGE', head: 'A clean edge.', sub: 'Each mask is grown, softened and blended with the last, so the edge never crawls.', cap: 'DILATE · FEATHER · TEMPORAL BLEND', tIn: 12.6, tOut: 18.35 });
-  drawCopy(ctx, V, L, t, { eyebrow: 'STEP 3 · THE ROOM', head: 'A room that’s alive.', sub: 'Not a photo: a 3D scene drawn live on your GPU, relit to match the light on your face.', cap: 'THREE.JS · WEBGL2 · 0 BYTES OF ARTWORK', tIn: 19.0, tOut: 25.9 });
-  drawCopy(ctx, V, L, t, { eyebrow: 'STEP 4 · THE PICTURE', head: 'You, in the room.', sub: 'Your shadow falls on the scene, and its light wraps around your edge.', cap: 'SCENE · SHADOW · YOU · LIGHT WRAP', tIn: 26.6, tOut: 32.3 });
+  const n = i => ({ n: V.steps ? V.steps[i] : i });
+  drawCopy(ctx, V, L, t, { eyebrow: 'STEP {n} · FIND YOU', vars: n(1), head: 'It finds you.', sub: 'A small model picks you out of every frame, on your own device.', cap: 'MEDIAPIPE · 256 px · 10–15× A SECOND', tIn: 6.3, tOut: 11.95 });
+  drawCopy(ctx, V, L, t, { eyebrow: 'STEP {n} · THE EDGE', vars: n(2), head: 'A clean edge.', sub: 'Each mask is grown, softened and blended with the last, so the edge never crawls.', cap: 'DILATE · FEATHER · TEMPORAL BLEND', tIn: 12.6, tOut: 18.35 });
+  drawCopy(ctx, V, L, t, { eyebrow: 'STEP {n} · THE ROOM', vars: n(3), head: 'A room that’s alive.', sub: 'Not a photo: a 3D scene drawn live on your GPU, relit to match the light on your face.', cap: 'THREE.JS · WEBGL2 · 0 BYTES OF ARTWORK', tIn: 19.0, tOut: 25.9 });
+  drawCopy(ctx, V, L, t, { eyebrow: 'STEP {n} · THE PICTURE', vars: n(4), head: 'You, in the room.', sub: 'Your shadow falls on the scene, and its light wraps around your edge.', cap: 'SCENE · SHADOW · YOU · LIGHT WRAP', tIn: 26.6, tOut: 32.3 });
   drawCopy(ctx, V, L, t, { eyebrow: 'IN A CALL', head: 'Send just you.', sub: 'A peer that can draw the scene gets you over flat green, and draws the room itself.', cap: 'KEYED VIDEO · DIRECT CONNECTIONS ONLY', tIn: 33.4, tOut: 38.75 });
 }
 
 // Step 6 · the catalogue, named as the picker names it.
 function bgCatalogue(ctx, V, t, L) {
   const S = L.title, size = S.size * 0.82;
-  slotLine(ctx, 'Pick a room.', 0, S.y + size * 0.36 + 10, size, seg(t, 39.5, 40.1), seg(t, 43.6, 43.95), { font: FD(size, 800), align: 'center', color: HEX.text });
-  const names = BG_LOOKS.map(l => l.name).concat(['+ Your 360° photo or 3D model']);
+  slotLine(ctx, TX('Pick a room.'), 0, S.y + size * 0.36 + 10, size, seg(t, 39.5, 40.1), seg(t, 43.6, 43.95), { font: FD(size, 800), align: 'center', color: HEX.text, maxW: V.hw * 2 - 100 });
+  const names = BG_LOOKS.map(l => TX(l.name)).concat([TX('+ Your 360° photo or 3D model')]);
   const cur = Math.floor((t - CAT_T0) / CAT_STEP);
   const size2 = L.chips.size;
   ctx.font = FT(size2, 600);
@@ -3353,7 +3600,7 @@ function bgClose(ctx, V, t, L) {
   ctx.restore();
   slotLine(ctx, 'Voxal', -w / 2, wy, L.word, seg(t, 44.35, 45.0), 0, { font: FD(L.word, 800), color: HEX.text });
   const ty = wy + L.tag * 1.6;
-  slotLine(ctx, 'Virtual backgrounds, made on your device.', 0, ty, L.tag, seg(t, 44.6, 45.2), 0, { font: FT(V.kind === 'port' ? L.tag * 0.86 : L.tag, 500), align: 'center', color: HEX.soft });
+  slotLine(ctx, TX('Virtual backgrounds, made on your device.'), 0, ty, L.tag, seg(t, 44.6, 45.2), 0, { font: FT(V.kind === 'port' ? L.tag * 0.86 : L.tag, 500), align: 'center', color: HEX.soft, maxW: V.hw * 2 - 100 });
   const ca = ease.outBack(seg(t, 44.85, 45.3), 1.6), cA = seg(t, 44.85, 45.05);
   if (cA > 0) {
     const cy = ty + L.tag * 1.9, size = L.tag * 0.86;
@@ -3376,9 +3623,9 @@ function bgClose(ctx, V, t, L) {
       ctx.globalAlpha *= fa;
       ctx.font = FM(V.kind === 'land' ? 21 : 18);
       ctx.fillStyle = HEX.soft;
-      const f = 'BLUR · SIX SCENES · YOUR OWN 360° PHOTOS & 3D MODELS', fw = measureT(ctx, f, 2);
+      const f = TX('BLUR · SIX SCENES · YOUR OWN 360° PHOTOS & 3D MODELS'), fw = measureT(ctx, f, 2);
       ctx.textBaseline = 'middle';
-      fillT(ctx, f, -fw / 2, cy + ph / 2 + 52, 2);
+      fitDraw(ctx, fw, V.hw * 2 - 80, 0, cy + ph / 2 + 52, () => fillT(ctx, f, -fw / 2, cy + ph / 2 + 52, 2));
       ctx.restore();
     }
   }
@@ -3387,7 +3634,7 @@ function bgClose(ctx, V, t, L) {
 // The corner mark through the explanation, and the icon of the end card.
 function bgHero(ctx, V, t, L) {
   const G = L.bug, E = L.end;
-  const ba = seg(t, 5.9, 6.4) * (1 - seg(t, 43.5, 43.9));
+  const ba = V.noBug ? 0 : seg(t, 5.9, 6.4) * (1 - seg(t, 43.5, 43.9));
   if (ba > 0) {
     glow(ctx, G.x, G.y, G.s * 1.7, 'violet', 0.22 * ba);
     drawIconImage(ctx, G.x, G.y, G.s * lerp(0.7, 1, ease.outBack(seg(t, 5.9, 6.4))), ba);
@@ -3419,7 +3666,7 @@ const BG_SCENES = [
   { a: 32.9, b: 39.4, draw: bgKeyed },
   { a: 6.0, b: 39.2, draw: bgCopy },
   { a: 39.3, b: 44.2, draw: bgCatalogue },
-  { a: 43.8, b: 48.01, draw: bgClose },
+  { a: 43.8, b: 60, draw: bgClose }, // a cut may hold the end card past 48 s
 ];
 const BG_CHAPTERS = [
   { t: 0, name: 'Your room' },
@@ -3499,32 +3746,144 @@ const FILMS = {
   backgrounds: {
     id: 'backgrounds', slug: 'backgrounds', name: 'Virtual backgrounds', title: 'Voxal: Virtual Backgrounds', dur: BG_DUR, poster: 46.5,
     layout: LAYOUT_BG, scenes: BG_SCENES, chapters: BG_CHAPTERS, hero: bgHero, focus: BG_FOCUS, hits: BG_HITS, score: scoreBackgrounds, tail: 47.0,
+    pose: bgPoseAt, cuts: { 15: 'backgrounds-15', 30: 'backgrounds-30' },
   },
 };
 
-// opt: { film: 'intro' | 'backgrounds' (default intro), subs: subtitles
-// (see subtitlesFor), grain: false to leave the grain out }.
+/* ── Shorter cuts ───────────────────────────────────────────────────────── */
+// A cut is a film made of stretches of another one's timeline, played in
+// order — `edl` lists them as [from, to] in the original's seconds. It draws
+// the original's frames at the mapped time, so it owns nothing but its edit:
+// the music is the original's score with each event moved to where its
+// moment now falls (the ones cut away dropped), the narration is the
+// original's lines that lie wholly inside a kept stretch, spoken by the
+// original's recording, and its steps are numbered again (`steps`).
+//
+// Where two stretches meet, the camera tile glides from where the first left
+// it to where the second wants it — `glide` is [seconds before the join,
+// seconds after] — and its picture cross-fades for XFADE seconds; the light
+// behind it moves over in the same way. A join belongs on a quiet moment:
+// every caption of the first stretch gone, none of the second yet in.
+const XFADE = 0.3;
+function makeCut(baseId, o) {
+  const B = FILMS[baseId];
+  let d = 0;
+  const segs = o.edl.map(([a, b, glide]) => { const g = { a, b, d, glide: glide || [0, 0] }; d += b - a; return g; });
+  const dur = Math.round(d * 1000) / 1000;
+  const last = segs[segs.length - 1];
+  // Cut time → the original's time, and back (null: not in the cut).
+  const src = t => { for (const g of segs) if (t < g.d + (g.b - g.a)) return g.a + Math.max(0, t - g.d); return last.b; };
+  const dst = s => { for (const g of segs) if (s >= g.a && s < g.b) return g.d + s - g.a; return s === last.b ? dur : null; };
+  // The light: the original's keyframes inside each stretch, gliding across
+  // each join instead of jumping.
+  const focus = [];
+  segs.forEach((g, j) => {
+    const lead = j ? Math.max(0.6, g.glide[1]) : 0, tail = j + 1 < segs.length ? segs[j + 1].glide[0] : 0;
+    focus.push([g.d + lead, ...focusAt(g.a + lead, B.focus)]);
+    for (const k of B.focus) if (k[0] > g.a + lead && k[0] < g.b - tail) focus.push([g.d + k[0] - g.a, k[1], k[2]]);
+    focus.push([g.d + (g.b - g.a) - tail, ...focusAt(g.b - tail, B.focus)]);
+  });
+  // Chapters: the original's, where they fall inside a stretch (one that
+  // starts just after a join opens it; one just before its end is dropped).
+  const chapters = [];
+  for (const g of segs) {
+    const inside = B.chapters.filter(c => c.t >= g.a && c.t < g.b - 0.5);
+    const cur = B.chapters.filter(c => c.t <= g.a).pop();
+    if (!inside.some(c => c.t - g.a < 0.5) && cur && (!chapters.length || chapters[chapters.length - 1].name !== cur.name)) chapters.push({ t: g.d, name: cur.name });
+    for (const c of inside) chapters.push({ t: c.t - g.a < 0.5 ? g.d : Math.round((g.d + c.t - g.a) * 1000) / 1000, name: c.name });
+  }
+  const F = {
+    ...B, ...o, base: baseId, segs, dur, src, dst, focus, chapters, cuts: undefined,
+    hits: B.hits.filter(h => dst(h[0]) !== null).map(h => [dst(h[0]), h[1]]),
+    poster: dst(B.poster) ?? dur - 1,
+    score: K => {
+      B.score(remapKit(K, segs));
+      // Each join is swept over.
+      segs.slice(1).forEach(g => K.whoosh(g.d - 0.32, 0.6, 0.55, true));
+    },
+  };
+  return F;
+}
+// The synth kit as a cut hears it: an event at the original's time s plays at
+// the cut's, if s was kept. Held notes (pads, bass) are clipped to their
+// stretch, and dropped where too little of them is left to sound like one.
+function remapKit(K, segs) {
+  const at = s => segs.find(g => s >= g.a && s < g.b);
+  const R = { ...K };
+  for (const name of ['tone', 'hiss', 'kick', 'boom', 'hat', 'clap', 'pluck', 'bell', 'whoosh', 'click', 'keyUp', 'roger']) {
+    R[name] = (t, ...rest) => { const g = at(t); if (g) K[name](g.d + t - g.a, ...rest); };
+  }
+  R.riser = (t0, t1, ...rest) => { const g = at(t0); if (g) K.riser(g.d + t0 - g.a, g.d + Math.min(t1, g.b) - g.a, ...rest); };
+  const held = name => (t0, t1, ...rest) => {
+    for (const g of segs) {
+      const a = Math.max(t0, g.a), b = Math.min(t1, g.b);
+      if (b - a >= 0.8) K[name](g.d + a - g.a, g.d + b - g.a, ...rest);
+    }
+  };
+  R.pad = held('pad');
+  R.bass = held('bass');
+  return R;
+}
+// Where the tile is mid-glide, and which picture is fading out, at cut time t.
+function cutJoin(F, L, t) {
+  const B = FILMS[F.base];
+  for (let j = 1; j < F.segs.length; j++) {
+    const g = F.segs[j], p = F.segs[j - 1], D = g.d, [gb, ga] = g.glide;
+    if (gb + ga > 0 && t >= D - gb && t < D + ga) {
+      const from = B.pose(L, p.b - gb), to = B.pose(L, g.a + ga);
+      L.pose = lerpRect(from, to, ease.io3((t - (D - gb)) / (gb + ga)));
+    }
+    if (t >= D && t < D + XFADE) L.xfade = { t: p.b + (t - D), a: 1 - ease.io2((t - D) / XFADE) };
+  }
+}
+// The two shorter versions of "Virtual backgrounds". 15 s: your room, the
+// scene arrives, then straight to the catalogue and the end card. 30 s: the
+// same, with step 1 (finding you) and step 3 (the living room) between.
+FILMS['backgrounds-15'] = makeCut('backgrounds', {
+  id: 'backgrounds-15', slug: 'backgrounds-15s', name: 'Virtual backgrounds · 15 s', title: 'Voxal: Virtual Backgrounds (15 s)',
+  // No corner mark: with no explanation to sit beside, it would only fade in
+  // as the tile leaves for the catalogue.
+  edl: [[0, 6.0], [39.4, 48.4, [0.8, 0.4]]], tail: 14.2, bug: false,
+});
+FILMS['backgrounds-30'] = makeCut('backgrounds', {
+  id: 'backgrounds-30', slug: 'backgrounds-30s', name: 'Virtual backgrounds · 30 s', title: 'Voxal: Virtual Backgrounds (30 s)',
+  edl: [[0, 12.55], [18.98, 26.5], [39.4, 49.33, [0, 0.4]]], steps: { 1: 1, 3: 2 }, tail: 29.2,
+});
+
+// opt: { film: an id of FILMS (default intro), subs: subtitles (see
+// subtitlesFor), lang: the language of the film's own words (default
+// English), grain: false to leave the grain out }.
 function renderFrame(ctx, W, H, t, opt = {}) {
   const F = FILMS[opt.film] || FILMS.intro;
   t = clamp(t, 0, F.dur);
+  // A cut draws its original at the mapped time; the light, the grain and
+  // the subtitles run on its own clock.
+  const B = F.base ? FILMS[F.base] : F, ts = F.base ? F.src(t) : t;
+  setRenderLang(opt.lang);
   const s = Math.min(W, H) / 1080;
   const V = { W, H, s, hw: W / 2 / s, hh: H / 2 / s, t };
   V.kind = V.hw / V.hh > 1.3 ? 'land' : V.hw / V.hh < 0.77 ? 'port' : 'sq';
   V.subs = !!opt.subs;
-  const L = F.layout(V);
+  V.steps = F.steps;
+  V.noBug = F.bug === false;
+  const L = B.layout(V);
+  if (F.base) cutJoin(F, L, t);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
   ctx.setLineDash([]);
+  // Right to left: lines laid out from their left edge still are, but their
+  // letters run, and their punctuation falls, the language's way.
+  if (RL.rtl) { ctx.direction = 'rtl'; ctx.textAlign = 'left'; } else if (ctx.direction === 'rtl') ctx.direction = 'inherit';
   ctx.setTransform(s, 0, 0, s, W / 2, H / 2);
   ctx.imageSmoothingQuality = 'high';
   drawBackground(ctx, V, t, F);
-  for (const sc of F.scenes) {
-    if (t >= sc.a && t < sc.b) { ctx.save(); sc.draw(ctx, V, t, L); ctx.restore(); }
+  for (const sc of B.scenes) {
+    if (ts >= sc.a && ts < sc.b) { ctx.save(); sc.draw(ctx, V, ts, L); ctx.restore(); }
   }
   drawVignette(ctx, V);
   ctx.save();
-  F.hero(ctx, V, t, L);
+  B.hero(ctx, V, ts, L);
   ctx.restore();
   drawOverlay(ctx, V, t, opt.grain !== false, opt.subs);
 }
@@ -3901,6 +4260,35 @@ const renderSoundtrack = () => renderScore('intro');
 
 const NARRATION = JSON.parse(document.getElementById('narration').textContent);
 const LANGS = Object.fromEntries(NARRATION.languages.map(l => [l.code, l]));
+// The film's on-screen words in every language but English, keyed by the
+// English (see TX). Every line TX is asked for is noted (TX_SEEN), so a test
+// can find one with no translation, or a translation nothing draws.
+const SCREEN_TEXT = JSON.parse(document.getElementById('screen-text').textContent);
+
+// A film's narration lines on its own timeline. A cut speaks the original's
+// lines that lie wholly inside a kept stretch, slot and all, moved with it.
+function filmCues(id) {
+  const F = FILMS[id];
+  if (!F.base) return NARRATION.films[id].cues;
+  return NARRATION.films[F.base].cues
+    .filter(c => F.segs.some(g => c.t >= g.a && c.t + c.max <= g.b + 1e-9))
+    .map(c => ({ ...c, t: Math.round(F.dst(c.t) * 1000) / 1000 }));
+}
+// A cut's recording: the original's, line by line — each kept line's whole
+// slot moved to its new time. Not stretch by stretch: a stretch can end just
+// after a line it does not keep has begun, and would carry its first word.
+function cutVoice(v, F) {
+  const src = v.buffer, sr = src.sampleRate, n = Math.ceil(F.dur * sr);
+  const buffer = new AudioBuffer({ numberOfChannels: src.numberOfChannels, length: n, sampleRate: sr });
+  const lines = filmCues(F.id), orig = Object.fromEntries(NARRATION.films[F.base].cues.map(c => [c.id, c]));
+  for (const c of lines) {
+    const from = Math.round(orig[c.id].t * sr), at = Math.round(c.t * sr);
+    const len = Math.max(0, Math.min(Math.round(c.max * sr), src.length - from, n - at));
+    for (let ch = 0; ch < src.numberOfChannels; ch++) buffer.getChannelData(ch).set(src.getChannelData(ch).subarray(from, from + len), at);
+  }
+  const keep = new Set(lines.map(c => c.id));
+  return { ...v, buffer, cues: v.cues.filter(c => keep.has(c.id)).map(c => ({ ...c, t: Math.round(F.dst(c.t) * 1000) / 1000 })) };
+}
 
 // What the voice says: the line, with the language's spoken-only spellings.
 function spokenText(cue, lang) {
@@ -3933,6 +4321,8 @@ function loadScript(src) {
 function loadVoice(film, lang) {
   const key = film + '/' + lang;
   if (_voices[key]) return _voices[key];
+  const F = FILMS[film];
+  if (F && F.base) return (_voices[key] = loadVoice(F.base, lang).then(v => v && cutVoice(v, F)));
   return (_voices[key] = (async () => {
     const reg = () => (window.VOX_VOICE || {})[key];
     for (const dir of VOICE_DIRS) {
@@ -3960,7 +4350,7 @@ function subtitlesFor(film, lang, voice) {
   const said = voice && !voice.stale ? Object.fromEntries(voice.cues.map(c => [c.id, c])) : {};
   return {
     lang, rtl: !!L.rtl,
-    cues: NARRATION.films[film].cues.map(c => ({ t: c.t, dur: said[c.id] ? said[c.id].dur : c.max, text: c.text[lang] || c.text.en })),
+    cues: filmCues(film).map(c => ({ t: c.t, dur: said[c.id] ? said[c.id].dur : c.max, text: c.text[lang] || c.text.en })),
   };
 }
 
@@ -4328,7 +4718,7 @@ const filmDur = () => film().dur;
 // Everything renderFrame needs besides the time, from the current choices.
 function frameOpts() {
   const subs = player.lang && player.subsOn ? subtitlesFor(player.film, player.lang, player.voice) : null;
-  return { film: player.film, subs };
+  return { film: player.film, subs, lang: player.lang };
 }
 const voiceIncluded = () => !!(player.lang && player.voiceOn && player.voice && player.voice.buffer);
 
@@ -4377,8 +4767,9 @@ function updateVoiceStatus() {
   $('with-voice').disabled = $('with-subs').disabled = !L;
   let msg = '';
   if (!L) msg = 'Music only: the film as it was first cut.';
+  else if (!player.voiceOn && !player.subsOn) msg = player.lang === 'en' ? 'Music only, in English.' : `The film’s own words in ${L.name}; music only.`;
   else if (player.voiceLoading) msg = 'Loading the voice…';
-  else if (!player.voice) msg = `No ${L.name} recording of this film yet — subtitles still work. Make one with: make promo-voice LANGS=${player.lang} FILMS=${player.film}`;
+  else if (!player.voice) msg = `No ${L.name} recording of this film yet — subtitles still work. Make one with: make promo-voice LANGS=${player.lang} FILMS=${film().base || player.film}`;
   else {
     const v = player.voice;
     const who = v.engine === 'say' ? `macOS “${v.voice}”` : `${v.engine} ${v.model || ''} “${v.voice}”`.replace(/\s+/g, ' ');
@@ -4388,11 +4779,17 @@ function updateVoiceStatus() {
   }
   el.textContent = msg;
 }
+// id: a film, or one of its cuts ('backgrounds-15'). The Film switch shows
+// the family, the Length switch (only for a film that has cuts) the version.
 function setFilm(id) {
   if (!FILMS[id]) id = 'intro';
   const changed = id !== player.film;
   player.film = id;
-  document.querySelectorAll('input[name="film"]').forEach(i => { i.checked = i.value === id; });
+  const family = FILMS[id].base || id, cuts = FILMS[family].cuts;
+  const cut = Object.keys(cuts || {}).find(k => cuts[k] === id) || '';
+  document.querySelectorAll('input[name="film"]').forEach(i => { i.checked = i.value === family; });
+  document.querySelectorAll('input[name="cut"]').forEach(i => { i.checked = i.value === cut; });
+  $('cut').hidden = !cuts;
   document.title = film().title;
   $('tc-dur').textContent = fmtTC(filmDur());
   $('scrub').setAttribute('aria-valuemax', String(filmDur()));
@@ -4492,17 +4889,22 @@ function tick() {
   draw();
   requestAnimationFrame(tick);
 }
+// The icons are <svg> and <path> elements, which have no `hidden` property
+// (it is HTMLElement's): assigning one only sets a JS field, so the attribute
+// has to be toggled itself.
+const showEl = (id, on) => $(id).toggleAttribute('hidden', !on);
 function syncButtons() {
-  $('ico-play').hidden = player.playing;
-  $('ico-pause').hidden = !player.playing;
+  showEl('ico-play', !player.playing);
+  showEl('ico-pause', player.playing);
   $('play').setAttribute('aria-label', player.playing ? 'Pause' : 'Play');
+  $('play').title = (player.playing ? 'Pause' : 'Play') + ' (Space)';
   // The big play button is only an invitation: once the film has run, the transport is enough.
   if (player.playing) player.started = true;
   $('overlay-play').hidden = player.playing || player.started || !ICON_IMG;
   $('loop').setAttribute('aria-pressed', String(player.loop));
   $('sound').setAttribute('aria-pressed', String(player.sound));
-  $('ico-wave').hidden = !player.sound;
-  $('ico-mute').hidden = player.sound;
+  showEl('ico-wave', player.sound);
+  showEl('ico-mute', !player.sound);
   $('sound-label').textContent = !player.audioBuf ? 'Sound…' : player.sound ? 'Sound on' : 'Sound off';
 }
 async function toggleSound() {
@@ -4675,7 +5077,7 @@ function settings() {
 // film's name, unchanged: voxal-30s-1920x1080-30fps.mp4.
 function exportBase(s) {
   let n = 'voxal-' + FILMS[s.film].slug;
-  if (s.voice || s.subs) n += '-' + s.lang + (s.voice ? '-vo' : '') + (s.subs ? '-subs' : '');
+  if (s.voice || s.subs || (s.lang && s.lang !== 'en')) n += '-' + s.lang + (s.voice ? '-vo' : '') + (s.subs ? '-subs' : '');
   if (s.draft) n += '-draft';
   return n;
 }
@@ -4697,7 +5099,7 @@ function updateSummary() {
     const parts = [];
     if (s.voice && s.withAudio) parts.push('voice' + (s.draft ? ' (draft)' : ''));
     if (s.subs) parts.push('subtitles');
-    add('Narration', `${LANGS[s.lang].name} · ${parts.length ? parts.join(' + ') : 'nothing to add yet'}`);
+    add('Language', `${LANGS[s.lang].name} · ${['on-screen text'].concat(parts).join(' + ')}`);
   }
   if (s.blur > 1) add('Renders', `${s.frames * s.blur} (${s.blur} per frame)`);
 }
@@ -4937,7 +5339,7 @@ function saveStill() {
   c.width = w; c.height = h;
   const s = settings();
   renderFrame(c.getContext('2d', { alpha: false }), w, h, player.t, s.opts);
-  const base = 'voxal-' + FILMS[s.film].slug + (s.subs ? '-' + s.lang + '-subs' : '');
+  const base = 'voxal-' + FILMS[s.film].slug + (s.subs ? '-' + s.lang + '-subs' : s.lang && s.lang !== 'en' ? '-' + s.lang : '');
   c.toBlob(b => { if (b) saveBlob(b, `${base}-${w}x${h}-${player.t.toFixed(2).replace('.', '_')}s.png`); }, 'image/png');
 }
 function saveWav() {
@@ -4950,7 +5352,7 @@ function requestAudio() { return (player.audioPending = refreshAudio()); }
 function fillLanguages() {
   const sel = $('lang');
   const none = document.createElement('option');
-  none.value = ''; none.textContent = 'None — music only';
+  none.value = ''; none.textContent = 'None — English, music only';
   sel.appendChild(none);
   for (const l of NARRATION.languages) {
     const o = document.createElement('option');
@@ -4960,12 +5362,13 @@ function fillLanguages() {
 }
 
 /* ── Boot ───────────────────────────────────────────────────────────────── */
-// URL: ?film=backgrounds&lang=fr&subs=1&voice=0&aspect=9:16&t=12.5
+// URL: ?film=backgrounds&cut=15&lang=fr&subs=1&voice=0&aspect=9:16&t=12.5
 async function boot() {
   buildChrome();
   fillLanguages();
   const q = new URLSearchParams(location.search);
-  setFilm(q.get('film'));
+  const fam = FILMS[q.get('film')];
+  setFilm(fam && fam.cuts && fam.cuts[q.get('cut')] || q.get('film'));
   const lang = q.get('lang');
   player.lang = LANGS[lang] ? lang : '';
   player.subsOn = q.get('subs') === '1';
@@ -4996,9 +5399,13 @@ async function boot() {
   document.querySelectorAll('input[name="film"]').forEach(i => i.addEventListener('change', () => {
     setFilm(i.value); requestAudio(); updateSummary(); i.blur();
   }));
+  document.querySelectorAll('input[name="cut"]').forEach(i => i.addEventListener('change', () => {
+    const family = film().base || player.film;
+    setFilm((FILMS[family].cuts || {})[i.value] || family); requestAudio(); updateSummary(); i.blur();
+  }));
   $('lang').addEventListener('change', () => { player.lang = $('lang').value; requestAudio(); draw(); updateSummary(); });
   $('with-voice').addEventListener('change', () => { player.voiceOn = $('with-voice').checked; requestAudio(); updateSummary(); });
-  $('with-subs').addEventListener('change', () => { player.subsOn = $('with-subs').checked; draw(); updateSummary(); });
+  $('with-subs').addEventListener('change', () => { player.subsOn = $('with-subs').checked; updateVoiceStatus(); draw(); updateSummary(); });
   $('res').addEventListener('change', updateSummary);
   $('with-audio').addEventListener('change', updateSummary);
   $('export').addEventListener('click', exportVideo);

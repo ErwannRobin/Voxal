@@ -1137,6 +1137,14 @@ Built and tested with macOS `say` drafts only (`docs/promo-voice/draft/`, gitign
 - [ ] Listen to the mix (`mixNarration()`: music 0.85, 0.3 under a line): balance was set by level arithmetic, not by ear.
 - [ ] Subtitles in ru/uk/zh/ja/ar use the system's fallback fonts (the page embeds Latin Archivo only), so those exports differ by machine. Embed a subset font if that matters.
 
+### On-screen text (both films, 12 languages) and the 15 s / 30 s cuts
+
+The films' own words follow the Language menu (`SCREEN_TEXT` block, `TX()`); the two shorter "Virtual backgrounds" cuts are edits of the 48 s timeline (`makeCut`). Checked here by contact sheets of rendered frames (de/ru/uk/ar/ja/zh, all three shapes) and the promo spec.
+
+- [ ] Native-speaker review of the on-screen lines (`screen-text` block in `docs/promo.html`) — written here, app terms reused where the app has them (Create Room, Join, Room code, Host/Deputy…), not reviewed. Scene names (Office, Island…) are translated in the film although the app's picker still shows them in English.
+- [ ] Arabic keeps the left-to-right layout (copy blocks left-aligned, catalogue chips in picker order), like the app; only the text runs right to left. Mirror it if a reviewer wants it.
+- [ ] Watch and listen to the 15 s and 30 s cuts end to end: the joins (tile glide + 0.3 s cross-fade + a whoosh) and the remapped score were judged on still frames and level envelopes only.
+
 ## 📱 Background tilt (phones) — verify on devices
 
 Shipped on web/JS (OTA); `NSMotionUsageDescription` needs a store build. Everything below was only exercised with synthetic `DeviceOrientationEvent`s.
