@@ -20,6 +20,13 @@ make release VERSION=1.2.0
 - `src/version.js` (with build date update)
 - `android/app/build.gradle` (also increments `versionCode`)
 
+`main` is protected (changes by pull request only, no bypass, not even for
+admins), so the bump is not pushed to it. Run `make release` from an up-to-date
+`main`: it commits the bump on `release/vX.Y.Z`, opens a PR, and waits until that
+PR is merged (`make release RELEASE_MERGE=1` squash-merges it for you). It then
+pulls the merged `main`, builds, tags that commit and publishes. Closing the PR
+unmerged aborts the release.
+
 ## CI release builds
 
 Publishing a GitHub release triggers platform workflows:
