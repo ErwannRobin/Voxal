@@ -326,12 +326,12 @@ test('a changed view applies to the next inference; an unknown view is refused',
     const refused = VideoEffects.setDiagnosticView('nope');
     const ok = VideoEffects.setDiagnosticView('heat');
     return { refused, ok, view: VideoEffects.diagnosticState().view,
-             select: document.querySelector('#seg-diagnostic select').value };
+             tab: document.querySelector('#seg-diagnostic [aria-pressed="true"]').textContent };
   });
   expect(r.refused).toBe(false);
   expect(r.ok).toBe(true);
   expect(r.view).toBe('heat');
-  expect(r.select).toBe('heat');
+  expect(r.tab).toBe('Stability');
 });
 
 for (const vp of [{ width: 390, height: 664 }, { width: 664, height: 340 }, { width: 320, height: 480 }]) {
@@ -344,7 +344,8 @@ for (const vp of [{ width: 390, height: 664 }, { width: 664, height: 340 }, { wi
       const el = document.getElementById('seg-diagnostic');
       const out = [];
       for (const b of el.querySelectorAll('button, select')) {
-        if (b.offsetParent === null) continue;   // the chip, while the panel is open
+        // The chip while the panel is open, and whatever sits in a closed section.
+        if (b.offsetParent === null || !b.checkVisibility()) continue;
         const q = b.getBoundingClientRect();
         // The element at the control's centre must be the control itself: not
         // clipped, not under something.
@@ -393,6 +394,7 @@ test('the silhouette prior is switched and tuned from the panel, and reported in
   expect(await page.evaluate(() => window.__untilInferences(2))).toBe(true);
   // Off by default on a desktop browser.
   expect(await page.evaluate(() => VideoEffects.active().silhouette)).toBe(false);
+  await page.locator('#seg-diag-tune summary').click();
   await page.locator('#seg-diagnostic').getByLabel('Silhouette prior', { exact: true }).selectOption('on');
   await page.locator('#seg-diagnostic').getByLabel('Silhouette prior strength').fill('0.35');
   const on = await page.evaluate(() => ({

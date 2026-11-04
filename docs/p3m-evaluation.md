@@ -31,13 +31,16 @@ either.
 
 Unlike RVM (GPL-3.0), P3M-Net can ship. It is kept out of the repository for
 **size** — 78 MB (half-float weights) or 156 MB (float32), plus 29 MB of ONNX
-Runtime — and of the desktop and mobile builds. The **web deploy carries it**:
-`vercel-build.sh` downloads the converted model from the
+Runtime — and of the desktop and mobile builds. **Vercel preview deploys carry
+it** (a production deploy only with `P3M_ASSETS=1`), so the engines can be
+compared live on a real device (*Compare engines* in the diagnostic, see
+`docs/video-effects.md`): `vercel-build.sh` downloads the converted model from the
 [`p3m-model-v1`](https://github.com/ErwannRobin/Voxal/releases/tag/p3m-model-v1)
 prerelease asset and ONNX Runtime from jsDelivr, both sha256-pinned
 (`scripts/p3m-fetch.sh`). A prerelease, so the desktop updater's
 `releases/latest` never sees it. A browser downloads the files only when
-somebody picks P3M-Net; a failed download at build time deploys without them
+somebody picks P3M-Net (or opens the comparison); a failed download at build
+time deploys without them
 (P3M-Net then falls back to MediaPipe).
 
 ## Choice of variant and runtime
@@ -86,8 +89,8 @@ somebody picks P3M-Net; a failed download at build time deploys without them
   (`p3m-clean`), `build-web` and `cap-sync` strip it.
 * `make p3m-fetch` (`scripts/p3m-fetch.sh`): downloads the file that conversion
   produced (published as a prerelease asset) and the three ONNX Runtime files
-  the WebGPU path loads, sha256-pinned. The web deploy runs it
-  (`vercel-build.sh`, never fatal); `/assets/p3m/` is cached a day
+  the WebGPU path loads, sha256-pinned. Preview deploys run it
+  (`vercel-build.sh`, never fatal; production with `P3M_ASSETS=1`); `/assets/p3m/` is cached a day
   (`vercel.json`), and the engine keeps the model in Cache Storage anyway.
 * `src/p3m-engine.js`: the engine, shaped like MediaPipe's ImageSegmenter so the
   Processor treats it like the others (same interface as `rvm-engine.js`).
@@ -305,7 +308,7 @@ make p3m-fetch           # download the published model + ONNX Runtime (107 MB) 
 make run-web             # or make dev (desktop); the files are served from src/
 ```
 
-On the web deploy nothing is needed: the files are there. Settings → Advanced →
+On a Vercel preview deploy nothing is needed: the files are there. Settings → Advanced →
 Segmentation debug → *Segmentation engine* → **P3M-Net**,
 then turn the camera on with a background. Switch between MediaPipe, Longpipe
 and P3M-Net there (or in the diagnostic panel: *Segmentation diagnostic panel*

@@ -3136,6 +3136,11 @@ var VideoEffects = (function () {
       };
       if (this.engine === 'longpipe') this.syncDirect();
     }
+    // A comparison follows the engine that drives the picture.
+    if (this === _active) {
+      if (_cmp.on) cmpResync();
+      else if (_diag.on && _diag.view === 'compare') cmpStart();
+    }
   };
 
   // Change engine under a running camera: no new track, no renegotiation (the
@@ -4576,6 +4581,7 @@ var VideoEffects = (function () {
           : 'none';
       }
       this.segCtx.drawImage(this.video, 0, 0, this.segW, this.segH);
+      var cmpOn = _cmp.on && this === _active, cmpT0 = cmpOn ? performance.now() : 0;
       this.segmenter.segmentForVideo(this.segCanvas, ts, function (result) {
         var masks = result && result.confidenceMasks;
         // The selfie model publishes a single confidence mask ("selfie"); other
@@ -4585,6 +4591,7 @@ var VideoEffects = (function () {
         self._maskCount = masks.length;
         try {
           var data = mask.getAsUint8Array();
+          if (cmpOn) self.cmpPrimary(data, mask.width, mask.height, performance.now() - cmpT0);
           if (self.refCapture) self.captureSawMask(data);
           self.uploadMask(data, mask.width, mask.height);
           if (result.rvm && result.rvm.fg) self.uploadFg(result.rvm);
@@ -4600,6 +4607,8 @@ var VideoEffects = (function () {
           }
         } catch (e) { /* the mask's lifetime ends with this callback */ }
       });
+      // The other engines, on this very frame (see Live engine comparison).
+      if (cmpOn) this.cmpFeed(now);
     } catch (e) {
       // A single failed inference must not take the call's video with it.
       this.segFailures = (this.segFailures || 0) + 1;
@@ -5389,6 +5398,7 @@ var VideoEffects = (function () {
       this.stream._effectsProcessor = null;
     }
     if (_active === this) {
+      cmpStop();
       _active = null;
       if (_onReference) { try { _onReference(referenceState()); } catch (e) { /* ignore */ } }
     }
@@ -6301,7 +6311,8 @@ var VideoEffects = (function () {
   // inference. It is opened by `VideoEffects.openDiagnostic()`, by `?segdiag=1`
   // in the URL, or by localStorage['seg-diagnostic'] = '1' (diagnosis only,
   // never written by the app), and closed by its ✕ button or
-  // `VideoEffects.closeDiagnostic()`.
+  // `VideoEffects.closeDiagnostic()`. Its "Compare engines" view (see Live
+  // engine comparison, further down) runs every engine on the same frames.
   //
   // How it keeps the comparison honest:
   //   * It adds NO inference. It reads the mask the one existing
@@ -6358,7 +6369,8 @@ var VideoEffects = (function () {
     ['feathered', 'C3 — after feather (fed to the composite)'],
     ['matte',     'C4 — matte used (smoothstep + reference + hair)'],
     ['final',     'D — final render'],
-    ['heat',      'Stability map (raw mask, successive inferences)']
+    ['heat',      'Stability map (raw mask, successive inferences)'],
+    ['compare',   'Compare engines — every model live, side by side']
   ];
   var DIAG_PANE = {
     original:  { label: 'A camera',                    src: 'cam' },
@@ -6378,7 +6390,9 @@ var VideoEffects = (function () {
 
   var _diag = {
     on: false, view: 'grid', tint: false, frozen: false, collapsed: false,
-    el: null, body: null, chip: null, canvas: null, ctx: null, info: null, select: null, freezeBtn: null,
+    el: null, body: null, chip: null, canvas: null, ctx: null, info: null, freezeBtn: null, copyBtn: null,
+    sizeBtn: null, size: 1, tabs: null, statsBox: null, cmpBox: null, cmpTable: null, cmpShow: null,
+    cmpBoxes: null, engBadge: null, hzBadge: null, engineSelect: null, lay: null,
     error: '', lastInfo: 0, text: ''
   };
 
@@ -6402,8 +6416,64 @@ var VideoEffects = (function () {
 
   function diagPct(x) { return (x * 100).toFixed(1) + '%'; }
 
+  // --- the panel ---------------------------------------------------------------
+
+  var DIAG_SIZES = [['S', 480], ['M', 640], ['L', 960]];
+  var DIAG_COLOR = { ok: '#3ecf8e', warn: '#f5b942', bad: '#ff6b6b', muted: '#8b8b8b', accent: '#5aa9ff' };
+  var DIAG_BTN = 'font:inherit;padding:6px 10px;min-height:34px;background:#222;color:#eee;' +
+    'border:1px solid #444;border-radius:6px;cursor:pointer';
+  var DIAG_CHIP = {
+    grid: 'Grid', stages: 'Stages', original: 'Camera', input: 'Input', raw: 'Raw', blend: 'Blend',
+    dilated: 'Dilate', feathered: 'Feather', matte: 'Matte', final: 'Final', heat: 'Stability',
+    compare: 'Compare engines'
+  };
+
+  function dEl(tag, css, text) {
+    var n = document.createElement(tag);
+    if (css) n.style.cssText = css;
+    if (text !== undefined && text !== null) n.textContent = text;
+    return n;
+  }
+
+  function dButton(text, fn, label) {
+    var b = dEl('button', DIAG_BTN, text);
+    b.type = 'button';
+    if (label) b.setAttribute('aria-label', label);
+    b.addEventListener('click', fn);
+    return b;
+  }
+
+  function dBadge(text, color) {
+    return dEl('span', 'display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;' +
+      'background:#222;border:1px solid ' + (color || '#444') + ';color:' + (color || '#ccc'), text);
+  }
+
+  // A row of mutually exclusive chips; `onPick(id)` is called on a click.
+  function dChips(items, onPick) {
+    var row = dEl('div', 'display:flex;flex-wrap:wrap;gap:4px');
+    var map = {};
+    items.forEach(function (it) {
+      var b = dEl('button', DIAG_BTN + ';padding:4px 9px;min-height:32px', it[1]);
+      b.type = 'button';
+      b.addEventListener('click', function () { onPick(it[0]); });
+      row.appendChild(b);
+      map[it[0]] = b;
+    });
+    return { el: row, map: map };
+  }
+
+  function dMarkChips(map, on) {
+    Object.keys(map).forEach(function (k) {
+      var yes = k === on;
+      map[k].setAttribute('aria-pressed', yes ? 'true' : 'false');
+      map[k].style.background = yes ? '#25456b' : '#222';
+      map[k].style.borderColor = yes ? DIAG_COLOR.accent : '#444';
+    });
+  }
+
   function diagBuildPanel() {
-    var el = document.createElement('div');
+    var size = DIAG_SIZES[_diag.size] || DIAG_SIZES[1];
+    var el = dEl('div');
     el.id = 'seg-diagnostic';
     el.setAttribute('role', 'dialog');
     el.setAttribute('aria-label', 'Segmentation diagnostic');
@@ -6414,53 +6484,132 @@ var VideoEffects = (function () {
     el.style.cssText = 'position:fixed;' +
       'left:max(8px,env(safe-area-inset-left));' +
       'bottom:max(8px,env(safe-area-inset-bottom));z-index:2147483000;' +
-      'width:min(96vw,640px);max-height:calc(100vh - 16px);' +
+      'width:min(96vw,' + size[1] + 'px);max-height:calc(100vh - 16px);' +
       'max-height:calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));' +
-      'overflow:auto;box-sizing:border-box;padding:8px;border-radius:8px;' +
-      'background:#111;color:#eee;box-shadow:0 2px 16px rgba(0,0,0,.5);' +
+      'overflow:auto;box-sizing:border-box;padding:8px;border-radius:10px;' +
+      'background:#111;color:#eee;border:1px solid #333;box-shadow:0 2px 16px rgba(0,0,0,.5);' +
       'font:12px/1.35 ui-monospace,Menlo,Consolas,monospace;touch-action:manipulation';
 
     // The panel can shrink to a small chip: on a phone it is otherwise over
     // the room's own controls (mic, camera), which are underneath it.
-    var chip = document.createElement('button');
+    var chip = dEl('button', 'display:none;font:inherit;padding:8px 12px;min-height:36px', 'Seg ▴');
     chip.type = 'button';
-    chip.textContent = 'Seg ▴';
-    chip.style.cssText = 'display:none;font:inherit;padding:8px 12px;min-height:36px';
     chip.addEventListener('click', function () { diagCollapse(false); });
     el.appendChild(chip);
 
-    var body = document.createElement('div');
+    var body = dEl('div');
 
-    // Sticky, so the controls stay on screen however tall the picture is.
-    var bar = document.createElement('div');
-    bar.style.cssText = 'position:sticky;top:0;z-index:1;background:#111;display:flex;' +
-      'flex-wrap:wrap;gap:6px;align-items:center;padding-bottom:6px';
+    // Sticky, so the title, the buttons and the views stay on screen however
+    // tall the picture is. Dragging it moves the panel.
+    var top = dEl('div', 'position:sticky;top:0;z-index:1;background:#111;padding-bottom:6px');
+    var head = dEl('div', 'display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding-bottom:6px;' +
+      'cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none');
+    head.appendChild(dEl('strong', 'flex:0 0 auto;font-size:13px', 'Segmentation'));
+    var engBadge = dBadge('–'); engBadge.id = 'seg-diag-engine';
+    var hzBadge = dBadge('– Hz');
+    head.appendChild(engBadge);
+    head.appendChild(hzBadge);
+    head.appendChild(dEl('span', 'flex:1 1 auto'));
+    head.appendChild(dButton('Hide', function () { diagCollapse(true); }));
+    head.appendChild(dButton('✕', diagClose));
+    diagMakeDraggable(el, head);
+    top.appendChild(head);
 
-    var sel = document.createElement('select');
-    sel.style.cssText = 'flex:1 1 100%;min-width:0;font:inherit;padding:6px;min-height:36px';
-    DIAG_VIEWS.forEach(function (v) {
-      var o = document.createElement('option');
-      o.value = v[0]; o.textContent = v[1];
-      sel.appendChild(o);
+    // What you do to the picture: freeze it, keep it, send it, make it bigger.
+    var actions = dEl('div', 'display:flex;flex-wrap:wrap;gap:6px;padding-bottom:6px');
+    _diag.freezeBtn = dButton('Freeze', function () {
+      _diag.frozen = !_diag.frozen;
+      _diag.freezeBtn.textContent = _diag.frozen ? 'Resume' : 'Freeze';
     });
-    sel.value = _diag.view;
-    sel.addEventListener('change', function () { diagSetView(sel.value); });
-    bar.appendChild(sel);
+    actions.appendChild(_diag.freezeBtn);
+    actions.appendChild(dButton('Save PNG', diagSave));
+    _diag.copyBtn = dButton('Copy report', diagCopy);
+    actions.appendChild(_diag.copyBtn);
+    _diag.sizeBtn = dButton('Size ' + size[0], function () {
+      _diag.size = (_diag.size + 1) % DIAG_SIZES.length;
+      var s = DIAG_SIZES[_diag.size];
+      _diag.sizeBtn.textContent = 'Size ' + s[0];
+      if (!_diag.collapsed) el.style.width = 'min(96vw,' + s[1] + 'px)';
+    }, 'Panel size');
+    actions.appendChild(_diag.sizeBtn);
+    top.appendChild(actions);
 
-    // The experimental engine, switchable under the running camera. Offered only
-    // where the Longpipe script is present; the choice is stored, so it survives
-    // a reload exactly like ?segengine=longpipe would.
+    var tabs = dChips(DIAG_VIEWS.map(function (v) { return [v[0], DIAG_CHIP[v[0]] || v[1]]; }), diagSetView);
+    Object.keys(tabs.map).forEach(function (k) {
+      var v = DIAG_VIEWS.filter(function (x) { return x[0] === k; })[0];
+      if (v) tabs.map[k].title = v[1];
+    });
+    top.appendChild(tabs.el);
+    body.appendChild(top);
+    _diag.tabs = tabs.map;
+
+    var canvas = dEl('canvas', 'display:block;width:100%;height:auto;max-height:50vh;' +
+      'max-height:50dvh;object-fit:contain;background:#222;margin-top:2px;border-radius:4px');
+    canvas.width = 16; canvas.height = 9;
+    canvas.addEventListener('click', diagCanvasClick);
+    body.appendChild(canvas);
+
+    // Compare-engines controls: only while that view is up.
+    var cmp = dEl('div', 'display:none;margin-top:8px;padding:8px;background:#181818;border-radius:6px');
+    var cmpShow = dChips([['cutout', 'Cutout'], ['mask', 'Mask'], ['overlay', 'Overlay'], ['diff', 'Diff vs reference']],
+      function (v) { cmpSetView(v); });
+    cmp.appendChild(dEl('div', 'color:' + DIAG_COLOR.muted + ';margin-bottom:4px', 'Show'));
+    cmp.appendChild(cmpShow.el);
+    _diag.cmpShow = cmpShow.map;
+    cmp.appendChild(dEl('div', 'color:' + DIAG_COLOR.muted + ';margin:8px 0 4px', 'Engines running together (untick one to rule out contention)'));
+    var cmpEngines = dEl('div', 'display:flex;flex-wrap:wrap;gap:6px 14px');
+    _diag.cmpBoxes = {};
+    cmpAvailable().forEach(function (name) {
+      var lab = dEl('label', 'white-space:nowrap;display:flex;align-items:center;gap:5px');
+      var cb = dEl('input'); cb.type = 'checkbox'; cb.checked = true;
+      cb.setAttribute('aria-label', 'Run ' + CMP_NAMES[name]);
+      cb.addEventListener('change', function () { cmpPause(name, !cb.checked); });
+      var dot = dEl('span', 'width:8px;height:8px;border-radius:50%;background:' + DIAG_COLOR.muted);
+      lab.appendChild(cb); lab.appendChild(dot); lab.appendChild(document.createTextNode(CMP_NAMES[name]));
+      cmpEngines.appendChild(lab);
+      _diag.cmpBoxes[name] = { cb: cb, dot: dot };
+    });
+    cmp.appendChild(cmpEngines);
+    var refRow = dEl('div', 'display:flex;align-items:center;gap:6px;margin-top:8px');
+    refRow.appendChild(dEl('span', 'color:' + DIAG_COLOR.muted, 'Diff reference'));
+    var refSel = dEl('select', 'font:inherit;padding:4px;min-height:30px;background:#222;color:#eee;border:1px solid #444;border-radius:6px');
+    refSel.setAttribute('aria-label', 'Diff reference');
+    [['', 'the engine driving the picture']].concat(cmpAvailable().map(function (n) { return [n, CMP_NAMES[n]]; }))
+      .forEach(function (v) {
+        var o = dEl('option', null, v[1]); o.value = v[0]; refSel.appendChild(o);
+      });
+    refSel.addEventListener('change', function () { _cmp.ref = refSel.value || null; });
+    refRow.appendChild(refSel);
+    cmp.appendChild(refRow);
+    var cmpTable = dEl('div', 'margin-top:8px;overflow-x:auto');
+    cmp.appendChild(cmpTable);
+    cmp.appendChild(dEl('div', 'margin-top:6px;color:' + DIAG_COLOR.muted + ';font-size:11px',
+      'Every engine is handed the same frames at the same moment; the numbers are with all of them running together, so each alone is faster. Masks are the raw model output, before the blend, dilate and feather. Click a picture to enlarge it.'));
+    body.appendChild(cmp);
+    _diag.cmpBox = cmp; _diag.cmpTable = cmpTable;
+
+    // The numbers that matter, then the full report.
+    var stats = dEl('div', 'margin-top:8px');
+    body.appendChild(stats);
+    _diag.statsBox = stats;
+
+    // Everything that changes how the camera behaves lives in one section.
+    var tune = dEl('details', 'margin-top:8px');
+    tune.id = 'seg-diag-tune';
+    tune.appendChild(dEl('summary', 'cursor:pointer;padding:4px 0;color:' + DIAG_COLOR.accent, 'Engine and tuning'));
+    var tuneBody = dEl('div', 'display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 0');
+
+    // The experimental engines, switchable under the running camera. Offered
+    // only where the Longpipe script is present; the choice is stored, so it
+    // survives a reload exactly like ?segengine=longpipe would.
     if (typeof LongpipeEngine !== 'undefined') {
-      var eng = document.createElement('select');
+      var eng = dEl('select', 'flex:1 1 100%;min-width:0;font:inherit;padding:6px;min-height:36px');
       eng.setAttribute('aria-label', 'Segmentation engine');
-      eng.style.cssText = 'flex:1 1 100%;min-width:0;font:inherit;padding:6px;min-height:36px';
       var engs = [['longpipe', 'Engine: Longpipe (default)'], ['mediapipe', 'Engine: MediaPipe']];
-      if (typeof RvmEngine !== 'undefined') engs.push(['rvm', 'Engine: RVM (experimental, needs make rvm-assets)']);
+      if (typeof RvmEngine !== 'undefined') engs.push(['rvm', 'Engine: RVM (experimental, GPL weights: previews and make rvm-assets)']);
       if (typeof P3mEngine !== 'undefined') engs.push(['p3m', 'Engine: P3M-Net (experimental, 78 MB download)']);
       engs.forEach(function (v) {
-        var o = document.createElement('option');
-        o.value = v[0]; o.textContent = v[1];
-        eng.appendChild(o);
+        var o = dEl('option', null, v[1]); o.value = v[0]; eng.appendChild(o);
       });
       eng.value = engine();
       eng.addEventListener('change', function () {
@@ -6469,74 +6618,93 @@ var VideoEffects = (function () {
         setEngine(want).then(function () { eng.value = engine(); eng.disabled = false; },
                              function () { eng.value = engine(); eng.disabled = false; });
       });
-      bar.appendChild(eng);
+      tuneBody.appendChild(eng);
       _diag.engineSelect = eng;
     }
 
-    var tintLabel = document.createElement('label');
-    tintLabel.style.cssText = 'white-space:nowrap;flex:1 1 auto';
-    var tint = document.createElement('input');
+    var tintLabel = dEl('label', 'white-space:nowrap;flex:1 1 auto');
+    var tint = dEl('input');
     tint.type = 'checkbox';
+    tint.checked = !!_diag.tint;
     tint.addEventListener('change', function () { _diag.tint = !!tint.checked; });
     tintLabel.appendChild(tint);
     tintLabel.appendChild(document.createTextNode(' tint visible band'));
-    bar.appendChild(tintLabel);
+    tuneBody.appendChild(tintLabel);
 
-    var silSel = document.createElement('select');
+    var silSel = dEl('select', 'flex:1 1 auto;min-width:0;font:inherit;padding:6px;min-height:36px');
     silSel.setAttribute('aria-label', 'Silhouette prior');
-    silSel.style.cssText = 'flex:1 1 auto;min-width:0;font:inherit;padding:6px;min-height:36px';
     [['default', 'Silhouette: default'], ['on', 'Silhouette: on'], ['off', 'Silhouette: off']].forEach(function (v) {
-      var o = document.createElement('option');
-      o.value = v[0]; o.textContent = v[1];
-      silSel.appendChild(o);
+      var o = dEl('option', null, v[1]); o.value = v[0]; silSel.appendChild(o);
     });
     silSel.value = readSilMode();
     silSel.addEventListener('change', function () { setDebug(SIL_KEY, silSel.value === 'default' ? null : silSel.value); });
-    bar.appendChild(silSel);
-    var silStr = document.createElement('input');
+    tuneBody.appendChild(silSel);
+    var silStr = dEl('input', 'flex:1 1 120px;min-width:80px');
     silStr.type = 'range'; silStr.min = '0'; silStr.max = '1'; silStr.step = '0.05';
     silStr.setAttribute('aria-label', 'Silhouette prior strength');
     silStr.title = 'Silhouette prior strength';
-    silStr.style.cssText = 'flex:1 1 120px;min-width:80px';
     silStr.value = String(readSilStrength());
-    silStr.addEventListener('input', function () { setDebug(SIL_STRENGTH_KEY, silStr.value); });
-    bar.appendChild(silStr);
-
-    function button(text, fn) {
-      var b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = text;
-      b.style.cssText = 'font:inherit;padding:6px 12px;min-height:36px';
-      b.addEventListener('click', fn);
-      bar.appendChild(b);
-      return b;
-    }
-    _diag.freezeBtn = button('Freeze', function () {
-      _diag.frozen = !_diag.frozen;
-      _diag.freezeBtn.textContent = _diag.frozen ? 'Resume' : 'Freeze';
+    var silVal = dEl('span', 'min-width:34px;text-align:right', Number(silStr.value).toFixed(2));
+    silStr.addEventListener('input', function () {
+      silVal.textContent = Number(silStr.value).toFixed(2);
+      setDebug(SIL_STRENGTH_KEY, silStr.value);
     });
-    button('Save PNG', diagSave);
-    button('Hide', function () { diagCollapse(true); });
-    button('✕', diagClose);
-    body.appendChild(bar);
+    tuneBody.appendChild(silStr);
+    tuneBody.appendChild(silVal);
+    tune.appendChild(tuneBody);
+    body.appendChild(tune);
 
-    var canvas = document.createElement('canvas');
-    canvas.width = 16; canvas.height = 9;
-    canvas.style.cssText = 'display:block;width:100%;height:auto;max-height:50vh;' +
-      'max-height:50dvh;object-fit:contain;background:#222';
-    body.appendChild(canvas);
-
-    var info = document.createElement('pre');
-    info.style.cssText = 'margin:6px 0 0;white-space:pre-wrap;word-break:break-word;font:inherit';
-    info.textContent = 'waiting for the first inference…';
-    body.appendChild(info);
+    var full = dEl('details', 'margin-top:4px');
+    full.appendChild(dEl('summary', 'cursor:pointer;padding:4px 0;color:' + DIAG_COLOR.accent, 'Full report'));
+    var info = dEl('pre', 'margin:6px 0 0;white-space:pre-wrap;word-break:break-word;font:inherit', 'waiting for the first inference…');
+    full.appendChild(info);
+    body.appendChild(full);
     el.appendChild(body);
 
     _diag.el = el; _diag.body = body; _diag.chip = chip;
     _diag.canvas = canvas; _diag.ctx = canvas.getContext('2d');
-    _diag.info = info; _diag.select = sel;
+    _diag.info = info; _diag.engBadge = engBadge; _diag.hzBadge = hzBadge;
+    _diag.lay = null;
     document.body.appendChild(el);
     diagCollapse(_diag.collapsed);
+    diagSyncView();
+  }
+
+  // Move the panel by its title bar. A drag leaves it where it was dropped,
+  // pinned by top/left (the bottom anchor is dropped), and never off screen.
+  function diagMakeDraggable(el, handle) {
+    var drag = null;
+    handle.addEventListener('pointerdown', function (ev) {
+      if (ev.target.closest && ev.target.closest('button, select, input')) return;
+      var r = el.getBoundingClientRect();
+      drag = { dx: ev.clientX - r.left, dy: ev.clientY - r.top };
+      try { handle.setPointerCapture(ev.pointerId); } catch (e) { /* ignore */ }
+      handle.style.cursor = 'grabbing';
+    });
+    handle.addEventListener('pointermove', function (ev) {
+      if (!drag) return;
+      var r = el.getBoundingClientRect();
+      var x = Math.max(0, Math.min(innerWidth - Math.min(r.width, innerWidth), ev.clientX - drag.dx));
+      var y = Math.max(0, Math.min(innerHeight - 40, ev.clientY - drag.dy));
+      el.style.left = x + 'px'; el.style.top = y + 'px'; el.style.bottom = 'auto';
+      el.style.maxHeight = 'calc(100dvh - ' + (y + 8) + 'px)';
+    });
+    function end() { drag = null; handle.style.cursor = 'grab'; }
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+  }
+
+  // What the panel shows follows the view: the compare controls only in the
+  // compare view, the tab that is up marked.
+  function diagSyncView() {
+    if (!_diag.el) return;
+    dMarkChips(_diag.tabs, _diag.view);
+    var c = _diag.view === 'compare';
+    _diag.cmpBox.style.display = c ? '' : 'none';
+    _diag.statsBox.style.display = c ? 'none' : '';
+    dMarkChips(_diag.cmpShow, _cmp.view);
+    if (c && !_cmp.on) cmpPaint();     // no camera yet: say so
+    _diag.canvas.style.cursor = (c || (DIAG_GRIDS[_diag.view] && DIAG_GRIDS[_diag.view].ids.length > 1)) ? 'pointer' : 'default';
   }
 
   // Shrink the panel to a chip, or bring it back. A hidden panel takes no
@@ -6544,43 +6712,124 @@ var VideoEffects = (function () {
   function diagCollapse(on) {
     _diag.collapsed = !!on;
     if (!_diag.el) return;
+    var size = DIAG_SIZES[_diag.size] || DIAG_SIZES[1];
     _diag.body.style.display = on ? 'none' : '';
     _diag.chip.style.display = on ? '' : 'none';
-    _diag.el.style.width = on ? 'auto' : 'min(96vw,640px)';
+    _diag.el.style.width = on ? 'auto' : 'min(96vw,' + size[1] + 'px)';
     _diag.el.style.padding = on ? '0' : '8px';
   }
 
   function diagOpen(view) {
+    if (_diag.on) {
+      if (view && diagViewValid(view)) diagSetView(view);
+      return diagState();
+    }
     if (view && diagViewValid(view)) _diag.view = view;
-    if (_diag.on) { if (_diag.select) _diag.select.value = _diag.view; return diagState(); }
     if (typeof document === 'undefined' || !document.body) return null;
     _diag.on = true;
     _diag.frozen = false;
     _diag.collapsed = false;
     _diag.error = '';
     diagBuildPanel();
+    if (_diag.view === 'compare') cmpStart();
     return diagState();
   }
 
   function diagClose() {
     if (!_diag.on) return;
     _diag.on = false;
+    cmpStop();
     if (_active) _active.diagRelease();
     if (_diag.el && _diag.el.parentNode) _diag.el.parentNode.removeChild(_diag.el);
     _diag.el = _diag.body = _diag.chip = _diag.canvas = _diag.ctx = null;
-    _diag.info = _diag.select = _diag.freezeBtn = null;
+    _diag.info = _diag.freezeBtn = _diag.copyBtn = _diag.sizeBtn = null;
+    _diag.engineSelect = _diag.tabs = _diag.statsBox = _diag.cmpBox = _diag.cmpTable = null;
+    _diag.cmpShow = _diag.cmpBoxes = _diag.engBadge = _diag.hzBadge = _diag.lay = null;
   }
 
   function diagSetView(view) {
     if (!diagViewValid(view)) return false;
     _diag.view = view;
-    if (_diag.select) _diag.select.value = view;
     // A frozen picture was drawn in the old layout; the next inference redraws.
     if (_diag.frozen) {
       _diag.frozen = false;
       if (_diag.freezeBtn) _diag.freezeBtn.textContent = 'Freeze';
     }
+    // Comparing is the one view that costs something: leaving it frees the
+    // engines it loaded.
+    if (view === 'compare') cmpStart(); else cmpStop();
+    diagSyncView();
     return true;
+  }
+
+  // A click on one picture of a grid enlarges it; in the comparison it
+  // enlarges that engine's picture, and a second click puts it back.
+  function diagCanvasClick(ev) {
+    var cv = _diag.canvas, lay = _diag.lay;
+    // One enlarged picture: any click puts the others back.
+    if (_diag.view === 'compare' && _cmp.focus) { cmpFocus(null); return; }
+    if (!cv || !lay || lay.ids.length < 2) return;
+    var r = cv.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    var col = Math.min(lay.cols - 1, Math.floor((ev.clientX - r.left) / r.width * lay.cols));
+    var row = Math.min(lay.rows - 1, Math.floor((ev.clientY - r.top) / r.height * lay.rows));
+    var id = lay.ids[row * lay.cols + col];
+    if (!id) return;
+    if (_diag.view === 'compare') cmpFocus(_cmp.focus === id ? null : id);
+    else diagSetView(id);
+  }
+
+  // The report to paste into an issue: what this device is, what is running,
+  // and every number the panel shows.
+  function diagReport() {
+    var lines = ['Voxal segmentation report · ' + new Date().toISOString()];
+    try {
+      lines.push(navigator.userAgent);
+      lines.push('window ' + innerWidth + 'x' + innerHeight + ' @' + (window.devicePixelRatio || 1) + 'x');
+    } catch (e) { /* ignore */ }
+    var p = _active && _active._dg;
+    if (p && p.st) lines.push('', diagInfoText(p));
+    else lines.push('', 'no inference yet');
+    var cs = cmpState();
+    if (cs.on) {
+      lines.push('', 'engines compared (' + cs.view + ' view):');
+      cs.entries.forEach(function (e) {
+        lines.push('  ' + e.name + (e.primary ? ' (drives the picture)' : '') + ': ' + e.state +
+          (e.error ? ' — ' + e.error : '') +
+          ' · ' + (e.ms === null ? '–' : e.ms.toFixed(1) + ' ms') +
+          ' · ' + (e.hz ? e.hz.toFixed(1) + ' Hz' : '–') +
+          ' · person ' + (e.person === null ? '–' : (e.person * 100).toFixed(1) + '%') +
+          ' · vs ' + (cs.reference || '–') + ' ' + (e.iou === null ? '–' : e.iou.toFixed(3)));
+      });
+    }
+    return lines.join('\n');
+  }
+
+  function diagCopy() {
+    var text = diagReport();
+    var btn = _diag.copyBtn;
+    function flash(msg) {
+      if (!btn) return;
+      btn.textContent = msg;
+      setTimeout(function () { if (btn) btn.textContent = 'Copy report'; }, 1500);
+    }
+    function fallback() {
+      try {
+        var ta = dEl('textarea', 'position:fixed;left:-9999px;top:0');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = document.execCommand && document.execCommand('copy');
+        document.body.removeChild(ta);
+        flash(ok ? 'Copied ✓' : 'Copy failed');
+      } catch (e) { flash('Copy failed'); }
+    }
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { flash('Copied ✓'); }, fallback);
+      } else fallback();
+    } catch (e) { fallback(); }
+    return text;
   }
 
   function diagSave() {
@@ -6601,9 +6850,9 @@ var VideoEffects = (function () {
     if (_diag.on) return;
     var want = false;
     try {
-      want = /[?&]segdiag=1(&|$)/.test(location.search) || localStorage.getItem(DIAG_KEY) === '1';
+      want = /[?&]segdiag=(1|compare)(&|$)/.test(location.search) || localStorage.getItem(DIAG_KEY) === '1';
     } catch (e) { /* storage blocked */ }
-    if (want) diagOpen();
+    if (want) diagOpen(/[?&]segdiag=compare(&|$)/.test(location.search) ? 'compare' : undefined);
   }
 
   // The numbers, for the panel and for tests. Null when the panel is closed or
@@ -6853,7 +7102,7 @@ var VideoEffects = (function () {
     var d = this._dg;
     if (!d || !d.fresh) return null;
     d.fresh = false;
-    if (_diag.frozen || _diag.collapsed || !_diag.ctx) return null;
+    if (_diag.frozen || _diag.collapsed || !_diag.ctx || _diag.view === 'compare') return null;
     var lay = diagLayout(_diag.view, w, h);
     // The same frame, checked rather than assumed: the video clock when the
     // inference read it against now, when the picture is about to be uploaded
@@ -6940,8 +7189,605 @@ var VideoEffects = (function () {
     if (_diag.info && d.st && now - _diag.lastInfo >= DIAG_INFO_MS) {
       _diag.lastInfo = now;
       _diag.info.textContent = diagInfoText(d);
+      diagRenderStats(d);
+      diagRefreshBadges(d);
     }
+    _diag.lay = lay.ids.length > 1 ? { ids: lay.ids, cols: lay.cols, rows: lay.rows } : null;
   };
+
+  // --- Live engine comparison --------------------------------------------------
+  //
+  // Every engine at once, on the same camera, to compare them where it
+  // matters: in the room, on the device, in the light you actually have.
+  //
+  // How it keeps the comparison honest:
+  //   * ONE camera, ONE downscaled frame. runSegment() hands the frame it
+  //     already made (segCanvas) to the engine that drives the picture, and
+  //     then to every other engine in the same task. Nothing is sampled
+  //     twice, so a difference between two panes is a difference between the
+  //     models, not between the frames they were shown.
+  //   * The engine that DRIVES the picture is untouched: it is still the
+  //     Processor's segmenter, and what is published is what it produced. The
+  //     others are guests — they never reach the composite — and any of them
+  //     can fail or be unticked without the call noticing.
+  //   * Masks are the RAW model output (what uploadMask() is handed), before
+  //     the blend, dilate and feather, so a pane shows the model and not the
+  //     pipeline that follows it. The picture around the person is the live
+  //     camera, so an engine that trails the camera shows it as a mask that
+  //     lags the face.
+  //   * The numbers are with everything running together (the models share one
+  //     GPU and one JS thread). Unticking an engine stops feeding it, which is
+  //     how you measure one alone.
+  //   * It costs nothing off: no engine is created, no frame is copied, and
+  //     leaving the compare view closes every guest.
+
+  var CMP_ENGINES = ['mediapipe', 'longpipe', 'rvm', 'p3m'];
+  var CMP_NAMES = { mediapipe: 'MediaPipe', longpipe: 'Longpipe', rvm: 'RVM', p3m: 'P3M-Net' };
+  var CMP_GW = 96, CMP_GH = 54;   // the grid two masks are compared on
+  var CMP_PAINT_MS = 100;         // pictures repaint at most this often
+  var CMP_POLL_MS = 1000;         // the engines' own stats, asked this often
+  var CMP_VIEWS = ['cutout', 'mask', 'overlay', 'diff'];
+
+  var _cmp = {
+    on: false, view: 'cutout', focus: null, ref: null,
+    entries: {}, order: [], raf: 0, lastPaint: 0, lastPoll: 0, cA: null, cB: null, checker: null
+  };
+
+  // The engines this build can offer (a script that is not on the page is not
+  // an engine). Whether one can START is learned by trying it.
+  function cmpAvailable() {
+    return CMP_ENGINES.filter(function (n) {
+      if (n === 'longpipe') return typeof LongpipeEngine !== 'undefined';
+      if (n === 'rvm') return typeof RvmEngine !== 'undefined';
+      if (n === 'p3m') return typeof P3mEngine !== 'undefined';
+      return true;
+    });
+  }
+
+  // createSegmenter(), without its kindness: an engine that cannot start is
+  // REPORTED here, not swapped for MediaPipe, because a pane that quietly
+  // shows another model is exactly the wrong thing to compare.
+  function cmpCreate(name, raw, video) {
+    var own = { longpipe: window.__voxalLongpipeStub, rvm: window.__voxalRvmStub, p3m: window.__voxalP3mStub }[name];
+    // Tests: a function that hands each engine its own stand-in.
+    if (typeof window.__voxalCompareStub === 'function') {
+      var made = window.__voxalCompareStub(name);
+      if (made) return Promise.resolve(made);
+    }
+    if (name === 'mediapipe') return createMediaPipeSegmenter();
+    if (window.__voxalSegStub && !own) return stubSegmenter();   // tests: a stand-in for every model
+    if (name === 'p3m' && typeof P3mEngine !== 'undefined') return P3mEngine.create(raw, video);
+    if (name === 'rvm' && typeof RvmEngine !== 'undefined') return RvmEngine.create(raw, video);
+    if (name === 'longpipe' && typeof LongpipeEngine !== 'undefined') return LongpipeEngine.create(raw, video);
+    return Promise.reject(new Error(CMP_NAMES[name] + ' is not part of this build'));
+  }
+
+  function cmpNewEntry(name, primary) {
+    return {
+      name: name, primary: !!primary, state: primary ? 'running' : 'loading', error: '',
+      since: performance.now(), readyMs: null, seg: null, paused: false,
+      mask: null, w: 0, h: 0, n: 0, stamps: [], hz: 0, lastAt: 0, lastTs: 0, errs: 0,
+      times: [], ms: null, msP95: null, note: '',
+      person: null, soft: null, grid: new Uint8Array(CMP_GW * CMP_GH), iou: null, painted: -1
+    };
+  }
+
+  function cmpPercentile(list, q) {
+    if (!list.length) return null;
+    var s = list.slice().sort(function (a, b) { return a - b; });
+    return s[Math.min(s.length - 1, Math.floor(q * s.length))];
+  }
+
+  // Make the entries match the engine that is driving the picture now: it is
+  // the primary, every other engine a guest. Called when the compare starts and
+  // whenever the Processor adopts a segmenter.
+  function cmpResync() {
+    var p = _active;
+    if (!_cmp.on || !p || p.stopped || !p.segmenter) return;
+    var prim = p.engine || 'mediapipe';
+    var want = cmpAvailable();
+    if (want.indexOf(prim) < 0) want.unshift(prim);
+    Object.keys(_cmp.entries).forEach(function (name) {
+      var e = _cmp.entries[name];
+      // The old primary is now a guest and the new primary no longer one.
+      if (want.indexOf(name) < 0 || e.primary !== (name === prim)) cmpDrop(name);
+    });
+    want.forEach(function (name) {
+      if (_cmp.entries[name]) return;
+      if (name === prim) { _cmp.entries[name] = cmpNewEntry(name, true); return; }
+      cmpAddGuest(p, name);
+    });
+    _cmp.order = want.slice().sort(function (a, b) {
+      if (a === prim) return -1;
+      if (b === prim) return 1;
+      return CMP_ENGINES.indexOf(a) - CMP_ENGINES.indexOf(b);
+    });
+    if (_cmp.focus && !_cmp.entries[_cmp.focus]) _cmp.focus = null;
+  }
+
+  function cmpAddGuest(p, name) {
+    var e = _cmp.entries[name] = cmpNewEntry(name, false);
+    cmpCreate(name, p.raw, p.video).then(function (seg) {
+      if (!_cmp.on || _cmp.entries[name] !== e || p.stopped) {
+        try { seg.close(); } catch (x) { /* ignore */ }
+        return;
+      }
+      e.seg = seg;
+      e.state = 'running';
+      e.readyMs = performance.now() - e.since;
+      // An engine that dies mid-comparison is marked, not replaced.
+      seg.onFail = function (err) { cmpFail(e, err); };
+    }, function (err) { cmpFail(e, err); });
+  }
+
+  function cmpFail(e, err) {
+    if (e.state === 'failed') return;
+    e.state = 'failed';
+    e.error = String((err && err.message) || err || 'failed');
+    if (e.seg) {
+      try { e.seg.onFail = null; e.seg.close(); } catch (x) { /* ignore */ }
+      e.seg = null;
+    }
+  }
+
+  function cmpDrop(name) {
+    var e = _cmp.entries[name];
+    delete _cmp.entries[name];
+    if (e && e.seg && !e.primary) { try { e.seg.onFail = null; e.seg.close(); } catch (x) { /* ignore */ } }
+  }
+
+  function cmpStart() {
+    if (_cmp.on) return true;
+    if (!_active || _active.stopped) return false;
+    _cmp.on = true;
+    _cmp.lastPoll = 0;
+    cmpResync();
+    if (!_cmp.raf && typeof requestAnimationFrame === 'function') _cmp.raf = requestAnimationFrame(cmpLoop);
+    if (!_diag.on) diagOpen('compare');
+    else if (_diag.view !== 'compare') diagSetView('compare');
+    return true;
+  }
+
+  function cmpStop() {
+    if (!_cmp.on && !Object.keys(_cmp.entries).length) return;
+    _cmp.on = false;
+    Object.keys(_cmp.entries).forEach(cmpDrop);
+    _cmp.entries = {};
+    _cmp.order = [];
+    if (_cmp.raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_cmp.raf);
+    _cmp.raf = 0;
+  }
+
+  function cmpPause(name, paused) {
+    var e = _cmp.entries[name];
+    if (!e || e.primary) return false;
+    e.paused = !!paused;
+    return true;
+  }
+
+  function cmpSetView(v) {
+    if (CMP_VIEWS.indexOf(v) < 0) return false;
+    _cmp.view = v;
+    _cmp.lastPaint = 0;
+    if (_diag.cmpShow) dMarkChips(_diag.cmpShow, v);
+    return true;
+  }
+
+  function cmpFocus(name) {
+    _cmp.focus = name && _cmp.entries[name] ? name : null;
+    _cmp.lastPaint = 0;
+    return _cmp.focus;
+  }
+
+  // A mask came back from an engine: keep a copy (the engine's own buffer may be
+  // reused or lost with its callback) and count it.
+  function cmpTake(e, data, w, h, syncMs) {
+    var n = w * h;
+    if (!data || data.length < n) return;
+    if (!e.mask || e.mask.length !== n) e.mask = new Uint8Array(n);
+    e.mask.set(data.subarray ? data.subarray(0, n) : data);
+    e.w = w; e.h = h;
+    var now = performance.now();
+    e.n++;
+    e.lastAt = now;
+    e.stamps.push(now);
+    if (e.stamps.length > 24) e.stamps.shift();
+    if (e.stamps.length > 1) {
+      var span = (e.stamps[e.stamps.length - 1] - e.stamps[0]) / 1000;
+      e.hz = span > 0 ? (e.stamps.length - 1) / span : 0;
+    }
+    // A synchronous engine (MediaPipe) is timed here; the others report their
+    // own inference time through stats().
+    if (syncMs !== null && syncMs !== undefined) {
+      e.times.push(syncMs);
+      if (e.times.length > 30) e.times.shift();
+      e.ms = cmpPercentile(e.times, 0.5);
+      e.msP95 = cmpPercentile(e.times, 0.95);
+    }
+  }
+
+  // The engine that drives the picture, from runSegment()'s own callback.
+  Processor.prototype.cmpPrimary = function (data, w, h, syncMs) {
+    var e = _cmp.entries[this.engine || 'mediapipe'];
+    if (e && e.primary) cmpTake(e, data, w, h, this.engine === 'mediapipe' ? syncMs : null);
+  };
+
+  // The others, in the same task as the primary's call and on the same frame.
+  Processor.prototype.cmpFeed = function (now) {
+    var self = this;
+    _cmp.order.forEach(function (name) {
+      var e = _cmp.entries[name];
+      if (!e || e.primary || e.state !== 'running' || e.paused || !e.seg) return;
+      var ts = Math.max(Math.round(now), e.lastTs + 1);
+      e.lastTs = ts;
+      var t0 = performance.now();
+      try {
+        e.seg.segmentForVideo(self.segCanvas, ts, function (result) {
+          var masks = result && result.confidenceMasks;
+          var mask = masks && (masks.length > 1 ? masks[1] : masks[0]);
+          if (!mask) return;
+          cmpTake(e, mask.getAsUint8Array(), mask.width, mask.height,
+            name === 'mediapipe' ? performance.now() - t0 : null);
+        });
+      } catch (err) {
+        e.errs++;
+        if (e.errs > 30) cmpFail(e, err);
+      }
+    });
+  };
+
+  // What the engines say about themselves: inference time for the ones that
+  // run off the main thread, plus a one-line description of the model.
+  function cmpPoll() {
+    var p = _active;
+    Object.keys(_cmp.entries).forEach(function (name) {
+      var e = _cmp.entries[name];
+      var seg = e.primary ? (p && p.segmenter) : e.seg;
+      if (!seg || !seg.stats || e.state !== 'running') return;
+      var asked;
+      try { asked = seg.stats(); } catch (x) { return; }
+      Promise.resolve(asked).then(function (s) {
+        if (!s) return;
+        var own = s.inferMsP50 !== undefined ? s.inferMsP50
+          : (s.pipeline && s.pipeline.modelMs ? s.pipeline.modelMs : null);
+        if (own !== null && own !== undefined) {
+          e.ms = own;
+          e.msP95 = s.inferMsP95 !== undefined ? s.inferMsP95 : null;
+        }
+        var bits = [];
+        if (s.model) bits.push(s.model);
+        if (s.ep) bits.push(s.ep);
+        if (s.input) bits.push(s.input);
+        if (s.modelMB) bits.push(s.modelMB + ' MB');
+        if (s.engine === 'longpipe') bits.push('key ' + s.key);
+        if (s.initMs !== undefined && s.initMs !== null) bits.push('init ' + Math.round(s.initMs) + ' ms');
+        e.note = bits.join(' · ');
+        if (s.errors && s.errors.length) e.error = s.errors[s.errors.length - 1];
+      }, function () { /* keep the last */ });
+    });
+  }
+
+  function cmpLoop() {
+    _cmp.raf = 0;
+    if (!_cmp.on) return;
+    _cmp.raf = requestAnimationFrame(cmpLoop);
+    var now = performance.now();
+    if (now - _cmp.lastPoll >= CMP_POLL_MS) { _cmp.lastPoll = now; cmpPoll(); }
+    if (!_diag.on || !_diag.ctx || _diag.collapsed || _diag.view !== 'compare') return;
+    if (now - _cmp.lastPaint < CMP_PAINT_MS) return;
+    _cmp.lastPaint = now;
+    if (!_diag.frozen) cmpPaint();
+  }
+
+  // Person share, soft-edge share and the coarse grid two masks are compared on.
+  function cmpMeasure(e) {
+    if (!e.mask || e.painted === e.n) return;
+    e.painted = e.n;
+    var m = e.mask, w = e.w, h = e.h, n = w * h, i, v, person = 0, soft = 0;
+    for (i = 0; i < n; i++) {
+      v = m[i];
+      if (v >= 128) person++;
+      if (v > 24 && v < 232) soft++;
+    }
+    e.person = person / n;
+    e.soft = soft / n;
+    var g = e.grid, x, y, sy;
+    for (y = 0; y < CMP_GH; y++) {
+      sy = Math.min(h - 1, ((y + 0.5) * h / CMP_GH) | 0) * w;
+      for (x = 0; x < CMP_GW; x++) g[y * CMP_GW + x] = m[sy + Math.min(w - 1, ((x + 0.5) * w / CMP_GW) | 0)] >= 128 ? 1 : 0;
+    }
+  }
+
+  function cmpIou(a, b) {
+    var inter = 0, uni = 0, i, x, y;
+    for (i = 0; i < a.length; i++) {
+      x = a[i]; y = b[i];
+      if (x && y) inter++;
+      if (x || y) uni++;
+    }
+    return uni ? inter / uni : null;
+  }
+
+  // The engine every other is measured against: the one chosen, else the one
+  // that is driving the picture.
+  function cmpReference() {
+    if (_cmp.ref && _cmp.entries[_cmp.ref] && _cmp.entries[_cmp.ref].mask) return _cmp.entries[_cmp.ref];
+    var found = null;
+    Object.keys(_cmp.entries).forEach(function (n) { if (_cmp.entries[n].primary) found = _cmp.entries[n]; });
+    return found && found.mask ? found : null;
+  }
+
+  function cmpState() {
+    var ref = cmpReference();
+    var now = performance.now();
+    return {
+      on: _cmp.on, view: _cmp.view, focus: _cmp.focus,
+      reference: ref ? ref.name : null,
+      entries: _cmp.order.map(function (name) {
+        var e = _cmp.entries[name];
+        if (!e) return null;
+        cmpMeasure(e);
+        return {
+          name: name, primary: e.primary, state: e.paused && e.state === 'running' ? 'paused' : e.state,
+          error: e.error, masks: e.n, hz: e.hz || null, ms: e.ms, msP95: e.msP95,
+          person: e.person, soft: e.soft, size: e.w ? e.w + 'x' + e.h : null,
+          iou: ref && e.mask && ref.mask && e !== ref ? cmpIou(e.grid, ref.grid) : (e === ref ? 1 : null),
+          loadedMs: e.readyMs, ageMs: e.lastAt ? Math.round(now - e.lastAt) : null, note: e.note
+        };
+      }).filter(Boolean)
+    };
+  }
+
+  // --- the comparison's pictures -------------------------------------------------
+
+  function cmpChecker() {
+    if (_cmp.checker) return _cmp.checker;
+    var c = document.createElement('canvas');
+    c.width = c.height = 16;
+    var x = c.getContext('2d');
+    x.fillStyle = '#2a2a2a'; x.fillRect(0, 0, 16, 16);
+    x.fillStyle = '#3a3a3a'; x.fillRect(0, 0, 8, 8); x.fillRect(8, 8, 8, 8);
+    _cmp.checker = c.getContext('2d').createPattern(c, 'repeat');
+    return _cmp.checker;
+  }
+
+  function cmpScratch(key, w, h) {
+    var c = _cmp[key] || (_cmp[key] = document.createElement('canvas'));
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    return c;
+  }
+
+  // One engine's mask as an RGBA picture at the mask's own size.
+  function cmpFill(e, view, ref) {
+    var a = cmpScratch('cA', e.w, e.h);
+    var actx = a.getContext('2d');
+    var img = actx.createImageData(e.w, e.h), d = img.data, m = e.mask, n = e.w * e.h, i, v, r, rv, rm, rw, rh, sx, sy, o;
+    if (view === 'diff') {
+      rm = ref && ref.mask; rw = ref ? ref.w : 0; rh = ref ? ref.h : 0;
+    }
+    for (i = 0; i < n; i++) {
+      v = m[i]; o = i * 4;
+      if (view === 'mask') {
+        d[o] = d[o + 1] = d[o + 2] = v; d[o + 3] = 255;
+      } else if (view === 'overlay') {
+        d[o] = 255; d[o + 1] = 60; d[o + 2] = 60; d[o + 3] = (v * 0.6) | 0;
+      } else if (view === 'diff') {
+        if (ref === e || !rm) {
+          d[o] = d[o + 1] = d[o + 2] = v >= 128 ? 200 : 20;
+        } else {
+          sx = ((i % e.w) + 0.5) / e.w; sy = (((i / e.w) | 0) + 0.5) / e.h;
+          rv = rm[Math.min(rh - 1, (sy * rh) | 0) * rw + Math.min(rw - 1, (sx * rw) | 0)];
+          r = v >= 128; rv = rv >= 128;
+          if (r && rv) { d[o] = d[o + 1] = d[o + 2] = 110; }          // both: grey
+          else if (r) { d[o] = 240; d[o + 1] = 70; d[o + 2] = 70; }     // only this one: red
+          else if (rv) { d[o] = 70; d[o + 1] = 140; d[o + 2] = 255; }  // only the reference: blue
+          else { d[o] = d[o + 1] = d[o + 2] = 16; }
+        }
+        d[o + 3] = 255;
+      } else {
+        d[o + 3] = v;     // cutout: the mask is the alpha
+      }
+    }
+    actx.putImageData(img, 0, 0);
+    return a;
+  }
+
+  function cmpLevel(v, good, fair, higherIsBetter) {
+    if (v === null || v === undefined) return 'muted';
+    if (higherIsBetter) return v >= good ? 'ok' : (v >= fair ? 'warn' : 'bad');
+    return v <= good ? 'ok' : (v <= fair ? 'warn' : 'bad');
+  }
+
+  function cmpPaintPane(ctx, e, ref, x, y, pw, ph, video) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.beginPath(); ctx.rect(0, 0, pw, ph); ctx.clip();
+    ctx.fillStyle = '#1b1b1b'; ctx.fillRect(0, 0, pw, ph);
+    var view = _cmp.view;
+    if (e.state === 'running' && e.mask && e.w) {
+      try {
+        var a = cmpFill(e, view, ref);
+        if (view === 'cutout') {
+          ctx.fillStyle = cmpChecker(); ctx.fillRect(0, 0, pw, ph);
+          var b = cmpScratch('cB', pw, ph), bctx = b.getContext('2d');
+          bctx.globalCompositeOperation = 'source-over';
+          bctx.clearRect(0, 0, pw, ph);
+          bctx.drawImage(video, 0, 0, pw, ph);
+          bctx.globalCompositeOperation = 'destination-in';
+          bctx.drawImage(a, 0, 0, pw, ph);
+          bctx.globalCompositeOperation = 'source-over';
+          ctx.drawImage(b, 0, 0);
+        } else if (view === 'overlay') {
+          ctx.drawImage(video, 0, 0, pw, ph);
+          ctx.drawImage(a, 0, 0, pw, ph);
+        } else {
+          ctx.imageSmoothingEnabled = view !== 'diff';
+          ctx.drawImage(a, 0, 0, pw, ph);
+        }
+      } catch (err) { _diag.error = String((err && err.message) || err); }
+    } else {
+      ctx.fillStyle = e.state === 'failed' ? DIAG_COLOR.bad : DIAG_COLOR.muted;
+      ctx.font = '12px ui-monospace, Menlo, monospace';
+      ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+      var msg = e.state === 'failed' ? ('failed: ' + e.error)
+        : e.paused ? 'paused'
+        : 'loading… ' + Math.round((performance.now() - e.since) / 1000) + ' s';
+      if (msg.length > 70) msg = msg.slice(0, 67) + '…';
+      ctx.fillText(msg, pw / 2, ph / 2);
+      ctx.textAlign = 'left';
+    }
+    // The label: who, how fast, how close to the reference.
+    ctx.font = '12px ui-monospace, Menlo, monospace';
+    ctx.textBaseline = 'top';
+    var bits = [CMP_NAMES[e.name] + (e.primary ? ' ★' : '')];
+    if (e.state === 'running') {
+      if (e.ms !== null) bits.push(e.ms.toFixed(0) + ' ms');
+      if (e.hz) bits.push(e.hz.toFixed(0) + ' Hz');
+      if (ref && e !== ref && e.mask && ref.mask) {
+        var q = cmpIou(e.grid, ref.grid);
+        if (q !== null) bits.push('IoU ' + q.toFixed(2));
+      }
+    }
+    var text = bits.join(' · ');
+    ctx.fillStyle = 'rgba(0,0,0,.7)';
+    ctx.fillRect(0, 0, Math.min(pw, ctx.measureText(text).width + 10), 18);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(text, 5, 3);
+    ctx.restore();
+  }
+
+  function cmpPaint() {
+    var cv = _diag.canvas, ctx = _diag.ctx, p = _active;
+    if (!cv || !ctx) return;
+    var names = _cmp.focus ? [_cmp.focus] : _cmp.order.slice();
+    if (!p || !names.length) {
+      cv.width = 640; cv.height = 120;
+      ctx.fillStyle = '#222'; ctx.fillRect(0, 0, 640, 120);
+      ctx.fillStyle = '#aaa'; ctx.font = '13px ui-monospace, Menlo, monospace';
+      ctx.fillText('Start the camera with a background effect to compare engines.', 16, 60);
+      _diag.lay = null;
+      cmpRenderTable();
+      return;
+    }
+    var cols = names.length === 1 ? 1 : (names.length <= 4 ? 2 : 3);
+    var rows = Math.ceil(names.length / cols);
+    var ow = DIAG_OVERLAY_MAX, pw = Math.floor(ow / cols);
+    var aspect = (p.segH || 9) / (p.segW || 16);
+    var ph = Math.max(1, Math.round(pw * aspect));
+    var oh = ph * rows;
+    if (cv.width !== pw * cols || cv.height !== oh) { cv.width = pw * cols; cv.height = oh; }
+    ctx.fillStyle = '#111'; ctx.fillRect(0, 0, cv.width, cv.height);
+    names.forEach(function (n) { if (_cmp.entries[n]) cmpMeasure(_cmp.entries[n]); });
+    var ref = cmpReference();
+    names.forEach(function (n, i) {
+      var e = _cmp.entries[n];
+      if (e) cmpPaintPane(ctx, e, ref, (i % cols) * pw, Math.floor(i / cols) * ph, pw, ph, p.video);
+    });
+    _diag.lay = { ids: names, cols: cols, rows: rows };
+    cmpRenderTable();
+    var d = p._dg, now = performance.now();
+    if (d) diagRefreshBadges(d);
+    if (_diag.info && d && d.st && now - _diag.lastInfo >= DIAG_INFO_MS) {
+      _diag.lastInfo = now;
+      _diag.info.textContent = diagInfoText(d);
+    }
+  }
+
+  function cmpRenderTable() {
+    var box = _diag.cmpTable;
+    if (!box) return;
+    var st = cmpState();
+    var head = ['Engine', 'State', 'Inference', 'Hz', 'Person', 'Soft edge', 'vs ' + (st.reference ? CMP_NAMES[st.reference] : 'ref')];
+    var html = ['<table style="border-collapse:collapse;width:100%;font:inherit"><thead><tr>'];
+    head.forEach(function (h) { html.push('<th style="text-align:left;padding:3px 8px 3px 0;color:' + DIAG_COLOR.muted + ';font-weight:normal;white-space:nowrap">' + h + '</th>'); });
+    html.push('</tr></thead><tbody>');
+    function cell(text, level) {
+      return '<td style="padding:3px 8px 3px 0;white-space:nowrap;color:' + (DIAG_COLOR[level] || '#eee') + '">' + text + '</td>';
+    }
+    function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+    st.entries.forEach(function (e) {
+      var live = e.state === 'running';
+      html.push('<tr data-engine="' + e.name + '">');
+      html.push(cell(esc(CMP_NAMES[e.name]) + (e.primary ? ' ★' : ''), 'accent'));
+      html.push(cell(esc(e.state === 'failed' ? 'failed' : e.state), e.state === 'failed' ? 'bad' : (live ? 'ok' : 'muted')));
+      html.push(cell(e.ms === null ? '–' : e.ms.toFixed(1) + ' ms' + (e.msP95 !== null && e.msP95 !== undefined ? ' / p95 ' + e.msP95.toFixed(0) : ''),
+        cmpLevel(e.ms, 25, 60, false)));
+      html.push(cell(e.hz ? e.hz.toFixed(1) : '–', cmpLevel(e.hz || null, 12, 6, true)));
+      html.push(cell(e.person === null ? '–' : (e.person * 100).toFixed(1) + '%', 'muted'));
+      html.push(cell(e.soft === null ? '–' : (e.soft * 100).toFixed(1) + '%', 'muted'));
+      html.push(cell(e.iou === null ? '–' : (e.primary && st.reference === e.name ? 'reference' : e.iou.toFixed(3)),
+        e.name === st.reference ? 'muted' : cmpLevel(e.iou, 0.9, 0.8, true)));
+      html.push('</tr>');
+      if (e.error || e.note) {
+        html.push('<tr><td colspan="7" style="padding:0 0 4px;color:' + (e.state === 'failed' ? DIAG_COLOR.bad : DIAG_COLOR.muted) + ';font-size:11px;white-space:normal;word-break:break-word">' +
+          esc(e.state === 'failed' ? e.error : (e.note || '')) + '</td></tr>');
+      }
+    });
+    html.push('</tbody></table>');
+    box.innerHTML = html.join('');
+    // The tick boxes show what each engine is doing.
+    if (_diag.cmpBoxes) {
+      Object.keys(_diag.cmpBoxes).forEach(function (name) {
+        var b = _diag.cmpBoxes[name];
+        var e = st.entries.filter(function (x) { return x.name === name; })[0];
+        b.dot.style.background = !e ? DIAG_COLOR.muted
+          : e.state === 'failed' ? DIAG_COLOR.bad
+          : e.state === 'running' ? DIAG_COLOR.ok
+          : e.state === 'paused' ? DIAG_COLOR.warn : DIAG_COLOR.accent;
+        b.cb.disabled = !e || !!e.primary || e.state === 'failed';
+        b.cb.title = e && e.primary ? 'This engine drives the picture' : '';
+      });
+    }
+  }
+
+  // The header's two badges: the engine that drives the picture and its rate.
+  function diagRefreshBadges(d) {
+    if (_diag.engBadge && _active) {
+      _diag.engBadge.textContent = engine();
+      _diag.engBadge.style.color = _engineFallback ? DIAG_COLOR.warn : DIAG_COLOR.accent;
+      _diag.engBadge.style.borderColor = _engineFallback ? DIAG_COLOR.warn : DIAG_COLOR.accent;
+      _diag.engBadge.title = _engineFallback ? 'fell back to MediaPipe: ' + _engineFallback : 'the engine driving the picture';
+    }
+    if (_diag.hzBadge) {
+      var hz = d && d.hz;
+      _diag.hzBadge.textContent = (hz ? hz.toFixed(1) : '–') + ' Hz';
+      var c = DIAG_COLOR[cmpLevel(hz || null, 12, 6, true)];
+      _diag.hzBadge.style.color = c; _diag.hzBadge.style.borderColor = c;
+    }
+  }
+
+  // The few numbers worth a glance, coloured: green is fine, amber is worth a
+  // look, red is the problem. The full report below has the rest.
+  function diagRenderStats(p) {
+    var box = _diag.statsBox;
+    if (!box || !p.st) return;
+    var st = p.st, a = _active;
+    var rows = [
+      ['Person', diagPct(st.person), 'muted', 'share of the frame the model calls person (>= 50%)'],
+      ['Uncertain', diagPct(st.mid), cmpLevel(st.mid, 0.03, 0.08, false), 'mid-confidence pixels: where the edge is decided'],
+      ['Flicker', p.compared ? diagPct(st.flips) : '–', p.compared ? cmpLevel(st.flips, 0.01, 0.03, false) : 'muted',
+        'pixels crossing 50% between inferences; sitting still it should be near 0'],
+      ['Mean change', p.compared ? diagPct(st.mean) : '–', 'muted', 'mean |delta| against the previous inference'],
+      ['Inference rate', p.hz ? p.hz.toFixed(1) + ' Hz' : '–', cmpLevel(p.hz || null, 12, 6, true), 'how often a new mask arrives'],
+      ['Frame skew', p.skewMs === null ? '–' : p.skewMs.toFixed(1) + ' ms', cmpLevel(p.skewMs, 40, 100, false),
+        'video clock between the inference and the picture drawn from it'],
+      ['Mask', p.w + 'x' + p.h + ' · ' + (a._maskCount || 0) + ' mask(s)', 'muted', ''],
+      ['Silhouette prior', a.silMode + (a.silhouette ? ' · running' + (a.silOn ? '' : ' (learning)') : ' · off'),
+        a.silhouette ? 'ok' : 'muted', 'the colour model that corrects the matte']
+    ];
+    var html = ['<table style="border-collapse:collapse;width:100%;font:inherit"><tbody>'];
+    rows.forEach(function (r) {
+      html.push('<tr title="' + r[3].replace(/"/g, '&quot;') + '"><td style="padding:2px 12px 2px 0;color:' + DIAG_COLOR.muted + ';white-space:nowrap">' + r[0] +
+        '</td><td style="padding:2px 0;color:' + (DIAG_COLOR[r[2]] || '#eee') + '">' + r[1] + '</td></tr>');
+    });
+    html.push('</tbody></table>');
+    var eng = diagEngineText();
+    if (eng) {
+      html.push('<div style="margin-top:6px;color:' + DIAG_COLOR.muted + ';font-size:11px;white-space:pre-wrap;word-break:break-word">' +
+        eng.replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }) + '</div>');
+    }
+    box.innerHTML = html.join('');
+  }
 
   // --- public surface -------------------------------------------------------
 
@@ -9146,6 +9992,15 @@ var VideoEffects = (function () {
     collapseDiagnostic: diagCollapse,
     setDiagnosticView: diagSetView,
     diagnosticState: diagState,
+    diagnosticReport: diagReport,
+    // Every engine at once (see Live engine comparison).
+    CMP_VIEWS: CMP_VIEWS,
+    compareStart: cmpStart,
+    compareStop: cmpStop,
+    compareState: cmpState,
+    compareSetView: cmpSetView,
+    compareFocus: cmpFocus,
+    comparePause: cmpPause,
     keyIn: keyIn,
     keyProbe: keyProbe,
     keyInCount: keyInCount,
