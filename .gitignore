@@ -65,7 +65,8 @@ src/build-info.js
 src/assets/seg/vision_*
 
 # The matting evaluation's RVM engine (`make rvm-assets`): GPL-3.0 weights and
-# the ONNX Runtime they run on. Never committed, never shipped.
+# the ONNX Runtime they run on. Never committed; staged by vercel-build.sh into
+# web preview deploys only (and into production only with RVM_ASSETS=1).
 src/assets/rvm/
 
 # The P3M-Net evaluation's engine (`make p3m-assets`): MIT, but 78-156 MB of

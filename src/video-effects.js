@@ -7149,7 +7149,7 @@ var VideoEffects = (function () {
         'Longpipe is the default: it runs its own model on the GPU and its output is turned into a mask (see the diagnostic). MediaPipe is the fallback, and what a Longpipe that cannot start ends up on.',
         'segmentation-engine',
         [['longpipe', 'Longpipe (default)'], ['mediapipe', 'MediaPipe']].concat(
-          typeof RvmEngine !== 'undefined' ? [['rvm', 'RVM (experimental; needs make rvm-assets, never shipped)']] : [],
+          typeof RvmEngine !== 'undefined' ? [['rvm', 'RVM (experimental; needs make rvm-assets or a preview deploy)']] : [],
           typeof P3mEngine !== 'undefined' ? [['p3m', 'P3M-Net (experimental; 78 MB download, needs WebGPU)']] : []),
         function () { return engine(); },
         function (v) { setEngine(v); });

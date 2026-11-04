@@ -4,7 +4,8 @@
 // Off unless localStorage['segmentation-engine'] is 'rvm' (or ?segengine=rvm).
 // Nothing here loads, runs or downloads otherwise, and in a normal checkout or
 // deployment there is nothing for it to load: RVM's weights are GPL-3.0, so
-// they are never committed or shipped. `make rvm-assets` stages them, with the
+// they are never committed, and only web PREVIEW deploys carry them
+// (vercel-build.sh; production needs RVM_ASSETS=1). `make rvm-assets` stages them, with the
 // ONNX Runtime Web build that runs them, into the gitignored src/assets/rvm/.
 // Without them create() rejects and video-effects.js falls back to MediaPipe,
 // exactly as it does for a Longpipe that cannot start.
