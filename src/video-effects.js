@@ -1937,8 +1937,12 @@ var VideoEffects = (function () {
     '#version 300 es',
     'in vec2 aPos;',
     'out vec2 vUv;',
+    // The part of the picture a quad draws: offset (xy) and how much of each
+    // side is left out (zw). Zero, the default of an unset uniform, is the
+    // whole picture; only the diagnostic's split view sets it (splitDraw).
+    'uniform vec4 uTile;',
     'void main() {',
-    '  vUv = aPos * 0.5 + 0.5;',
+    '  vUv = uTile.xy + (aPos * 0.5 + 0.5) * (1.0 - uTile.zw);',
     '  gl_Position = vec4(aPos, 0.0, 1.0);',
     '}'
   ].join('\n');
@@ -4673,7 +4677,7 @@ var VideoEffects = (function () {
     if (w !== W || h !== H) {
       // Should not happen now that we control the input size, but a mask of an
       // unexpected shape is better re-allocated than silently misread.
-      this.segW = W = w; this.segH = H = h;
+      this.segW = w; this.segH = h;
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, w, h, 0, gl.RED, gl.UNSIGNED_BYTE, data);
       this.resizeMaskBuffers(w, h);
       gl.bindTexture(gl.TEXTURE_2D, this.texMaskRaw);
@@ -4708,26 +4712,40 @@ var VideoEffects = (function () {
     gl.bindTexture(gl.TEXTURE_2D, this.texSegNow);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.segCanvas);
     this.segSeen++;
+    this.maskChain(this, held, dg);
+  };
+
+  // From a raw mask to the finished one: temporal blend, core, hole fill,
+  // dilate, feather. `S` holds the mask textures and the engine's own edge,
+  // cut and blend: the Processor itself for the engine that drives the call,
+  // or one of the split view's sets (splitSet) for a compared engine, so that
+  // every engine's picture goes through this one chain and none through a
+  // copy of it. `held` is the camera-motion hold, for the Processor's own
+  // mask only (a guest's mask may arrive frames late); `dg` the diagnostic's
+  // hooks, likewise.
+  Processor.prototype.maskChain = function (S, held, dg) {
+    var gl = this.gl;
+    var W = S.segW, H = S.segH;
     gl.useProgram(this.pMix);
-    this.bindTex(this.pMix, 'uPrev', 0, this.texMaskS);
-    this.bindTex(this.pMix, 'uNext', 1, this.texMaskRaw);
+    this.bindTex(this.pMix, 'uPrev', 0, S.texMaskS);
+    this.bindTex(this.pMix, 'uNext', 1, S.texMaskRaw);
     this.bindTex(this.pMix, 'uCamNow', 2, this.texSegNow);
     this.bindTex(this.pMix, 'uCamPrev', 3, this.texSegPrev);
-    gl.uniform2f(uloc(gl, this.pMix, 'uCamTexel'), 1 / W, 1 / H);
+    gl.uniform2f(uloc(gl, this.pMix, 'uCamTexel'), 1 / this.segW, 1 / this.segH);
     gl.uniform1f(uloc(gl, this.pMix, 'uHold'), held ? 1 : 0);
     // window.__voxalMaskBlend = [up, down]: the matting bench's A/B switch.
-    var mbw = maskBlendFor(this.engine);
+    var mbw = maskBlendFor(S.engine);
     var mb = window.__voxalMaskBlend || [mbw, mbw];
-    gl.uniform1f(uloc(gl, this.pMix, 'uAlphaUp'), this.maskPrimed ? mb[0] : 1.0);
-    gl.uniform1f(uloc(gl, this.pMix, 'uAlphaDown'), this.maskPrimed ? mb[1] : 1.0);
-    gl.uniform1f(uloc(gl, this.pMix, 'uCut'), this.maskCut);
-    this.drawQuad(this.fbMaskSB, W, H);
+    gl.uniform1f(uloc(gl, this.pMix, 'uAlphaUp'), S.maskPrimed ? mb[0] : 1.0);
+    gl.uniform1f(uloc(gl, this.pMix, 'uAlphaDown'), S.maskPrimed ? mb[1] : 1.0);
+    gl.uniform1f(uloc(gl, this.pMix, 'uCut'), S.maskCut);
+    this.drawQuad(S.fbMaskSB, W, H);
 
     // Swap the state pair: texMaskS is the blend's memory, and nothing
     // downstream ever writes to it.
-    var ts = this.texMaskS, fs = this.fbMaskS;
-    this.texMaskS = this.texMaskSB; this.fbMaskS = this.fbMaskSB;
-    this.texMaskSB = ts; this.fbMaskSB = fs;
+    var ts = S.texMaskS, fs = S.fbMaskS;
+    S.texMaskS = S.texMaskSB; S.fbMaskS = S.fbMaskSB;
+    S.texMaskSB = ts; S.fbMaskSB = fs;
 
     // Everything from here is a fresh derivation of that state into the work
     // pair, discarded and rebuilt next inference.
@@ -4744,38 +4762,38 @@ var VideoEffects = (function () {
     if (this.refLoaded || this.refOn) {
       var es = REF_CORE_ERODE / 2;
       gl.useProgram(this.pErode);
-      this.bindTex(this.pErode, 'uTex', 0, this.texMaskS);
+      this.bindTex(this.pErode, 'uTex', 0, S.texMaskS);
       gl.uniform2f(uloc(gl, this.pErode, 'uDir'), es / W, 0);
-      this.drawQuad(this.fbMaskB, W, H);
-      this.bindTex(this.pErode, 'uTex', 0, this.texMaskB);
-      this.drawQuad(this.fbMaskA, W, H);
-      this.bindTex(this.pErode, 'uTex', 0, this.texMaskA);
+      this.drawQuad(S.fbMaskB, W, H);
+      this.bindTex(this.pErode, 'uTex', 0, S.texMaskB);
+      this.drawQuad(S.fbMaskA, W, H);
+      this.bindTex(this.pErode, 'uTex', 0, S.texMaskA);
       gl.uniform2f(uloc(gl, this.pErode, 'uDir'), 0, es / H);
-      this.drawQuad(this.fbMaskB, W, H);
-      this.bindTex(this.pErode, 'uTex', 0, this.texMaskB);
-      this.drawQuad(this.fbCore, W, H);
+      this.drawQuad(S.fbMaskB, W, H);
+      this.bindTex(this.pErode, 'uTex', 0, S.texMaskB);
+      this.drawQuad(S.fbCore, W, H);
     }
 
     // With the empty-room reference in use the band reaches a little further:
     // the reference can only give back what is inside it.
-    var dilate = (typeof window.__voxalDilate === 'number' ? window.__voxalDilate : this.edge.dilate) +
+    var dilate = (typeof window.__voxalDilate === 'number' ? window.__voxalDilate : S.edge.dilate) +
       (this.refWeight > 0.5 ? REF_DILATE_EXTRA : 0);
-    var dilateSrc = this.texMaskS;
+    var dilateSrc = S.texMaskS;
     if (window.__voxalHoleFill !== false) {
       gl.useProgram(this.pHole);
-      this.bindTex(this.pHole, 'uTex', 0, this.texMaskS);
+      this.bindTex(this.pHole, 'uTex', 0, S.texMaskS);
       gl.uniform2f(uloc(gl, this.pHole, 'uTexel'), 1 / W, 1 / H);
-      this.drawQuad(this.fbMaskSB, W, H);
-      dilateSrc = this.texMaskSB;
+      this.drawQuad(S.fbMaskSB, W, H);
+      dilateSrc = S.texMaskSB;
     }
     gl.useProgram(this.pDilate);
     this.bindTex(this.pDilate, 'uTex', 0, dilateSrc);
     gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), dilate / W, 0);
-    this.drawQuad(this.fbMaskB, W, H);
+    this.drawQuad(S.fbMaskB, W, H);
 
-    this.bindTex(this.pDilate, 'uTex', 0, this.texMaskB);
+    this.bindTex(this.pDilate, 'uTex', 0, S.texMaskB);
     gl.uniform2f(uloc(gl, this.pDilate, 'uDir'), 0, dilate / H);
-    this.drawQuad(this.fbMaskA, W, H);
+    this.drawQuad(S.fbMaskA, W, H);
     // fbMaskA holds the dilated mask until the feather overwrites it below.
     if (dg) this.diagKeepDilated();
 
@@ -4785,18 +4803,18 @@ var VideoEffects = (function () {
     // NOT be gamma-corrected, or the ramp would be bent and the edge would land
     // somewhere other than where MASK_DILATE put it.
     gl.useProgram(this.pFeather);
-    this.bindTex(this.pFeather, 'uTex', 0, this.texMaskA);
-    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), this.edge.feather / W, 0);
-    this.drawQuad(this.fbMaskB, W, H);
+    this.bindTex(this.pFeather, 'uTex', 0, S.texMaskA);
+    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), S.edge.feather / W, 0);
+    this.drawQuad(S.fbMaskB, W, H);
 
-    this.bindTex(this.pFeather, 'uTex', 0, this.texMaskB);
-    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), 0, this.edge.feather / H);
-    this.drawQuad(this.fbMaskA, W, H);
+    this.bindTex(this.pFeather, 'uTex', 0, S.texMaskB);
+    gl.uniform2f(uloc(gl, this.pFeather, 'uDir'), 0, S.edge.feather / H);
+    this.drawQuad(S.fbMaskA, W, H);
 
     // texMaskA is the finished mask, by construction rather than by a swap —
     // the work pair has a fixed direction now, so there is no way for the
     // feedback above to come back.
-    this.maskPrimed = true;
+    S.maskPrimed = true;
     if (dg) this.diagMarkFresh();
   };
 
@@ -4834,22 +4852,21 @@ var VideoEffects = (function () {
     // composite. Anything short of live is Voxal's blur below.
     var direct = (this.segmenter && this.segmenter.directFrame && !(this.keyed && this.keyed.demand > 0))
       ? this.segmenter.directFrame() : null;
+    // The diagnostic's split view (see "Split view" further down) needs the
+    // composite even when the call gets Longpipe's own picture, so it runs
+    // the whole frame on the camera and puts the direct picture out last.
+    var split = _split.on && this === _active;
     gl.bindTexture(gl.TEXTURE_2D, this.texCam);
     try {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, direct || this.video);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, (direct && !split) ? direct : this.video);
     } catch (e) {
       return;   // the source can vanish mid-teardown
     }
-    if (direct) {
-      // The downsample program with a quarter-texel offset is a copy.
-      gl.useProgram(this.pDown);
-      this.bindTex(this.pDown, 'uTex', 0, this.texCam);
-      gl.uniform2f(uloc(gl, this.pDown, 'uOff'), 0.25 / w, 0.25 / h);
-      gl.uniform1f(uloc(gl, this.pDown, 'uFlip'), 1);
-      this.drawQuad(null, w, h);
-      gl.uniform1f(uloc(gl, this.pDown, 'uFlip'), 0);
+    if (direct && !split) {
+      this.drawDirect(this.texCam, w, h);
       return;
     }
+    if (split) this.splitPrepare();
 
     // The empty-room reference: ease its weight toward whether it should be
     // used, and while it carries any weight, compare this frame to it.
@@ -4955,8 +4972,30 @@ var VideoEffects = (function () {
     // frame is drawn over all of it just below, full viewport, so what is
     // published is exactly what it is without the diagnostic.
     if (dgl) this.diagPanes(dgl, true);
+    if (split) this.splitDraw(w, h, direct, fgOn, lin);
+    if (direct) {
+      // Only with the split view up (the early return above otherwise).
+      gl.bindTexture(gl.TEXTURE_2D, this.texCam);
+      try {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, direct);
+      } catch (e) { return; }
+      this.drawDirect(this.texCam, w, h);
+      return;
+    }
     if (this.keyed && this.keyed.demand > 0) this.drawKeyed(w, h);
     else this.drawQuad(null, w, h);
+  };
+
+  // Longpipe's own picture, as is: the downsample program with a
+  // quarter-texel offset is a copy.
+  Processor.prototype.drawDirect = function (tex, w, h) {
+    var gl = this.gl;
+    gl.useProgram(this.pDown);
+    this.bindTex(this.pDown, 'uTex', 0, tex);
+    gl.uniform2f(uloc(gl, this.pDown, 'uOff'), 0.25 / w, 0.25 / h);
+    gl.uniform1f(uloc(gl, this.pDown, 'uFlip'), 1);
+    this.drawQuad(null, w, h);
+    gl.uniform1f(uloc(gl, this.pDown, 'uFlip'), 0);
   };
 
   // --- the keyed output -----------------------------------------------------
@@ -5324,6 +5363,7 @@ var VideoEffects = (function () {
     var gl = this.gl;
     if (!gl) return;
     this.diagRelease();
+    this.splitRelease();
     [this.texCam, this.texImg, this.texBlurA, this.texBlurB, this.texMaskRaw,
      this.texMaskS, this.texMaskSB, this.texMaskA, this.texMaskB, this.texSegNow, this.texSegPrev,
      this.texPlate, this.texRefA, this.texRefB, this.texLearnA, this.texLearnB, this.texSilP, this.texSilC,
@@ -6311,8 +6351,9 @@ var VideoEffects = (function () {
   // inference. It is opened by `VideoEffects.openDiagnostic()`, by `?segdiag=1`
   // in the URL, or by localStorage['seg-diagnostic'] = '1' (diagnosis only,
   // never written by the app), and closed by its ✕ button or
-  // `VideoEffects.closeDiagnostic()`. Its "Compare engines" view (see Live
-  // engine comparison, further down) runs every engine on the same frames.
+  // `VideoEffects.closeDiagnostic()`. Its Engines tab (see Live engine
+  // comparison and Split view, further down) runs every engine on the same
+  // frames and splits your own video by engine.
   //
   // How it keeps the comparison honest:
   //   * It adds NO inference. It reads the mask the one existing
@@ -6370,7 +6411,7 @@ var VideoEffects = (function () {
     ['matte',     'C4 — matte used (smoothstep + reference + hair)'],
     ['final',     'D — final render'],
     ['heat',      'Stability map (raw mask, successive inferences)'],
-    ['compare',   'Compare engines — every model live, side by side']
+    ['compare',   'Engines — every model live, on your own video']
   ];
   var DIAG_PANE = {
     original:  { label: 'A camera',                    src: 'cam' },
@@ -6389,11 +6430,9 @@ var VideoEffects = (function () {
   };
 
   var _diag = {
-    on: false, view: 'grid', tint: false, frozen: false, collapsed: false,
-    el: null, body: null, chip: null, canvas: null, ctx: null, info: null, freezeBtn: null, copyBtn: null,
-    sizeBtn: null, size: 1, tabs: null, statsBox: null, cmpBox: null, cmpTable: null, cmpShow: null,
-    cmpBoxes: null, engBadge: null, hzBadge: null, engineSelect: null, lay: null,
+    on: false, view: 'grid', lastPipe: 'grid', tint: false, frozen: false, collapsed: false, size: 1,
     error: '', lastInfo: 0, text: ''
+    // plus the panel's DOM references (DIAG_UI), set while it is open
   };
 
   function diagViewValid(v) {
@@ -6417,257 +6456,382 @@ var VideoEffects = (function () {
   function diagPct(x) { return (x * 100).toFixed(1) + '%'; }
 
   // --- the panel ---------------------------------------------------------------
+  //
+  // Two tabs. "Engines" compares the engines on your own picture (the split
+  // view, see Split view below) and lists their numbers; "Pipeline" shows the
+  // stages of one inference of the engine driving the call. Tuning and the
+  // full report fold away under both. The panel is built once per opening and
+  // its numbers are repainted in place, so a control never moves or loses
+  // focus under the pointer.
 
-  var DIAG_SIZES = [['S', 480], ['M', 640], ['L', 960]];
-  var DIAG_COLOR = { ok: '#3ecf8e', warn: '#f5b942', bad: '#ff6b6b', muted: '#8b8b8b', accent: '#5aa9ff' };
-  var DIAG_BTN = 'font:inherit;padding:6px 10px;min-height:34px;background:#222;color:#eee;' +
-    'border:1px solid #444;border-radius:6px;cursor:pointer';
-  var DIAG_CHIP = {
-    grid: 'Grid', stages: 'Stages', original: 'Camera', input: 'Input', raw: 'Raw', blend: 'Blend',
-    dilated: 'Dilate', feathered: 'Feather', matte: 'Matte', final: 'Final', heat: 'Stability',
-    compare: 'Compare engines'
+  var DIAG_SIZES = [['S', 380], ['M', 460], ['L', 640]];
+  var DIAG_COLOR = { ok: '#3ecf8e', warn: '#f5b942', bad: '#ff6b6b', muted: '#8b93a1', accent: '#5aa9ff' };
+  // The pipeline's views as the panel offers them: the two overviews as
+  // buttons, every single stage in one list.
+  var DIAG_OVERVIEWS = [['grid', 'Overview'], ['stages', 'All stages']];
+  var DIAG_STAGE_NAMES = {
+    original: 'Camera', input: 'Model input', raw: 'Raw mask', blend: 'Blend', dilated: 'Dilate',
+    feathered: 'Feather', matte: 'Matte', final: 'Final', heat: 'Stability'
   };
+  // Every DOM reference the panel keeps, dropped together when it closes.
+  var DIAG_UI = ['el', 'main', 'chip', 'canvas', 'ctx', 'info', 'freezeBtn', 'copyBtn', 'sizeBtn',
+    'tabEngines', 'tabPipeline', 'pageEngines', 'pagePipeline', 'statsBox', 'cmpShow', 'cmpNote',
+    'cmpBody', 'cmpRows', 'pipeBtns', 'stageSel', 'engBadge', 'hzBadge', 'engineSelect', 'lay'];
 
-  function dEl(tag, css, text) {
+  // Scoped to the panel's id, so nothing here can reach the app's own styles.
+  var DIAG_CSS = [
+    '#seg-diagnostic{position:fixed;left:max(8px,env(safe-area-inset-left));bottom:max(8px,env(safe-area-inset-bottom));',
+    'z-index:2147483000;max-height:calc(100vh - 16px);',
+    'max-height:calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));',
+    'display:flex;flex-direction:column;box-sizing:border-box;overflow:hidden;',
+    'background:#0f1115;color:#e8eaed;border:1px solid #2a2e36;border-radius:14px;',
+    'box-shadow:0 14px 44px rgba(0,0,0,.55);font:13px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;',
+    'touch-action:manipulation;-webkit-font-smoothing:antialiased}',
+    '#seg-diagnostic *{box-sizing:border-box}',
+    '#seg-diagnostic [hidden]{display:none!important}',
+    '#seg-diagnostic .sd-main{display:flex;flex-direction:column;min-height:0;flex:1 1 auto}',
+    '#seg-diagnostic .sd-head{display:flex;align-items:center;gap:6px;padding:6px 6px 6px 12px;cursor:grab;',
+    'touch-action:none;user-select:none;-webkit-user-select:none;border-bottom:1px solid #22262d}',
+    '#seg-diagnostic .sd-title{font-weight:600;letter-spacing:.01em;margin-right:2px}',
+    '#seg-diagnostic .sd-badge{font:11px/1 ui-monospace,Menlo,Consolas,monospace;padding:4px 7px;border-radius:999px;',
+    'border:1px solid currentColor;color:#8b93a1;white-space:nowrap;max-width:9em;overflow:hidden;text-overflow:ellipsis}',
+    '#seg-diagnostic .sd-badge+.sd-badge{flex:0 0 auto;max-width:none}',
+    '#seg-diagnostic .sd-sp{flex:1 1 auto}',
+    '#seg-diagnostic button{font:inherit;color:#e8eaed;background:#1c1f26;border:1px solid #2c313a;border-radius:8px;',
+    'padding:5px 11px;min-height:32px;cursor:pointer;white-space:nowrap}',
+    '#seg-diagnostic button:hover:not(:disabled){background:#252a33;border-color:#3a404b}',
+    '#seg-diagnostic button:disabled{opacity:.45;cursor:default}',
+    '#seg-diagnostic button[aria-pressed="true"]{background:#1b3556;border-color:#5aa9ff;color:#fff}',
+    '#seg-diagnostic :focus-visible{outline:2px solid #5aa9ff;outline-offset:1px}',
+    '#seg-diagnostic .sd-icon{min-width:32px;padding:4px 6px;background:transparent;border-color:transparent;color:#aab1bd}',
+    '#seg-diagnostic .sd-icon:hover:not(:disabled){background:#1c1f26;border-color:#2c313a;color:#fff}',
+    '#seg-diagnostic .sd-tabs{display:flex;gap:4px;margin:8px 12px 0;padding:3px;background:#171a20;border-radius:10px}',
+    '#seg-diagnostic .sd-tabs button{flex:1 1 0;border-color:transparent;background:transparent;border-radius:8px}',
+    '#seg-diagnostic .sd-tabs button[aria-pressed="true"]{background:#262b35;border-color:#353b47}',
+    '#seg-diagnostic .sd-body{overflow:auto;padding:10px 12px;display:flex;flex-direction:column;gap:10px;min-height:0;flex:1 1 auto}',
+    '#seg-diagnostic .sd-page{display:flex;flex-direction:column;gap:10px}',
+    '#seg-diagnostic .sd-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}',
+    '#seg-diagnostic .sd-seg{display:inline-flex;gap:0}',
+    '#seg-diagnostic .sd-seg button{border-radius:0;margin-left:-1px}',
+    '#seg-diagnostic .sd-seg button:first-child{border-radius:8px 0 0 8px;margin-left:0}',
+    '#seg-diagnostic .sd-seg button:last-child{border-radius:0 8px 8px 0}',
+    '#seg-diagnostic .sd-seg button[aria-pressed="true"]{position:relative;z-index:1}',
+    '#seg-diagnostic .sd-label{color:#8b93a1;margin-right:4px}',
+    '#seg-diagnostic .sd-hint{color:#8b93a1;font-size:12px}',
+    '#seg-diagnostic .sd-note{padding:8px 10px;border-radius:8px;background:#141821;border:1px solid #232937;font-size:12px}',
+    '#seg-diagnostic table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}',
+    '#seg-diagnostic th{text-align:left;font-weight:500;color:#8b93a1;font-size:11px;padding:0 8px 6px 0;',
+    'border-bottom:1px solid #22262d;white-space:nowrap}',
+    '#seg-diagnostic td{padding:5px 8px 5px 0;border-bottom:1px solid #1a1d23;white-space:nowrap;vertical-align:middle}',
+    '#seg-diagnostic .r{text-align:right}',
+    '#seg-diagnostic .sd-num{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}',
+    '#seg-diagnostic .sd-eng{display:flex;align-items:center;gap:6px}',
+    '#seg-diagnostic .sd-eng input{width:16px;height:16px;margin:0;accent-color:#5aa9ff}',
+    '#seg-diagnostic .sd-dot{flex:0 0 8px;width:8px;height:8px;border-radius:50%;background:#8b93a1}',
+    '#seg-diagnostic .sd-name{background:transparent;border-color:transparent;padding:4px 6px;font-weight:600}',
+    '#seg-diagnostic .sd-use{padding:3px 10px;min-height:30px;font-size:12px}',
+    '#seg-diagnostic tr.sd-sub td{border-bottom:1px solid #1a1d23;padding:0 0 6px 30px;white-space:normal;',
+    'word-break:break-word;font-size:11px;color:#8b93a1}',
+    '#seg-diagnostic tr.sd-hasub td{border-bottom:0}',
+    '#seg-diagnostic canvas{display:block;width:100%;height:auto;max-height:46vh;max-height:46dvh;',
+    'object-fit:contain;background:#000;border-radius:8px}',
+    '#seg-diagnostic select{font:inherit;color:#e8eaed;background:#1c1f26;border:1px solid #2c313a;border-radius:8px;',
+    'padding:5px 8px;min-height:32px;max-width:100%}',
+    '#seg-diagnostic details{border-top:1px solid #22262d;padding-top:8px}',
+    '#seg-diagnostic summary{cursor:pointer;color:#aab1bd;padding:2px 0;font-weight:500}',
+    '#seg-diagnostic summary:hover{color:#fff}',
+    '#seg-diagnostic pre{margin:6px 0 0;white-space:pre-wrap;word-break:break-word;',
+    'font:11px/1.45 ui-monospace,Menlo,Consolas,monospace;color:#c4cad3}',
+    '#seg-diagnostic .sd-foot{display:flex;gap:6px;padding:8px 12px;border-top:1px solid #22262d;background:#0f1115}',
+    '#seg-diagnostic.sd-collapsed{width:auto!important;border-radius:999px}',
+    '#seg-diagnostic .sd-chip{border:0;border-radius:999px;padding:8px 14px;min-height:36px;background:#1c1f26}'
+  ].join('');
+
+  function diagStyle() {
+    if (document.getElementById('seg-diag-style')) return;
+    var s = document.createElement('style');
+    s.id = 'seg-diag-style';
+    s.textContent = DIAG_CSS;
+    (document.head || document.documentElement).appendChild(s);
+  }
+
+  function dEl(tag, cls, text) {
     var n = document.createElement(tag);
-    if (css) n.style.cssText = css;
+    if (cls) n.className = cls;
     if (text !== undefined && text !== null) n.textContent = text;
     return n;
   }
 
-  function dButton(text, fn, label) {
-    var b = dEl('button', DIAG_BTN, text);
+  function dButton(text, fn, label, cls) {
+    var b = dEl('button', cls || '', text);
     b.type = 'button';
     if (label) b.setAttribute('aria-label', label);
     b.addEventListener('click', fn);
     return b;
   }
 
-  function dBadge(text, color) {
-    return dEl('span', 'display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;' +
-      'background:#222;border:1px solid ' + (color || '#444') + ';color:' + (color || '#ccc'), text);
+  function dPress(b, on) {
+    if (b) b.setAttribute('aria-pressed', on ? 'true' : 'false');
   }
 
-  // A row of mutually exclusive chips; `onPick(id)` is called on a click.
-  function dChips(items, onPick) {
-    var row = dEl('div', 'display:flex;flex-wrap:wrap;gap:4px');
-    var map = {};
-    items.forEach(function (it) {
-      var b = dEl('button', DIAG_BTN + ';padding:4px 9px;min-height:32px', it[1]);
-      b.type = 'button';
-      b.addEventListener('click', function () { onPick(it[0]); });
-      row.appendChild(b);
-      map[it[0]] = b;
-    });
-    return { el: row, map: map };
-  }
-
-  function dMarkChips(map, on) {
-    Object.keys(map).forEach(function (k) {
-      var yes = k === on;
-      map[k].setAttribute('aria-pressed', yes ? 'true' : 'false');
-      map[k].style.background = yes ? '#25456b' : '#222';
-      map[k].style.borderColor = yes ? DIAG_COLOR.accent : '#444';
-    });
+  function diagWidth() {
+    return (DIAG_SIZES[_diag.size] || DIAG_SIZES[1])[1];
   }
 
   function diagBuildPanel() {
-    var size = DIAG_SIZES[_diag.size] || DIAG_SIZES[1];
+    diagStyle();
     var el = dEl('div');
     el.id = 'seg-diagnostic';
     el.setAttribute('role', 'dialog');
     el.setAttribute('aria-label', 'Segmentation diagnostic');
-    // Sized to what is VISIBLE (dvh, not vh: on iOS Safari 100vh is the page
-    // with the toolbars away, taller than the screen), clear of the notch and
-    // the home bar, and opaque — a see-through panel over the room's own
-    // buttons shows them as ghosts you cannot tell from its controls.
-    el.style.cssText = 'position:fixed;' +
-      'left:max(8px,env(safe-area-inset-left));' +
-      'bottom:max(8px,env(safe-area-inset-bottom));z-index:2147483000;' +
-      'width:min(96vw,' + size[1] + 'px);max-height:calc(100vh - 16px);' +
-      'max-height:calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));' +
-      'overflow:auto;box-sizing:border-box;padding:8px;border-radius:10px;' +
-      'background:#111;color:#eee;border:1px solid #333;box-shadow:0 2px 16px rgba(0,0,0,.5);' +
-      'font:12px/1.35 ui-monospace,Menlo,Consolas,monospace;touch-action:manipulation';
+    el.style.width = 'min(calc(100vw - 16px), ' + diagWidth() + 'px)';
 
-    // The panel can shrink to a small chip: on a phone it is otherwise over
-    // the room's own controls (mic, camera), which are underneath it.
-    var chip = dEl('button', 'display:none;font:inherit;padding:8px 12px;min-height:36px', 'Seg ▴');
-    chip.type = 'button';
-    chip.addEventListener('click', function () { diagCollapse(false); });
+    // The panel shrinks to this chip: on a phone it is otherwise over the
+    // room's own controls (mic, camera), which are underneath it.
+    var chip = dButton('Seg ▴', function () { diagCollapse(false); }, null, 'sd-chip');
     el.appendChild(chip);
 
-    var body = dEl('div');
+    var main = dEl('div', 'sd-main');
 
-    // Sticky, so the title, the buttons and the views stay on screen however
-    // tall the picture is. Dragging it moves the panel.
-    var top = dEl('div', 'position:sticky;top:0;z-index:1;background:#111;padding-bottom:6px');
-    var head = dEl('div', 'display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding-bottom:6px;' +
-      'cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none');
-    head.appendChild(dEl('strong', 'flex:0 0 auto;font-size:13px', 'Segmentation'));
-    var engBadge = dBadge('–'); engBadge.id = 'seg-diag-engine';
-    var hzBadge = dBadge('– Hz');
+    // The title bar: what drives the call, how often, and the window's own
+    // buttons. Dragging it moves the panel.
+    var head = dEl('div', 'sd-head');
+    head.appendChild(dEl('span', 'sd-title', 'Segmentation'));
+    var engBadge = dEl('span', 'sd-badge', '–'); engBadge.id = 'seg-diag-engine';
+    var hzBadge = dEl('span', 'sd-badge', '– Hz');
     head.appendChild(engBadge);
     head.appendChild(hzBadge);
-    head.appendChild(dEl('span', 'flex:1 1 auto'));
-    head.appendChild(dButton('Hide', function () { diagCollapse(true); }));
-    head.appendChild(dButton('✕', diagClose));
-    diagMakeDraggable(el, head);
-    top.appendChild(head);
-
-    // What you do to the picture: freeze it, keep it, send it, make it bigger.
-    var actions = dEl('div', 'display:flex;flex-wrap:wrap;gap:6px;padding-bottom:6px');
-    _diag.freezeBtn = dButton('Freeze', function () {
-      _diag.frozen = !_diag.frozen;
-      _diag.freezeBtn.textContent = _diag.frozen ? 'Resume' : 'Freeze';
-    });
-    actions.appendChild(_diag.freezeBtn);
-    actions.appendChild(dButton('Save PNG', diagSave));
-    _diag.copyBtn = dButton('Copy report', diagCopy);
-    actions.appendChild(_diag.copyBtn);
-    _diag.sizeBtn = dButton('Size ' + size[0], function () {
+    head.appendChild(dEl('span', 'sd-sp'));
+    _diag.sizeBtn = dButton('⤢', function () {
       _diag.size = (_diag.size + 1) % DIAG_SIZES.length;
-      var s = DIAG_SIZES[_diag.size];
-      _diag.sizeBtn.textContent = 'Size ' + s[0];
-      if (!_diag.collapsed) el.style.width = 'min(96vw,' + s[1] + 'px)';
-    }, 'Panel size');
-    actions.appendChild(_diag.sizeBtn);
-    top.appendChild(actions);
+      if (!_diag.collapsed) el.style.width = 'min(calc(100vw - 16px), ' + diagWidth() + 'px)';
+      _diag.sizeBtn.title = 'Panel size: ' + DIAG_SIZES[_diag.size][0];
+    }, 'Panel size', 'sd-icon');
+    _diag.sizeBtn.title = 'Panel size: ' + DIAG_SIZES[_diag.size][0];
+    head.appendChild(_diag.sizeBtn);
+    var hide = dButton('–', function () { diagCollapse(true); }, 'Hide', 'sd-icon');
+    hide.title = 'Shrink to a chip';
+    head.appendChild(hide);
+    head.appendChild(dButton('✕', diagClose, 'Close', 'sd-icon'));
+    diagMakeDraggable(el, head);
+    main.appendChild(head);
 
-    var tabs = dChips(DIAG_VIEWS.map(function (v) { return [v[0], DIAG_CHIP[v[0]] || v[1]]; }), diagSetView);
-    Object.keys(tabs.map).forEach(function (k) {
-      var v = DIAG_VIEWS.filter(function (x) { return x[0] === k; })[0];
-      if (v) tabs.map[k].title = v[1];
-    });
-    top.appendChild(tabs.el);
-    body.appendChild(top);
-    _diag.tabs = tabs.map;
+    var tabs = dEl('div', 'sd-tabs');
+    _diag.tabEngines = dButton('Engines', function () { diagSetView('compare'); });
+    _diag.tabEngines.title = 'Every engine at once, on your own video';
+    _diag.tabPipeline = dButton('Pipeline', function () { diagSetView(_diag.lastPipe || 'grid'); });
+    _diag.tabPipeline.title = 'Each stage of one inference, from the model to the picture';
+    tabs.appendChild(_diag.tabEngines);
+    tabs.appendChild(_diag.tabPipeline);
+    main.appendChild(tabs);
 
-    var canvas = dEl('canvas', 'display:block;width:100%;height:auto;max-height:50vh;' +
-      'max-height:50dvh;object-fit:contain;background:#222;margin-top:2px;border-radius:4px');
-    canvas.width = 16; canvas.height = 9;
-    canvas.addEventListener('click', diagCanvasClick);
-    body.appendChild(canvas);
-
-    // Compare-engines controls: only while that view is up.
-    var cmp = dEl('div', 'display:none;margin-top:8px;padding:8px;background:#181818;border-radius:6px');
-    var cmpShow = dChips([['cutout', 'Cutout'], ['mask', 'Mask'], ['overlay', 'Overlay'], ['diff', 'Diff vs reference']],
-      function (v) { cmpSetView(v); });
-    cmp.appendChild(dEl('div', 'color:' + DIAG_COLOR.muted + ';margin-bottom:4px', 'Show'));
-    cmp.appendChild(cmpShow.el);
-    _diag.cmpShow = cmpShow.map;
-    cmp.appendChild(dEl('div', 'color:' + DIAG_COLOR.muted + ';margin:8px 0 4px', 'Engines running together (untick one to rule out contention)'));
-    var cmpEngines = dEl('div', 'display:flex;flex-wrap:wrap;gap:6px 14px');
-    _diag.cmpBoxes = {};
-    cmpAvailable().forEach(function (name) {
-      var lab = dEl('label', 'white-space:nowrap;display:flex;align-items:center;gap:5px');
-      var cb = dEl('input'); cb.type = 'checkbox'; cb.checked = true;
-      cb.setAttribute('aria-label', 'Run ' + CMP_NAMES[name]);
-      cb.addEventListener('change', function () { cmpPause(name, !cb.checked); });
-      var dot = dEl('span', 'width:8px;height:8px;border-radius:50%;background:' + DIAG_COLOR.muted);
-      lab.appendChild(cb); lab.appendChild(dot); lab.appendChild(document.createTextNode(CMP_NAMES[name]));
-      cmpEngines.appendChild(lab);
-      _diag.cmpBoxes[name] = { cb: cb, dot: dot };
-    });
-    cmp.appendChild(cmpEngines);
-    var refRow = dEl('div', 'display:flex;align-items:center;gap:6px;margin-top:8px');
-    refRow.appendChild(dEl('span', 'color:' + DIAG_COLOR.muted, 'Diff reference'));
-    var refSel = dEl('select', 'font:inherit;padding:4px;min-height:30px;background:#222;color:#eee;border:1px solid #444;border-radius:6px');
-    refSel.setAttribute('aria-label', 'Diff reference');
-    [['', 'the engine driving the picture']].concat(cmpAvailable().map(function (n) { return [n, CMP_NAMES[n]]; }))
-      .forEach(function (v) {
-        var o = dEl('option', null, v[1]); o.value = v[0]; refSel.appendChild(o);
-      });
-    refSel.addEventListener('change', function () { _cmp.ref = refSel.value || null; });
-    refRow.appendChild(refSel);
-    cmp.appendChild(refRow);
-    var cmpTable = dEl('div', 'margin-top:8px;overflow-x:auto');
-    cmp.appendChild(cmpTable);
-    cmp.appendChild(dEl('div', 'margin-top:6px;color:' + DIAG_COLOR.muted + ';font-size:11px',
-      'Every engine is handed the same frames at the same moment; the numbers are with all of them running together, so each alone is faster. Masks are the raw model output, before the blend, dilate and feather. Click a picture to enlarge it.'));
-    body.appendChild(cmp);
-    _diag.cmpBox = cmp; _diag.cmpTable = cmpTable;
-
-    // The numbers that matter, then the full report.
-    var stats = dEl('div', 'margin-top:8px');
-    body.appendChild(stats);
-    _diag.statsBox = stats;
-
-    // Everything that changes how the camera behaves lives in one section.
-    var tune = dEl('details', 'margin-top:8px');
-    tune.id = 'seg-diag-tune';
-    tune.appendChild(dEl('summary', 'cursor:pointer;padding:4px 0;color:' + DIAG_COLOR.accent, 'Engine and tuning'));
-    var tuneBody = dEl('div', 'display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 0');
-
-    // The experimental engines, switchable under the running camera. Offered
-    // only where the Longpipe script is present; the choice is stored, so it
-    // survives a reload exactly like ?segengine=longpipe would.
-    if (typeof LongpipeEngine !== 'undefined') {
-      var eng = dEl('select', 'flex:1 1 100%;min-width:0;font:inherit;padding:6px;min-height:36px');
-      eng.setAttribute('aria-label', 'Segmentation engine');
-      var engs = [['longpipe', 'Engine: Longpipe (default)'], ['mediapipe', 'Engine: MediaPipe']];
-      if (typeof RvmEngine !== 'undefined') engs.push(['rvm', 'Engine: RVM (experimental, GPL weights: previews and make rvm-assets)']);
-      if (typeof P3mEngine !== 'undefined') engs.push(['p3m', 'Engine: P3M-Net (experimental, 78 MB download)']);
-      engs.forEach(function (v) {
-        var o = dEl('option', null, v[1]); o.value = v[0]; eng.appendChild(o);
-      });
-      eng.value = engine();
-      eng.addEventListener('change', function () {
-        var want = eng.value;
-        eng.disabled = true;       // one swap at a time
-        setEngine(want).then(function () { eng.value = engine(); eng.disabled = false; },
-                             function () { eng.value = engine(); eng.disabled = false; });
-      });
-      tuneBody.appendChild(eng);
-      _diag.engineSelect = eng;
-    }
-
-    var tintLabel = dEl('label', 'white-space:nowrap;flex:1 1 auto');
-    var tint = dEl('input');
-    tint.type = 'checkbox';
-    tint.checked = !!_diag.tint;
-    tint.addEventListener('change', function () { _diag.tint = !!tint.checked; });
-    tintLabel.appendChild(tint);
-    tintLabel.appendChild(document.createTextNode(' tint visible band'));
-    tuneBody.appendChild(tintLabel);
-
-    var silSel = dEl('select', 'flex:1 1 auto;min-width:0;font:inherit;padding:6px;min-height:36px');
-    silSel.setAttribute('aria-label', 'Silhouette prior');
-    [['default', 'Silhouette: default'], ['on', 'Silhouette: on'], ['off', 'Silhouette: off']].forEach(function (v) {
-      var o = dEl('option', null, v[1]); o.value = v[0]; silSel.appendChild(o);
-    });
-    silSel.value = readSilMode();
-    silSel.addEventListener('change', function () { setDebug(SIL_KEY, silSel.value === 'default' ? null : silSel.value); });
-    tuneBody.appendChild(silSel);
-    var silStr = dEl('input', 'flex:1 1 120px;min-width:80px');
-    silStr.type = 'range'; silStr.min = '0'; silStr.max = '1'; silStr.step = '0.05';
-    silStr.setAttribute('aria-label', 'Silhouette prior strength');
-    silStr.title = 'Silhouette prior strength';
-    silStr.value = String(readSilStrength());
-    var silVal = dEl('span', 'min-width:34px;text-align:right', Number(silStr.value).toFixed(2));
-    silStr.addEventListener('input', function () {
-      silVal.textContent = Number(silStr.value).toFixed(2);
-      setDebug(SIL_STRENGTH_KEY, silStr.value);
-    });
-    tuneBody.appendChild(silStr);
-    tuneBody.appendChild(silVal);
-    tune.appendChild(tuneBody);
-    body.appendChild(tune);
-
-    var full = dEl('details', 'margin-top:4px');
-    full.appendChild(dEl('summary', 'cursor:pointer;padding:4px 0;color:' + DIAG_COLOR.accent, 'Full report'));
-    var info = dEl('pre', 'margin:6px 0 0;white-space:pre-wrap;word-break:break-word;font:inherit', 'waiting for the first inference…');
+    var body = dEl('div', 'sd-body');
+    body.appendChild(diagBuildEngines());
+    body.appendChild(diagBuildPipeline());
+    body.appendChild(diagBuildTuning());
+    var full = dEl('details');
+    full.appendChild(dEl('summary', '', 'Full report'));
+    var info = dEl('pre', '', 'waiting for the first inference…');
     full.appendChild(info);
     body.appendChild(full);
-    el.appendChild(body);
+    main.appendChild(body);
 
-    _diag.el = el; _diag.body = body; _diag.chip = chip;
-    _diag.canvas = canvas; _diag.ctx = canvas.getContext('2d');
+    var foot = dEl('div', 'sd-foot');
+    _diag.copyBtn = dButton('Copy report', diagCopy);
+    _diag.copyBtn.title = 'This device, what is running and every number here, ready to paste into an issue';
+    foot.appendChild(_diag.copyBtn);
+    var save = dButton('Save PNG', diagSave);
+    save.title = 'Save the picture: the split view on the Engines tab, the stages on the Pipeline tab';
+    foot.appendChild(save);
+    main.appendChild(foot);
+    el.appendChild(main);
+
+    _diag.el = el; _diag.main = main; _diag.chip = chip;
     _diag.info = info; _diag.engBadge = engBadge; _diag.hzBadge = hzBadge;
     _diag.lay = null;
     document.body.appendChild(el);
     diagCollapse(_diag.collapsed);
     diagSyncView();
+  }
+
+  // The Engines tab: what the split view shows, and one row per engine.
+  function diagBuildEngines() {
+    var page = dEl('section', 'sd-page');
+    var show = dEl('div', 'sd-row');
+    show.appendChild(dEl('span', 'sd-label', 'Your video shows'));
+    var seg = dEl('div', 'sd-seg');
+    _diag.cmpShow = {};
+    [['result', 'Result', 'Each engine with your background, as the call would get it'],
+     ['matte', 'Matte', 'Each engine\'s matte: white is you, black is the room']].forEach(function (v) {
+      var b = dButton(v[1], function () { cmpSetView(v[0]); });
+      b.title = v[2];
+      seg.appendChild(b);
+      _diag.cmpShow[v[0]] = b;
+    });
+    show.appendChild(seg);
+    page.appendChild(show);
+
+    _diag.cmpNote = dEl('div', 'sd-note');
+    page.appendChild(_diag.cmpNote);
+
+    var table = dEl('table');
+    var thead = dEl('thead'), hr = dEl('tr');
+    [['Engine', ''], ['Inference', 'r'], ['Rate', 'r'], ['Match', 'r'], ['', 'r']].forEach(function (h) {
+      var th = dEl('th', h[1], h[0]);
+      if (h[0] === 'Match') th.title = 'Overlap (IoU) of its mask with the engine driving the call';
+      if (h[0] === 'Inference') th.title = 'Time per mask, p50';
+      hr.appendChild(th);
+    });
+    thead.appendChild(hr);
+    table.appendChild(thead);
+    _diag.cmpBody = dEl('tbody');
+    _diag.cmpRows = {};
+    table.appendChild(_diag.cmpBody);
+    page.appendChild(table);
+    page.appendChild(dEl('div', 'sd-hint',
+      'Every engine is handed the same frames at once, so each is faster alone: untick the others to time one. ' +
+      'Tap a name to show only that engine; Use moves the call to it.'));
+    _diag.pageEngines = page;
+    return page;
+  }
+
+  // The Pipeline tab: one inference, stage by stage, and the numbers on it.
+  function diagBuildPipeline() {
+    var page = dEl('section', 'sd-page');
+    var row = dEl('div', 'sd-row');
+    var seg = dEl('div', 'sd-seg');
+    _diag.pipeBtns = {};
+    DIAG_OVERVIEWS.forEach(function (v) {
+      var b = dButton(v[1], function () { diagSetView(v[0]); });
+      b.title = (DIAG_VIEWS.filter(function (x) { return x[0] === v[0]; })[0] || [])[1] || '';
+      seg.appendChild(b);
+      _diag.pipeBtns[v[0]] = b;
+    });
+    row.appendChild(seg);
+    var sel = dEl('select');
+    sel.setAttribute('aria-label', 'One stage');
+    var ph = dEl('option', '', 'One stage…'); ph.value = ''; ph.disabled = true;
+    sel.appendChild(ph);
+    Object.keys(DIAG_STAGE_NAMES).forEach(function (k) {
+      var o = dEl('option', '', DIAG_STAGE_NAMES[k]);
+      o.value = k;
+      o.title = (DIAG_VIEWS.filter(function (x) { return x[0] === k; })[0] || [])[1] || '';
+      sel.appendChild(o);
+    });
+    sel.addEventListener('change', function () { if (sel.value) diagSetView(sel.value); });
+    row.appendChild(sel);
+    _diag.stageSel = sel;
+    // Above the picture, not under it: on a short screen the picture is what
+    // scrolls away, never the controls.
+    _diag.freezeBtn = dButton('Freeze', function () {
+      _diag.frozen = !_diag.frozen;
+      _diag.freezeBtn.textContent = _diag.frozen ? 'Resume' : 'Freeze';
+      dPress(_diag.freezeBtn, _diag.frozen);
+    });
+    _diag.freezeBtn.title = 'Keep this inference on screen';
+    row.appendChild(_diag.freezeBtn);
+    page.appendChild(row);
+
+    var canvas = dEl('canvas');
+    canvas.width = 16; canvas.height = 9;
+    canvas.addEventListener('click', diagCanvasClick);
+    page.appendChild(canvas);
+    _diag.canvas = canvas; _diag.ctx = canvas.getContext('2d');
+
+    var tintLabel = dEl('label', 'sd-hint');
+    tintLabel.style.cssText = 'display:inline-flex;align-items:center;gap:6px';
+    var tint = dEl('input');
+    tint.type = 'checkbox';
+    tint.checked = !!_diag.tint;
+    tint.addEventListener('change', function () { _diag.tint = !!tint.checked; });
+    tintLabel.appendChild(tint);
+    tintLabel.appendChild(document.createTextNode('Tint the undecided band (the mask between the edge thresholds)'));
+    page.appendChild(tintLabel);
+
+    _diag.statsBox = dEl('div');
+    page.appendChild(_diag.statsBox);
+    _diag.pagePipeline = page;
+    return page;
+  }
+
+  // Everything that changes how the camera behaves, folded away.
+  function diagBuildTuning() {
+    var tune = dEl('details');
+    tune.id = 'seg-diag-tune';
+    tune.appendChild(dEl('summary', '', 'Tuning'));
+    var box = dEl('div', 'sd-row');
+    box.style.marginTop = '6px';
+
+    // The engine that drives the call, switchable under the running camera.
+    // Offered only where the Longpipe script is present; the choice is stored,
+    // so it survives a reload exactly like ?segengine=longpipe would.
+    if (typeof LongpipeEngine !== 'undefined') {
+      var eng = dEl('select');
+      eng.style.flex = '1 1 100%';
+      eng.setAttribute('aria-label', 'Segmentation engine');
+      var engs = [['longpipe', 'Engine: Longpipe (default)'], ['mediapipe', 'Engine: MediaPipe']];
+      if (typeof RvmEngine !== 'undefined') engs.push(['rvm', 'Engine: RVM (experimental, GPL weights: previews and make rvm-assets)']);
+      if (typeof P3mEngine !== 'undefined') engs.push(['p3m', 'Engine: P3M-Net (experimental, 78 MB download)']);
+      engs.forEach(function (v) {
+        var o = dEl('option', '', v[1]); o.value = v[0]; eng.appendChild(o);
+      });
+      eng.value = engine();
+      eng.addEventListener('change', function () {
+        eng.disabled = true;       // one swap at a time
+        diagUseEngine(eng.value);
+      });
+      box.appendChild(eng);
+      _diag.engineSelect = eng;
+    }
+
+    var silSel = dEl('select');
+    silSel.style.flex = '1 1 auto';
+    silSel.setAttribute('aria-label', 'Silhouette prior');
+    [['default', 'Silhouette: default'], ['on', 'Silhouette: on'], ['off', 'Silhouette: off']].forEach(function (v) {
+      var o = dEl('option', '', v[1]); o.value = v[0]; silSel.appendChild(o);
+    });
+    silSel.value = readSilMode();
+    silSel.addEventListener('change', function () { setDebug(SIL_KEY, silSel.value === 'default' ? null : silSel.value); });
+    box.appendChild(silSel);
+    var silStr = dEl('input');
+    silStr.style.cssText = 'flex:1 1 120px;min-width:80px';
+    silStr.type = 'range'; silStr.min = '0'; silStr.max = '1'; silStr.step = '0.05';
+    silStr.setAttribute('aria-label', 'Silhouette prior strength');
+    silStr.title = 'Silhouette prior strength';
+    silStr.value = String(readSilStrength());
+    var silVal = dEl('span', 'sd-num', Number(silStr.value).toFixed(2));
+    silVal.style.cssText = 'min-width:34px;text-align:right';
+    silStr.addEventListener('input', function () {
+      silVal.textContent = Number(silStr.value).toFixed(2);
+      setDebug(SIL_STRENGTH_KEY, silStr.value);
+    });
+    box.appendChild(silStr);
+    box.appendChild(silVal);
+    tune.appendChild(box);
+    return tune;
+  }
+
+  // Move the call to another engine, from the tuning list or an engine's Use
+  // button; every control that can do it waits for the swap to land.
+  var _diagSwapping = false;
+  function diagUseEngine(name) {
+    if (_diagSwapping) return Promise.resolve(engine());
+    _diagSwapping = true;
+    diagSyncEngineControls();
+    function done() {
+      _diagSwapping = false;
+      diagSyncEngineControls();
+      return engine();
+    }
+    return setEngine(name).then(done, done);
+  }
+
+  function diagSyncEngineControls() {
+    if (_diag.engineSelect) {
+      _diag.engineSelect.value = engine();
+      _diag.engineSelect.disabled = _diagSwapping;
+    }
+    if (_diag.on && _diag.view === 'compare') cmpRenderTable();
   }
 
   // Move the panel by its title bar. A drag leaves it where it was dropped,
@@ -6689,34 +6853,38 @@ var VideoEffects = (function () {
       el.style.left = x + 'px'; el.style.top = y + 'px'; el.style.bottom = 'auto';
       el.style.maxHeight = 'calc(100dvh - ' + (y + 8) + 'px)';
     });
-    function end() { drag = null; handle.style.cursor = 'grab'; }
+    function end() { drag = null; handle.style.cursor = ''; }
     handle.addEventListener('pointerup', end);
     handle.addEventListener('pointercancel', end);
   }
 
-  // What the panel shows follows the view: the compare controls only in the
-  // compare view, the tab that is up marked.
+  // What the panel shows follows the view: the tab that is up, its page, and
+  // which of the pipeline's views is marked.
   function diagSyncView() {
     if (!_diag.el) return;
-    dMarkChips(_diag.tabs, _diag.view);
     var c = _diag.view === 'compare';
-    _diag.cmpBox.style.display = c ? '' : 'none';
-    _diag.statsBox.style.display = c ? 'none' : '';
-    dMarkChips(_diag.cmpShow, _cmp.view);
-    if (c && !_cmp.on) cmpPaint();     // no camera yet: say so
-    _diag.canvas.style.cursor = (c || (DIAG_GRIDS[_diag.view] && DIAG_GRIDS[_diag.view].ids.length > 1)) ? 'pointer' : 'default';
+    dPress(_diag.tabEngines, c);
+    dPress(_diag.tabPipeline, !c);
+    _diag.pageEngines.hidden = !c;
+    _diag.pagePipeline.hidden = c;
+    Object.keys(_diag.pipeBtns).forEach(function (k) { dPress(_diag.pipeBtns[k], _diag.view === k); });
+    _diag.stageSel.value = DIAG_STAGE_NAMES[_diag.view] ? _diag.view : '';
+    Object.keys(_diag.cmpShow).forEach(function (k) { dPress(_diag.cmpShow[k], _cmp.view === k); });
+    dPress(_diag.freezeBtn, _diag.frozen);
+    _diag.canvas.style.cursor = DIAG_GRIDS[_diag.view] ? 'pointer' : 'default';
+    if (c) cmpRenderTable();
   }
 
   // Shrink the panel to a chip, or bring it back. A hidden panel takes no
-  // pictures (diagBegin), so it costs nothing while it is out of the way.
+  // pictures (diagBegin), so it costs nothing while it is out of the way; the
+  // split view on your own video carries on.
   function diagCollapse(on) {
     _diag.collapsed = !!on;
     if (!_diag.el) return;
-    var size = DIAG_SIZES[_diag.size] || DIAG_SIZES[1];
-    _diag.body.style.display = on ? 'none' : '';
-    _diag.chip.style.display = on ? '' : 'none';
-    _diag.el.style.width = on ? 'auto' : 'min(96vw,' + size[1] + 'px)';
-    _diag.el.style.padding = on ? '0' : '8px';
+    _diag.main.hidden = !!on;
+    _diag.chip.hidden = !on;
+    _diag.el.classList.toggle('sd-collapsed', !!on);
+    if (!on) _diag.el.style.width = 'min(calc(100vw - 16px), ' + diagWidth() + 'px)';
   }
 
   function diagOpen(view) {
@@ -6730,6 +6898,7 @@ var VideoEffects = (function () {
     _diag.frozen = false;
     _diag.collapsed = false;
     _diag.error = '';
+    if (_diag.view !== 'compare') _diag.lastPipe = _diag.view;
     diagBuildPanel();
     if (_diag.view === 'compare') cmpStart();
     return diagState();
@@ -6741,42 +6910,37 @@ var VideoEffects = (function () {
     cmpStop();
     if (_active) _active.diagRelease();
     if (_diag.el && _diag.el.parentNode) _diag.el.parentNode.removeChild(_diag.el);
-    _diag.el = _diag.body = _diag.chip = _diag.canvas = _diag.ctx = null;
-    _diag.info = _diag.freezeBtn = _diag.copyBtn = _diag.sizeBtn = null;
-    _diag.engineSelect = _diag.tabs = _diag.statsBox = _diag.cmpBox = _diag.cmpTable = null;
-    _diag.cmpShow = _diag.cmpBoxes = _diag.engBadge = _diag.hzBadge = _diag.lay = null;
+    var style = document.getElementById('seg-diag-style');
+    if (style && style.parentNode) style.parentNode.removeChild(style);
+    DIAG_UI.forEach(function (k) { _diag[k] = null; });
   }
 
   function diagSetView(view) {
     if (!diagViewValid(view)) return false;
     _diag.view = view;
+    if (view !== 'compare') _diag.lastPipe = view;
     // A frozen picture was drawn in the old layout; the next inference redraws.
     if (_diag.frozen) {
       _diag.frozen = false;
       if (_diag.freezeBtn) _diag.freezeBtn.textContent = 'Freeze';
     }
     // Comparing is the one view that costs something: leaving it frees the
-    // engines it loaded.
+    // engines it loaded and gives your video back.
     if (view === 'compare') cmpStart(); else cmpStop();
     diagSyncView();
     return true;
   }
 
-  // A click on one picture of a grid enlarges it; in the comparison it
-  // enlarges that engine's picture, and a second click puts it back.
+  // A click on one picture of an overview opens that stage on its own.
   function diagCanvasClick(ev) {
     var cv = _diag.canvas, lay = _diag.lay;
-    // One enlarged picture: any click puts the others back.
-    if (_diag.view === 'compare' && _cmp.focus) { cmpFocus(null); return; }
     if (!cv || !lay || lay.ids.length < 2) return;
     var r = cv.getBoundingClientRect();
     if (!r.width || !r.height) return;
     var col = Math.min(lay.cols - 1, Math.floor((ev.clientX - r.left) / r.width * lay.cols));
     var row = Math.min(lay.rows - 1, Math.floor((ev.clientY - r.top) / r.height * lay.rows));
     var id = lay.ids[row * lay.cols + col];
-    if (!id) return;
-    if (_diag.view === 'compare') cmpFocus(_cmp.focus === id ? null : id);
-    else diagSetView(id);
+    if (id) diagSetView(id);
   }
 
   // The report to paste into an issue: what this device is, what is running,
@@ -6792,14 +6956,15 @@ var VideoEffects = (function () {
     else lines.push('', 'no inference yet');
     var cs = cmpState();
     if (cs.on) {
-      lines.push('', 'engines compared (' + cs.view + ' view):');
+      lines.push('', 'engines compared (split view: ' + cs.view + (cs.focus ? ', only ' + cs.focus : '') + '):');
       cs.entries.forEach(function (e) {
         lines.push('  ' + e.name + (e.primary ? ' (drives the picture)' : '') + ': ' + e.state +
           (e.error ? ' — ' + e.error : '') +
           ' · ' + (e.ms === null ? '–' : e.ms.toFixed(1) + ' ms') +
           ' · ' + (e.hz ? e.hz.toFixed(1) + ' Hz' : '–') +
           ' · person ' + (e.person === null ? '–' : (e.person * 100).toFixed(1) + '%') +
-          ' · vs ' + (cs.reference || '–') + ' ' + (e.iou === null ? '–' : e.iou.toFixed(3)));
+          ' · vs ' + (cs.reference || '–') + ' ' + (e.iou === null ? '–' : e.iou.toFixed(3)) +
+          (e.note ? ' · ' + e.note : ''));
       });
     }
     return lines.join('\n');
@@ -6815,7 +6980,8 @@ var VideoEffects = (function () {
     }
     function fallback() {
       try {
-        var ta = dEl('textarea', 'position:fixed;left:-9999px;top:0');
+        var ta = dEl('textarea');
+        ta.style.cssText = 'position:fixed;left:-9999px;top:0';
         ta.value = text;
         document.body.appendChild(ta);
         ta.select();
@@ -6832,14 +6998,16 @@ var VideoEffects = (function () {
     return text;
   }
 
+  // The picture of the tab that is up: the split view, or the stages.
   function diagSave() {
     try {
-      if (!_diag.canvas) return;
-      _diag.canvas.toBlob(function (blob) {
+      var c = _diag.view === 'compare' ? _split.canvas : _diag.canvas;
+      if (!c || !c.width) return;
+      c.toBlob(function (blob) {
         if (!blob) return;
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
-        a.href = url; a.download = 'voxal-seg-' + _diag.view + '.png';
+        a.href = url; a.download = 'voxal-seg-' + (_diag.view === 'compare' ? 'engines' : _diag.view) + '.png';
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
         setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
       }, 'image/png');
@@ -7198,39 +7366,38 @@ var VideoEffects = (function () {
   // --- Live engine comparison --------------------------------------------------
   //
   // Every engine at once, on the same camera, to compare them where it
-  // matters: in the room, on the device, in the light you actually have.
+  // matters: in the room, on the device, in the light you actually have, and
+  // on your own picture with your own background (Split view, below).
   //
   // How it keeps the comparison honest:
   //   * ONE camera, ONE downscaled frame. runSegment() hands the frame it
   //     already made (segCanvas) to the engine that drives the picture, and
   //     then to every other engine in the same task. Nothing is sampled
-  //     twice, so a difference between two panes is a difference between the
+  //     twice, so a difference between two tiles is a difference between the
   //     models, not between the frames they were shown.
   //   * The engine that DRIVES the picture is untouched: it is still the
   //     Processor's segmenter, and what is published is what it produced. The
-  //     others are guests — they never reach the composite — and any of them
-  //     can fail or be unticked without the call noticing.
-  //   * Masks are the RAW model output (what uploadMask() is handed), before
-  //     the blend, dilate and feather, so a pane shows the model and not the
-  //     pipeline that follows it. The picture around the person is the live
-  //     camera, so an engine that trails the camera shows it as a mask that
-  //     lags the face.
+  //     others are guests — they never reach the published frame — and any of
+  //     them can fail or be unticked without the call noticing.
+  //   * A failing engine is REPORTED, never replaced by another model: a tile
+  //     that quietly shows another model is exactly the wrong thing to compare.
   //   * The numbers are with everything running together (the models share one
   //     GPU and one JS thread). Unticking an engine stops feeding it, which is
   //     how you measure one alone.
   //   * It costs nothing off: no engine is created, no frame is copied, and
-  //     leaving the compare view closes every guest.
+  //     leaving the Engines tab closes every guest.
 
   var CMP_ENGINES = ['mediapipe', 'longpipe', 'rvm', 'p3m'];
   var CMP_NAMES = { mediapipe: 'MediaPipe', longpipe: 'Longpipe', rvm: 'RVM', p3m: 'P3M-Net' };
   var CMP_GW = 96, CMP_GH = 54;   // the grid two masks are compared on
-  var CMP_PAINT_MS = 100;         // pictures repaint at most this often
+  var CMP_TABLE_MS = 250;         // the engine table repaints at most this often
   var CMP_POLL_MS = 1000;         // the engines' own stats, asked this often
-  var CMP_VIEWS = ['cutout', 'mask', 'overlay', 'diff'];
+  // What each tile of the split view shows: the composite, or its matte.
+  var CMP_VIEWS = ['result', 'matte'];
 
   var _cmp = {
-    on: false, view: 'cutout', focus: null, ref: null,
-    entries: {}, order: [], raf: 0, lastPaint: 0, lastPoll: 0, cA: null, cB: null, checker: null
+    on: false, view: 'result', focus: null,
+    entries: {}, order: [], raf: 0, lastTable: 0, lastPoll: 0
   };
 
   // The engines this build can offer (a script that is not on the page is not
@@ -7245,8 +7412,7 @@ var VideoEffects = (function () {
   }
 
   // createSegmenter(), without its kindness: an engine that cannot start is
-  // REPORTED here, not swapped for MediaPipe, because a pane that quietly
-  // shows another model is exactly the wrong thing to compare.
+  // REPORTED here, not swapped for MediaPipe.
   function cmpCreate(name, raw, video) {
     var own = { longpipe: window.__voxalLongpipeStub, rvm: window.__voxalRvmStub, p3m: window.__voxalP3mStub }[name];
     // Tests: a function that hands each engine its own stand-in.
@@ -7266,9 +7432,9 @@ var VideoEffects = (function () {
     return {
       name: name, primary: !!primary, state: primary ? 'running' : 'loading', error: '',
       since: performance.now(), readyMs: null, seg: null, paused: false,
-      mask: null, w: 0, h: 0, n: 0, stamps: [], hz: 0, lastAt: 0, lastTs: 0, errs: 0,
+      mask: null, fg: null, w: 0, h: 0, n: 0, stamps: [], hz: 0, lastAt: 0, lastTs: 0, errs: 0,
       times: [], ms: null, msP95: null, note: '',
-      person: null, soft: null, grid: new Uint8Array(CMP_GW * CMP_GH), iou: null, painted: -1
+      person: null, soft: null, grid: new Uint8Array(CMP_GW * CMP_GH), iou: null, measured: -1
     };
   }
 
@@ -7328,6 +7494,7 @@ var VideoEffects = (function () {
       try { e.seg.onFail = null; e.seg.close(); } catch (x) { /* ignore */ }
       e.seg = null;
     }
+    if (_cmp.focus === e.name) _cmp.focus = null;
   }
 
   function cmpDrop(name) {
@@ -7343,39 +7510,44 @@ var VideoEffects = (function () {
     _cmp.lastPoll = 0;
     cmpResync();
     if (!_cmp.raf && typeof requestAnimationFrame === 'function') _cmp.raf = requestAnimationFrame(cmpLoop);
+    splitOpen();
     if (!_diag.on) diagOpen('compare');
     else if (_diag.view !== 'compare') diagSetView('compare');
     return true;
   }
 
   function cmpStop() {
-    if (!_cmp.on && !Object.keys(_cmp.entries).length) return;
+    if (!_cmp.on && !Object.keys(_cmp.entries).length && !_split.on) return;
     _cmp.on = false;
     Object.keys(_cmp.entries).forEach(cmpDrop);
     _cmp.entries = {};
     _cmp.order = [];
+    _cmp.focus = null;
     if (_cmp.raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_cmp.raf);
     _cmp.raf = 0;
+    splitClose();
   }
 
   function cmpPause(name, paused) {
     var e = _cmp.entries[name];
     if (!e || e.primary) return false;
     e.paused = !!paused;
+    if (e.paused && _cmp.focus === name) _cmp.focus = null;
     return true;
   }
 
   function cmpSetView(v) {
     if (CMP_VIEWS.indexOf(v) < 0) return false;
     _cmp.view = v;
-    _cmp.lastPaint = 0;
-    if (_diag.cmpShow) dMarkChips(_diag.cmpShow, v);
+    if (_diag.cmpShow) Object.keys(_diag.cmpShow).forEach(function (k) { dPress(_diag.cmpShow[k], k === v); });
     return true;
   }
 
+  // One engine alone on your video (null: all of them again).
   function cmpFocus(name) {
-    _cmp.focus = name && _cmp.entries[name] ? name : null;
-    _cmp.lastPaint = 0;
+    var e = name && _cmp.entries[name];
+    _cmp.focus = e && e.state !== 'failed' && !e.paused ? name : null;
+    if (_diag.on && _diag.view === 'compare') cmpRenderTable();
     return _cmp.focus;
   }
 
@@ -7428,6 +7600,13 @@ var VideoEffects = (function () {
           if (!mask) return;
           cmpTake(e, mask.getAsUint8Array(), mask.width, mask.height,
             name === 'mediapipe' ? performance.now() - t0 : null);
+          // RVM's own foreground colour, which its tile composites with.
+          var fg = result.rvm && result.rvm.fg;
+          if (fg) {
+            if (!e.fg || e.fg.data.length !== fg.length) e.fg = { data: new Uint8Array(fg.length), width: 0, height: 0, n: 0 };
+            e.fg.data.set(fg);
+            e.fg.width = result.rvm.width; e.fg.height = result.rvm.height; e.fg.n = e.n;
+          }
         });
       } catch (err) {
         e.errs++;
@@ -7473,16 +7652,22 @@ var VideoEffects = (function () {
     _cmp.raf = requestAnimationFrame(cmpLoop);
     var now = performance.now();
     if (now - _cmp.lastPoll >= CMP_POLL_MS) { _cmp.lastPoll = now; cmpPoll(); }
-    if (!_diag.on || !_diag.ctx || _diag.collapsed || _diag.view !== 'compare') return;
-    if (now - _cmp.lastPaint < CMP_PAINT_MS) return;
-    _cmp.lastPaint = now;
-    if (!_diag.frozen) cmpPaint();
+    if (!_diag.on || _diag.collapsed || _diag.view !== 'compare') return;
+    if (now - _cmp.lastTable < CMP_TABLE_MS) return;
+    _cmp.lastTable = now;
+    cmpRenderTable();
+    var d = _active && _active._dg;
+    diagRefreshBadges(d);
+    if (_diag.info && d && d.st && now - _diag.lastInfo >= DIAG_INFO_MS) {
+      _diag.lastInfo = now;
+      _diag.info.textContent = diagInfoText(d);
+    }
   }
 
   // Person share, soft-edge share and the coarse grid two masks are compared on.
   function cmpMeasure(e) {
-    if (!e.mask || e.painted === e.n) return;
-    e.painted = e.n;
+    if (!e.mask || e.measured === e.n) return;
+    e.measured = e.n;
     var m = e.mask, w = e.w, h = e.h, n = w * h, i, v, person = 0, soft = 0;
     for (i = 0; i < n; i++) {
       v = m[i];
@@ -7508,12 +7693,11 @@ var VideoEffects = (function () {
     return uni ? inter / uni : null;
   }
 
-  // The engine every other is measured against: the one chosen, else the one
-  // that is driving the picture.
+  // The engine every other is measured against: the one driving the call.
   function cmpReference() {
-    if (_cmp.ref && _cmp.entries[_cmp.ref] && _cmp.entries[_cmp.ref].mask) return _cmp.entries[_cmp.ref];
     var found = null;
     Object.keys(_cmp.entries).forEach(function (n) { if (_cmp.entries[n].primary) found = _cmp.entries[n]; });
+    if (found) cmpMeasure(found);
     return found && found.mask ? found : null;
   }
 
@@ -7523,6 +7707,11 @@ var VideoEffects = (function () {
     return {
       on: _cmp.on, view: _cmp.view, focus: _cmp.focus,
       reference: ref ? ref.name : null,
+      split: {
+        on: _split.on, mirror: _split.mirror, frames: _split.frames,
+        width: _split.canvas ? _split.canvas.width : 0, height: _split.canvas ? _split.canvas.height : 0,
+        tiles: _split.tiles.map(function (t) { return { name: t.name, x: t.x, y: t.y, w: t.w, h: t.h, ready: t.ready }; })
+      },
       entries: _cmp.order.map(function (name) {
         var e = _cmp.entries[name];
         if (!e) return null;
@@ -7538,226 +7727,419 @@ var VideoEffects = (function () {
     };
   }
 
-  // --- the comparison's pictures -------------------------------------------------
-
-  function cmpChecker() {
-    if (_cmp.checker) return _cmp.checker;
-    var c = document.createElement('canvas');
-    c.width = c.height = 16;
-    var x = c.getContext('2d');
-    x.fillStyle = '#2a2a2a'; x.fillRect(0, 0, 16, 16);
-    x.fillStyle = '#3a3a3a'; x.fillRect(0, 0, 8, 8); x.fillRect(8, 8, 8, 8);
-    _cmp.checker = c.getContext('2d').createPattern(c, 'repeat');
-    return _cmp.checker;
-  }
-
-  function cmpScratch(key, w, h) {
-    var c = _cmp[key] || (_cmp[key] = document.createElement('canvas'));
-    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
-    return c;
-  }
-
-  // One engine's mask as an RGBA picture at the mask's own size.
-  function cmpFill(e, view, ref) {
-    var a = cmpScratch('cA', e.w, e.h);
-    var actx = a.getContext('2d');
-    var img = actx.createImageData(e.w, e.h), d = img.data, m = e.mask, n = e.w * e.h, i, v, r, rv, rm, rw, rh, sx, sy, o;
-    if (view === 'diff') {
-      rm = ref && ref.mask; rw = ref ? ref.w : 0; rh = ref ? ref.h : 0;
-    }
-    for (i = 0; i < n; i++) {
-      v = m[i]; o = i * 4;
-      if (view === 'mask') {
-        d[o] = d[o + 1] = d[o + 2] = v; d[o + 3] = 255;
-      } else if (view === 'overlay') {
-        d[o] = 255; d[o + 1] = 60; d[o + 2] = 60; d[o + 3] = (v * 0.6) | 0;
-      } else if (view === 'diff') {
-        if (ref === e || !rm) {
-          d[o] = d[o + 1] = d[o + 2] = v >= 128 ? 200 : 20;
-        } else {
-          sx = ((i % e.w) + 0.5) / e.w; sy = (((i / e.w) | 0) + 0.5) / e.h;
-          rv = rm[Math.min(rh - 1, (sy * rh) | 0) * rw + Math.min(rw - 1, (sx * rw) | 0)];
-          r = v >= 128; rv = rv >= 128;
-          if (r && rv) { d[o] = d[o + 1] = d[o + 2] = 110; }          // both: grey
-          else if (r) { d[o] = 240; d[o + 1] = 70; d[o + 2] = 70; }     // only this one: red
-          else if (rv) { d[o] = 70; d[o + 1] = 140; d[o + 2] = 255; }  // only the reference: blue
-          else { d[o] = d[o + 1] = d[o + 2] = 16; }
-        }
-        d[o + 3] = 255;
-      } else {
-        d[o + 3] = v;     // cutout: the mask is the alpha
-      }
-    }
-    actx.putImageData(img, 0, 0);
-    return a;
-  }
-
   function cmpLevel(v, good, fair, higherIsBetter) {
     if (v === null || v === undefined) return 'muted';
     if (higherIsBetter) return v >= good ? 'ok' : (v >= fair ? 'warn' : 'bad');
     return v <= good ? 'ok' : (v <= fair ? 'warn' : 'bad');
   }
 
-  function cmpPaintPane(ctx, e, ref, x, y, pw, ph, video) {
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.beginPath(); ctx.rect(0, 0, pw, ph); ctx.clip();
-    ctx.fillStyle = '#1b1b1b'; ctx.fillRect(0, 0, pw, ph);
-    var view = _cmp.view;
-    if (e.state === 'running' && e.mask && e.w) {
-      try {
-        var a = cmpFill(e, view, ref);
-        if (view === 'cutout') {
-          ctx.fillStyle = cmpChecker(); ctx.fillRect(0, 0, pw, ph);
-          var b = cmpScratch('cB', pw, ph), bctx = b.getContext('2d');
-          bctx.globalCompositeOperation = 'source-over';
-          bctx.clearRect(0, 0, pw, ph);
-          bctx.drawImage(video, 0, 0, pw, ph);
-          bctx.globalCompositeOperation = 'destination-in';
-          bctx.drawImage(a, 0, 0, pw, ph);
-          bctx.globalCompositeOperation = 'source-over';
-          ctx.drawImage(b, 0, 0);
-        } else if (view === 'overlay') {
-          ctx.drawImage(video, 0, 0, pw, ph);
-          ctx.drawImage(a, 0, 0, pw, ph);
-        } else {
-          ctx.imageSmoothingEnabled = view !== 'diff';
-          ctx.drawImage(a, 0, 0, pw, ph);
-        }
-      } catch (err) { _diag.error = String((err && err.message) || err); }
-    } else {
-      ctx.fillStyle = e.state === 'failed' ? DIAG_COLOR.bad : DIAG_COLOR.muted;
-      ctx.font = '12px ui-monospace, Menlo, monospace';
-      ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
-      var msg = e.state === 'failed' ? ('failed: ' + e.error)
-        : e.paused ? 'paused'
-        : 'loading… ' + Math.round((performance.now() - e.since) / 1000) + ' s';
-      if (msg.length > 70) msg = msg.slice(0, 67) + '…';
-      ctx.fillText(msg, pw / 2, ph / 2);
-      ctx.textAlign = 'left';
-    }
-    // The label: who, how fast, how close to the reference.
-    ctx.font = '12px ui-monospace, Menlo, monospace';
-    ctx.textBaseline = 'top';
-    var bits = [CMP_NAMES[e.name] + (e.primary ? ' ★' : '')];
-    if (e.state === 'running') {
-      if (e.ms !== null) bits.push(e.ms.toFixed(0) + ' ms');
-      if (e.hz) bits.push(e.hz.toFixed(0) + ' Hz');
-      if (ref && e !== ref && e.mask && ref.mask) {
-        var q = cmpIou(e.grid, ref.grid);
-        if (q !== null) bits.push('IoU ' + q.toFixed(2));
-      }
-    }
-    var text = bits.join(' · ');
-    ctx.fillStyle = 'rgba(0,0,0,.7)';
-    ctx.fillRect(0, 0, Math.min(pw, ctx.measureText(text).width + 10), 18);
-    ctx.fillStyle = '#fff';
-    ctx.fillText(text, 5, 3);
-    ctx.restore();
-  }
-
-  function cmpPaint() {
-    var cv = _diag.canvas, ctx = _diag.ctx, p = _active;
-    if (!cv || !ctx) return;
-    var names = _cmp.focus ? [_cmp.focus] : _cmp.order.slice();
-    if (!p || !names.length) {
-      cv.width = 640; cv.height = 120;
-      ctx.fillStyle = '#222'; ctx.fillRect(0, 0, 640, 120);
-      ctx.fillStyle = '#aaa'; ctx.font = '13px ui-monospace, Menlo, monospace';
-      ctx.fillText('Start the camera with a background effect to compare engines.', 16, 60);
-      _diag.lay = null;
-      cmpRenderTable();
-      return;
-    }
-    var cols = names.length === 1 ? 1 : (names.length <= 4 ? 2 : 3);
-    var rows = Math.ceil(names.length / cols);
-    var ow = DIAG_OVERLAY_MAX, pw = Math.floor(ow / cols);
-    var aspect = (p.segH || 9) / (p.segW || 16);
-    var ph = Math.max(1, Math.round(pw * aspect));
-    var oh = ph * rows;
-    if (cv.width !== pw * cols || cv.height !== oh) { cv.width = pw * cols; cv.height = oh; }
-    ctx.fillStyle = '#111'; ctx.fillRect(0, 0, cv.width, cv.height);
-    names.forEach(function (n) { if (_cmp.entries[n]) cmpMeasure(_cmp.entries[n]); });
-    var ref = cmpReference();
-    names.forEach(function (n, i) {
-      var e = _cmp.entries[n];
-      if (e) cmpPaintPane(ctx, e, ref, (i % cols) * pw, Math.floor(i / cols) * ph, pw, ph, p.video);
-    });
-    _diag.lay = { ids: names, cols: cols, rows: rows };
-    cmpRenderTable();
-    var d = p._dg, now = performance.now();
-    if (d) diagRefreshBadges(d);
-    if (_diag.info && d && d.st && now - _diag.lastInfo >= DIAG_INFO_MS) {
-      _diag.lastInfo = now;
-      _diag.info.textContent = diagInfoText(d);
-    }
+  // One row per engine, made once and updated in place: a tick box that
+  // feeds it or not, its state, its numbers, and Use (move the call to it).
+  function cmpRow(name) {
+    var r = _diag.cmpRows[name];
+    if (r) return r;
+    var tr = dEl('tr');
+    tr.setAttribute('data-engine', name);
+    var c0 = dEl('td'), cell = dEl('div', 'sd-eng');
+    var cb = dEl('input');
+    cb.type = 'checkbox'; cb.checked = true;
+    cb.setAttribute('aria-label', 'Run ' + CMP_NAMES[name]);
+    cb.addEventListener('change', function () { cmpPause(name, !cb.checked); cmpRenderTable(); });
+    var dot = dEl('span', 'sd-dot');
+    var nm = dButton(CMP_NAMES[name], function () { cmpFocus(_cmp.focus === name ? null : name); },
+      'Show only ' + CMP_NAMES[name], 'sd-name');
+    cell.appendChild(cb); cell.appendChild(dot); cell.appendChild(nm);
+    c0.appendChild(cell);
+    var ms = dEl('td', 'r sd-num'), hz = dEl('td', 'r sd-num'), iou = dEl('td', 'r sd-num'), act = dEl('td', 'r');
+    var use = dButton('Use', function () { diagUseEngine(name); }, 'Use ' + CMP_NAMES[name] + ' for the call', 'sd-use');
+    act.appendChild(use);
+    tr.appendChild(c0); tr.appendChild(ms); tr.appendChild(hz); tr.appendChild(iou); tr.appendChild(act);
+    var sub = dEl('tr', 'sd-sub'), subTd = dEl('td');
+    subTd.colSpan = 5;
+    sub.appendChild(subTd);
+    r = _diag.cmpRows[name] = { tr: tr, sub: sub, subTd: subTd, cb: cb, dot: dot, nm: nm, ms: ms, hz: hz, iou: iou, use: use };
+    return r;
   }
 
   function cmpRenderTable() {
-    var box = _diag.cmpTable;
-    if (!box) return;
-    var st = cmpState();
-    var head = ['Engine', 'State', 'Inference', 'Hz', 'Person', 'Soft edge', 'vs ' + (st.reference ? CMP_NAMES[st.reference] : 'ref')];
-    var html = ['<table style="border-collapse:collapse;width:100%;font:inherit"><thead><tr>'];
-    head.forEach(function (h) { html.push('<th style="text-align:left;padding:3px 8px 3px 0;color:' + DIAG_COLOR.muted + ';font-weight:normal;white-space:nowrap">' + h + '</th>'); });
-    html.push('</tr></thead><tbody>');
-    function cell(text, level) {
-      return '<td style="padding:3px 8px 3px 0;white-space:nowrap;color:' + (DIAG_COLOR[level] || '#eee') + '">' + text + '</td>';
+    var body = _diag.cmpBody;
+    if (!body) return;
+    var st = cmpState(), p = _active;
+    var prim = st.entries.filter(function (e) { return e.primary; })[0];
+    // The line above the table: what you are looking at.
+    if (_diag.cmpNote) {
+      _diag.cmpNote.textContent = !p || p.stopped
+        ? 'Start the camera with a background effect to compare engines.'
+        : 'Your own video is split by engine, with your background — only you see it. The call still gets ' +
+          (prim ? '★ ' + CMP_NAMES[prim.name] : 'the engine driving it') + '.' +
+          (st.focus ? ' Showing only ' + CMP_NAMES[st.focus] + ': tap its name again for all.' : '');
     }
-    function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+    var seen = {};
     st.entries.forEach(function (e) {
-      var live = e.state === 'running';
-      html.push('<tr data-engine="' + e.name + '">');
-      html.push(cell(esc(CMP_NAMES[e.name]) + (e.primary ? ' ★' : ''), 'accent'));
-      html.push(cell(esc(e.state === 'failed' ? 'failed' : e.state), e.state === 'failed' ? 'bad' : (live ? 'ok' : 'muted')));
-      html.push(cell(e.ms === null ? '–' : e.ms.toFixed(1) + ' ms' + (e.msP95 !== null && e.msP95 !== undefined ? ' / p95 ' + e.msP95.toFixed(0) : ''),
-        cmpLevel(e.ms, 25, 60, false)));
-      html.push(cell(e.hz ? e.hz.toFixed(1) : '–', cmpLevel(e.hz || null, 12, 6, true)));
-      html.push(cell(e.person === null ? '–' : (e.person * 100).toFixed(1) + '%', 'muted'));
-      html.push(cell(e.soft === null ? '–' : (e.soft * 100).toFixed(1) + '%', 'muted'));
-      html.push(cell(e.iou === null ? '–' : (e.primary && st.reference === e.name ? 'reference' : e.iou.toFixed(3)),
-        e.name === st.reference ? 'muted' : cmpLevel(e.iou, 0.9, 0.8, true)));
-      html.push('</tr>');
-      if (e.error || e.note) {
-        html.push('<tr><td colspan="7" style="padding:0 0 4px;color:' + (e.state === 'failed' ? DIAG_COLOR.bad : DIAG_COLOR.muted) + ';font-size:11px;white-space:normal;word-break:break-word">' +
-          esc(e.state === 'failed' ? e.error : (e.note || '')) + '</td></tr>');
-      }
+      seen[e.name] = true;
+      var r = cmpRow(e.name);
+      var running = e.state === 'running';
+      body.appendChild(r.tr);
+      r.nm.textContent = CMP_NAMES[e.name] + (e.primary ? ' ★' : '');
+      dPress(r.nm, st.focus === e.name);
+      r.cb.checked = e.state !== 'paused';
+      r.cb.disabled = e.primary || e.state === 'failed';
+      r.cb.title = e.primary ? 'This engine drives the call' : '';
+      r.dot.style.background = DIAG_COLOR[e.state === 'failed' ? 'bad' : running ? 'ok' : e.state === 'paused' ? 'warn' : 'accent'];
+      r.dot.title = e.state;
+      // An engine that is not running says so where its time would be.
+      r.ms.textContent = !running ? (e.state === 'loading' ? 'loading…' : e.state)
+        : e.ms === null || e.ms === undefined ? '–' : e.ms.toFixed(1) + ' ms';
+      r.ms.title = running && e.msP95 !== null && e.msP95 !== undefined ? 'p95 ' + e.msP95.toFixed(1) + ' ms' : '';
+      r.ms.style.color = e.state === 'failed' ? DIAG_COLOR.bad
+        : e.state === 'paused' ? DIAG_COLOR.warn
+        : DIAG_COLOR[cmpLevel(running ? e.ms : null, 25, 60, false)];
+      r.hz.textContent = running && e.hz ? e.hz.toFixed(1) + ' Hz' : '–';
+      r.hz.style.color = DIAG_COLOR[cmpLevel(running ? e.hz : null, 12, 6, true)];
+      r.iou.textContent = e.primary ? '★' : (e.iou === null ? '–' : e.iou.toFixed(2));
+      r.iou.style.color = DIAG_COLOR[e.primary ? 'muted' : cmpLevel(running ? e.iou : null, 0.9, 0.8, true)];
+      r.use.textContent = e.primary ? 'In call' : 'Use';
+      r.use.disabled = e.primary || e.state !== 'running' || _diagSwapping;
+      var sub = e.state === 'failed' ? e.error
+        : e.state === 'loading' ? 'starting for ' + Math.round((performance.now() - ((_cmp.entries[e.name] || {}).since || 0)) / 1000) + ' s'
+        : e.state === 'paused' ? 'not fed, not on your video'
+        : e.note;
+      r.subTd.textContent = sub || '';
+      r.subTd.style.color = e.state === 'failed' ? DIAG_COLOR.bad : '';
+      r.tr.classList.toggle('sd-hasub', !!sub);
+      if (sub) body.appendChild(r.sub);
+      else if (r.sub.parentNode) r.sub.parentNode.removeChild(r.sub);
     });
-    html.push('</tbody></table>');
-    box.innerHTML = html.join('');
-    // The tick boxes show what each engine is doing.
-    if (_diag.cmpBoxes) {
-      Object.keys(_diag.cmpBoxes).forEach(function (name) {
-        var b = _diag.cmpBoxes[name];
-        var e = st.entries.filter(function (x) { return x.name === name; })[0];
-        b.dot.style.background = !e ? DIAG_COLOR.muted
-          : e.state === 'failed' ? DIAG_COLOR.bad
-          : e.state === 'running' ? DIAG_COLOR.ok
-          : e.state === 'paused' ? DIAG_COLOR.warn : DIAG_COLOR.accent;
-        b.cb.disabled = !e || !!e.primary || e.state === 'failed';
-        b.cb.title = e && e.primary ? 'This engine drives the picture' : '';
-      });
-    }
+    Object.keys(_diag.cmpRows).forEach(function (name) {
+      if (seen[name]) return;
+      var r = _diag.cmpRows[name];
+      [r.tr, r.sub].forEach(function (n) { if (n.parentNode) n.parentNode.removeChild(n); });
+      delete _diag.cmpRows[name];
+    });
   }
+
+  // --- Split view -------------------------------------------------------------------
+  //
+  // The comparison on the picture you actually look at. While the Engines tab
+  // is up, your self-view shows the camera split into one tile per engine,
+  // each tile the FULL frame — blur, picture or animated scene, light, shadow
+  // and all — drawn with that engine's mask. One engine alone fills it; two
+  // stand side by side, each showing the middle of the frame; three or four
+  // share a 2x2 grid.
+  //
+  // How it keeps it honest:
+  //   * Each guest's raw mask goes through maskChain(), the very chain the
+  //     engine driving the call goes through, with a set of mask textures of
+  //     its own (splitSet) and its own edge, cut and blend — what that engine
+  //     would get if it drove the call.
+  //   * The tiles are drawn by the composite program itself, once its state
+  //     for the real frame is set, into the GL canvas; copied to a 2D canvas in
+  //     the same task (the keyed frame's trick); and then the real frame is
+  //     drawn over the whole canvas. The call is sent exactly what it is sent
+  //     without the split — byte for byte.
+  //   * The split is a stream of its own, which only the self-view shows
+  //     (selfView()): nobody in the call sees it.
+  //   * What is learned over time — the empty-room reference, the silhouette
+  //     prior's colour model, a scene's light and the subject's shadow — is
+  //     the driving engine's. A tile changes the mask, its edge and (RVM) the
+  //     foreground colour, which is where engines differ.
+  //   * With Longpipe's own blur published (its direct picture), Longpipe's
+  //     tile shows that picture, since that is what the call gets.
+
+  var SPLIT_MAX_W = 1280;   // the split canvas's width at most, in px
+
+  var _split = { on: false, canvas: null, ctx: null, stream: null, mirror: false, tiles: [], frames: 0, listeners: [] };
+
+  function splitNotify() {
+    _split.listeners.slice().forEach(function (fn) { try { fn(); } catch (e) { /* ignore */ } });
+  }
+
+  function splitOpen() {
+    if (_split.on) return;
+    _split.on = true;
+    if (!_split.canvas) {
+      _split.canvas = document.createElement('canvas');
+      _split.ctx = _split.canvas.getContext('2d');
+    }
+    var p = _active;
+    _split.canvas.width = Math.max(2, Math.min(SPLIT_MAX_W, (p && p.canvas.width) || 640));
+    _split.canvas.height = Math.max(2, Math.round(_split.canvas.width * (((p && p.canvas.height) || 360) / ((p && p.canvas.width) || 640))));
+    _split.ctx.fillStyle = '#000';
+    _split.ctx.fillRect(0, 0, _split.canvas.width, _split.canvas.height);
+    _split.tiles = [];
+    _split.frames = 0;
+    try { _split.stream = _split.canvas.captureStream(); } catch (e) { _split.stream = null; }
+    splitNotify();
+  }
+
+  function splitClose() {
+    if (!_split.on) return;
+    _split.on = false;
+    if (_split.stream) {
+      try { _split.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* ignore */ }
+    }
+    _split.stream = null;
+    _split.tiles = [];
+    if (_split.canvas) { _split.canvas.width = 0; _split.canvas.height = 0; }
+    if (_active) _active.splitRelease();
+    splitNotify();
+  }
+
+  // What the self-view should show for `stream`: the split while it is up and
+  // `stream` is the camera pipeline's output, else `stream` itself. `mirror`
+  // says the self-view is drawn mirrored (a front camera), so the split puts
+  // its tiles and labels the right way round for it.
+  function selfView(stream, mirror) {
+    if (typeof mirror === 'boolean') _split.mirror = mirror;
+    if (_split.on && _split.stream && _active && stream && stream === _active.stream) return _split.stream;
+    return stream;
+  }
+
+  // Called whenever selfView() would answer differently.
+  function onSelfViewChange(fn) {
+    if (typeof fn !== 'function') return function () {};
+    _split.listeners.push(fn);
+    return function () {
+      var i = _split.listeners.indexOf(fn);
+      if (i >= 0) _split.listeners.splice(i, 1);
+    };
+  }
+
+  // A compared engine's own mask textures, at its mask's size, with its own
+  // edge, cut and blend: the shape maskChain() reads off the Processor.
+  Processor.prototype.splitSet = function (name, w, h) {
+    var sets = this._splitSets || (this._splitSets = {});
+    var S = sets[name];
+    if (S && S.segW === w && S.segH === h) return S;
+    if (S) this.splitFree(name);
+    var gl = this.gl;
+    S = { engine: name, segW: w, segH: h, maskCut: isMatteEngine(name) ? 0 : readMaskCut(),
+          edge: edgeProfileFor(name), maskPrimed: false, n: -1, texFg: null, fgN: -1 };
+    ['texMaskRaw', 'texMaskS', 'texMaskSB', 'texMaskA', 'texMaskB', 'texCore'].forEach(function (k) {
+      S[k] = texture(gl, w, h, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
+    });
+    S.fbMaskS = framebuffer(gl, S.texMaskS);
+    S.fbMaskSB = framebuffer(gl, S.texMaskSB);
+    S.fbMaskA = framebuffer(gl, S.texMaskA);
+    S.fbMaskB = framebuffer(gl, S.texMaskB);
+    S.fbCore = framebuffer(gl, S.texCore);
+    sets[name] = S;
+    return S;
+  };
+
+  Processor.prototype.splitFree = function (name) {
+    var gl = this.gl, sets = this._splitSets, S = sets && sets[name];
+    if (!S) return;
+    delete sets[name];
+    if (!gl) return;
+    ['texMaskRaw', 'texMaskS', 'texMaskSB', 'texMaskA', 'texMaskB', 'texCore', 'texFg'].forEach(function (k) {
+      if (S[k]) try { gl.deleteTexture(S[k]); } catch (e) { /* ignore */ }
+    });
+    ['fbMaskS', 'fbMaskSB', 'fbMaskA', 'fbMaskB', 'fbCore'].forEach(function (k) {
+      if (S[k]) try { gl.deleteFramebuffer(S[k]); } catch (e) { /* ignore */ }
+    });
+  };
+
+  Processor.prototype.splitRelease = function () {
+    var self = this;
+    Object.keys(this._splitSets || {}).forEach(function (n) { self.splitFree(n); });
+    this._splitSets = null;
+    if (this._splitDirect && this.gl) try { this.gl.deleteTexture(this._splitDirect); } catch (e) { /* ignore */ }
+    this._splitDirect = null;
+  };
+
+  // The engines that get a tile, the driving one first: running or still
+  // loading, not unticked. A failed engine is in the table, not on your video.
+  function splitNames() {
+    if (_cmp.focus && _cmp.entries[_cmp.focus]) return [_cmp.focus];
+    return _cmp.order.filter(function (n) {
+      var e = _cmp.entries[n];
+      return e && !e.paused && (e.primary || e.state === 'running' || e.state === 'loading');
+    });
+  }
+
+  // Where each tile goes, in canvas pixels (top-left origin) and in GL's
+  // (bottom-left), and which part of the frame it shows (uTile).
+  function splitLayout(n, w, h, mirror) {
+    var cols, rows, tw, th, crop = 0;
+    if (n <= 1) { cols = 1; rows = 1; tw = w; th = h; }
+    else if (n === 2) { cols = 2; rows = 1; tw = Math.floor(w / 2); th = h; crop = 0.5; }
+    else { cols = 2; rows = Math.ceil(n / 2); tw = Math.floor(w / 2); th = Math.floor(h / rows); }
+    var tiles = [], y0 = Math.floor((h - rows * th) / 2);
+    for (var i = 0; i < n; i++) {
+      var r = Math.floor(i / cols), c = i % cols;
+      var inRow = Math.min(cols, n - r * cols);
+      var x0 = Math.floor((w - inRow * tw) / 2);     // a short last row is centred
+      var x = x0 + (mirror ? inRow - 1 - c : c) * tw, top = y0 + r * th;
+      tiles.push({ x: x, top: top, y: h - top - th, w: tw, h: th, u0: crop / 2, du: crop });
+    }
+    return tiles;
+  }
+
+  // Bring every guest's finished mask up to its latest inference. Run at the
+  // top of draw(), before the composite's state is set.
+  Processor.prototype.splitPrepare = function () {
+    var self = this, gl = this.gl, keep = {};
+    try {
+      _cmp.order.forEach(function (name) {
+        var e = _cmp.entries[name];
+        if (!e || e.primary || e.state !== 'running' || e.paused || !e.mask || !e.w) return;
+        keep[name] = true;
+        var S = self.splitSet(name, e.w, e.h);
+        if (S.n === e.n) return;
+        S.n = e.n;
+        gl.bindTexture(gl.TEXTURE_2D, S.texMaskRaw);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, e.w, e.h, gl.RED, gl.UNSIGNED_BYTE, e.mask);
+        S.edge = edgeProfileFor(name);
+        self.maskChain(S, false, false);
+        if (e.fg && e.fg.n !== S.fgN && e.fg.width) {
+          S.fgN = e.fg.n;
+          if (!S.texFg) S.texFg = texture(gl, 0, 0);
+          gl.bindTexture(gl.TEXTURE_2D, S.texFg);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, e.fg.width, e.fg.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, e.fg.data);
+        }
+      });
+      Object.keys(this._splitSets || {}).forEach(function (n) { if (!keep[n]) self.splitFree(n); });
+    } catch (err) {
+      _diag.error = String((err && err.message) || err);
+    }
+  };
+
+  // The tiles, drawn by the composite program with its state for the real
+  // frame already set (see draw()), then copied out; the real frame's own
+  // per-engine state is put back before draw() draws it. `fgOn` and `lin`
+  // are the real frame's own RVM switches.
+  Processor.prototype.splitDraw = function (w, h, direct, fgOn, lin) {
+    var gl = this.gl, self = this, prog = this.pComp;
+    var names = splitNames();
+    var tiles = splitLayout(names.length, w, h, _split.mirror);
+    var matte = _cmp.view === 'matte';
+    var directTile = null;
+    try {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, w, h);
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.uniform1f(uloc(gl, prog, 'uDbg'), matte ? 1 : 0);
+      names.forEach(function (name, i) {
+        var t = tiles[i], e = _cmp.entries[name];
+        var S = e.primary ? self : (self._splitSets && self._splitSets[name]);
+        t.name = name;
+        t.ready = !!(S && S.maskPrimed);
+        if (!t.ready) return;                         // its state is printed instead
+        if (e.primary && direct && !matte) { directTile = t; return; }
+        var rvm = name === 'rvm';
+        var sLin = S === self ? lin : (typeof window.__voxalLinearComposite === 'boolean' ? window.__voxalLinearComposite : rvm);
+        var sFg = S === self ? fgOn : !!(S.texFg && rvm && window.__voxalRvmFg !== false);
+        self.bindTex(prog, 'uMask', 3, S.texMaskA);
+        self.bindTex(prog, 'uCore', 5, S.texCore);
+        self.bindTex(prog, 'uFg', 10, sFg ? (S === self ? self.texFg : S.texFg) : self.texImg);
+        gl.uniform1f(uloc(gl, prog, 'uFgOn'), sFg ? 1 : 0);
+        gl.uniform2f(uloc(gl, prog, 'uEdge'), S.edge.lo, S.edge.hi);
+        gl.uniform1f(uloc(gl, prog, 'uLinear'), sLin ? 1 : 0);
+        gl.uniform4f(uloc(gl, prog, 'uTile'), t.u0, 0, t.du, 0);
+        self.drawQuadRect(t.x, t.y, t.w, t.h);
+      });
+      // Longpipe's own picture, last: it needs a texture unit of its own.
+      if (directTile) {
+        if (!this._splitDirect) this._splitDirect = texture(gl, 0, 0);
+        gl.useProgram(this.pDown);
+        this.bindTex(this.pDown, 'uTex', 0, this._splitDirect);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, direct);
+        gl.uniform2f(uloc(gl, this.pDown, 'uOff'), 0.25 / w, 0.25 / h);
+        gl.uniform1f(uloc(gl, this.pDown, 'uFlip'), 1);
+        gl.uniform4f(uloc(gl, this.pDown, 'uTile'), directTile.u0, 0, directTile.du, 0);
+        this.drawQuadRect(directTile.x, directTile.y, directTile.w, directTile.h);
+        gl.uniform4f(uloc(gl, this.pDown, 'uTile'), 0, 0, 0, 0);
+        gl.uniform1f(uloc(gl, this.pDown, 'uFlip'), 0);
+      }
+      this.splitPublish(tiles, w, h, !!direct);
+    } catch (err) {
+      _diag.error = String((err && err.message) || err);
+    } finally {
+      // The real frame: the driving engine's own state, the whole picture.
+      gl.useProgram(prog);
+      gl.uniform4f(uloc(gl, prog, 'uTile'), 0, 0, 0, 0);
+      gl.uniform1f(uloc(gl, prog, 'uDbg'), 0);
+      this.bindTex(prog, 'uSharp', 0, this.texCam);
+      this.bindTex(prog, 'uMask', 3, this.texMaskA);
+      this.bindTex(prog, 'uCore', 5, this.texCore);
+      this.bindTex(prog, 'uFg', 10, fgOn ? this.texFg : this.texImg);
+      gl.uniform1f(uloc(gl, prog, 'uFgOn'), fgOn ? 1 : 0);
+      gl.uniform2f(uloc(gl, prog, 'uEdge'), this.edge.lo, this.edge.hi);
+      gl.uniform1f(uloc(gl, prog, 'uLinear'), lin ? 1 : 0);
+    }
+  };
+
+  // Copy the tiles out of the GL canvas, in the task that drew them, and
+  // label each: who, how fast, and the state of one that is not ready.
+  Processor.prototype.splitPublish = function (tiles, w, h, direct) {
+    var cv = _split.canvas, ctx = _split.ctx;
+    if (!cv || !ctx) return;
+    var ow = Math.max(2, Math.min(SPLIT_MAX_W, w)), s = ow / w, oh = Math.max(2, Math.round(h * s));
+    if (cv.width !== ow || cv.height !== oh) { cv.width = ow; cv.height = oh; }
+    ctx.drawImage(this.canvas, 0, 0, w, h, 0, 0, ow, oh);
+    var mirror = _split.mirror;
+    _split.tiles = tiles.map(function (t) {
+      var x = t.x * s, y = t.top * s, tw = t.w * s, th = t.h * s;
+      var e = _cmp.entries[t.name];
+      if (!e) return { name: t.name, x: x, y: y, w: tw, h: th, ready: false };
+      var fs = Math.max(12, Math.min(30, Math.round(Math.min(tw, th * 1.6) / 22)));
+      ctx.save();
+      // Seen mirrored, the label must still read left to right from the
+      // tile's top-left corner on screen: draw it flipped, from the right.
+      if (mirror) { ctx.translate(x + tw, y); ctx.scale(-1, 1); } else ctx.translate(x, y);
+      if (tiles.length > 1) {
+        ctx.strokeStyle = 'rgba(0,0,0,.85)';
+        ctx.lineWidth = Math.max(2, fs / 6);
+        ctx.strokeRect(0, 0, tw, th);
+      }
+      var bits = [CMP_NAMES[t.name] + (e.primary ? ' ★' : '')];
+      if (e.state === 'running' && t.ready) {
+        if (e.ms !== null && e.ms !== undefined) bits.push(e.ms.toFixed(0) + ' ms');
+        if (e.hz) bits.push(e.hz.toFixed(0) + ' Hz');
+        if (e.primary && direct && _cmp.view !== 'matte') bits.push('its own blur');
+      }
+      var text = bits.join(' · ');
+      ctx.font = '600 ' + fs + 'px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx.textBaseline = 'middle';
+      var pad = Math.round(fs * 0.5), bw = Math.min(tw - 2 * pad, ctx.measureText(text).width + 2 * pad), bh = Math.round(fs * 1.7);
+      ctx.fillStyle = e.primary ? 'rgba(27,53,86,.88)' : 'rgba(0,0,0,.66)';
+      ctx.fillRect(pad, pad, bw, bh);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(text, pad * 2, pad + bh / 2, Math.max(10, bw - 2 * pad));
+      if (!t.ready) {
+        var msg = e.state === 'loading'
+          ? 'loading… ' + Math.round((performance.now() - e.since) / 1000) + ' s'
+          : 'waiting for its first mask';
+        ctx.fillStyle = '#9aa3b0';
+        ctx.textAlign = 'center';
+        ctx.fillText(msg, tw / 2, th / 2, tw - 2 * pad);
+      }
+      ctx.restore();
+      return { name: t.name, x: x, y: y, w: tw, h: th, ready: !!t.ready };
+    });
+    _split.frames++;
+  };
 
   // The header's two badges: the engine that drives the picture and its rate.
   function diagRefreshBadges(d) {
     if (_diag.engBadge && _active) {
-      _diag.engBadge.textContent = engine();
-      _diag.engBadge.style.color = _engineFallback ? DIAG_COLOR.warn : DIAG_COLOR.accent;
-      _diag.engBadge.style.borderColor = _engineFallback ? DIAG_COLOR.warn : DIAG_COLOR.accent;
-      _diag.engBadge.title = _engineFallback ? 'fell back to MediaPipe: ' + _engineFallback : 'the engine driving the picture';
+      _diag.engBadge.textContent = (CMP_NAMES[engine()] || engine()) + ' ★';
+      var c = _engineFallback ? DIAG_COLOR.warn : DIAG_COLOR.accent;
+      _diag.engBadge.style.color = c;
+      _diag.engBadge.title = _engineFallback ? 'fell back to MediaPipe: ' + _engineFallback : 'the engine driving the call';
     }
     if (_diag.hzBadge) {
       var hz = d && d.hz;
       _diag.hzBadge.textContent = (hz ? hz.toFixed(1) : '–') + ' Hz';
-      var c = DIAG_COLOR[cmpLevel(hz || null, 12, 6, true)];
-      _diag.hzBadge.style.color = c; _diag.hzBadge.style.borderColor = c;
+      _diag.hzBadge.style.color = DIAG_COLOR[cmpLevel(hz || null, 12, 6, true)];
+      _diag.hzBadge.title = 'masks per second from the engine driving the call';
     }
   }
 
   // The few numbers worth a glance, coloured: green is fine, amber is worth a
-  // look, red is the problem. The full report below has the rest.
+  // look, red is the problem. The full report has the rest.
   function diagRenderStats(p) {
     var box = _diag.statsBox;
     if (!box || !p.st) return;
@@ -7775,15 +8157,15 @@ var VideoEffects = (function () {
       ['Silhouette prior', a.silMode + (a.silhouette ? ' · running' + (a.silOn ? '' : ' (learning)') : ' · off'),
         a.silhouette ? 'ok' : 'muted', 'the colour model that corrects the matte']
     ];
-    var html = ['<table style="border-collapse:collapse;width:100%;font:inherit"><tbody>'];
+    var html = ['<table><tbody>'];
     rows.forEach(function (r) {
-      html.push('<tr title="' + r[3].replace(/"/g, '&quot;') + '"><td style="padding:2px 12px 2px 0;color:' + DIAG_COLOR.muted + ';white-space:nowrap">' + r[0] +
-        '</td><td style="padding:2px 0;color:' + (DIAG_COLOR[r[2]] || '#eee') + '">' + r[1] + '</td></tr>');
+      html.push('<tr title="' + r[3].replace(/"/g, '&quot;') + '"><td style="color:' + DIAG_COLOR.muted + '">' + r[0] +
+        '</td><td class="r sd-num" style="color:' + (DIAG_COLOR[r[2]] || '#e8eaed') + '">' + r[1] + '</td></tr>');
     });
     html.push('</tbody></table>');
     var eng = diagEngineText();
     if (eng) {
-      html.push('<div style="margin-top:6px;color:' + DIAG_COLOR.muted + ';font-size:11px;white-space:pre-wrap;word-break:break-word">' +
+      html.push('<div class="sd-hint" style="margin-top:6px;white-space:pre-wrap;word-break:break-word;font-size:11px">' +
         eng.replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }) + '</div>');
     }
     box.innerHTML = html.join('');
@@ -10001,6 +10383,9 @@ var VideoEffects = (function () {
     compareSetView: cmpSetView,
     compareFocus: cmpFocus,
     comparePause: cmpPause,
+    // The self-view's picture: the split view while it is up (see Split view).
+    selfView: selfView,
+    onSelfViewChange: onSelfViewChange,
     keyIn: keyIn,
     keyProbe: keyProbe,
     keyInCount: keyInCount,
