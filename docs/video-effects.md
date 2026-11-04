@@ -1659,30 +1659,36 @@ one just moves the problem. The diagnostic shows each stage's output for the
 **Open it** (it is off, and costs one boolean test per frame, until you do):
 
 - `?segdiag=1` on the page's URL (web / PWA — the way to do it on an iPhone;
-  `?segdiag=compare` opens it on the engine comparison), or
+  `?segdiag=compare` opens it on the Engines tab), or
 - `localStorage['seg-diagnostic'] = '1'` then reload (Tauri, Capacitor), or
 - `VideoEffects.openDiagnostic('stages')` in the console.
 
 It opens a panel (opaque, sized to the *visible* screen — `dvh`, safe areas —
-with its title, actions and view tabs sticky at the top, so they stay reachable
-on a phone). From the top:
+its title bar, tabs and actions fixed while its middle scrolls, so they stay
+reachable on a phone):
 
-- **Title bar**: the engine driving the picture and the inference rate, as
+- **Title bar**: the engine driving the call (★) and its inference rate, as
   coloured badges (green fine, amber worth a look, red the problem); drag it to
-  move the panel. *Hide* shrinks the panel to a small "Seg" chip — on a phone it
-  is otherwise over the room's own mic and camera buttons — and it takes no
-  pictures while hidden. ✕ closes it and frees what it made
+  move the panel. ⤢ cycles its width, – shrinks it to a small "Seg" chip (on a
+  phone it is otherwise over the room's own mic and camera buttons; it takes no
+  pictures while hidden) and ✕ closes it and frees what it made
   (`VideoEffects.closeDiagnostic()` does the same).
-- **Actions**: *Freeze* (hold the last inference to study it or screenshot it),
-  *Save PNG*, *Copy report* (the device, the engine and every number the panel
-  shows, as text to paste into an issue; `VideoEffects.diagnosticReport()`) and
-  *Size S / M / L*.
-- **View tabs**, one per row of the table below. In *grid*, *stages* and the
-  comparison, **click a picture to enlarge it**.
-- Under the picture, the few numbers worth a glance (person share, uncertain
-  pixels, flicker, inference rate, frame skew), coloured against a threshold, and
-  two closed sections: *Engine and tuning* (engine, silhouette prior, tint) and
-  *Full report* (the complete text).
+- **Two tabs**: **Engines** (every engine at once, on your own video — below) and
+  **Pipeline** (each stage of one inference of the engine driving the call).
+- At the bottom, always: *Copy report* (the device, the engines and every number
+  the panel shows, as text to paste into an issue;
+  `VideoEffects.diagnosticReport()`) and *Save PNG* (the split view on the
+  Engines tab, the stages on the Pipeline tab). Two closed sections under either
+  tab: *Tuning* (the engine driving the call, the silhouette prior and its
+  strength) and *Full report*.
+
+### Pipeline: one inference, stage by stage
+
+*Overview* (A B C3 D) and *All stages* (B C1 C2 C3 C4 D) are buttons; every
+single stage is in the *One stage…* list; *Freeze* holds the last inference to
+study or screenshot it. Click a picture of an overview to open that stage on its
+own. Under the picture, the few numbers worth a glance (person share, uncertain
+pixels, flicker, inference rate, frame skew), coloured against a threshold.
 
 | View | What it is |
 |---|---|
@@ -1695,51 +1701,63 @@ on a phone). From the top:
 | **C4** matte used | The composite shader's own `m`: smoothstep window + empty-room reference + hair refinement, i.e. the alpha it actually mixes with |
 | **D** final | The composite |
 | stability map | Where the raw mask kept changing between successive inferences (bright = changing) |
-| *grid* / *stages* | A B C3 D in 2x2, or B C1 C2 C3 C4 D in 3x2, of one inference |
-| **Compare engines** | Every engine at once, on the same camera — see below |
+| *Overview* / *All stages* | A B C3 D in 2x2, or B C1 C2 C3 C4 D in 3x2, of one inference (views `grid` / `stages`) |
 
-"Tint the visible band red" paints, on the mask views, the values the composite
+"Tint the undecided band" paints, on the mask views, the values the composite
 lets through as a *partial* picture (the smoothstep window, 12–78% by default).
 That is the quickest way to see which grey texels in B are the ones that show up
 as background fragments in D.
 
-### Compare engines: every model live, side by side
+### Engines: every model live, on your own video
 
 *"Which engine is better on this device, in this room?"* The measured answers
 (`docs/matting-evaluation.md`, `docs/p3m-evaluation.md`) are on recorded footage;
-this view asks the question where it matters. It loads **MediaPipe, Longpipe,
-RVM and P3M-Net** at once (the ones this build has; an engine whose files are
-missing is shown as *failed* with its reason, never swapped for another model),
-hands every one the **same downscaled camera frame in the same task**, and draws
-their masks in a grid:
+this tab asks the question where it matters. It loads **MediaPipe, Longpipe, RVM
+and P3M-Net** at once (the ones this build has; an engine whose files are missing
+is shown as *failed* with its reason, never swapped for another model), hands
+every one the **same downscaled camera frame in the same task**, and **splits your
+own video** — the self tile in the room — into one tile per engine:
 
-- **Cutout** (the person over a checkerboard), **Mask** (grey), **Overlay** (red
-  over the camera) or **Diff vs reference** (grey both say person, red only this
-  engine, blue only the reference). The reference is the engine driving the
-  picture unless *Diff reference* says otherwise.
-- Each picture is labelled with the engine, its inference time, its rate and its
-  **IoU** against the reference; the table underneath adds the person share, the
-  soft-edge share (how much of the matte is neither 0 nor 1) and a one-line
-  description of the model (provider, input size, load time). ★ marks the engine
-  that drives the picture.
-- **Untick an engine** to stop feeding it: that is how to time one alone (the
-  numbers are otherwise *with everything running together*, sharing one GPU and
-  one thread, so each is slower than it would be alone) and how to tell whether
-  a hitch is the engine or the contention.
-- Choosing another engine under *Engine and tuning* moves the ★: the old driver
-  becomes a guest and the new one stops being one. Leaving the view, closing the
-  panel or stopping the camera closes every guest.
+- Each tile is the **full picture with your background** (blur, image or animated
+  scene), drawn with that engine's mask: one engine fills the picture, two stand
+  side by side (each showing the middle half of the frame), three or four share a
+  2x2 grid. *Matte* shows each engine's matte instead (white you, black the
+  room). Each tile is labelled with the engine, its inference time and its rate;
+  ★ is the engine driving the call.
+- **Only you see the split.** It is a stream of its own (`VideoEffects.selfView()`,
+  which `main.js`'s self tile asks for); the call is sent exactly what it is sent
+  without it, byte for byte (`unit-seg-compare.spec.js`).
+- The table lists every engine: its inference time (p50), its rate and **Match**
+  (the IoU of its mask with ★'s), coloured; under a row, why it failed, how long
+  it has been loading, or a one-line description of the model (provider, input
+  size, load time). **Tap a name** to show that engine alone on your video, again
+  for all of them. **Use** moves the call to that engine (as the *Tuning* list
+  does): the old driver becomes a guest and the new one stops being one.
+- **Untick an engine** to stop feeding it (and take it off your video): that is
+  how to time one alone (the numbers are otherwise *with everything running
+  together*, sharing one GPU and one thread, so each is slower than it would be
+  alone) and how to tell whether a hitch is the engine or the contention.
+- Leaving the tab, closing the panel or stopping the camera closes every guest
+  and gives your self tile its normal picture back.
 
-The masks are the **raw model output** (what `uploadMask()` is handed), before
-the blend, dilate and feather: a pane shows the model, not the pipeline after it.
-The camera behind the cutout is live, so an engine that trails the camera (RVM and
-P3M-Net by about one inference) shows it as a matte that lags a moving face — that
-lag is a real cost of the engine, visible here and not in a still. Guests never
-reach the composite: the published frame is byte-identical with the comparison
-running (`unit-seg-compare.spec.js`). The two heavy engines need WebGPU and about
-110 MB each, and RVM's weights are GPL-3.0 and exist only on Vercel previews and in
-`make rvm-assets`, so this is a desktop evaluation tool, not something to leave
-on: it costs nothing until opened.
+How a tile is drawn: the guest's raw mask goes through **the same chain**
+(`maskChain()`: blend, hole fill, dilate, feather) as the engine driving the
+call, with mask textures of its own and its own edge, cut and blend
+(`edgeProfileFor()`, `maskBlendFor()`), and the composite program draws it into
+its tile before drawing the real frame over the whole canvas. So a tile is what
+that engine would look like driving the call — with one caveat: what is
+*learned* over time (the empty-room reference, the silhouette prior's colour
+model, a scene's light and the subject's shadow) is the driving engine's. The
+tiles differ in the mask, its edge and (RVM) the foreground colour, which is where
+engines differ. With Longpipe's own blur published (its direct picture), its tile
+is that picture, labelled *its own blur*. An engine that trails the camera (RVM
+and P3M-Net by about one inference) shows it as a cut-out that lags a moving face
+— a real cost of the engine, visible here and not in a still.
+
+The two heavy engines need WebGPU and about 110 MB each, and RVM's weights are
+GPL-3.0 and exist only on Vercel previews and in `make rvm-assets`, so this is a
+desktop evaluation tool, not something to leave on: it costs nothing until
+opened.
 
 ### The confidence cut
 

@@ -275,7 +275,7 @@ ONNX Runtime WASM (~27 MB) — a download the mobile apps would also have to fet
    users have today, independently of model choice, and needs no new dependency.
 2. **Do not ship RVM to users.** (It is staged into web *preview* deploys only,
    so it can be evaluated on real devices with `?segengine=rvm`, or side by side with
-   the others in the diagnostic's *Compare engines* view; `vercel-build.sh`.) GPL-3.0 weights; and even licence aside its matte arrives
+   the others in the diagnostic's *Engines* tab; `vercel-build.sh`.) GPL-3.0 weights; and even licence aside its matte arrives
    2–3 frames late in real time, and it needs WebGPU. Keep it as an opt-in,
    never-shipped evaluation engine.
 3. **If a better matte is wanted, look for a permissively licensed matting model
