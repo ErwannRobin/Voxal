@@ -280,6 +280,11 @@ install:
 # and increments android/app/build.gradle versionCode by 1.
 # Without VERSION, it auto-bumps patch version from tauri.conf.json.
 #
+# main is protected (PR only, no bypass), so the bump is committed on
+# release/vX.Y.Z and opened as a PR; the build waits until it is merged, then
+# tags the merged commit on main. RELEASE_MERGE=1 merges that PR for you.
+# Run it from an up-to-date main.
+#
 # "release" allows an ad-hoc-signed DMG (ALLOW_ADHOC_DMG=1 by default).
 # "release-official" refuses ad-hoc signing — use it once Developer ID
 # signing/notarization is configured.
@@ -293,6 +298,12 @@ release-core:
 	@command -v gh >/dev/null 2>&1 || { echo "Error: gh CLI not installed (https://cli.github.com)"; exit 1; }
 	@git diff --quiet && git diff --cached --quiet || { \
 		echo "Error: working tree has uncommitted changes. Commit or stash before releasing."; \
+		exit 1; \
+	}
+	@# main only changes through a PR, so the version bump travels as one. It must start
+	@# from main as it is on GitHub, or the release PR would carry unrelated commits.
+	@git fetch -q origin main && [ "$$(git rev-parse --abbrev-ref HEAD)" = "main" ] && [ "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/main)" ] || { \
+		echo "Error: release from an up-to-date main (git switch main && git pull --ff-only)."; \
 		exit 1; \
 	}
 	@if [ -z "$$TAURI_SIGNING_PRIVATE_KEY" ] && [ ! -f ~/.tauri/voxal.key ]; then \
@@ -334,10 +345,27 @@ release-core:
 	echo "→ Updated package.json, tauri.conf.json, Cargo.toml, version.js, Android, and iOS version fields"; \
 	VERSION="$$NEW_VERSION"; \
 	if ! git diff --quiet -- package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src/version.js android/app/build.gradle ios/App/App.xcodeproj/project.pbxproj; then \
-		echo "→ Committing and pushing version bump…"; \
+		BRANCH="release/v$$VERSION"; \
+		echo "→ Opening a release PR for the version bump ($$BRANCH)…"; \
+		git switch -c "$$BRANCH" || exit 1; \
 		git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src/version.js android/app/build.gradle ios/App/App.xcodeproj/project.pbxproj; \
-		git commit -m "publish new release $$VERSION"; \
-		git push; \
+		git commit -m "publish new release $$VERSION" || exit 1; \
+		git push origin "$$BRANCH:refs/heads/$$BRANCH" || exit 1; \
+		gh pr create --base main --head "$$BRANCH" --title "Release v$$VERSION" \
+			--body "Version bump for v$$VERSION, opened by \`make release\`. The release build continues once this is merged." || exit 1; \
+		if [ "$(RELEASE_MERGE)" = "1" ]; then \
+			echo "→ RELEASE_MERGE=1: merging the release PR now…"; \
+			gh pr merge "$$BRANCH" --squash --delete-branch || exit 1; \
+		fi; \
+		echo "→ Waiting for the release PR to be merged (Ctrl-C to abort)…"; \
+		while :; do \
+			STATE=$$(gh pr view "$$BRANCH" --json state -q .state); \
+			[ "$$STATE" = "MERGED" ] && break; \
+			[ "$$STATE" = "CLOSED" ] && { echo "Error: release PR was closed without merging."; exit 1; }; \
+			sleep 10; \
+		done; \
+		git switch main && git pull --ff-only || exit 1; \
+		git branch -D "$$BRANCH" >/dev/null 2>&1; \
 	fi; \
 	echo "→ Building Voxal v$$VERSION (signed release)…"; \
 	export TAURI_SIGNING_PRIVATE_KEY="$${TAURI_SIGNING_PRIVATE_KEY:-$$(cat ~/.tauri/voxal.key)}"; \
