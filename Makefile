@@ -3,7 +3,7 @@
         coverage-api coverage-summary coverage-badge bench bench-app bench-audio bench-video \
         bench-report bench-publish bench-history \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
-        seg-assets rvm-assets rvm-clean p3m-assets p3m-fetch p3m-clean matting-footage matting-bench emoji-data promo-assets promo-voice scene-preview three-vendor
+        seg-assets rvm-assets rvm-clean p3m-assets p3m-fetch p3m-clean bgm-assets bgm-clean matting-footage matting-bench emoji-data promo-assets promo-voice scene-preview three-vendor
 
 # Default target
 help:
@@ -21,6 +21,7 @@ help:
 	@echo "  rvm-assets   Stage the EXPERIMENTAL RVM matting engine (GPL-3.0; local + web previews only) into src/assets/rvm"
 	@echo "  p3m-fetch    Download the EXPERIMENTAL P3M-Net engine (model + ONNX Runtime, sha256-pinned) into src/assets/p3m"
 	@echo "  p3m-assets   Convert P3M-Net from its official checkpoint yourself (needs PyTorch) into src/assets/p3m"
+	@echo "  bgm-assets   Convert the EXPERIMENTAL BackgroundMattingV2 engine (MIT; needs PyTorch) into src/assets/bgm"
 	@echo "  matting-footage Build the matting benchmark's footage (known alpha) into bench-results/matting"
 	@echo "  matting-bench Score MediaPipe / Longpipe / RVM on it through the real pipeline; ARGS=... passes options"
 	@echo "  promo-assets Re-embed the icon and fonts in docs/promo.html (the films page)"
@@ -93,11 +94,11 @@ debug:
 	echo "→ Launching Voxal (debug)..."; \
 	open "$$APP"
 
-build: gen-build-info seg-assets rvm-clean p3m-clean
+build: gen-build-info seg-assets rvm-clean p3m-clean bgm-clean
 	@echo "→ Building release (unsigned, no updater artifacts). Use 'make build-signed' to sign."
 	npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
-build-signed: gen-build-info seg-assets rvm-clean p3m-clean
+build-signed: gen-build-info seg-assets rvm-clean p3m-clean bgm-clean
 	@export TAURI_SIGNING_PRIVATE_KEY="$${TAURI_SIGNING_PRIVATE_KEY:-$$(cat ~/.tauri/voxal.key 2>/dev/null)}"; \
 	if [ -z "$$TAURI_SIGNING_PRIVATE_KEY" ]; then \
 		echo "Error: No signing key found."; exit 1; \
@@ -109,7 +110,7 @@ build-signed: gen-build-info seg-assets rvm-clean p3m-clean
 	fi; \
 	npm run tauri build
 
-build-debug: gen-build-info seg-assets rvm-clean p3m-clean
+build-debug: gen-build-info seg-assets rvm-clean p3m-clean bgm-clean
 	npm run tauri build -- --debug
 	@echo ""
 	@echo "Debug bundle: src-tauri/target/debug/bundle/macos/Voxal.app"
@@ -197,6 +198,17 @@ p3m-assets:
 p3m-clean:
 	@rm -rf src/assets/p3m
 
+# The BackgroundMattingV2 evaluation's engine (docs/bgm-evaluation.md). MIT,
+# 10-20 MB per converted model plus ONNX Runtime Web, never committed and in no
+# build yet: converted locally from the official checkpoint (needs PyTorch).
+# Deleted before every desktop build (bgm-clean) and stripped from build-web
+# and the mobile apps.
+bgm-assets:
+	@sh scripts/bgm-assets.sh
+
+bgm-clean:
+	@rm -rf src/assets/bgm
+
 # The matting evaluation: footage with a known alpha (public-domain clip and CC0
 # rooms, downloaded once into bench-results/), then every engine through the
 # real pipeline on it. ARGS=... passes options (see scripts/matting-bench.mjs).
@@ -218,7 +230,7 @@ run-web: gen-build-info seg-assets
 build-web: gen-build-info seg-assets
 	mkdir -p dist
 	cp -r src/* dist/
-	@rm -rf dist/assets/rvm dist/assets/p3m
+	@rm -rf dist/assets/rvm dist/assets/p3m dist/assets/bgm
 	@echo "Web app copied to dist/"
 
 # ── Mobile (Capacitor) ────────────────────────────────────────────────────────
@@ -234,6 +246,7 @@ cap-sync: gen-build-info
 	      android/app/src/main/assets/public/assets/seg/vision_*
 	@rm -rf ios/App/App/public/assets/rvm android/app/src/main/assets/public/assets/rvm
 	@rm -rf ios/App/App/public/assets/p3m android/app/src/main/assets/public/assets/p3m
+	@rm -rf ios/App/App/public/assets/bgm android/app/src/main/assets/public/assets/bgm
 
 cap-ios: cap-sync
 	npx cap open ios
