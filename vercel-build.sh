@@ -41,6 +41,11 @@ else
   rm -rf src/assets/p3m
 fi
 
+# BackgroundMattingV2 (MIT, docs/bgm-evaluation.md): not deployed yet. Its model
+# is converted locally (make bgm-assets) and has no published download, so a
+# deploy never carries it; the engine then falls back to MediaPipe.
+rm -rf src/assets/bgm
+
 # Stamp the commit and build time for the about panel. Mirrors the Makefile's
 # gen-build-info target, but reads Vercel's env var — the deploy is built from a
 # shallow checkout where `git rev-parse` is not dependable.
