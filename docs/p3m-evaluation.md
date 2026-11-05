@@ -32,7 +32,7 @@ either.
 Unlike RVM (GPL-3.0), P3M-Net can ship. It is kept out of the repository for
 **size** — 78 MB (half-float weights) or 156 MB (float32), plus 29 MB of ONNX
 Runtime — and of the desktop and mobile builds. **Vercel preview deploys carry
-it** (a production deploy only with `P3M_ASSETS=1`), so the engines can be
+it only with `PREVIEW_ENGINES=1`** (a production deploy only with `P3M_ASSETS=1`), so the engines can be
 compared live on a real device (*Compare engines* in the diagnostic, see
 `docs/video-effects.md`): `vercel-build.sh` downloads the converted model from the
 [`p3m-model-v1`](https://github.com/ErwannRobin/Voxal/releases/tag/p3m-model-v1)
@@ -308,7 +308,7 @@ make p3m-fetch           # download the published model + ONNX Runtime (107 MB) 
 make run-web             # or make dev (desktop); the files are served from src/
 ```
 
-On a Vercel preview deploy nothing is needed: the files are there. Settings → Advanced →
+On a Vercel preview deploy with `PREVIEW_ENGINES=1` nothing else is needed: the files are there. Settings → Advanced →
 Segmentation debug → *Segmentation engine* → **P3M-Net**,
 then turn the camera on with a background. Switch between MediaPipe, Longpipe
 and P3M-Net there (or in the diagnostic panel: *Segmentation diagnostic panel*
