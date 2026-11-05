@@ -43,6 +43,37 @@
     <meta name="twitter:image"       content="https://web.voxal.app/assets/social-card.png" />
     <meta name="twitter:image:alt"   content="Voxal — push-to-talk voice chat" />
 
+    <!-- Structured data (schema.org). Static JSON: a crawler reads it without
+         running the app. `url`/`image` use web.voxal.app for the same reason as
+         the Open Graph tags above. No softwareVersion on purpose — it would go
+         stale at every `make release`. -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "Voxal",
+      "description": "P2P push-to-talk voice chat — no accounts, no server. Share a room code to start talking instantly.",
+      "url": "https://web.voxal.app/",
+      "image": "https://web.voxal.app/assets/social-card.png",
+      "applicationCategory": "CommunicationApplication",
+      "operatingSystem": "Any (web browser), macOS, iOS, Android",
+      "browserRequirements": "Requires WebRTC and a microphone",
+      "inLanguage": ["en", "fr", "es", "de", "pt", "ro", "ru", "uk", "id", "zh", "ja", "ar"],
+      "isAccessibleForFree": true,
+      "license": "https://opensource.org/licenses/MIT",
+      "codeRepository": "https://github.com/ErwannRobin/Voxal",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "featureList": [
+        "Push-to-talk voice rooms",
+        "Peer-to-peer audio, no media server",
+        "No account required",
+        "Camera and screen sharing",
+        "Virtual backgrounds",
+        "In-room text chat"
+      ]
+    }
+    </script>
+
     <link rel="stylesheet" href="styles.css" />
     <script src="version.js"></script>
     <script src="build-info.js" onerror="this.remove()"></script>
