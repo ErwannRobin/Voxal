@@ -24,7 +24,9 @@
 
 set -e
 
-DST="src/assets/p3m"
+# The BackgroundMattingV2 evaluation runs on the same pinned ONNX Runtime and
+# stages it through here: scripts/bgm-assets.sh sets FETCH_DST.
+DST="${FETCH_DST:-src/assets/p3m}"
 ORT_VERSION="1.30.0"
 ORT_BASE="https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist"
 MODEL_BASE="https://github.com/ErwannRobin/Voxal/releases/download/p3m-model-v1"

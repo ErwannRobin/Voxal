@@ -16,9 +16,17 @@
 // Engines: mediapipe | longpipe | rvm (MobileNetV3, 512 px input) |
 // rvm-hi (MobileNetV3, the camera's own size, RVM's recommended downsample) |
 // rvm-resnet (ResNet50, 512 px) | p3m (P3M-Net ResNet-34, its default input) |
-// p3m-<N> (P3M-Net at N px on the long side) | p3m-fp32 / p3m-fp16 / p3m-wasm.
+// p3m-<N> (P3M-Net at N px on the long side) | p3m-fp32 / p3m-fp16 / p3m-wasm |
+// bgm (BackgroundMattingV2 MobileNetV2, 640 px, base at 1/4, handed the room
+// with nobody in it at the app's own 640-px plate size) | bgm-s50 (base at 1/2) |
+// bgm-960 / bgm-1280 (input size) | bgm-960-s50 / bgm-1280-s50 | bgm-fp32 | bgm-fullplate (the plate at the
+// camera's size) | bgm-gain (the plate's exposure/white balance off by a few
+// percent, uncorrected) | bgm-shift (the camera nudged 3x2 px at 1280 since the
+// plate) | bgm-nofg (its alpha without its foreground colour) | bgm-raw /
+// bgm-1280-s50-raw (without the stray-island cleanup).
 // RVM needs `make rvm-assets` (resnet: ARGS=--with-resnet), P3M-Net
-// `make p3m-assets` (fp16: ARGS=--fp16); Longpipe fetches its weights from
+// `make p3m-assets` (fp16: ARGS=--fp16), BackgroundMattingV2 `make bgm-assets`;
+// Longpipe fetches its weights from
 // cdn.longpipe.dev.
 //
 // Quality mode steps the Processor by hand, one frame at a time: each engine
@@ -95,6 +103,27 @@ const ENGINES = {
   'p3m-fp32': { engine: 'p3m', p3m: { model: 'fp32' } },
   'p3m-fp16': { engine: 'p3m', p3m: { model: 'fp16' } },
   'p3m-wasm': { engine: 'p3m', p3m: { ep: 'wasm' } },
+  // BackgroundMattingV2 is handed the footage's empty room (plate.png): at
+  // 640 px on the long side unless said otherwise, which is the size the app
+  // keeps its picture of the room at (REF_LONG). The footage's room is a still
+  // photo, so this is the best case a real room can only approach: see
+  // docs/bgm-evaluation.md for what the perturbed variants say.
+  bgm: { engine: 'bgm', bgm: {}, plate: { long: 640 } },
+  'bgm-s50': { engine: 'bgm', bgm: { scale: '50' }, plate: { long: 640 } },
+  'bgm-960': { engine: 'bgm', bgm: { size: 960 }, plate: { long: 640 } },
+  'bgm-1280': { engine: 'bgm', bgm: { size: 1280 }, plate: { long: 640 } },
+  // The base network at 480x270 (the authors' HD setting: 1920x1080 at 1/4)
+  // and at 640x360.
+  'bgm-960-s50': { engine: 'bgm', bgm: { size: 960, scale: '50' }, plate: { long: 640 } },
+  'bgm-1280-s50': { engine: 'bgm', bgm: { size: 1280, scale: '50' }, plate: { long: 640 } },
+  'bgm-fp32': { engine: 'bgm', bgm: { model: 'fp32' }, plate: { long: 640 } },
+  'bgm-fullplate': { engine: 'bgm', bgm: {}, plate: {} },
+  'bgm-gain': { engine: 'bgm', bgm: {}, plate: { long: 640, gain: [1.06, 1.0, 0.93] } },
+  'bgm-shift': { engine: 'bgm', bgm: {}, plate: { long: 640, shift: [3, 2] } },
+  'bgm-nofg': { engine: 'bgm', bgm: {}, plate: { long: 640 }, flags: { __voxalBgmFg: false } },
+  // Without the stray-island cleanup (dropStrayIslands() in bgm-engine.js).
+  'bgm-raw': { engine: 'bgm', bgm: {}, plate: { long: 640 }, flags: { __voxalBgmBlobs: false } },
+  'bgm-1280-s50-raw': { engine: 'bgm', bgm: { size: 1280, scale: '50' }, plate: { long: 640 }, flags: { __voxalBgmBlobs: false } },
   // The ground truth through the pipeline: no model error, only the
   // pipeline's own. -mp keeps MediaPipe's settings (cut, dilate 3), -matte
   // a matte engine's (no cut, dilate ~1), at the mask sizes the engines use.
@@ -190,7 +219,8 @@ async function main() {
     try {
       if (r.kind === 'realtime') {
         const res = await page.evaluate((o) => window.H.realtime(o),
-          { engine: e.engine, rvm: rvmFor(e, r.w), p3m: e.p3m, w: r.w, h: r.h, seconds: opt.seconds });
+          { engine: e.engine, rvm: rvmFor(e, r.w), p3m: e.p3m, bgm: e.bgm, plate: e.plate, w: r.w, h: r.h, seconds: opt.seconds,
+            flags: e.flags || {} });
         const cdp = await ctx.newCDPSession(page);
         await cdp.send('Performance.enable');
         const pm = Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map((m) => [m.name, m.value]));
@@ -199,7 +229,7 @@ async function main() {
         console.log(`${res.engine} out ${res.outFps.toFixed(1)} fps, mask age p50 ${res.maskAgeMsP50 === null ? '–' : res.maskAgeMsP50.toFixed(0)} ms (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
       } else {
         const setup = await page.evaluate((o) => window.H.setup(o), {
-          engine: e.engine, rvm: rvmFor(e, r.w), p3m: e.p3m, room: r.room, w: r.w, h: r.h,
+          engine: e.engine, rvm: rvmFor(e, r.w), p3m: e.p3m, bgm: e.bgm, plate: e.plate, room: r.room, w: r.w, h: r.h,
           flags: { ...(e.flags || {}), ...(r.flags || {}) }, longpipeWaitMs: opt.longpipeWaitMs,
           oracle: e.oracle, maskCut: e.maskCut
         });
@@ -292,7 +322,7 @@ function report(results) {
     L.push('|---|---|---|---|---|---|---|---|---|---|---|---|');
     for (const r of rt) {
       const x = r.result, st = x.stats || {};
-      const inf = st.engine === 'rvm' || st.engine === 'p3m' ? `${fmt(st.inferMsP50)}/${fmt(st.inferMsP95)}` : (st.engine === 'longpipe' && st.pipeline ? `its model ${fmt(st.pipeline.modelMs)}` : '–');
+      const inf = st.engine === 'rvm' || st.engine === 'p3m' || st.engine === 'bgm' ? `${fmt(st.inferMsP50)}/${fmt(st.inferMsP95)}` : (st.engine === 'longpipe' && st.pipeline ? `its model ${fmt(st.pipeline.modelMs)}` : '–');
       const hz = st.maskHz || (st.engine === 'mediapipe' ? x.segHz : null);
       L.push(`| ${r.name} | ${r.w}x${r.h} | ${x.engine} | ${fmt(x.startMs, 0)} | ${fmt(x.outFps)} | ${fmt(hz)} | ${inf} | ${fmt(x.runSegmentMsP50, 2)}/${fmt(x.runSegmentMsP95, 2)} | ${fmt(x.drawMsP50, 2)}/${fmt(x.drawMsP95, 2)} | ${fmt(x.maskAgeMsP50, 0)}/${fmt(x.maskAgeMsP95, 0)} | ${fmt(x.longTaskMsPerS, 0)} | ${fmt(x.jsHeapMB, 0)} |`);
     }

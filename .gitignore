@@ -73,6 +73,10 @@ src/assets/rvm/
 # converted weights plus ONNX Runtime, and the PyTorch venv that converts them.
 src/assets/p3m/
 .cache/p3m/
+# The BackgroundMattingV2 evaluation's engine (`make bgm-assets`): MIT, 10-20 MB
+# per converted model + 29 MB of ONNX Runtime Web; never committed (docs/bgm-evaluation.md).
+src/assets/bgm/
+.cache/bgm/
 
 # Voice-over drafts recorded with macOS `say` (make promo-voice): Apple's
 # licence allows its system voices for personal, non-commercial use only, so
