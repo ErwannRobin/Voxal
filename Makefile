@@ -174,7 +174,7 @@ seg-assets:
 
 # The matting evaluation's RVM engine (docs/matting-evaluation.md). GPL-3.0
 # weights: staged for local benchmarking and for web PREVIEW deploys
-# (vercel-build.sh; production only with RVM_ASSETS=1), gitignored, deleted before every
+# (vercel-build.sh; previews only with PREVIEW_ENGINES=1, production only with RVM_ASSETS=1), gitignored, deleted before every
 # desktop build (rvm-clean) and stripped from the mobile apps (cap-sync).
 rvm-assets:
 	@sh scripts/rvm-assets.sh $(ARGS)
