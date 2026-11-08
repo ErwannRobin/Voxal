@@ -247,7 +247,10 @@ H.step = async function (f, want) {
   var camPx = H.camCtx.getImageData(0, 0, w, h).data;
   await H.advance();
   var out = H.outCtx.getImageData(0, 0, w, h).data;
-  if (!H.mask) return { f: f, missing: true };
+  var r = { f: f };
+  if (want && want.jpeg) r.jpeg = H.out.toDataURL('image/jpeg', 0.9);
+  if (want && want.still) r.still = H.sideBySide();
+  if (!H.mask) { H.missing = (H.missing || 0) + 1; r.missing = true; return r; }
   var m = upsample(H.mask.data, H.mask.width, H.mask.height, w, h);
   var yOut = luma(out, n), yCam = luma(camPx, n);
   var R = regions(m, w, h);
@@ -292,9 +295,6 @@ H.step = async function (f, want) {
 
   var L = p.look || {};
   H.looks.push({ f: f, exposure: L.exposure, dirX: L.dirX, dirY: L.dirY, hard: L.hard, side: L.side, sideMix: L.sideMix, motion: L.motion, tint: L.tint ? [].slice.call(L.tint) : null });
-  var r = { f: f };
-  if (want && want.jpeg) r.jpeg = H.out.toDataURL('image/jpeg', 0.9);
-  if (want && want.still) r.still = H.sideBySide();
   return r;
 };
 
@@ -320,7 +320,7 @@ H.result = function () {
   });
   var last = H.looks[H.looks.length - 1];
   if (last && last.tint) look.tint = last.tint;
-  return { scores: o, look: look, engine: H.engineUsed, scene: H.p.sceneId || null };
+  return { scores: o, look: look, engine: H.engineUsed, scene: H.p.sceneId || null, framesWithoutMask: H.missing || 0 };
 };
 
 window.H = H;

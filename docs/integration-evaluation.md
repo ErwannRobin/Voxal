@@ -144,6 +144,8 @@ and a way to see that a change moved what it meant to move.
 - The stock clips' flat areas are 4–20x quieter than the scene's grain
   (`noise ×`), consistent with graded, denoised footage. This is not a webcam
   measurement.
+- **Longpipe never hands over a mask when the person fills the bottom corners** (upright clips pexels-8048443, pexels-8135646): its adapter waits for 3 of the 4 frame corners to show the key colour (`cornersMatch()`, `longpipe-engine.js`) and on a first load only fails open after `READY_TIMEOUT_MS + KEY_SETTLE_MAX_MS` (21.5 s). The composite meanwhile is the scene with nobody in it. The bench runs Longpipe on real time, so a run shorter than that shows no person at all; such runs are reported and left out of the judging page.
+- The low-light clip (pexels-7231260) is handled as intended: exposure 0.22 turns the scene to evening, and the lamp on the left mirrors the room so its light is on the left.
 - Seated subjects lose the desk in front of them (pexels-8136211): the
   foreground the person rests on is cut away with the room. A scene foreground
   layer (item 3 of the plan) is what would give them something to sit at.

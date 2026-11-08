@@ -175,6 +175,7 @@ async function main() {
       const s = res.scores, g = (k, d = 1) => (s[k] ? s[k].mean.toFixed(d) : '–');
       console.log(`${res.engine}: black ${g('dBlack', 0)} white ${g('dWhite', 0)} sat× ${g('satRatio', 2)} noise× ${g('noiseRatio', 2)} edge ${g('edgeFlickerNet', 2)} exp ${res.look.exposure ? res.look.exposure.toFixed(2) : '–'} (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
       if (setup.engine !== opt.engine) console.log(`   engine fell back to ${setup.engine}`);
+      if (res.framesWithoutMask) console.log(`   no mask on ${res.framesWithoutMask} of ${nFrames} frames (${res.engine})`);
     } catch (err) {
       console.log('FAILED: ' + err.message.split('\n')[0]);
       results.runs.push({ clip: clip.id, situation: clip.situation, scene, variant, error: err.message, logs: logs.slice(-10) });
@@ -229,6 +230,11 @@ export function report(results) {
   for (const r of ok) {
     L.push(`| ${r.clip} | ${r.situation} | ${r.scene} | ${r.variant} | ` + METRICS.map(([k, , d]) => fmt(r.result.scores[k] && r.result.scores[k].mean, d)).join(' | ') + ' |');
   }
+  const blind = ok.filter((r) => r.result.framesWithoutMask);
+  if (blind.length) {
+    L.push('', '## Runs with frames the engine gave no mask for (left out of the judging page)', '');
+    for (const r of blind) L.push(`- ${r.clip} ${r.scene} ${r.variant}: ${r.result.framesWithoutMask} frames (${r.result.engine})`);
+  }
   const bad = results.runs.filter((r) => r.error);
   if (bad.length) {
     L.push('', '## Failed runs', '');
@@ -240,7 +246,7 @@ export function report(results) {
 // --- the blind judging page ---------------------------------------------------
 
 function writeJudge(outDir, results) {
-  const ok = results.runs.filter((r) => r.result);
+  const ok = results.runs.filter((r) => r.result && !(r.result.framesWithoutMask > 0));
   const cells = [];
   for (const r of ok) {
     if (cells.some((c) => c.clip === r.clip && c.scene === r.scene)) continue;
