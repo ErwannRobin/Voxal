@@ -103,7 +103,7 @@ reference. See `docs/video-effects.md`.
 
 Deliberately left for later:
 
-- **Tune the scenes' lighting match on a real webcam.** `LOOK_DIR_GAIN`,
+- **Tune the scenes' lighting match on a real webcam.** Tooling now exists: `make integration-bench` (real clips, blind A/B page, `docs/integration-evaluation.md`). `LOOK_DIR_GAIN`,
   `LOOK_SIDE_FLIP`, the exposure curve, the tint clamp, `SHADOW_REACH` and the
   per-scene shadow/wrap strengths are reasoned and checked only on synthetic
   subjects. Try: a window to one side, an overhead office light, a desk lamp at

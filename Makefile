@@ -3,7 +3,7 @@
         coverage-api coverage-summary coverage-badge bench bench-app bench-audio bench-video \
         bench-report bench-publish bench-history \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
-        seg-assets rvm-assets rvm-clean p3m-assets p3m-fetch p3m-clean matting-footage matting-bench emoji-data promo-assets promo-voice scene-preview three-vendor
+        seg-assets rvm-assets rvm-clean p3m-assets p3m-fetch p3m-clean matting-footage matting-bench integration-footage integration-bench emoji-data promo-assets promo-voice scene-preview three-vendor
 
 # Default target
 help:
@@ -23,6 +23,8 @@ help:
 	@echo "  p3m-assets   Convert P3M-Net from its official checkpoint yourself (needs PyTorch) into src/assets/p3m"
 	@echo "  matting-footage Build the matting benchmark's footage (known alpha) into bench-results/matting"
 	@echo "  matting-bench Score MediaPipe / Longpipe / RVM on it through the real pipeline; ARGS=... passes options"
+	@echo "  integration-footage Fetch the real clips of tests/bench/integration/clips.csv (Pexels) as frames"
+	@echo "  integration-bench Real clips into the scenes, per compositing variant + a blind A/B judging page; ARGS=..."
 	@echo "  promo-assets Re-embed the icon and fonts in docs/promo.html (the films page)"
 	@echo "  promo-voice  Record the films' voice-over; ENGINE=say (drafts) | openai, FILMS=, LANGS= narrow it"
 	@echo "  scene-preview Render the animated backgrounds to PNG (scene-previews/); ARGS=... passes options"
@@ -205,6 +207,16 @@ matting-footage:
 
 matting-bench: seg-assets
 	@node scripts/matting-bench.mjs $(ARGS)
+
+# Real webcam-style clips (tests/bench/integration/clips.csv, fetched from Pexels
+# into bench-results/integration/footage) through the real pipeline into the
+# scenes, under compositing variants, plus a blind A/B judging page.
+# See docs/integration-evaluation.md. ARGS=... passes options.
+integration-footage:
+	@node scripts/integration-footage.mjs $(ARGS)
+
+integration-bench: seg-assets
+	@node scripts/integration-bench.mjs $(ARGS)
 
 run-web: gen-build-info seg-assets
 	@command -v npx >/dev/null 2>&1 || { echo "npx not found — install Node.js"; exit 1; }

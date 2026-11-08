@@ -1,0 +1,329 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<base href="/">
+<title>Integration bench harness</title>
+<!-- Driven by scripts/integration-bench.mjs (docs/integration-evaluation.md).
+     The app's own scripts, in index.html's order, so the Processor, its
+     shaders, the scenes and every engine are the shipped ones. -->
+<script src="/device-tilt.js"></script>
+<script src="/video-scenes.js"></script>
+<script src="/longpipe-engine.js"></script>
+<script src="/rvm-engine.js"></script>
+<script src="/p3m-engine.js"></script>
+<script src="/video-effects.js"></script>
+</head>
+<body>
+<script>
+'use strict';
+// Real footage has no ground truth, so nothing here says whether a composite
+// is RIGHT; that is the judging page's job. What is measured is what can be
+// measured without one:
+//
+//   the camera look   the background region of the composite (the scene, as
+//                     sent) against the same region of the camera frame (the
+//                     room THIS camera filmed): black level, white level,
+//                     saturation, noise in flat areas, sharpness. A scene that
+//                     looks filmed by the same camera comes out close to the
+//                     room on the content-independent ones (blacks, whites,
+//                     noise); mid-tone, saturation and sharpness also depend
+//                     on what the scene shows.
+//   edge flicker      how much the composite changes at the subject's edge
+//                     where the camera did not change, net of the scene's own
+//                     churn (grain, animation) measured away from the subject.
+//   the look          what the pipeline measured about the light (exposure,
+//                     side, tint, motion): the input every integration term
+//                     is driven by.
+
+function loadImage(url) {
+  return fetch(url).then(function (r) {
+    if (!r.ok) throw new Error(url + ': HTTP ' + r.status);
+    return r.blob();
+  }).then(function (b) { return createImageBitmap(b, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' }); });
+}
+
+// Bilinear resample of a single-channel 0-255 plane to 0-1.
+function upsample(src, sw, sh, w, h) {
+  var out = new Float32Array(w * h);
+  for (var y = 0; y < h; y++) {
+    var fy = (y + 0.5) * sh / h - 0.5, y0 = Math.max(0, Math.floor(fy)), y1 = Math.min(sh - 1, y0 + 1), ty = Math.min(1, Math.max(0, fy - y0));
+    for (var x = 0; x < w; x++) {
+      var fx = (x + 0.5) * sw / w - 0.5, x0 = Math.max(0, Math.floor(fx)), x1 = Math.min(sw - 1, x0 + 1), tx = Math.min(1, Math.max(0, fx - x0));
+      var a = src[y0 * sw + x0] * (1 - tx) + src[y0 * sw + x1] * tx;
+      var b = src[y1 * sw + x0] * (1 - tx) + src[y1 * sw + x1] * tx;
+      out[y * w + x] = (a * (1 - ty) + b * ty) / 255;
+    }
+  }
+  return out;
+}
+
+function luma(px, n) {
+  var y = new Float32Array(n);
+  for (var i = 0; i < n; i++) y[i] = 0.2126 * px[i * 4] + 0.7152 * px[i * 4 + 1] + 0.0722 * px[i * 4 + 2];
+  return y;
+}
+
+var CELL = 8;   // px per coarse cell, at any size
+
+// Coarse regions from the mask: per CELL x CELL cell, whether it holds any
+// person (> 0.5), and the distance (in cells, Chebyshev) to the nearest such
+// cell. Background = no person within `margin` cells; the ring = background
+// within `ring` cells of the person; the edge band = cells the mask crosses.
+function regions(m, w, h) {
+  var cw = Math.ceil(w / CELL), ch = Math.ceil(h / CELL), n = cw * ch;
+  var hasP = new Uint8Array(n), hasB = new Uint8Array(n);
+  for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) {
+    var v = m[y * w + x], c = ((y / CELL) | 0) * cw + ((x / CELL) | 0);
+    if (v > 0.5) hasP[c] = 1;
+    if (v < 0.5) hasB[c] = 1;
+  }
+  // Two-pass chamfer (Chebyshev) distance to the nearest person cell.
+  var INF = 1e6, d = new Float32Array(n);
+  for (var i = 0; i < n; i++) d[i] = hasP[i] ? 0 : INF;
+  for (var cy = 0; cy < ch; cy++) for (var cx = 0; cx < cw; cx++) {
+    var k = cy * cw + cx, v2 = d[k];
+    if (cx > 0) v2 = Math.min(v2, d[k - 1] + 1);
+    if (cy > 0) { v2 = Math.min(v2, d[k - cw] + 1); if (cx > 0) v2 = Math.min(v2, d[k - cw - 1] + 1); if (cx < cw - 1) v2 = Math.min(v2, d[k - cw + 1] + 1); }
+    d[k] = v2;
+  }
+  for (var by = ch - 1; by >= 0; by--) for (var bx = cw - 1; bx >= 0; bx--) {
+    var j = by * cw + bx, v3 = d[j];
+    if (bx < cw - 1) v3 = Math.min(v3, d[j + 1] + 1);
+    if (by < ch - 1) { v3 = Math.min(v3, d[j + cw] + 1); if (bx < cw - 1) v3 = Math.min(v3, d[j + cw + 1] + 1); if (bx > 0) v3 = Math.min(v3, d[j + cw - 1] + 1); }
+    d[j] = v3;
+  }
+  return { cw: cw, ch: ch, dist: d, edge: function (c) { return hasP[c] && hasB[c]; }, core: function (c) { return hasP[c] && !hasB[c]; } };
+}
+
+// Black level, white level, mid-tone, saturation and sharpness over a pixel
+// selection; noise from the flattest blocks of the selection (the 20% of
+// fully selected CELL x CELL blocks with the least luma variance), as the mean
+// |4-neighbour Laplacian| inside them: grain, not texture.
+function lookStats(px, y, w, h, sel, R) {
+  var hist = new Float64Array(256), cnt = 0, sat = 0, grads = [];
+  for (var yy = 1; yy < h - 1; yy++) for (var xx = 1; xx < w - 1; xx++) {
+    var i = yy * w + xx;
+    if (!sel(i, xx, yy)) continue;
+    hist[Math.max(0, Math.min(255, Math.round(y[i])))]++; cnt++;
+    var r = px[i * 4], g = px[i * 4 + 1], b = px[i * 4 + 2];
+    sat += (Math.max(r, g, b) - Math.min(r, g, b));
+    if ((xx + yy) % 3 === 0) grads.push(Math.abs(y[i + 1] - y[i - 1]) + Math.abs(y[i + w] - y[i - w]));
+  }
+  if (cnt < 500) return null;
+  function pct(p) { var t = p * cnt, a = 0; for (var k = 0; k < 256; k++) { a += hist[k]; if (a >= t) return k; } return 255; }
+  grads.sort(function (a, b) { return a - b; });
+  var blocks = [];
+  for (var cy = 0; cy < R.ch; cy++) for (var cx = 0; cx < R.cw; cx++) {
+    var x0 = cx * CELL + 1, y0 = cy * CELL + 1, x1 = Math.min(w - 1, x0 + CELL - 2), y1 = Math.min(h - 1, y0 + CELL - 2);
+    if (x1 - x0 < 4 || y1 - y0 < 4) continue;
+    var ok = true, s = 0, s2 = 0, nn = 0, lap = 0;
+    for (var by = y0; by < y1 && ok; by++) for (var bx = x0; bx < x1; bx++) {
+      var j = by * w + bx;
+      if (!sel(j, bx, by)) { ok = false; break; }
+      s += y[j]; s2 += y[j] * y[j]; nn++;
+      lap += Math.abs(4 * y[j] - y[j - 1] - y[j + 1] - y[j - w] - y[j + w]);
+    }
+    if (ok && nn) blocks.push([s2 / nn - (s / nn) * (s / nn), lap / nn]);
+  }
+  blocks.sort(function (a, b) { return a[0] - b[0]; });
+  var flat = blocks.slice(0, Math.max(1, Math.floor(blocks.length * 0.2)));
+  var noise = flat.length ? flat.reduce(function (a, b) { return a + b[1]; }, 0) / flat.length : null;
+  return { black: pct(0.02), mid: pct(0.5), white: pct(0.98), sat: sat / cnt, sharp: grads.length ? grads[Math.floor(grads.length * 0.9)] : 0, noise: noise, n: cnt };
+}
+
+var H = {};
+
+H.setup = async function (opt) {
+  // opt: { clip, w, h, fps, mode, engine, flags, storage, longpipeWaitMs, cadence, warm }
+  localStorage.clear();
+  localStorage.setItem('segmentation-engine', opt.engine);
+  localStorage.setItem('longpipe-blur', '0');
+  localStorage.setItem('bg-reference', 'off');
+  Object.keys(opt.storage || {}).forEach(function (k) { localStorage.setItem(k, String(opt.storage[k])); });
+  Object.keys(opt.flags || {}).forEach(function (k) { window[k] = opt.flags[k]; });
+  H.opt = opt;
+  var w = opt.w, h = opt.h;
+  H.cam = document.createElement('canvas');
+  H.cam.width = w; H.cam.height = h;
+  H.camCtx = H.cam.getContext('2d', { willReadFrequently: true });
+  H.camCtx.imageSmoothingQuality = 'high';
+  H.camCtx.drawImage(await loadImage(H.frameUrl(0)), 0, 0, w, h);
+  H.stream = H.cam.captureStream(30);
+  H.paintTimer = setInterval(function () { H.camCtx.drawImage(H.cam, 0, 0); }, 33);
+  Object.defineProperty(H.cam, 'videoWidth', { get: function () { return H.cam.width; } });
+  Object.defineProperty(H.cam, 'videoHeight', { get: function () { return H.cam.height; } });
+  Object.defineProperty(H.cam, 'readyState', { get: function () { return 4; } });
+
+  await VideoEffects.wrap(H.stream, opt.mode);
+  var p = H.p = VideoEffects.active();
+  if (!p) throw new Error('no processor');
+  p.unpump();
+  p.video = H.cam;
+  H.real = p.segmenter;
+  if (H.real && 'camVideo' in H.real) H.real.camVideo = H.cam;
+  H.engineUsed = p.engine;
+  // A scene compiles off the page's thread: wait until it draws.
+  if (opt.mode.indexOf('preset:') === 0) {
+    var id = opt.mode.slice(7), t0 = performance.now();
+    while (p.sceneId !== id) {
+      if (performance.now() - t0 > 30000) throw new Error('scene ' + id + ' never became ready');
+      await new Promise(function (r) { setTimeout(r, 50); });
+    }
+  }
+  H.out = document.createElement('canvas');
+  H.out.width = w; H.out.height = h;
+  H.outCtx = H.out.getContext('2d', { willReadFrequently: true });
+  // The pipeline's clock: virtual, one camera frame per step, so the scene's
+  // animation, the look's easing and the segmentation cadence run as in a call
+  // however long a step takes here.
+  H.now = performance.now();
+  H.dt = 1000 / (opt.fps || 30);
+  H.lastSeg = -Infinity;
+  H.acc = {}; H.looks = [];
+  H.prev = null;
+  // Settle on the first frame: the look's first measurement, the scene's
+  // jittered redraws, the mask's temporal blend.
+  for (var k = 0; k < (opt.warm || 0); k++) await H.advance();
+  return { engine: p.engine, scene: p.sceneId || null, segHz: 1000 / p.segInterval, canvas: [p.canvas.width, p.canvas.height] };
+};
+
+H.frameUrl = function (f) { return '/__footage/' + H.opt.clip + '/' + String(f).padStart(4, '0') + '.jpg'; };
+
+// The mask for the frame now in H.cam goes through the Processor's own
+// callback (runSegment), so everything a call does with a mask — the blend,
+// the soft mask, the look — happens. Only the engine call is intercepted, to
+// keep a copy of the mask for the measurements.
+H.segment = async function () {
+  var p = H.p, real = H.real;
+  if (H.engineUsed === 'longpipe') await new Promise(function (r) { setTimeout(r, H.opt.longpipeWaitMs || 150); });
+  var got = null;
+  if (H.engineUsed === 'rvm' || H.engineUsed === 'p3m') {
+    var r = await real.inferFrame(H.cam);
+    got = { width: r.width, height: r.height, data: r.data, rvm: H.engineUsed === 'rvm' ? r : undefined };
+  }
+  p.segmenter = {
+    getLabels: function () { return ['selfie']; },
+    segmentForVideo: function (frame, ts, cb) {
+      if (got) {
+        H.mask = got;
+        cb({ confidenceMasks: [{ width: got.width, height: got.height, getAsUint8Array: function () { return got.data; } }], rvm: got.rvm });
+        return;
+      }
+      real.segmentForVideo(frame, ts, function (res) {
+        var m = res.confidenceMasks[res.confidenceMasks.length > 1 ? 1 : 0];
+        H.mask = { width: m.width, height: m.height, data: new Uint8Array(m.getAsUint8Array()) };
+        cb(res);
+      });
+    }
+  };
+  try { p.lastSeg = 0; p.runSegment(H.now); } finally { p.segmenter = real; }
+};
+
+// One camera frame of pipeline time: segment if the app's cadence says so
+// (or always, with cadence 'every'), then draw.
+H.advance = async function () {
+  var p = H.p;
+  H.now += H.dt;
+  if (H.opt.cadence === 'every' || H.now - H.lastSeg >= p.segInterval) {
+    H.lastSeg = H.now;
+    await H.segment();
+  }
+  p.draw(H.now);
+  H.outCtx.drawImage(p.canvas, 0, 0, H.opt.w, H.opt.h);
+};
+
+function add(name, v) {
+  if (v === null || v === undefined || !isFinite(v)) return;
+  var a = H.acc[name] || (H.acc[name] = []);
+  a.push(v);
+}
+
+// Frame f: put it in front of the pipeline, run a frame of pipeline time, and
+// measure. `jpeg` asks for the composite back (for the judging page's video).
+H.step = async function (f, want) {
+  var opt = H.opt, w = opt.w, h = opt.h, n = w * h, p = H.p;
+  H.camCtx.drawImage(await loadImage(H.frameUrl(f)), 0, 0, w, h);
+  var camPx = H.camCtx.getImageData(0, 0, w, h).data;
+  await H.advance();
+  var out = H.outCtx.getImageData(0, 0, w, h).data;
+  if (!H.mask) return { f: f, missing: true };
+  var m = upsample(H.mask.data, H.mask.width, H.mask.height, w, h);
+  var yOut = luma(out, n), yCam = luma(camPx, n);
+  var R = regions(m, w, h);
+  var cellOf = function (x, y) { return ((y / CELL) | 0) * R.cw + ((x / CELL) | 0); };
+  var bg = function (i, x, y) { return R.dist[cellOf(x, y)] >= 3; };
+  var subj = function (i, x, y) { return R.core(cellOf(x, y)) && m[i] > 0.95; };
+
+  // The camera look, every 5th frame (it moves slowly and costs a pass).
+  if (f % 5 === 0) {
+    var sOut = lookStats(out, yOut, w, h, bg, R), sCam = lookStats(camPx, yCam, w, h, bg, R);
+    var subCam = lookStats(camPx, yCam, w, h, subj, R);
+    if (sOut && sCam) {
+      add('dBlack', sOut.black - sCam.black);
+      add('dWhite', sOut.white - sCam.white);
+      add('dMid', sOut.mid - sCam.mid);
+      add('satRatio', sCam.sat > 1 ? sOut.sat / sCam.sat : null);
+      add('noiseRatio', sCam.noise > 0.05 ? sOut.noise / sCam.noise : null);
+      add('sharpRatio', sCam.sharp > 0.5 ? sOut.sharp / sCam.sharp : null);
+      add('bgShare', sOut.n / n);
+      // How bright the background is against the person, in the composite
+      // relative to the camera (0 = the same relationship as the real room).
+      if (subCam) add('dBgVsSubject', (sOut.mid - subCam.mid) - (sCam.mid - subCam.mid));
+    }
+  }
+
+  // Edge flicker: the composite's change at the edge where the camera held
+  // still, minus the same measured on the background away from the person.
+  if (H.prev) {
+    var eS = 0, eN = 0, bS = 0, bN = 0;
+    for (var y = 0; y < h; y += 2) for (var x = 0; x < w; x += 2) {
+      var i = y * w + x;
+      if (Math.abs(yCam[i] - H.prev.cam[i]) >= 3) continue;
+      var c = cellOf(x, y), dOut = Math.abs(yOut[i] - H.prev.out[i]);
+      if (R.edge(c)) { eS += dOut; eN++; }
+      else if (R.dist[c] >= 6) { bS += dOut; bN++; }
+    }
+    if (eN > 200) add('edgeFlicker', eS / eN);
+    if (bN > 200) add('sceneChurn', bS / bN);
+    if (eN > 200 && bN > 200) add('edgeFlickerNet', eS / eN - bS / bN);
+  }
+  H.prev = { cam: yCam, out: yOut };
+
+  var L = p.look || {};
+  H.looks.push({ f: f, exposure: L.exposure, dirX: L.dirX, dirY: L.dirY, hard: L.hard, side: L.side, sideMix: L.sideMix, motion: L.motion, tint: L.tint ? [].slice.call(L.tint) : null });
+  var r = { f: f };
+  if (want && want.jpeg) r.jpeg = H.out.toDataURL('image/jpeg', 0.9);
+  if (want && want.still) r.still = H.sideBySide();
+  return r;
+};
+
+// Camera | composite, for the report's stills.
+H.sideBySide = function () {
+  var w = H.opt.w, h = H.opt.h, c = document.createElement('canvas');
+  c.width = w * 2; c.height = h;
+  var x = c.getContext('2d');
+  x.drawImage(H.cam, 0, 0); x.drawImage(H.out, w, 0);
+  return c.toDataURL('image/jpeg', 0.9);
+};
+
+H.result = function () {
+  var o = {};
+  Object.keys(H.acc).forEach(function (k) {
+    var a = H.acc[k].slice().sort(function (p, q) { return p - q; });
+    o[k] = { mean: a.reduce(function (s, v) { return s + v; }, 0) / a.length, p50: a[a.length >> 1], n: a.length };
+  });
+  var look = {};
+  ['exposure', 'dirX', 'dirY', 'hard', 'side', 'sideMix', 'motion'].forEach(function (k) {
+    var v = H.looks.map(function (l) { return l[k]; }).filter(function (x) { return typeof x === 'number'; });
+    if (v.length) look[k] = v.reduce(function (s, x) { return s + x; }, 0) / v.length;
+  });
+  var last = H.looks[H.looks.length - 1];
+  if (last && last.tint) look.tint = last.tint;
+  return { scores: o, look: look, engine: H.engineUsed, scene: H.p.sceneId || null };
+};
+
+window.H = H;
+</script>
+</body>
+</html>
