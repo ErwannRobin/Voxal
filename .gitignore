@@ -78,6 +78,11 @@ src/assets/p3m/
 src/assets/bgm/
 .cache/bgm/
 
+# The matting candidates (`make lab-assets`, docs/matting-candidates.md): local
+# measurement only, some under licences Voxal cannot ship.
+src/assets/lab/
+.cache/lab/
+
 # Voice-over drafts recorded with macOS `say` (make promo-voice): Apple's
 # licence allows its system voices for personal, non-commercial use only, so
 # they are never committed. Tracks to publish go to docs/promo-voice/ itself.

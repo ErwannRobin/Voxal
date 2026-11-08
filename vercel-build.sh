@@ -46,6 +46,11 @@ fi
 # deploy never carries it; the engine then falls back to MediaPipe.
 rm -rf src/assets/bgm
 
+# The matting candidates (src/lab-engine.js, docs/matting-candidates.md) are
+# local measurement only — some carry licences Voxal cannot ship — so no deploy
+# carries them, preview or production.
+rm -rf src/assets/lab
+
 # Stamp the commit and build time for the about panel. Mirrors the Makefile's
 # gen-build-info target, but reads Vercel's env var — the deploy is built from a
 # shallow checkout where `git rev-parse` is not dependable.

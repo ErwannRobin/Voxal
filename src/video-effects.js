@@ -202,7 +202,13 @@ var VideoEffects = (function () {
   // MediaPipe cut, and they fall back to MediaPipe if they die mid-call.
   // BackgroundMattingV2 (bgm) is an image model too: blended like P3M-Net's.
   function isMatteEngine(engine) {
+    if (engine === 'lab') return labSpec().matte !== false;
     return engine === 'longpipe' || engine === 'rvm' || engine === 'p3m' || engine === 'bgm';
+  }
+  // The matting lab's current candidate (lab-engine.js): whether its output is
+  // a matte or a segmentation, and its own edge dilate.
+  function labSpec() {
+    return typeof LabEngine !== 'undefined' ? LabEngine.config().spec : {};
   }
 
   // The confidence cut. The model's mask is not 0/1: where it is unsure (a
@@ -986,6 +992,7 @@ var VideoEffects = (function () {
     } catch (e) { return null; }
   }
   function p3mDilateOverride() { return dilateOverride('p3m-dilate'); }
+  function labDilateOverride() { return dilateOverride('lab-dilate'); }
   function edgeProfileFor(engine) {
     var e = edgeProfile(readSharpness());
     // RVM's alpha is a matte too (and a finer one): same edge as Longpipe's.
@@ -1006,6 +1013,13 @@ var VideoEffects = (function () {
       // `bgm-dilate` (texels, 0-4) overrides it.
       var bo = dilateOverride('bgm-dilate');
       e.dilate = bo !== null ? bo : BGM_DILATE;
+    } else if (engine === 'lab') {
+      // A matting candidate is treated as P3M-Net is (its alpha already
+      // reaches the outside), a segmentation candidate as MediaPipe is;
+      // `lab-dilate` overrides either for the bench.
+      var lo = labDilateOverride();
+      if (lo !== null) e.dilate = lo;
+      else if (labSpec().matte !== false) e.dilate = labSpec().dilate || 0;
     }
     if (engine === 'longpipe' || engine === 'rvm' || engine === 'bgm') e.feather *= MATTE_FEATHER_SCALE;
     // The matting bench's A/B switch: { feather, lo, hi } replace the profile's.
@@ -1872,6 +1886,7 @@ var VideoEffects = (function () {
   // P3M-Net (p3m-engine.js), and BackgroundMattingV2 (bgm-engine.js), which
   // also needs a picture of the empty room (Processor.syncBgm()).
   function selectedEngine() {
+    if (typeof LabEngine !== 'undefined' && LabEngine.selected()) return 'lab';
     if (typeof BgmEngine !== 'undefined' && BgmEngine.selected()) return 'bgm';
     if (typeof P3mEngine !== 'undefined' && P3mEngine.selected()) return 'p3m';
     if (typeof RvmEngine !== 'undefined' && RvmEngine.selected()) return 'rvm';
@@ -1884,6 +1899,16 @@ var VideoEffects = (function () {
   // experiment: the reason is kept for the diagnostic panel.
   function createSegmenter(raw, engine, video) {
     var want = engine || selectedEngine();
+    if (want === 'lab' && (!window.__voxalSegStub || window.__voxalLabStub) && typeof LabEngine !== 'undefined') {
+      return LabEngine.create(raw, video).then(function (seg) {
+        _engineFallback = null;
+        return seg;
+      }, function (e) {
+        _engineFallback = (e && e.message) || String(e);
+        console.warn('[VideoEffects] lab engine unavailable, using MediaPipe: ' + _engineFallback);
+        return createMediaPipeSegmenter();
+      });
+    }
     if (want === 'bgm' && (!window.__voxalSegStub || window.__voxalBgmStub) && typeof BgmEngine !== 'undefined') {
       return BgmEngine.create(raw, video).then(function (seg) {
         _engineFallback = null;
@@ -3159,9 +3184,9 @@ var VideoEffects = (function () {
     this.maskCut = isMatteEngine(this.engine) ? 0 : readMaskCut();
     this.edge = edgeProfileFor(this.engine);
     this.maskPrimed = false;
-    if (isMatteEngine(this.engine)) {
+    if (isMatteEngine(this.engine) || this.engine === 'lab') {
       // An experimental engine that dies mid-call hands the camera back to MediaPipe.
-      var name = { rvm: 'RVM', p3m: 'P3M-Net', bgm: 'BackgroundMattingV2', longpipe: 'Longpipe' }[this.engine];
+      var name = { rvm: 'RVM', p3m: 'P3M-Net', bgm: 'BackgroundMattingV2', longpipe: 'Longpipe', lab: 'The lab engine' }[this.engine];
       seg.onFail = function (e) {
         if (self.segmenter !== seg || self.stopped) return;
         _engineFallback = (e && e.message) || String(e);
@@ -6906,6 +6931,7 @@ var VideoEffects = (function () {
       if (typeof RvmEngine !== 'undefined') engs.push(['rvm', 'Engine: RVM (experimental, GPL weights: previews and make rvm-assets)']);
       if (typeof P3mEngine !== 'undefined') engs.push(['p3m', 'Engine: P3M-Net (experimental, 78 MB download)']);
       if (typeof BgmEngine !== 'undefined') engs.push(['bgm', 'Engine: BackgroundMattingV2 (experimental, needs a picture of the empty room)']);
+      if (typeof LabEngine !== 'undefined') engs.push(['lab', 'Engine: matting lab (candidates; make lab-assets)']);
       engs.forEach(function (v) {
         var o = dEl('option', '', v[1]); o.value = v[0]; eng.appendChild(o);
       });
@@ -7199,6 +7225,12 @@ var VideoEffects = (function () {
             ' · masks ' + (s.maskHz === null ? '–' : s.maskHz + ' Hz') + ' · init ' + (s.initMs === null ? '–' : s.initMs + ' ms') +
             '\nthe matte trails the camera by about one inference';
           if (s.errors && s.errors.length) t += '\nrvm errors: ' + s.errors.join(' | ');
+        }
+        if (s.engine === 'lab') {
+          t += ' · ' + s.label + ' [' + s.licence + '] (' + s.modelMB + ' MB) on ' + s.ep + ' · input ' + s.input +
+            '\ninference ' + (s.inferMsP50 === null ? '–' : s.inferMsP50.toFixed(1) + ' ms p50 / ' + s.inferMsP95.toFixed(1) + ' p95') +
+            ' · masks ' + (s.maskHz === null ? '–' : s.maskHz + ' Hz') + ' · init ' + (s.initMs === null ? '–' : s.initMs + ' ms');
+          if (s.errors && s.errors.length) t += '\nlab errors: ' + s.errors.join(' | ');
         }
         if (s.engine === 'p3m') {
           t += ' · ' + s.model + ' (' + s.modelMB + ' MB' + (s.cached ? ', cached' : '') + ') on ' + s.ep + ' · input ' + s.input +
@@ -7530,6 +7562,8 @@ var VideoEffects = (function () {
   //   * It costs nothing off: no engine is created, no frame is copied, and
   //     leaving the Engines tab closes every guest.
 
+  // The matting lab (lab-engine.js) is not here: it is one engine standing for
+  // many models, chosen in its own setting, and it is local measurement only.
   var CMP_ENGINES = ['mediapipe', 'longpipe', 'rvm', 'p3m', 'bgm'];
   var CMP_NAMES = { mediapipe: 'MediaPipe', longpipe: 'Longpipe', rvm: 'RVM', p3m: 'P3M-Net', bgm: 'BGMv2' };
   var CMP_GW = 96, CMP_GH = 54;   // the grid two masks are compared on
@@ -8376,9 +8410,10 @@ var VideoEffects = (function () {
   // safe at any moment: with no camera running they only store the choice;
   // with one they swap the engine under it, keeping the canvas track.
   function setEngine(name) {
-    name = name === 'longpipe' || name === 'rvm' || name === 'p3m' || name === 'bgm' ? name : 'mediapipe';
-    var experimental = name === 'rvm' || name === 'p3m' || name === 'bgm';
+    name = name === 'longpipe' || name === 'rvm' || name === 'p3m' || name === 'bgm' || name === 'lab' ? name : 'mediapipe';
+    var experimental = name === 'rvm' || name === 'p3m' || name === 'bgm' || name === 'lab';
     if (typeof LongpipeEngine !== 'undefined') LongpipeEngine.setSelected(experimental ? 'longpipe' : name);
+    if (typeof LabEngine !== 'undefined') LabEngine.setSelected(name === 'lab');
     if (typeof RvmEngine !== 'undefined') RvmEngine.setSelected(name === 'rvm');
     if (typeof P3mEngine !== 'undefined') P3mEngine.setSelected(name === 'p3m');
     if (typeof BgmEngine !== 'undefined') BgmEngine.setSelected(name === 'bgm');
@@ -8443,7 +8478,7 @@ var VideoEffects = (function () {
       } else if (key === 'longpipe-preset') {
         // The preset is read when the pipeline is built: reopen it.
         if (p.engine === 'longpipe' && p.segmenter && p.segmenter.setSource) p.segmenter.setSource(p.raw);
-      } else if (key === 'longpipe-dilate' || key === 'p3m-dilate' || key === 'bgm-dilate') {
+      } else if (key === 'longpipe-dilate' || key === 'p3m-dilate' || key === 'bgm-dilate' || key === 'lab-dilate') {
         p.applyEdge();
       } else if (key === SIL_KEY || key === SIL_STRENGTH_KEY) {
         p.applySilhouette();
@@ -8451,6 +8486,10 @@ var VideoEffects = (function () {
         // Read when the session is built: build a new one, the old one keeps
         // feeding the picture until it is up.
         if (p.engine === 'p3m') p.swapSegmenter('p3m', true).catch(function (e) {
+          _engineFallback = (e && e.message) || String(e);
+        });
+      } else if (key === 'lab-model' || key === 'lab-size') {
+        if (p.engine === 'lab') p.swapSegmenter('lab', true).catch(function (e) {
           _engineFallback = (e && e.message) || String(e);
         });
       } else if (key === 'bgm-size' || key === 'bgm-model' || key === 'bgm-scale') {
@@ -8543,7 +8582,8 @@ var VideoEffects = (function () {
         [['longpipe', 'Longpipe (default)'], ['mediapipe', 'MediaPipe']].concat(
           typeof RvmEngine !== 'undefined' ? [['rvm', 'RVM (experimental; needs make rvm-assets or a preview deploy with PREVIEW_ENGINES=1)']] : [],
           typeof P3mEngine !== 'undefined' ? [['p3m', 'P3M-Net (experimental; 78 MB download, needs WebGPU)']] : [],
-          typeof BgmEngine !== 'undefined' ? [['bgm', 'BackgroundMattingV2 (experimental; needs WebGPU and a picture of the empty room)']] : []),
+          typeof BgmEngine !== 'undefined' ? [['bgm', 'BackgroundMattingV2 (experimental; needs WebGPU and a picture of the empty room)']] : [],
+          typeof LabEngine !== 'undefined' ? [['lab', 'Matting lab (candidate models; make lab-assets, needs WebGPU)']] : []),
         function () { return engine(); },
         function (v) { setEngine(v); });
       toggle('Longpipe blur',
@@ -8598,6 +8638,17 @@ var VideoEffects = (function () {
       number('BackgroundMattingV2 edge dilate (texels)',
         'How far its matte is grown before feathering. Blank = automatic (0).',
         'bgm-dilate', 0, 4, 0.1, 'auto');
+    }
+    if (typeof LabEngine !== 'undefined') {
+      select('Matting lab model',
+        'The candidate the lab engine runs (docs/matting-candidates.md). Some carry licences Voxal cannot ship: they are for measuring only. Applies by rebuilding its session.',
+        'lab-model',
+        Object.keys(LabEngine.MODELS).map(function (k) { var m = LabEngine.MODELS[k]; return [k, m.label + ' — ' + m.licence]; }),
+        function () { return LabEngine.config().model; },
+        function (v) { setDebug('lab-model', v || null); });
+      number('Matting lab edge dilate (texels)',
+        'How far the lab candidate\'s mask is grown before feathering. Blank = the candidate\'s own default.',
+        'lab-dilate', 0, 4, 0.1, 'auto');
     }
     number('MediaPipe mask cut (0-0.94)',
       'MediaPipe values at or under this are background. Blank = 0.78; 0 turns the cut off. Not used by Longpipe.',

@@ -11,6 +11,15 @@ Experimental engine (MIT, 10 MB) behind Settings → Advanced → Segmentation d
 - **Feed it the learned room** (`texLearnA`) instead of requiring a capture, and shift the plate by the reference's motion estimate (`shift`).
 - If it holds up: publish the converted model as a `bgm-model-v1` prerelease + fetch script (like P3M-Net) so preview deploys carry it; measure on Windows / Safari / a phone.
 
+## 🧪 MODNet (webcam checkpoint) as an engine (`docs/matting-candidates.md`)
+
+Best shippable no-reference matte measured (Apache-2.0, 26 MB / 13 MB fp16, 32 ms WebGPU); runs today as `lab:modnet-webcam` after `make lab-assets`.
+- [ ] Try it on real webcams against Longpipe (glasses, dark hair on dark room, hands, backlight).
+- [ ] Publish an fp16 webcam export as a prerelease asset (like `p3m-model-v1`) and give it its own engine path so previews can carry it.
+- [ ] GPU pre/post-processing (7 ms main thread now vs RVM's 3.4).
+- [ ] Foreground colour in the edge band (leak 4.8% vs RVM 0.9%); temporal smoothing tuned for an image model (dtSSD 1.92 vs RVM 1.46).
+- [ ] Phone numbers (nothing measured off an M5).
+
 ---
 
 ## 🧪 P3M-Net matting experiment (`docs/p3m-evaluation.md`)

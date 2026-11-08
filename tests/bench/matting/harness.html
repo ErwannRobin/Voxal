@@ -11,6 +11,7 @@
 <script src="/rvm-engine.js"></script>
 <script src="/p3m-engine.js"></script>
 <script src="/bgm-engine.js"></script>
+<script src="/lab-engine.js"></script>
 <script src="/video-effects.js"></script>
 </head>
 <body>
@@ -122,6 +123,7 @@ H.setup = async function (opt) {
   if (opt.bgm) Object.keys(opt.bgm).forEach(function (k) { localStorage.setItem('bgm-' + k, String(opt.bgm[k])); });
   // The bench hands BackgroundMattingV2 its plate itself (no capture flow).
   window.__voxalBgmManual = opt.engine === 'bgm';
+  if (opt.lab) Object.keys(opt.lab).forEach(function (k) { localStorage.setItem('lab-' + k, String(opt.lab[k])); });
   Object.keys(opt.flags || {}).forEach(function (k) { window[k] = opt.flags[k]; });
   H.opt = opt;
   H.manifest = await (await fetch('/__footage/manifest.json')).json();
@@ -194,11 +196,20 @@ H.maskFor = async function () {
     var a = pixels(H.gtAlphaImg, ow, oh), d = new Uint8Array(ow * oh);
     for (var q = 0; q < ow * oh; q++) d[q] = a[q * 4];
     got = { width: ow, height: oh, data: d };
+  } else if (H.opt.pre) {
+    // An OFFLINE model's matte for this frame, computed beforehand at its own
+    // size (scripts/matting-offline.py): a model that cannot run in the
+    // browser, scored through the same pipeline.
+    var im = await loadImage('/__footage/pre/' + H.opt.pre + '/' + H.opt.room + '/' + H.frameName + '.png');
+    var pw = im.naturalWidth || im.width, ph = im.naturalHeight || im.height;
+    var pp = pixels(im, pw, ph), pd = new Uint8Array(pw * ph);
+    for (var k = 0; k < pw * ph; k++) pd[k] = pp[k * 4];
+    got = { width: pw, height: ph, data: pd };
   } else if (eng === 'rvm') {
     var r = await real.inferFrame(H.cam);
     H.inferMs.push(r.ms);
     got = { width: r.width, height: r.height, data: r.data, rvm: r };
-  } else if (eng === 'p3m') {
+  } else if (eng === 'p3m' || eng === 'lab') {
     var r3 = await real.inferFrame(H.cam);
     H.inferMs.push(r3.ms);
     got = { width: r3.width, height: r3.height, data: r3.data };
@@ -243,6 +254,7 @@ H.step = async function (f) {
   H.camCtx.drawImage(imgs[0], 0, 0, w, h);
   var gtA = pixels(imgs[1], w, h), gtF = pixels(imgs[2], w, h);
   H.gtAlphaImg = imgs[1];
+  H.frameName = name;
   await H.maskFor();
   var now = performance.now();
   p.lastSeg = 0;
@@ -379,6 +391,7 @@ H.realtime = async function (opt) {
   if (opt.bgm) Object.keys(opt.bgm).forEach(function (k) { localStorage.setItem('bgm-' + k, String(opt.bgm[k])); });
   window.__voxalBgmManual = opt.engine === 'bgm';
   Object.keys(opt.flags || {}).forEach(function (k) { window[k] = opt.flags[k]; });
+  if (opt.lab) Object.keys(opt.lab).forEach(function (k) { localStorage.setItem('lab-' + k, String(opt.lab[k])); });
   var w = opt.w, h = opt.h, room = opt.room || 'living';
   var frames = [];
   for (var f = 0; f < 60; f++) frames.push(await loadImage('/__footage/' + room + '/' + String(f * 5).padStart(4, '0') + '.jpg'));
@@ -407,7 +420,7 @@ H.realtime = async function (opt) {
         orig.call(seg, fr, ts, function (res) {
           // The frame this matte was computed from: RVM says when its
           // inference started; MediaPipe answers on this frame.
-          var at = res && (res.rvm || res.p3m || res.bgm);
+          var at = res && (res.rvm || res.p3m || res.bgm || res.lab);
           lastMaskAt = at ? at.at : performance.now();
           cb(res);
         });
