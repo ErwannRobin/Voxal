@@ -401,7 +401,7 @@
   "ui.when_a_room_host_has_dev_mode_on_an_i_button": "Quando o anfitrião da sala ativa o modo dev, um botão “i” aparece ao lado de cada nome mostrando diagnósticos de dispositivo, áudio e rede. Fica desativado até você aceitar — nada é compartilhado sem isso.",
   "ui.where_to_find_it": "Onde encontrar",
   "ui.which_side_the_talk_button_sits_on_in_landsc": "De que lado fica o botão de falar na horizontal (web).",
-  "ui.with_an_animated_scene_sends_just_you_and_a": "Com uma cena animada, envia só você e uma borda fina da sua sala; as pessoas da chamada desenham a mesma cena no próprio dispositivo. Usa menos upload em chamadas peer-to-peer. Elas podem ver a cena de um jeito ligeiramente diferente, e isso exige um pouco de trabalho do dispositivo delas. Não tem efeito com desfoque ou com sua própria imagem, nem quando o vídeo passa pelo relay.",
+  "ui.with_an_animated_scene_sends_just_you_and_a": "Com uma cena animada, envia só você e uma borda fina da sua sala; as pessoas da chamada desenham a mesma cena no próprio dispositivo. Usa menos upload em chamadas peer-to-peer. Elas podem ver a cena de um jeito ligeiramente diferente, e isso exige um pouco de trabalho do dispositivo delas. Não tem efeito com desfoque ou com sua própria imagem.",
   "ui.with_an_animated_scene_the_room_behind_you_t": "Com uma cena animada, a sala atrás de você gira conforme você inclina ou vira o celular, como uma sala de verdade. Usa o sensor de movimento do celular; nada é gravado nem enviado a lugar nenhum além do próprio ângulo, para quem desenha a sua cena.",
   "ui.works_when_app_is_focused_only": "· só funciona com o app em foco",
   "ui.you_can_change_this_anytime_in_settings_adva": "Você pode mudar isso quando quiser em Ajustes → Avançado.",

@@ -397,7 +397,7 @@
   "ui.when_a_room_host_has_dev_mode_on_an_i_button": "当房主开启开发者模式时，每个名字旁会出现一个“i”按钮，显示设备、音频和网络诊断信息。在你接受之前此功能保持关闭——否则不会共享任何内容。",
   "ui.where_to_find_it": "在哪里找到",
   "ui.which_side_the_talk_button_sits_on_in_landsc": "横屏时说话按钮位于哪一侧（网页端）。",
-  "ui.with_an_animated_scene_sends_just_you_and_a": "使用动态场景时，只发送你本人和房间的一小圈边缘；通话对象会在自己的设备上绘制同样的场景。点对点通话中占用更少的上传带宽。他们看到的场景可能略有不同，且会增加其设备的负担。对模糊或你自己的图片无效，视频经中继转发时也无效。",
+  "ui.with_an_animated_scene_sends_just_you_and_a": "使用动态场景时，只发送你本人和房间的一小圈边缘；通话对象会在自己的设备上绘制同样的场景。点对点通话中占用更少的上传带宽。他们看到的场景可能略有不同，且会增加其设备的负担。对模糊或你自己的图片无效。",
   "ui.with_an_animated_scene_the_room_behind_you_t": "使用动态场景时，你身后的房间会随手机的倾斜或转动而转动，就像真实的房间一样。使用手机的运动传感器；除角度本身会发送给绘制你场景的人之外，不会记录或发送任何内容。",
   "ui.works_when_app_is_focused_only": "· 仅在应用处于前台时有效",
   "ui.you_can_change_this_anytime_in_settings_adva": "你可以随时在“设置 → 高级”中更改。",

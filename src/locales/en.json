@@ -399,7 +399,7 @@
   "ui.when_a_room_host_has_dev_mode_on_an_i_button": "When a room host has dev mode on, an “i” button appears next to each name showing device, audio & network diagnostics. This is off until you accept — nothing is shared otherwise.",
   "ui.where_to_find_it": "Where to find it",
   "ui.which_side_the_talk_button_sits_on_in_landsc": "Which side the talk button sits on in landscape (web).",
-  "ui.with_an_animated_scene_sends_just_you_and_a": "With an animated scene, sends just you and a thin edge of your room; the people you call draw the same scene on their own device. Uses less upload in calls that go peer to peer. They may see the scene slightly differently, and it costs their device some work. Has no effect with blur or your own image, or when video goes through the relay.",
+  "ui.with_an_animated_scene_sends_just_you_and_a": "With an animated scene, sends just you and a thin edge of your room; the people you call draw the same scene on their own device. Uses less upload in calls that go peer to peer. They may see the scene slightly differently, and it costs their device some work. Has no effect with blur or your own image.",
   "ui.with_an_animated_scene_the_room_behind_you_t": "With an animated scene, the room behind you turns as you tilt or turn your phone, the way a real one would. Uses the phone's motion sensor; nothing is recorded or sent anywhere except the angle itself, to people who draw your scene.",
   "ui.works_when_app_is_focused_only": "· works when app is focused only",
   "ui.you_can_change_this_anytime_in_settings_adva": "You can change this anytime in Settings → Advanced.",

@@ -26,9 +26,11 @@ it changes the picture *before* the picture is encoded. If you route video
 through the relay, the relay sees your blurred background; if you don't, nobody
 does.
 
-The keyed picture does not change that. It goes only to a peer on a direct
-connection, never through the relay (the relay is always sent the finished
-picture), and it carries you over flat green plus the thin edge of your room
+The keyed picture does not change what the room shows. It goes to a peer that
+draws your scene — directly on the mesh, or, when video goes through the relay,
+as a second relay track that such a peer pulls (so the relay is then given it
+too, next to the finished picture; see [video
+routing](video-routing.md#keyed-camera-through-the-relay)) — and it carries you over flat green plus the thin edge of your room
 that the cut-out's soft outline lets through; anything fainter than that is cut
 to pure green before it leaves (`KEY_ALPHA_FLOOR`). What it adds on the wire is
 the scene's name and a few numbers about your light, so the far end can draw
@@ -1070,8 +1072,9 @@ desktop and plain mobile tiers, set near libwebrtc's resolution steps so it
 buys bits rather than a smaller picture, and nothing taken from the frugal tier,
 which is already as low as a face survives. The flat field is what lets the
 person keep their quality under it. Neither half has been measured on a real
-call. And it is mesh-only, so on the default routing it applies in two-person
-rooms (see [video routing](video-routing.md#keyed-camera-is-mesh-only)).
+call. On the mesh the sender moves each call; through the relay it publishes a
+second, keyed relay track that each capable receiver pulls instead (see [video
+routing](video-routing.md#keyed-camera-through-the-relay)).
 
 ### The keyed frame
 
@@ -1252,10 +1255,11 @@ pipeline: its captured track stays live and the picture freezes for every peer.
 The pipeline also listens for `webglcontextlost` and gives up out loud — the
 background goes off and the peers get the plain camera — rather than freeze.
 
-The switch alone says nothing about whether it is doing anything, and in a
-default room of three, or with blur picked, it is not. `keyedStatus()` decides,
-and two lines say it. Under the switch in Settings, every state ("In use for 1
-of 2 people", "Not in use: video goes through the relay in this room"). In the
+The switch alone says nothing about whether it is doing anything, and with
+blur picked, or in a relayed room where nobody can draw the scene from the
+relay, it is not. `keyedStatus()` decides, and two lines say it. Under the
+switch in Settings, every state ("In use for 1 of 2 people", "Not in use: video
+goes through the relay, and nobody here can draw the scene from it"). In the
 background popover of a call, only while it is in use, in words that say what
 it means ("2 of 3 people draw this scene on their own device; the others see
 your usual picture.", `keyedPopoverText()`), with an (i) whose tooltip says the

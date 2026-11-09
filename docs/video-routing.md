@@ -350,30 +350,63 @@ over Voxal's existing PeerJS star signaling, extended with an optional
 messages (see the protocol table at the top of `src/main.js`). Cloudflare's
 DataChannels are never used for this.
 
-## Keyed camera is mesh-only
+## Keyed camera through the relay
 
 With **Let others draw my scene** on (see [Keyed sending and
 receiving](video-effects.md#keyed-sending-and-receiving)), a camera sender can
 carry a picture of the person over flat key green to a peer that draws the
-scene itself, chosen peer by peer. That exists **only on the mesh**:
+scene itself, chosen peer by peer. On the mesh the choice is the sender's: each
+call's sender is moved onto the keyed track once that receiver has acked that
+very call. Through the SFU every receiver pulls one published track, so the
+choice moves to the receivers:
 
-- the sender's offer is null unless its camera's topology is `p2p`
-  (`currentOffer()`), and the SFU publish sender always gets the finished
-  composite (`swapLocalVideoTrack()` keys mesh senders only);
-- a receiver never starts a cut-out for a peer whose camera reaches it through
-  the SFU (`keyedReceiveEligible()`).
+- **Two relay tracks.** Next to the composite (`<peer id>-video`) the sender
+  publishes `<peer id>-video-keyed`, on a publish leg of its own
+  (`sfuPublishKeyedTrack()`), so adding or dropping it never renegotiates the
+  picture everybody else gets. It exists only while some receiver wants it: a
+  live `video-keyed-ready` with `call: 'sfu'` (`keyedSfuWanted()`), plus
+  `KEYED_SFU_LINGER_MS` (15 s) after the last one, so a receiver on its way back
+  never loses the picture under it. A failed publish waits 30 s.
+- **The offer names it.** `keyedOffer.ref` is `{sessionId, trackName}` of the
+  keyed track, once it is published, and absent otherwise (a mesh offer is
+  unchanged).
+- **Each receiver pulls what it can show.** A receiver cuts out the composite
+  pull first (`keyIn()`, which passes unkeyed frames through), acks with
+  `call: 'sfu'`, and switches its own pull to the keyed track once the offer
+  names it (`syncKeyedSfuPull()`). Back to the composite when the cut-out closes
+  (shed, a scene that will not compile, the offer withdrawn) or when nothing
+  wants the keyed pull any more. Every switch is **make before break**: the new
+  pull replaces `conn.videoMedia`/`conn.remoteVideoStream` only once its first
+  frame has arrived (`sfuPullTrack()` waits for the track's `unmute`), and the
+  cut-out follows it with `setSource()`, so the tile neither goes dark nor ever
+  shows a keyed frame raw. A failed keyed pull is held off for 30 s; a failed
+  composite pull falls back to an ordinary `sfuSubscribeTrack()`.
+- **The registry keeps the composite's reference.** `peer-list`, `video-offer`
+  and a reconnect all deal in the composite; a keyed pull is marked
+  `_keyedRef` on its shim, and a dropped keyed leg is resubscribed as the
+  composite (the cut-out asks for the keyed track again itself).
+- **No tilt strip** through the relay: the keyed track is one picture for every
+  receiver, and the strip changes the frame format before any receiver could
+  have the offer that announces it.
+- **Capabilities.** Both ends advertise `keyed-sfu-1` (`PROTOCOL_VERSION` 5),
+  and so must the host whenever neither end is the host: an older host
+  sanitises `ref` away, so a sender never offers keying through it
+  (`peerKeyableOverRelay()`). An older peer keeps getting the composite.
 
-Two reasons. An SFU forwards one published track to every subscriber, so a
-per-viewer choice would need a second published track and a second
-subscription per viewer. And a move to the relay must not change what the relay
-is given: it is only ever the picture everybody else sees.
+**Costs.** While at least one receiver draws the scene, the sender uploads two
+streams to the relay — the composite at the camera cap and the keyed track at
+`KEYED_BITRATE_SHARE` of it — so roughly 1.75x its camera upload when a room
+mixes receivers that key and receivers that cannot (phones drawing their own
+scene, non-Chromium browsers, older builds). Each receiver still downloads one
+stream. A receiver's GPU limit is unchanged: `KEYED_RECEIVERS_MAX_DESKTOP` (3)
+cut-outs at once, one on a phone; any further sender shows its composite.
 
-When the room moves to the relay, the mesh calls that carried keyed pictures
-close with the move (`unpublishLocalTrack()`), the offer is withdrawn, and the
-setting's status line says "Not in use: video goes through the relay in this
-room". Under the default `allow-sfu` that means keying applies in two-person
-rooms (and in bigger ones only while the relay is unavailable); `prefer-p2p`
-and `p2p-only` keep it at any size.
+**What the relay is given.** With a keyed receiver in the room, Cloudflare is
+sent the person cut out over flat green in addition to the finished composite.
+Neither shows the real room; the keyed picture carries the person's outline
+explicitly. That is the same `allow-sfu` bargain as the composite (the relay
+can see the video it forwards), and `prefer-p2p` / `p2p-only` keep video — keyed
+or not — off the relay entirely.
 
 ## Reconnection
 

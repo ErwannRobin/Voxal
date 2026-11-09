@@ -282,7 +282,7 @@ cost are in section 8.2.
    real-webcam tuning is outstanding.
 3. Timings come from an Apple M5 and a software renderer. Low-end GPUs and
    phones are not covered.
-4. Keyed sending is mesh-only, needs a hardware-GPU Chromium receiver, and does
+4. Keyed sending needs a hardware-GPU Chromium receiver (`keyed-sfu-1` too through the relay), and does
    not apply to custom scenes.
 5. No head-to-head benchmark against Zoom, Meet or Teams. Competitor entries
    come from public pages and may be out of date.
