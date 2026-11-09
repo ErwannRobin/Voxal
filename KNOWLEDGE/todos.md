@@ -213,11 +213,14 @@ mostly on a software GPU, with a synthetic person. Left for later:
   through H.264 at the frugal tier. A Safari sender also takes the
   `captureStream(fps)` fallback for the keyed canvas (no `requestFrame`), which
   nothing has exercised.
-- **A keyed option through the SFU.** Keyed is mesh-only, so on the default
-  routing it applies only in two-person rooms — exactly where bandwidth matters
-  least. Through the SFU it would need a second published track (or a simulcast
-  layer) and a per-subscriber choice of which to pull, plus a decision about
-  what the relay may be given (today it only ever gets the finished picture).
+- **Keyed through the SFU against a live Cloudflare account.** Shipped behind
+  `keyed-sfu-1` (second relay track + per-receiver pull, see
+  `docs/video-routing.md`), unit-tested through stand-ins for
+  `sfuPublishKeyedTrack()` / `sfuPullTrack()` only. Not yet verified: a real
+  two-track publish on a live app, the `unmute` wait on a Cloudflare pull, and
+  whether dropping the composite pull while keyed (rather than keeping both)
+  holds up on a starved downlink. The sender's ~1.75x relay upload in a mixed
+  room is unmeasured; a bench row would settle it.
 - **A bench scenario to re-derive the bitrate share on a real call.**
   `KEYED_BITRATE_SHARE` (0.75, not on the frugal tier) rests on fixed-quantizer
   VP9 (26–67% fewer bits) and the resolution-step thresholds; under rate control

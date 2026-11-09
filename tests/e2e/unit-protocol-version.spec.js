@@ -10,7 +10,7 @@ test.beforeEach(async ({ page }) => {
 test('helloMessage carries protocolVersion and appVersion', async ({ page }) => {
   const hello = await page.evaluate(() => helloMessage());
   expect(hello.type).toBe('hello');
-  expect(hello.protocolVersion).toBe(4);   // v4 added the keyed camera (caps, video-keyed)
+  expect(hello.protocolVersion).toBe(5);   // v5 added keying through the relay (keyed-sfu-1, offer.ref)
   expect(typeof hello.appVersion).toBe('string');
 });
 
@@ -76,8 +76,8 @@ test('receiving a peer-list from a newer host flags outdated (full receiver path
       peers: [],
       hostId: 'host-x',
       hostPseudo: 'Host',
-      protocolVersion: 5,
-      appVersion: '5.0.0',
+      protocolVersion: PROTOCOL_VERSION + 1,
+      appVersion: '99.0.0',
     });
     return _sawNewerProtocol;
   });

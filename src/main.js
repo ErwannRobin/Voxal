@@ -28,7 +28,10 @@
  *                  = it can draw a sender's scene behind a keyed camera picture.
  *                  'keyed-tilt-1' = it also reads the tilt strip a keyed frame may
  *                  carry (the sender's phone's turn, drawn into the top edge).
- *                  keyedOffer: { epoch, scene, look, edgeE, size, tilt } | null — what a
+ *                  'keyed-sfu-1' = it keys through the relay too: as a receiver it
+ *                  pulls a sender's keyed relay track itself, as a host it relays
+ *                  the offer's `ref` (an older host sanitises it away).
+ *                  keyedOffer: { epoch, scene, look, edgeE, size, tilt, ref? } | null — what a
  *                  sender would key, if a receiver says it is ready for it. scene
  *                  is null while the sender holds keying back (blur, an image, a
  *                  green shirt): its keyed track then carries the plain composite.
@@ -36,7 +39,9 @@
  *                  not (tilt: true means the keyed frames carry that strip, and the
  *                  epoch changes whenever it flips): a missing caps keeps what was known, and a missing
  *                  keyedOffer means none only from a host that has the capability,
- *                  outside the post-migration settle.
+ *                  outside the post-migration settle. `ref` only when the camera goes
+ *                  through the SFU: {sessionId, trackName} of the sender's keyed relay
+ *                  track, once it is published (it is, while a receiver wants it).
  *   peer-joined  { peerId, pseudo }               host -> all existing peers
  *   peer-left    { peerId }                       host -> all
  *   talking      { peerId, active }               non-host -> host (relayed to all)
@@ -64,7 +69,8 @@
  *                  (the mesh MediaConnection's connectionId), for THIS offer epoch,
  *                  with THIS scene compiled" — or ok:false, "stop keying me".
  *                  Re-sent every 10 s and to every new host; a sender forgets one
- *                  after 25 s. Keyed is mesh-only: never offered for an SFU camera.
+ *                  after 25 s. Through the SFU, call is 'sfu': "publish your keyed
+ *                  track, I will pull it" — the receiver switches its own pull.
  *   audio-check-request  { peerId, from,        viewer -> host (relayed to target); dev only
  *                          durationMs }
  *   audio-check-response { peerId, report,       target -> host (relayed to requester); dev only
@@ -123,7 +129,10 @@
 // `video-keyed-ready`: a receiver drawing the sender's scene. Additive the same
 // way — an older peer never advertises the capability, so nobody keys to it, and
 // an older host drops the two messages, so nothing is keyed through it.
-const PROTOCOL_VERSION = 4;
+// v5 added `keyed-sfu-1`, the offer's `ref` and the ack's call 'sfu': keying
+// through the relay. Additive too — without the capability on both ends and on
+// the host, a relayed camera is never offered keyed, exactly as in v4.
+const PROTOCOL_VERSION = 5;
 
 const METERED_APP_STORE_KEY    = 'metered-app-name';
 const METERED_API_STORE_KEY    = 'metered-api-key';
@@ -7254,6 +7263,7 @@ async function _collectBandwidthSample() {
   // Our own SFU publish legs belong to no peer — one per kind, not per peer,
   // which is the whole point of routing through a relay.
   if (_sfuPublishSessions.video && _sfuPublishSessions.video.pc) measure(_sfuPublishSessions.video.pc, 'camera');
+  if (_keyedSfu && _keyedSfu.pc) measure(_keyedSfu.pc, 'camera');
   if (_sfuPublishSessions.screen && _sfuPublishSessions.screen.pc) measure(_sfuPublishSessions.screen.pc, 'screen');
 
   await Promise.all(pending);
@@ -8939,8 +8949,14 @@ function _keyedSendingState(peerId) {
   if (videoBackgroundMode().indexOf('preset:') !== 0 || !localVideoStream._effectsProcessor) {
     return 'Composite (no animated scene)';
   }
-  var t = _localVideoTopology.video;
-  if (t && t.mode === 'sfu') return 'Composite (video goes through the relay)';
+  if (localVideoViaRelay()) {
+    if (!peerKeyableOverRelay(peerId)) return 'Composite (through the relay, which their app or the host cannot key)';
+    var a = _keyedAcks.get(peerId);
+    if (_keyedSfu && a && a.ok && a.call === KEYED_SFU_CALL && Date.now() - a.at <= KEYED_ACK_TTL_MS) {
+      return 'Scene drawn on their device (keyed track through the relay)';
+    }
+    return 'Composite (through the relay; waiting for their device to confirm)';
+  }
   if (!peerSupports(peerId, KEYED_VIDEO_CAP)) return 'Composite (their app cannot draw scenes)';
   if (!keyedRelayCapable(peerId)) return 'Composite (their connection cannot)';
   if (keyedFor(peerId)) return 'Scene drawn on their device';
@@ -8954,7 +8970,8 @@ function _keyedReceivingState(peerId) {
     if (entry.gaveUp) return 'Gave up (' + entry.gaveUp + ')';
     if (entry.state === 'ready') {
       var st = _keyedStageShape.get(peerId);
-      return 'Drawing their scene here' + (st && st.want ? ' · filling the tile (' + st.want.toFixed(2) + ')' : '');
+      var via = remoteVideoViaRelay(conn) ? (keyedSfuPulling(conn) ? ' · keyed track from the relay' : ' · relay, on their composite') : '';
+      return 'Drawing their scene here' + via + (st && st.want ? ' · filling the tile (' + st.want.toFixed(2) + ')' : '');
     }
     return entry.state === 'closing' ? 'Going back to their composite' : 'Starting';
   }
@@ -9835,6 +9852,12 @@ var KEYED_VIDEO_CAP =
 // peer it could key has this, because a receiver without it would show the
 // strip's black and white cells across the top of the picture.
 var KEYED_TILT_CAP = 'keyed-tilt-1';
+// Whether this build takes part in keying through the relay: as a receiver it
+// subscribes to a sender's second, keyed relay track and cuts it out; as a host
+// it relays the keyed-track reference an offer carries (an older host sanitises
+// that field away, so nothing is keyed through it). Never advertised without
+// KEYED_VIDEO_CAP. See *Keyed camera through the relay* in docs/video-routing.md.
+var KEYED_SFU_CAP = 'keyed-sfu-1';
 
 function videoBackgroundMode() {
   return (typeof VideoEffects === 'undefined') ? 'off' : VideoEffects.readMode();
@@ -15184,6 +15207,12 @@ async function swapLocalVideoTrackNow(track) {
   if (_sfuPublishSessions.video && _sfuPublishSessions.video.pc) {
     tuneVideoSenders(_sfuPublishSessions.video.pc, 'video');
   }
+  // Our keyed relay track is never one of the targets above (it carries the
+  // keyed picture whatever the background): it only follows a new keyed track.
+  if (_keyedSfu) {
+    var kt = localKeyedTrack();
+    if (kt && _keyedSfu.track !== kt) moveKeyedSfuTrack(kt);
+  }
   applyKeyedDemand();
 }
 
@@ -15341,6 +15370,8 @@ async function publishLocalTrack(kind, stream) {
 function unpublishLocalTrack(kind) {
   var topology = _localVideoTopology[kind];
   _localVideoTopology[kind] = null;
+  // Our keyed relay track goes with the camera's relay publish (or is not there).
+  if (kind === 'video') unpublishKeyedSfu();
   if (topology && topology.mode === 'sfu') {
     if (kind === 'video') sfuUnpublishVideo(); else sfuUnpublishScreen();
     return;
@@ -15546,6 +15577,10 @@ var KEYED_ACK_REFRESH_MS = 10000;    // …so a ready receiver repeats it this o
 var KEYED_OFFER_MIN_GAP_MS = 1000;   // between two non-null offers we send
 var KEYED_OFFER_RATE_PER_S = 2;      // what a host relays per source (null exempt)
 var KEYED_SEND_TICK_MS = 5000;       // re-check acks for expiry while any exist
+var KEYED_SFU_CALL = 'sfu';          // the `call` an ack names when the camera comes through the relay
+var KEYED_SFU_LINGER_MS = 15000;     // our keyed relay track outlives the last receiver that wanted it
+var KEYED_SFU_RETRY_MS = 30000;      // after a keyed relay publish or pull that failed
+var KEYED_SFU_PULL_TIMEOUT_MS = 10000; // a relay pull with no frame by then has failed
 
 var _keyedEpoch = 0;          // bumped when the offer appears or the keyed track changes
 var _keyedEpochTrack = null;  // the keyed track the current epoch was issued for
@@ -15560,6 +15595,13 @@ var _keyedAcks = new Map();   // receiver peerId -> { ok, call, epoch, scene, at
 var _keyedDemand = 0;         // senders on the keyed track, as last told to VideoEffects
 var _keyedDemandStream = null;
 var _keyedOfferRate = new Map(); // host only: source peerId -> recent offer times
+var _keyedSfu = null;           // our keyed relay track: { pc, ref, track }
+var _keyedSfuPending = null;    // …its publish, while in flight
+var _keyedSfuSeq = 0;           // bumped by every unpublish, so a late publish lands nowhere
+var _keyedSfuWantedAt = 0;      // the last time a relay receiver had a live ok:true for it
+var _keyedSfuRetryAt = 0;       // no new publish before this, after one failed
+var _keyedSfuSwitches = new Map(); // receiver: sender peerId -> the relay pull in flight
+var _keyedSfuPullHold = new Map(); // receiver: sender peerId -> no keyed pull before this
 
 function keyedApi(name) {
   return typeof VideoEffects !== 'undefined' && !!VideoEffects &&
@@ -15572,7 +15614,7 @@ function keyedApi(name) {
 // that most need the saving, cannot even reach.
 function localCaps() {
   if (IS_TINY_EMBED || !KEYED_VIDEO_CAP || !keyedApi('canKeyIn')) return [];
-  try { return VideoEffects.canKeyIn() ? [KEYED_VIDEO_CAP, KEYED_TILT_CAP] : []; } catch (e) { return []; }
+  try { return VideoEffects.canKeyIn() ? [KEYED_VIDEO_CAP, KEYED_TILT_CAP, KEYED_SFU_CAP] : []; } catch (e) { return []; }
 }
 
 // Wire input. At most 16 short strings, or null when it is not a list at all —
@@ -15598,6 +15640,31 @@ function peerSupports(peerId, cap) {
 // offer nor the "stop" a receiver may need to say. Fail closed.
 function keyedRelayCapable(peerId) {
   return isHost || peerId === roomCode || peerSupports(roomCode, KEYED_VIDEO_CAP);
+}
+
+// The same question when the camera goes through the SFU: the offer then names
+// the sender's keyed relay track, and a host without KEYED_SFU_CAP sanitises
+// that reference away — the receiver could never subscribe to it. Fail closed.
+function keyedSfuRelayCapable(peerId) {
+  return isHost || peerId === roomCode || peerSupports(roomCode, KEYED_SFU_CAP);
+}
+
+// A peer we could key through the relay: it can cut out, it can pull a second
+// relay track, and every message between us survives the host.
+function peerKeyableOverRelay(peerId) {
+  return peerSupports(peerId, KEYED_VIDEO_CAP) && peerSupports(peerId, KEYED_SFU_CAP) &&
+    keyedRelayCapable(peerId) && keyedSfuRelayCapable(peerId);
+}
+
+// Whether OUR camera currently goes through the SFU.
+function localVideoViaRelay() {
+  var t = _localVideoTopology.video;
+  return !!(t && t.mode === 'sfu');
+}
+
+// Whether a sender's camera reaches us through the SFU.
+function remoteVideoViaRelay(conn) {
+  return !!(conn && conn.videoTopology && conn.videoTopology.mode === 'sfu');
 }
 
 function keyedClamp(v, lo, hi, fallback) {
@@ -15629,7 +15696,7 @@ function sanitizeKeyedOffer(raw) {
       size = [Math.min(4096, Math.max(16, w)), Math.min(4096, Math.max(16, h))];
     }
   }
-  return {
+  var out = {
     epoch: epoch,
     scene: keyedSceneId(raw.scene),
     look: {
@@ -15644,6 +15711,25 @@ function sanitizeKeyedOffer(raw) {
     size: size,
     tilt: raw.tilt === true
   };
+  // Through the relay only: which relay track carries the keyed picture. Absent
+  // (never null) otherwise, so a mesh offer is exactly what it always was.
+  var ref = sanitizeKeyedRef(raw.ref);
+  if (ref) out.ref = ref;
+  return out;
+}
+
+// An opaque SFU track reference ({sessionId, trackName}), as it may cross the
+// wire inside an offer. Two short strings, or nothing.
+function sanitizeKeyedRef(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  var ok = function(v) { return typeof v === 'string' && v.length > 0 && v.length <= 128; };
+  if (!ok(raw.sessionId) || !ok(raw.trackName)) return null;
+  return { sessionId: raw.sessionId, trackName: raw.trackName };
+}
+
+function sameSfuRef(a, b) {
+  if (!a || !b) return !a && !b;
+  return a.sessionId === b.sessionId && a.trackName === b.trackName;
 }
 
 // `ok` is true only when it is literally true: a truthy string is a no.
@@ -15693,6 +15779,16 @@ function anyPeerSupportsKeyed() {
   return found;
 }
 
+function anyPeerKeyableOverRelay() {
+  if (!KEYED_VIDEO_CAP) return false;
+  var self = peer && peer.id;
+  var found = false;
+  connections.forEach(function(c, id) {
+    if (!found && id !== self && peerKeyableOverRelay(id)) found = true;
+  });
+  return found;
+}
+
 // The live offer: what this client would key right now. Computed from live
 // state every time and never cached — a cached one is how a stale offer
 // outlives a move to the relay. Non-null only while ALL of these hold: the
@@ -15715,11 +15811,18 @@ function keyedTiltOk() {
 function currentOffer() {
   var s = localVideoStream;
   var t = _localVideoTopology.video;
+  var relay = !!(t && t.mode === 'sfu');
   var track = null, state = null;
-  if (keyedSubjectOnlyOn() && localVideoActive && s && s._effectsProcessor && t && t.mode === 'p2p' &&
-      keyedApi('keyedTrack') && keyedApi('keyedState') && anyPeerSupportsKeyed()) {
+  if (keyedSubjectOnlyOn() && localVideoActive && s && s._effectsProcessor && t &&
+      (relay ? anyPeerKeyableOverRelay() : t.mode === 'p2p' && anyPeerSupportsKeyed()) &&
+      keyedApi('keyedTrack') && keyedApi('keyedState')) {
     try { track = VideoEffects.keyedTrack(s) || null; } catch (e) { track = null; }
-    if (track && keyedApi('setKeyedTilt')) { try { VideoEffects.setKeyedTilt(s, keyedTiltOk()); } catch (e) { /* ignore */ } }
+    // Through the relay the keyed track is ONE picture for every receiver, and
+    // its frames change format the moment the strip is switched — before any
+    // of them could have the new offer. So no strip there.
+    if (track && keyedApi('setKeyedTilt')) {
+      try { VideoEffects.setKeyedTilt(s, !relay && keyedTiltOk()); } catch (e) { /* ignore */ }
+    }
     if (track) { try { state = VideoEffects.keyedState(s) || null; } catch (e) { state = null; } }
   }
   if (!track || !state) { _keyedOfferLive = false; return null; }
@@ -15738,7 +15841,9 @@ function currentOffer() {
   _keyedOfferLive = true;
   return sanitizeKeyedOffer({
     epoch: _keyedEpoch, scene: state.scene, look: state.look, edgeE: state.edgeE, size: state.size,
-    tilt: tilt
+    tilt: tilt,
+    // Through the relay: the keyed track to pull, once it is published.
+    ref: relay && _keyedSfu ? _keyedSfu.ref : null
   });
 }
 
@@ -15907,6 +16012,8 @@ function keyedSendersOnTrack() {
     var s = meshVideoSender(peerId);
     if (s && s.track === kt) n++;
   });
+  // Our keyed relay track: one sender, however many receivers pull it.
+  if (_keyedSfu && _keyedSfu.track === kt) n++;
   return n;
 }
 
@@ -15946,6 +16053,7 @@ function closeOutgoingCameraCall(peerId) {
 // Synchronous last resort before the pipeline is stopped: anything still on
 // its keyed track is closed, with no time to swap it.
 function closeCameraCallsOnKeyedTrack() {
+  unpublishKeyedSfu();
   connections.forEach(function(c, peerId) {
     var s = meshVideoSender(peerId);
     if (!s || !isKeyedVideoTrack(s.track)) return;
@@ -15968,6 +16076,7 @@ function refreshKeyedSend() {
   // offer it was keyed for has changed or gone.
   if (keyedSendersOutOfStep(offer)) scheduleKeyedReconcile();
   else if (_keyedDemand > 0) applyKeyedDemand();
+  if (syncKeyedSfuPublish(offer)) offer = currentOffer();
   if (!sameKeyedOffer(offer, _keyedSentOffer)) {
     // An offer appearing goes out at once — nobody can be keyed before the
     // receivers have it. Anything else waits behind the senders' queue.
@@ -16028,7 +16137,7 @@ function pruneKeyedAcks() {
 
 // An ack expires even in a room where nothing else happens.
 function armKeyedSendTick() {
-  var want = _keyedAcks.size > 0 || _keyedDemand > 0;
+  var want = _keyedAcks.size > 0 || _keyedDemand > 0 || !!_keyedSfu;
   if (want && !_keyedSendTick) {
     _keyedSendTick = setInterval(refreshKeyedSend, KEYED_SEND_TICK_MS);
   } else if (!want && _keyedSendTick) {
@@ -16041,6 +16150,8 @@ function armKeyedSendTick() {
 // already closed, so nobody needs moving — only state to forget. And a new
 // epoch, so no ack from this share can ever key the next one.
 function keyedSendStopped() {
+  unpublishKeyedSfu();
+  _keyedSfuWantedAt = 0;
   _keyedAcks.clear();
   _keyedEpoch++;
   _keyedOfferLive = false;
@@ -16050,6 +16161,164 @@ function keyedSendStopped() {
   if (_keyedSentOffer) sendKeyedOffer(null);
   if (_keyedSendTimer) { clearTimeout(_keyedSendTimer); _keyedSendTimer = null; }
   armKeyedSendTick();
+}
+
+// --- Keyed camera: sending through the relay ------------------------------------
+//
+// Through the SFU every receiver pulls ONE published track, so the per-peer
+// choice moves from our senders to their subscriptions: next to the composite
+// we publish a second relay track carrying the keyed picture, and a receiver
+// that is ready for it pulls that one instead (see the receiving side below).
+// Nobody is moved onto it by us, so the ack that guards each mesh call against
+// a raw green frame has only one job here: saying somebody wants the track.
+//
+//   * It is published only while some receiver's ok:true for KEYED_SFU_CALL is
+//     live, and kept for KEYED_SFU_LINGER_MS after the last one, so a receiver
+//     on its way back to the composite never loses the picture under it.
+//   * The offer names it (`ref`) only once it is published; every receiver
+//     that wants it pulls it itself.
+//   * One picture for all, so the tilt strip is never drawn into it, and the
+//     frames are the plain composite while keying is withheld — exactly as on
+//     the mesh.
+
+function keyedSfuWanted() {
+  var now = Date.now();
+  var want = false;
+  _keyedAcks.forEach(function(ack, id) {
+    if (!want && ack.ok && ack.call === KEYED_SFU_CALL && now - ack.at <= KEYED_ACK_TTL_MS &&
+        connections.has(id) && peerKeyableOverRelay(id)) want = true;
+  });
+  return want;
+}
+
+// How many receivers say they draw our scene through the relay now.
+function keyedSfuReceiverCount() {
+  if (!_keyedSfu) return 0;
+  var now = Date.now();
+  var n = 0;
+  _keyedAcks.forEach(function(ack, id) {
+    if (ack.ok && ack.call === KEYED_SFU_CALL && now - ack.at <= KEYED_ACK_TTL_MS &&
+        connections.has(id) && peerKeyableOverRelay(id)) n++;
+  });
+  return n;
+}
+
+// Level-triggered, from refreshKeyedSend(): publish, follow a new keyed track,
+// or unpublish, from live state. True when it dropped the track (the offer
+// changed under the caller).
+function syncKeyedSfuPublish(offer) {
+  var now = Date.now();
+  var live = !!offer && localVideoViaRelay() && localVideoActive && !!localVideoStream;
+  if (!live) {
+    _keyedSfuWantedAt = 0;
+    if (_keyedSfu || _keyedSfuPending) { unpublishKeyedSfu(); return true; }
+    return false;
+  }
+  if (keyedSfuWanted()) _keyedSfuWantedAt = now;
+  if (!_keyedSfuWantedAt || now - _keyedSfuWantedAt >= KEYED_SFU_LINGER_MS) {
+    // Dropped: the offer stops naming it, and a receiver still on it goes back.
+    if (_keyedSfu || _keyedSfuPending) { unpublishKeyedSfu(); return true; }
+    return false;
+  }
+  var kt = localKeyedTrack();
+  if (!kt) return false;
+  if (_keyedSfu) {
+    if (_keyedSfu.track !== kt) moveKeyedSfuTrack(kt);
+    return false;
+  }
+  if (!_keyedSfuPending && now >= _keyedSfuRetryAt) publishKeyedSfu(kt);
+  return false;
+}
+
+function publishKeyedSfu(kt) {
+  var seq = ++_keyedSfuSeq;
+  var pending = Promise.resolve().then(function() { return sfuPublishKeyedTrack(kt); });
+  _keyedSfuPending = pending;
+  pending.then(function(pub) {
+    if (seq !== _keyedSfuSeq || _keyedSfuPending !== pending) {
+      try { pub.pc.close(); } catch (_) {}
+      return;
+    }
+    _keyedSfuPending = null;
+    _keyedSfu = { pc: pub.pc, ref: pub.ref, track: kt };
+    tuneVideoSenders(pub.pc, 'video');
+    // The keyed pass must be drawing before anybody pulls the track.
+    applyKeyedDemand();
+    watchKeyedSfuPublish(_keyedSfu);
+    devLog('[Video] keyed picture published to the relay as "' + pub.ref.trackName + '"');
+    refreshKeyedSend();
+  }, function(e) {
+    if (seq !== _keyedSfuSeq || _keyedSfuPending !== pending) return;
+    _keyedSfuPending = null;
+    _keyedSfuRetryAt = Date.now() + KEYED_SFU_RETRY_MS;
+    devLog('[Video] keyed relay publish failed: ' + (e && e.message ? e.message : String(e)), 'warn');
+    renderKeyedStatus();
+  });
+}
+
+// A relay leg that fails is not reconnected in place: dropping it takes the
+// reference out of the offer, receivers go back to the composite, and the
+// next refresh publishes a fresh one if anyone still wants it.
+function watchKeyedSfuPublish(pub) {
+  var pc = pub.pc;
+  if (!pc || typeof pc.addEventListener !== 'function') return;
+  pc.addEventListener('connectionstatechange', function() {
+    if (_keyedSfu !== pub || pc.connectionState !== 'failed') return;
+    devLog('[Video] keyed relay track failed; withdrawing it', 'warn');
+    unpublishKeyedSfu();
+    _keyedSfuRetryAt = Date.now() + 2000;
+    refreshKeyedSend();
+  });
+}
+
+// The pipeline was rebuilt (a background off and on): same relay track, new
+// source. replaceTrack needs no renegotiation, and runs on the sender queue.
+function moveKeyedSfuTrack(kt) {
+  var pub = _keyedSfu;
+  pub.track = kt;
+  queueVideoSenderMutation(function() {
+    if (_keyedSfu !== pub || !pub.pc || typeof pub.pc.getSenders !== 'function') return;
+    var sender = (pub.pc.getSenders() || [])[0];
+    if (!sender) return;
+    return Promise.resolve(sender.replaceTrack(kt)).then(function() {
+      tuneVideoSenders(pub.pc, 'video');
+      applyKeyedDemand();
+    }, function(e) {
+      devLog('[Video] keyed relay replaceTrack failed: ' + (e && e.message ? e.message : String(e)), 'warn');
+      if (_keyedSfu === pub) { unpublishKeyedSfu(); refreshKeyedSend(); }
+    });
+  });
+}
+
+// Synchronous, and safe to call at any time.
+function unpublishKeyedSfu() {
+  _keyedSfuSeq++;
+  _keyedSfuPending = null;
+  var pub = _keyedSfu;
+  _keyedSfu = null;
+  if (pub && pub.pc) { try { pub.pc.close(); } catch (_) {} }
+}
+
+// The transport: one more publish leg of its own, beside the composite's, so
+// adding and dropping it never renegotiates the picture everybody else gets.
+// Split out so the tests can stand in for Cloudflare.
+async function sfuPublishKeyedTrack(track) {
+  var minted = await sfuMintCapability('video', 'publish');
+  var pc = new RTCPeerConnection();
+  try {
+    var tr = pc.addTransceiver(track, { direction: 'sendonly', streams: [new MediaStream([track])] });
+    var offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    var trackName = sfuTrackNameFor(peer.id, 'video') + '-keyed';
+    var result = await sfuNegotiate('video', 'publish', pc.localDescription.sdp, minted, [{
+      location: 'local', mid: tr.mid, trackName: trackName
+    }]);
+    await pc.setRemoteDescription({ type: 'answer', sdp: _sdpOf(result.sessionDescription) });
+    return { pc: pc, ref: { sessionId: result.sessionId, trackName: trackName } };
+  } catch (e) {
+    try { pc.close(); } catch (_) {}
+    throw e;
+  }
 }
 
 // --- Keyed camera: signalling --------------------------------------------------
@@ -16190,7 +16459,9 @@ function keyedTilePriority(peerId) {
 // changes every few seconds and would make a device that cannot do it retry
 // forever with a fresh WebGL context each time.
 function keyedFailureKey(scene, raw) {
-  return String(scene || '') + '|' + String((raw && raw.id) || '');
+  // A relay stream is a new MediaStream on every pull (the composite, the keyed
+  // track, the composite again): it carries a key that outlives them.
+  return String(scene || '') + '|' + String((raw && (raw._keyedKey || raw.id)) || '');
 }
 
 function keyedBlocked(peerId, scene, raw) {
@@ -16221,10 +16492,17 @@ function noteKeyedFailure(peerId, scene, raw, holdMs) {
 function keyedReceiveEligible(peerId, conn) {
   if (!inRoom || !conn || !peer || peerId === peer.id) return false;
   if (!conn.videoActive || !conn.remoteVideoStream || !conn.keyedOffer) return false;
-  if (conn.videoTopology && conn.videoTopology.mode === 'sfu') return false;
   if (!keyedRelayCapable(peerId)) return false;
-  // An ack names the call, so a stream without one cannot be keyed honestly.
-  if (!conn.videoMedia || !conn.videoMedia.connectionId) return false;
+  if (remoteVideoViaRelay(conn)) {
+    // Through the relay we pull the keyed track ourselves: that needs a
+    // subscription of our own to stand on, and a host that passes the
+    // reference to it on.
+    if (!KEYED_SFU_CAP || !keyedSfuRelayCapable(peerId)) return false;
+    if (!conn.videoMedia || !conn.videoMedia._sfu) return false;
+  } else if (!conn.videoMedia || !conn.videoMedia.connectionId) {
+    // An ack names the call, so a stream without one cannot be keyed honestly.
+    return false;
+  }
   return !keyedBlocked(peerId, conn.keyedOffer.scene, conn.remoteVideoStream);
 }
 
@@ -16237,6 +16515,9 @@ function keyedAckFor(entry, conn) {
   var scene;
   try { scene = h.scene() || null; } catch (e) { scene = null; }
   if (!scene || (offer.scene && offer.scene !== scene)) return null;
+  // Through the relay there is no call of ours for the sender to move: the ack
+  // only says "publish it, I will pull it".
+  if (remoteVideoViaRelay(conn)) return { call: KEYED_SFU_CALL, epoch: offer.epoch, scene: scene };
   var mc = conn.videoMedia;
   if (!mc || !mc.connectionId) return null;
   return { call: String(mc.connectionId), epoch: offer.epoch, scene: scene };
@@ -16402,7 +16683,17 @@ function reconcileReadyKeyedReceiver(peerId, entry, conn, eligible) {
   }
   // Expect keyed frames only for what we acked — and not while the sender has
   // no scene, when it sends the plain composite on the keyed track.
-  var expect = !!want && sameKeyedAck(want, entry.ack) && !!conn.keyedOffer.scene;
+  var acked = !!want && sameKeyedAck(want, entry.ack);
+  var expect = acked && !!conn.keyedOffer.scene;
+  if (remoteVideoViaRelay(conn)) {
+    // Through the relay WE choose the track: the keyed one once we have acked
+    // and the offer names it, and we stay on it through a scene's compile (the
+    // ack lapses for that long; the frames do not change).
+    var onKeyed = keyedSfuPulling(conn);
+    var ref = conn.keyedOffer.ref || null;
+    syncKeyedSfuPull(peerId, conn, ref && (acked || onKeyed) ? ref : null);
+    expect = onKeyed && !!conn.keyedOffer.scene;
+  }
   try { h.setExpectKeyed(expect); } catch (e) { /* ignore */ }
 }
 
@@ -16423,6 +16714,9 @@ function closeKeyedReceiver(peerId, entry, why) {
   sendKeyedAck(peerId, false, entry.ack);
   entry.okFalseAt = performance.now();
   entry.ack = null;
+  // Through the relay the way out is ours: pull the composite back now.
+  var c = connections.get(peerId);
+  if (keyedSfuPulling(c)) syncKeyedSfuPull(peerId, c, null);
   // Its own timer: nothing else is guaranteed to re-run the reconcile in a
   // quiet room, and only the reconcile can finish closing.
   if (entry.timer) clearTimeout(entry.timer);
@@ -16438,7 +16732,14 @@ function reconcileClosingKeyedReceiver(peerId, entry, conn, eligible) {
   var raw = conn.remoteVideoStream;
   // The stream it was cutting out is gone — the share ended, or a new call came
   // in, which starts on the composite: nothing keyed can reach the tile now.
+  // Through the relay that is also how closing ends: we pull the composite
+  // again, and it replaces the keyed stream only once its frames flow.
   if (!raw || raw !== entry.raw || !conn.videoActive) { dropKeyedReceiver(peerId); return; }
+  if (keyedSfuPulling(conn) &&
+      !(keyedHandleAlive(entry.handle) && !entry.gaveUp && !entry.shed && eligible)) {
+    syncKeyedSfuPull(peerId, conn, null);
+    return;
+  }
   var h = entry.handle;
   var alive = keyedHandleAlive(h);
   if (alive && !entry.gaveUp && !entry.shed && eligible) {
@@ -16505,6 +16806,152 @@ function dropKeyedProbe(peerId) {
   _keyedProbes.delete(peerId);
 }
 
+// --- Keyed camera: receiving through the relay ----------------------------------
+//
+// A sender whose camera reaches us through the SFU publishes its keyed picture
+// as a second relay track (see the sending side). Which of the two we pull is
+// ours to choose, and every change is make-before-break: the new pull replaces
+// conn.videoMedia / conn.remoteVideoStream only once its first frame is in, so
+// the tile never goes dark, and the cut-out follows the new stream like a new
+// mesh call (setSource). The registry keeps the COMPOSITE's reference — that is
+// what peer-list and video-offer announce, and what a reconnect pulls again;
+// the keyed pull is marked `_keyedRef` on its shim.
+//
+//   * The keyed track only once the cut-out is ready and acked, and the offer
+//     names the track. Nothing keyed reaches a tile with nothing to cut it out.
+//   * Back to the composite when the cut-out closes, or whenever nothing here
+//     wants the keyed pull any more (the sweep in reconcileKeyedReceivers).
+//   * A keyed pull that fails is held off for KEYED_SFU_RETRY_MS; a composite
+//     one that fails falls back to an ordinary fresh subscription.
+
+function keyedSfuPulling(conn) {
+  return !!(conn && conn.videoMedia && conn.videoMedia._sfu && conn.videoMedia._keyedRef);
+}
+
+// `keyedRef`: the keyed track to be on, or null for the composite.
+function syncKeyedSfuPull(peerId, conn, keyedRef) {
+  var media = conn && conn.videoMedia;
+  if (!media || !media._sfu || !remoteVideoViaRelay(conn)) return;
+  var target = keyedRef || null;
+  var pending = _keyedSfuSwitches.get(peerId);
+  if (sameSfuRef(media._keyedRef || null, target)) {
+    // Already there: a pull still in flight for something else is stale.
+    if (pending) _keyedSfuSwitches.delete(peerId);
+    return;
+  }
+  if (pending && sameSfuRef(pending.target, target)) return;
+  if (target && (_keyedSfuPullHold.get(peerId) || 0) > Date.now()) {
+    if (pending) _keyedSfuSwitches.delete(peerId);
+    return;
+  }
+  var composite = _normalizeProviderRef(_rememberedProviderRef(peerId, 'video'));
+  var ref = target || composite;
+  if (!ref) return;
+  var token = { target: target };
+  _keyedSfuSwitches.set(peerId, token);
+  devLog('[Video] ' + shortId(peerId) + ': pulling the ' + (target ? 'keyed' : 'composite') +
+         ' relay track "' + ref.trackName + '"');
+  Promise.resolve().then(function() {
+    return sfuPullTrack('video', ref, KEYED_SFU_PULL_TIMEOUT_MS);
+  }).then(function(got) {
+    var c = connections.get(peerId);
+    var old = c && c.videoMedia;
+    var current = _keyedSfuSwitches.get(peerId) === token;
+    if (current) _keyedSfuSwitches.delete(peerId);
+    // Only onto the very subscription we set out to replace, for a share that
+    // still comes through the relay.
+    if (!current || !inRoom || !c || !c.videoActive || !remoteVideoViaRelay(c) || !old || !old._sfu) {
+      try { got.pc.close(); } catch (_) {}
+      scheduleStageRelayout();
+      return;
+    }
+    got.stream._keyedKey = 'sfu:' + peerId + ':' + (composite ? composite.sessionId : '');
+    var pc = got.pc;
+    c.videoMedia = {
+      _sfu: true, _keyedRef: target, peerConnection: pc,
+      close: function() { try { pc.close(); } catch (_) {} }
+    };
+    try { old.close(); } catch (_) {}
+    // A leg that drops is pulled again as the composite (sfuSubscribeTrack
+    // sees this one dead); the cut-out asks for the keyed track again itself.
+    _wireSfuReconnect(pc, 'video', peerId, 'subscribe', function() {
+      return sfuSubscribeTrack('video', peerId, _rememberedProviderRef(peerId, 'video'));
+    });
+    attachRemoteVideo(peerId, got.stream);
+  }, function(err) {
+    if (_keyedSfuSwitches.get(peerId) !== token) return;
+    _keyedSfuSwitches.delete(peerId);
+    devLog('[Video] ' + shortId(peerId) + ': ' + (target ? 'keyed' : 'composite') + ' relay pull failed: ' +
+           (err && err.message ? err.message : String(err)), 'warn');
+    if (target) {
+      _keyedSfuPullHold.set(peerId, Date.now() + KEYED_SFU_RETRY_MS);
+    } else {
+      // Off the keyed track at any cost: an ordinary subscription to the
+      // composite, through the path every relayed camera uses.
+      var c = connections.get(peerId);
+      if (c && keyedSfuPulling(c) && composite) {
+        detachRemoteVideoTransport(peerId);
+        _rememberProviderRef(peerId, 'video', composite);
+        sfuSubscribeVideo(peerId, composite);
+      }
+    }
+    scheduleStageRelayout();
+  });
+}
+
+// The transport for a pull: a subscribe leg of its own, resolved only once its
+// first frame has arrived (a remote track is muted until RTP flows). Split out
+// so the tests can stand in for Cloudflare.
+async function sfuPullTrack(kind, ref, timeoutMs) {
+  var minted = await sfuMintCapability(kind, 'subscribe');
+  var pc = new RTCPeerConnection();
+  var stream = new MediaStream();
+  var timer = null;
+  var flowing = new Promise(function(resolve, reject) {
+    pc.addEventListener('track', function(ev) {
+      var t = ev.track;
+      if (!stream.getTracks().includes(t)) stream.addTrack(t);
+      if (!t.muted) resolve();
+      else t.addEventListener('unmute', function() { resolve(); }, { once: true });
+    });
+    timer = setTimeout(function() { reject(new Error('no frame within ' + timeoutMs + ' ms')); }, timeoutMs);
+  });
+  try {
+    var result = await sfuNegotiate(kind, 'subscribe', null, minted, [{
+      location: 'remote', sessionId: ref.sessionId, trackName: ref.trackName
+    }]);
+    var sdp = _sdpOf(result.sessionDescription);
+    if (result.requiresImmediateRenegotiation && sdp) {
+      await pc.setRemoteDescription({ type: 'offer', sdp: sdp });
+      var answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await sfuRenegotiate(kind, 'subscribe', pc.localDescription.sdp, minted, result.sessionId);
+    } else if (sdp) {
+      await pc.setRemoteDescription({ type: 'answer', sdp: sdp });
+    } else {
+      throw Object.assign(new Error('SFU subscribe returned no session description'), { code: 'negotiate_failed' });
+    }
+    await flowing;
+    return { pc: pc, stream: stream };
+  } catch (e) {
+    try { pc.close(); } catch (_) {}
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Nothing here wants a keyed pull any more (the cut-out was dropped, the slot
+// lost, the room left): back to the composite.
+function sweepKeyedSfuPulls() {
+  connections.forEach(function(conn, peerId) {
+    if (!keyedSfuPulling(conn)) return;
+    var entry = _keyedReceivers.get(peerId);
+    if (entry && (entry.state === 'ready' || entry.state === 'closing')) return;
+    syncKeyedSfuPull(peerId, conn, null);
+  });
+}
+
 // Run at the head of every updateVideoStage(), so it follows the room even
 // where nothing is drawn. O(peers) and Map-only, and it never calls back into
 // updatePeerList()/updateVideoStage(): what finishes later (a keyIn, a give-up,
@@ -16514,6 +16961,7 @@ function reconcileKeyedReceivers() {
     if (_keyedReceivers.size || _keyedProbes.size) resetKeyedReceivers();
     return;
   }
+  sweepKeyedSfuPulls();
   if (!_keyedReceivers.size && !_keyedProbes.size) {
     var anyOffer = false;
     connections.forEach(function(c) { if (!anyOffer && c && c.keyedOffer) anyOffer = true; });
@@ -16630,6 +17078,7 @@ function shedKeyedReceiverForPressure() {
 }
 
 function resetKeyedReceivers() {
+  _keyedSfuSwitches.clear();
   Array.from(_keyedReceivers.keys()).forEach(dropKeyedReceiver);
   Array.from(_keyedProbes.keys()).forEach(dropKeyedProbe);
   if (_keyedReceiveTimer) { clearTimeout(_keyedReceiveTimer); _keyedReceiveTimer = null; }
@@ -16638,6 +17087,8 @@ function resetKeyedReceivers() {
 // A peer left: its cut-out, its probe and anything it acked go with it. Its
 // failures stay — "never again this session" means the session.
 function forgetKeyedPeer(peerId) {
+  _keyedSfuSwitches.delete(peerId);
+  _keyedSfuPullHold.delete(peerId);
   dropKeyedReceiver(peerId);
   dropKeyedProbe(peerId);
   _keyedAcks.delete(peerId);
@@ -16646,6 +17097,10 @@ function forgetKeyedPeer(peerId) {
 
 // Leaving the room.
 function resetKeyedState() {
+  unpublishKeyedSfu();
+  _keyedSfuWantedAt = 0;
+  _keyedSfuRetryAt = 0;
+  _keyedSfuPullHold.clear();
   resetKeyedReceivers();
   _keyedFailures.clear();
   _keyedAcks.clear();
@@ -16675,7 +17130,7 @@ var KEYED_STATUS_TEXT = {
   'not-sharing': 'Not in use: your camera is off',
   'no-scene': 'Not in use: pick an animated scene',
   'own-scene': 'Not in use: a scene you added is sent as your picture (nobody else has the file)',
-  'relay': 'Not in use: video goes through the relay in this room',
+  'relay': 'Not in use: video goes through the relay, and nobody here can draw the scene from it',
   'no-capable-peer': 'Not in use: nobody here can draw the scene',
   'paused': 'Paused for now: everyone gets your usual picture'
 };
@@ -16688,16 +17143,23 @@ function keyedStatus() {
   }
   var own = typeof VideoScenes !== 'undefined' && VideoScenes.byId(videoBackgroundMode().slice(7));
   if (own && own.custom) return { state: 'inactive', reason: 'own-scene' };
-  var t = _localVideoTopology.video;
-  if (t && t.mode === 'sfu') return { state: 'inactive', reason: 'relay' };
+  var relay = localVideoViaRelay();
+  if (relay && !anyPeerKeyableOverRelay()) return { state: 'inactive', reason: 'relay' };
   var st = null;
   if (keyedApi('keyedState')) {
     try { st = VideoEffects.keyedState(localVideoStream); } catch (e) { st = null; }
   }
   // The pipeline is holding keying back (green clothing, a covered corner…).
   if (st && !st.scene && st.reason) return { state: 'inactive', reason: 'paused' };
-  var kt = localKeyedTrack();
   var self = peer && peer.id;
+  if (relay) {
+    // Everybody gets our camera from the relay; those who said they draw the
+    // scene pull the keyed track instead.
+    var everyone = 0;
+    connections.forEach(function(c, peerId) { if (peerId !== self) everyone++; });
+    return { state: 'active', peers: keyedSfuReceiverCount(), of: everyone };
+  }
+  var kt = localKeyedTrack();
   var of = 0, on = 0, capable = 0;
   connections.forEach(function(c, peerId) {
     if (peerId === self) return;
@@ -17066,6 +17528,9 @@ async function _sfuSubscribeTrackNow(kind, publisherPeerId, providerRef) {
   var minted = await sfuMintCapability(kind, 'subscribe');
   var pc = new RTCPeerConnection();
   var remoteStream = new MediaStream();
+  // What a keyed cut-out remembers its failures by: the same for every pull
+  // of this share, the keyed one included (syncKeyedSfuPull).
+  remoteStream._keyedKey = 'sfu:' + publisherPeerId + ':' + ref.sessionId;
   pc.addEventListener('track', function(ev) {
     (ev.streams[0] ? ev.streams[0].getTracks() : [ev.track]).forEach(function(t) {
       if (!remoteStream.getTracks().includes(t)) remoteStream.addTrack(t);
@@ -17106,7 +17571,11 @@ async function _sfuSubscribeTrackNow(kind, publisherPeerId, providerRef) {
     return;
   }
 
-  var shim = { peerConnection: pc, close: function() { try { pc.close(); } catch (_) {} } };
+  var shim = { _sfu: true, peerConnection: pc, close: function() { try { pc.close(); } catch (_) {} } };
+  // A relay pull that landed while this one negotiated (a keyed switch) would
+  // otherwise be orphaned here, still pulling.
+  var prior = kind === 'video' ? live.videoMedia : live.screenMedia;
+  if (prior && prior._sfu && prior !== shim) { try { prior.close(); } catch (_) {} }
   if (kind === 'video') live.videoMedia = shim; else live.screenMedia = shim;
   var topologyPatch = {}; topologyPatch[kind + 'Topology'] = { mode: 'sfu', reason: VIDEO_TOPOLOGY_REASON.PREFERENCE_ALLOW_SFU };
   Object.assign(live, topologyPatch);

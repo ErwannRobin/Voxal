@@ -401,7 +401,7 @@
   "ui.when_a_room_host_has_dev_mode_on_an_i_button": "Când gazda unei camere are modul dev activ, lângă fiecare nume apare un buton „i” cu diagnostice despre dispozitiv, audio și rețea. Este dezactivat până accepți — altfel nu se partajează nimic.",
   "ui.where_to_find_it": "Unde îl găsești",
   "ui.which_side_the_talk_button_sits_on_in_landsc": "De ce parte se află butonul de vorbit în modul peisaj (web).",
-  "ui.with_an_animated_scene_sends_just_you_and_a": "Cu o scenă animată, trimite doar persoana ta și o margine subțire din cameră; cei pe care îi suni desenează aceeași scenă pe propriul dispozitiv. Folosește mai puțin upload în apelurile peer-to-peer. Este posibil să vadă scena puțin diferit, iar dispozitivul lor are mai mult de lucru. Nu are efect cu estompare sau cu propria imagine, nici când videoul trece prin releu.",
+  "ui.with_an_animated_scene_sends_just_you_and_a": "Cu o scenă animată, trimite doar persoana ta și o margine subțire din cameră; cei pe care îi suni desenează aceeași scenă pe propriul dispozitiv. Folosește mai puțin upload în apelurile peer-to-peer. Este posibil să vadă scena puțin diferit, iar dispozitivul lor are mai mult de lucru. Nu are efect cu estompare sau cu propria imagine.",
   "ui.with_an_animated_scene_the_room_behind_you_t": "Cu o scenă animată, camera din spatele tău se rotește când înclini sau rotești telefonul, ca una reală. Folosește senzorul de mișcare al telefonului; nimic nu este înregistrat sau trimis nicăieri în afară de unghiul însuși, către cei care îți desenează scena.",
   "ui.works_when_app_is_focused_only": "· funcționează doar când aplicația este activă",
   "ui.you_can_change_this_anytime_in_settings_adva": "Poți schimba asta oricând din Setări → Avansat.",

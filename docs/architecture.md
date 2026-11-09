@@ -29,9 +29,11 @@ distinction from TURN relaying and the backend authorization model.
 
 On the mesh, the camera's outgoing track can differ per peer: with **Let others
 draw my scene** on, a peer that can draw the sender's animated scene is sent a
-keyed picture of the person instead of the finished composite. That choice is
-mesh-only — the SFU is always sent the composite. See [Keyed sending and
-receiving](video-effects.md#keyed-sending-and-receiving).
+keyed picture of the person instead of the finished composite. Through the SFU
+the sender publishes the keyed picture as a second relay track and each capable
+receiver pulls it instead of the composite (see [Keyed camera through the
+relay](video-routing.md#keyed-camera-through-the-relay) and [Keyed sending and
+receiving](video-effects.md#keyed-sending-and-receiving)).
 
 ### Diagrams
 

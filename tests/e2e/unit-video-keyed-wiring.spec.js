@@ -322,8 +322,7 @@ test.describe('the setting', () => {
       expect(html.replace(/\s+/g, ' ')).toContain(
         'With an animated scene, sends just you and a thin edge of your room; the people you call draw the same ' +
         'scene on their own device. Uses less upload in calls that go peer to peer. They may see the scene slightly ' +
-        'differently, and it costs their device some work. Has no effect with blur or your own image, or when video ' +
-        'goes through the relay.');
+        'differently, and it costs their device some work. Has no effect with blur or your own image.');
       // The picker's promise stays true with the setting on.
       expect(html).not.toContain('everything is computed on this device');
       expect(html.indexOf('id="settings-bg-picker"')).toBeLessThan(html.indexOf('id="settings-subject-only"'));
@@ -372,8 +371,8 @@ test.describe('the setting', () => {
 test.describe('signalling', () => {
   test('hello carries the capability and the live offer', async ({ page }) => {
     const hello = await page.evaluate(() => helloMessage());
-    expect(hello.protocolVersion).toBe(4);
-    expect(hello.caps).toEqual(['keyed-video-1', 'keyed-tilt-1']);
+    expect(hello.protocolVersion).toBe(5);
+    expect(hello.caps).toEqual(['keyed-video-1', 'keyed-tilt-1', 'keyed-sfu-1']);
     expect(hello.keyedOffer).toBeNull();
     const cannot = await page.evaluate(() => { window.__keyed.canKeyIn = false; return helloMessage().caps; });
     expect(cannot).toEqual([]);
@@ -417,7 +416,7 @@ test.describe('signalling', () => {
     expect(seen.aEntry.keyedOffer).toMatchObject({ epoch: 3, scene: 'island', edgeE: -0.2, size: [320, 180] });
     expect(seen.oldEntry.caps).toEqual([]);
     expect(seen.oldEntry.keyedOffer).toBeNull();
-    expect(seen.hostCaps).toEqual(['keyed-video-1', 'keyed-tilt-1']);
+    expect(seen.hostCaps).toEqual(['keyed-video-1', 'keyed-tilt-1', 'keyed-sfu-1']);
     expect(seen.hostKeyedOffer).toBeNull();
   });
 
@@ -1260,7 +1259,7 @@ test.describe('drawing a sender\'s scene', () => {
         state: _keyedReceivers.get('p1').state,
       };
     });
-    expect(seen.hello).toEqual([['keyed-video-1', 'keyed-tilt-1']]);
+    expect(seen.hello).toEqual([['keyed-video-1', 'keyed-tilt-1', 'keyed-sfu-1']]);
     expect(seen.acks[0]).toEqual(['p1', true, 'mc_p1_1', 1, 'office']);
     expect(seen.offer).toBe('office');
     expect(seen.state).toBe('ready');
@@ -1354,12 +1353,323 @@ test.describe('keyedStatus()', () => {
     expect(byLabel.paused.st).toEqual({ state: 'inactive', reason: 'paused' });
     expect(byLabel['no-scene']).toEqual({ st: { state: 'inactive', reason: 'no-scene' }, text: 'Not in use: pick an animated scene' });
     expect(byLabel.relay).toEqual({ st: { state: 'inactive', reason: 'relay' },
-      text: 'Not in use: video goes through the relay in this room' });
+      text: 'Not in use: video goes through the relay, and nobody here can draw the scene from it' });
     expect(byLabel.nobody.st).toEqual({ state: 'inactive', reason: 'no-capable-peer' });
     expect(table.line).toBe('In use for 1 of 2 people');
     expect(table.pop).toBe('1 of 2 people draw this scene on their own device; the others see your usual picture.');
     expect(table.popInfo).toBe(true);
     expect(table.idleLine).toBe('Not in use: pick an animated scene');
     expect(table.idlePopHidden).toBe(true);
+  });
+});
+
+// --- through the relay ------------------------------------------------------------
+//
+// The camera goes through the SFU: the sender publishes a second relay track
+// with the keyed picture, and each receiver chooses which one it pulls. The
+// Cloudflare legs are stood in for at their two seams, sfuPublishKeyedTrack()
+// and sfuPullTrack() — the SDP dance behind them is the composite's own.
+
+// This page hosts and shares its camera through the relay. p1 can key through
+// the relay, p2 cannot key at all, p3 (when asked for) only on the mesh.
+async function seedRelaySender(page, opts = {}) {
+  await seedSender(page, { peers: opts.peers || [
+    { id: 'p1', caps: ['keyed-video-1', 'keyed-tilt-1', 'keyed-sfu-1'] },
+    { id: 'p2', caps: [] },
+  ] });
+  await page.evaluate(async () => {
+    window.__pubs = [];
+    window.__failPublish = false;
+    sfuPublishKeyedTrack = async (track) => {
+      if (window.__failPublish) throw new Error('relay said no');
+      const sender = { track, replaceTrack(t) { this.track = t; return Promise.resolve(); },
+        getParameters() { return { encodings: [{}] }; }, setParameters() { return Promise.resolve(); } };
+      const pc = { closed: 0, sender, getSenders: () => [sender], close() { this.closed++; }, addEventListener() {} };
+      const pub = { track, pc, ref: { sessionId: 'S-keyed-' + (window.__pubs.length + 1), trackName: 'host-video-keyed' } };
+      window.__pubs.push(pub);
+      return { pc, ref: pub.ref };
+    };
+    // The camera moved onto the SFU: one publish for everybody.
+    unpublishLocalTrack('video');
+    const sfuSender = { track: localVideoStream.getVideoTracks()[0], replaceTrack(t) { this.track = t; return Promise.resolve(); } };
+    window.__sfuSender = sfuSender;
+    _sfuPublishSessions.video = { pc: { getSenders: () => [sfuSender] } };
+    _localVideoTopology.video = { mode: 'sfu', reason: 'test' };
+    window.__sent = [];
+    refreshKeyedSend();
+  });
+  await page.evaluate(() => window.__flush());
+}
+
+async function relayAck(page, peerId, ok = true) {
+  await page.evaluate(({ peerId, ok }) => {
+    const offer = currentOffer();
+    handleKeyedAckAtHost(peerId, { type: 'video-keyed-ready', to: 'host', ok,
+      call: ok ? 'sfu' : null, epoch: ok ? offer.epoch : null, scene: ok ? offer.scene : null });
+  }, { peerId, ok });
+  await page.evaluate(() => window.__flush());
+}
+
+test.describe('through the relay: sending', () => {
+  test('offered to a peer that can key through the relay; published only once one acks', async ({ page }) => {
+    await seedRelaySender(page);
+    const before = await page.evaluate(() => ({
+      offer: currentOffer(), pubs: window.__pubs.length, status: keyedStatus(),
+    }));
+    expect(before.offer).toMatchObject({ scene: 'office', tilt: false });
+    expect(before.offer).not.toHaveProperty('ref');
+    expect(before.pubs).toBe(0);
+    expect(before.status).toEqual({ state: 'active', peers: 0, of: 2 });
+
+    // p2 says yes — but it cannot key at all: nothing is published for it.
+    await relayAck(page, 'p2');
+    expect(await page.evaluate(() => window.__pubs.length)).toBe(0);
+
+    await relayAck(page, 'p1');
+    const after = await page.evaluate(async () => {
+      // The offer that names the track waits for its slot (one a second).
+      await new Promise((r) => setTimeout(r, KEYED_OFFER_MIN_GAP_MS + 100));
+      await window.__flush();
+      const offers = window.__sent.filter((s) => s.msg.type === 'video-keyed');
+      return {
+        pubs: window.__pubs.length,
+        keyedOnPub: VideoEffects.isKeyedTrack(window.__pubs[0].track),
+        compositeOnRelay: window.__sfuSender.track === localVideoStream.getVideoTracks()[0],
+        demand: window.__keyed.demand[window.__keyed.demand.length - 1],
+        lastOffer: offers[offers.length - 1].msg.offer,
+        to: offers.filter((o) => o.msg.offer && o.msg.offer.ref).map((o) => o.to).sort(),
+        status: keyedStatus(),
+        text: keyedStatusText(keyedStatus()),
+        state: _keyedSendingState('p1'),
+      };
+    });
+    expect(after).toMatchObject({ pubs: 1, keyedOnPub: true, compositeOnRelay: true, demand: 1,
+      to: ['p1', 'p2'], status: { state: 'active', peers: 1, of: 2 }, text: 'In use for 1 of 2 people' });
+    expect(after.lastOffer.ref).toEqual({ sessionId: 'S-keyed-1', trackName: 'host-video-keyed' });
+    expect(after.state).toBe('Scene drawn on their device (keyed track through the relay)');
+
+    // A background swap moves the composite publish, never the keyed one.
+    const swapped = await page.evaluate(async () => {
+      await swapLocalVideoTrack(window.__raw.getVideoTracks()[0]);
+      return { relay: window.__sfuSender.track === window.__raw.getVideoTracks()[0],
+        keyed: VideoEffects.isKeyedTrack(window.__pubs[0].pc.sender.track) };
+    });
+    expect(swapped).toEqual({ relay: true, keyed: true });
+  });
+
+  test('the keyed track lingers after the last receiver lets go, then is withdrawn from the offer', async ({ page }) => {
+    await seedRelaySender(page);
+    await relayAck(page, 'p1');
+    // The offer naming the track has gone out (it waited for its slot).
+    await page.evaluate(async () => {
+      await new Promise((r) => setTimeout(r, KEYED_OFFER_MIN_GAP_MS + 100));
+      await window.__flush();
+    });
+    expect(await page.evaluate(() => !!_keyedSentOffer.ref)).toBe(true);
+    await relayAck(page, 'p1', false);
+    const lingering = await page.evaluate(() => ({ closed: window.__pubs[0].pc.closed, ref: !!currentOffer().ref }));
+    expect(lingering).toEqual({ closed: 0, ref: true });
+    const gone = await page.evaluate(async () => {
+      _keyedSfuWantedAt -= KEYED_SFU_LINGER_MS + 1;
+      window.__sent = [];
+      refreshKeyedSend();
+      await window.__flush();
+      await new Promise((r) => setTimeout(r, KEYED_OFFER_MIN_GAP_MS + 100));
+      await window.__flush();
+      const offers = window.__sent.filter((s) => s.msg.type === 'video-keyed');
+      const last = offers[offers.length - 1];
+      return { closed: window.__pubs[0].pc.closed, ref: 'ref' in currentOffer(),
+        sentWithout: !!(last && last.msg.offer && !('ref' in last.msg.offer)),
+        demand: window.__keyed.demand[window.__keyed.demand.length - 1] };
+    });
+    expect(gone).toEqual({ closed: 1, ref: false, sentWithout: true, demand: 0 });
+  });
+
+  test('a failed publish is not retried at once; moving off the relay or stopping drops the track', async ({ page }) => {
+    await seedRelaySender(page);
+    await page.evaluate(() => { window.__failPublish = true; });
+    await relayAck(page, 'p1');
+    const failed = await page.evaluate(async () => {
+      refreshKeyedSend(); await window.__flush();
+      return { pubs: window.__pubs.length, held: _keyedSfuRetryAt > Date.now(), ref: 'ref' in currentOffer() };
+    });
+    expect(failed).toEqual({ pubs: 0, held: true, ref: false });
+
+    const dropped = await page.evaluate(async () => {
+      window.__failPublish = false;
+      _keyedSfuRetryAt = 0;
+      refreshKeyedSend(); await window.__flush();
+      const pub = window.__pubs[0];
+      unpublishLocalTrack('video');
+      const onMove = pub.pc.closed;
+      return { published: !!pub, onMove, offer: currentOffer() };
+    });
+    expect(dropped).toEqual({ published: true, onMove: 1, offer: null });
+  });
+
+  test('never offered through a host, or to peers, that cannot key through the relay', async ({ page }) => {
+    await seedRelaySender(page, { peers: [
+      { id: 'p1', caps: ['keyed-video-1', 'keyed-tilt-1'] },   // a v4 build: mesh only
+      { id: 'p2', caps: [] },
+    ] });
+    expect(await page.evaluate(() => [currentOffer(), keyedStatus().reason])).toEqual([null, 'relay']);
+    const viaOldHost = await page.evaluate(() => {
+      connections.get('p1').caps = ['keyed-video-1', 'keyed-sfu-1'];
+      const yes = anyPeerKeyableOverRelay();
+      // Now a non-host, behind a host (p2) that does not know the reference.
+      isHost = false; roomCode = 'p2';
+      const no = anyPeerKeyableOverRelay();
+      isHost = true; roomCode = 'host';
+      return [yes, no];
+    });
+    expect(viaOldHost).toEqual([true, false]);
+  });
+
+  test('the reference survives the host, and is dropped when malformed', async ({ page }) => {
+    const out = await page.evaluate(() => {
+      const base = { epoch: 3, scene: 'office', look: {}, edgeE: -0.1, size: [640, 360] };
+      return {
+        mesh: 'ref' in sanitizeKeyedOffer(base),
+        ok: sanitizeKeyedOffer(Object.assign({}, base, { ref: { sessionId: 'S', trackName: 'p-video-keyed', x: 1 } })).ref,
+        bad: 'ref' in sanitizeKeyedOffer(Object.assign({}, base, { ref: { sessionId: 7, trackName: 'x' } })),
+        long: 'ref' in sanitizeKeyedOffer(Object.assign({}, base, { ref: { sessionId: 'S'.repeat(200), trackName: 'x' } })),
+      };
+    });
+    expect(out).toEqual({ mesh: false, ok: { sessionId: 'S', trackName: 'p-video-keyed' }, bad: false, long: false });
+  });
+});
+
+// This page is a non-host behind a capable host 'h'; p1's camera reaches it
+// through the relay, on a composite subscription.
+async function seedRelayReceiver(page) {
+  await seedReceiver(page, { hostCaps: ['keyed-video-1', 'keyed-sfu-1'] });
+  await page.evaluate(async () => {
+    window.__pulls = [];
+    sfuPullTrack = (kind, ref) => new Promise((resolve, reject) => {
+      const rec = { kind, ref, pc: { closed: 0, close() { this.closed++; }, addEventListener() {} },
+        stream: window.__canvasStream('#0f0') };
+      rec.resolve = () => resolve({ pc: rec.pc, stream: rec.stream });
+      rec.reject = (e) => reject(e || new Error('no frame'));
+      window.__pulls.push(rec);
+    });
+    const c = connections.get('p1');
+    c.videoTopology = { mode: 'sfu', reason: 'test' };
+    window.__composite = { _sfu: true, closed: 0, peerConnection: {}, close() { this.closed++; } };
+    c.videoMedia = window.__composite;
+    _rememberProviderRef('p1', 'video', { sessionId: 'S-comp', trackName: 'p1-video' });
+    updatePeerList();
+  });
+  await page.evaluate(() => window.__flush());
+}
+
+const KEYED_REF = { sessionId: 'S-keyed', trackName: 'p1-video-keyed' };
+
+test.describe('through the relay: receiving', () => {
+  test('acks with call "sfu", and pulls the keyed track only once the offer names it — make before break', async ({ page }) => {
+    await seedRelayReceiver(page);
+    const first = await page.evaluate(async () => {
+      window.__offer('p1');
+      await window.__flush();
+      return { acks: window.__acks(), pulls: window.__pulls.length, state: _keyedReceivers.get('p1').state };
+    });
+    expect(first.acks).toEqual([{ type: 'video-keyed-ready', peerId: 'me', to: 'p1', ok: true, call: 'sfu', epoch: 1, scene: 'office' }]);
+    expect(first).toMatchObject({ pulls: 0, state: 'ready' });
+
+    const pending = await page.evaluate(async (ref) => {
+      window.__offer('p1', { ref });
+      await window.__flush();
+      for (let i = 0; i < 3; i++) updatePeerList();   // many relayouts, one pull
+      await window.__flush();
+      const h = window.__keyed.handles[0];
+      return { pulls: window.__pulls.map((p) => p.ref), oldClosed: window.__composite.closed,
+        onComposite: connections.get('p1').videoMedia === window.__composite, expect: h.expect,
+        tileCut: window.__tileVideo('p1').srcObject === h.stream };
+    }, KEYED_REF);
+    expect(pending).toEqual({ pulls: [KEYED_REF], oldClosed: 0, onComposite: true, expect: false, tileCut: true });
+
+    const switched = await page.evaluate(async () => {
+      const p = window.__pulls[0];
+      p.resolve();
+      await window.__flush();
+      const c = connections.get('p1');
+      const h = window.__keyed.handles[0];
+      return { keyedRef: c.videoMedia._keyedRef, oldClosed: window.__composite.closed,
+        raw: c.remoteVideoStream === p.stream, handleOn: h.raw === p.stream, expect: h.expect,
+        tileCut: window.__tileVideo('p1').srcObject === h.stream,
+        registry: _rememberedProviderRef('p1', 'video'), keyedKey: p.stream._keyedKey };
+    });
+    expect(switched).toMatchObject({ keyedRef: KEYED_REF, oldClosed: 1, raw: true, handleOn: true, expect: true,
+      tileCut: true, registry: { sessionId: 'S-comp', trackName: 'p1-video' } });
+    expect(switched.keyedKey).toBe('sfu:p1:S-comp');
+  });
+
+  test('closing pulls the composite back, and lets go of the cut-out only once it is in', async ({ page }) => {
+    await seedRelayReceiver(page);
+    await page.evaluate(async (ref) => {
+      window.__offer('p1'); await window.__flush();
+      window.__offer('p1', { ref }); await window.__flush();
+      window.__pulls[0].resolve(); await window.__flush();
+    }, KEYED_REF);
+    const seen = await page.evaluate(async () => {
+      const h = window.__keyed.handles[0];
+      const keyedPull = window.__pulls[0];
+      window.__sent = [];
+      window.__offer('p1', null);           // the sender withdrew its offer
+      await window.__flush();
+      const during = { stop: window.__acks().map((a) => a.ok), state: _keyedReceivers.get('p1').state,
+        pull: window.__pulls[1] && window.__pulls[1].ref, destroyed: h.destroyed,
+        tileCut: window.__tileVideo('p1').srcObject === h.stream };
+      window.__pulls[1].resolve();
+      await window.__flush();
+      const c = connections.get('p1');
+      return { during, after: { entry: _keyedReceivers.has('p1'), destroyed: h.destroyed,
+        keyedRef: c.videoMedia._keyedRef, keyedClosed: keyedPull.pc.closed,
+        tileRaw: window.__tileVideo('p1').srcObject === window.__pulls[1].stream } };
+    });
+    expect(seen.during).toEqual({ stop: [false], state: 'closing', pull: { sessionId: 'S-comp', trackName: 'p1-video' },
+      destroyed: 0, tileCut: true });
+    expect(seen.after).toEqual({ entry: false, destroyed: 1, keyedRef: null, keyedClosed: 1, tileRaw: true });
+  });
+
+  test('a keyed pull that fails is held off; a composite pull that fails resubscribes the plain way', async ({ page }) => {
+    await seedRelayReceiver(page);
+    const held = await page.evaluate(async (ref) => {
+      window.__offer('p1'); await window.__flush();
+      window.__offer('p1', { ref }); await window.__flush();
+      window.__pulls[0].reject();
+      await window.__flush();
+      for (let i = 0; i < 3; i++) updatePeerList();
+      await window.__flush();
+      return { pulls: window.__pulls.length, hold: _keyedSfuPullHold.get('p1') > Date.now(),
+        onComposite: connections.get('p1').videoMedia === window.__composite };
+    }, KEYED_REF);
+    expect(held).toEqual({ pulls: 1, hold: true, onComposite: true });
+
+    const fallback = await page.evaluate(async () => {
+      _keyedSfuPullHold.clear();
+      updatePeerList(); await window.__flush();
+      window.__pulls[1].resolve(); await window.__flush();
+      window.__subs = [];
+      sfuSubscribeTrack = (kind, id, ref) => { window.__subs.push({ kind, id, ref }); return Promise.resolve(); };
+      window.__offer('p1', null); await window.__flush();
+      window.__pulls[2].reject(); await window.__flush();
+      const c = connections.get('p1');
+      return { subs: window.__subs, media: c.videoMedia, keyedClosed: window.__pulls[1].pc.closed };
+    });
+    expect(fallback).toEqual({ subs: [{ kind: 'video', id: 'p1', ref: { sessionId: 'S-comp', trackName: 'p1-video' } }],
+      media: null, keyedClosed: 1 });
+  });
+
+  test('a keyed pull with nothing left to cut it out goes back to the composite', async ({ page }) => {
+    await seedRelayReceiver(page);
+    const seen = await page.evaluate(async (ref) => {
+      window.__offer('p1'); await window.__flush();
+      window.__offer('p1', { ref }); await window.__flush();
+      window.__pulls[0].resolve(); await window.__flush();
+      dropKeyedReceiver('p1');            // lost without closing
+      updatePeerList(); await window.__flush();
+      return window.__pulls.slice(1).map((p) => p.ref);
+    }, KEYED_REF);
+    expect(seen[0]).toEqual({ sessionId: 'S-comp', trackName: 'p1-video' });
   });
 });
