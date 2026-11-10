@@ -152,8 +152,8 @@ green — a red or still-running test suite disables the merge button. Push a fi
 and it re-runs; there is no override.
 
 The multi-peer WebRTC suite (`E2E (mesh, non-blocking)`) is advisory and does
-not block a merge, but a failure there is still worth investigating before
-merging.
+not block a merge. It runs weekly and on demand (`scheduled-checks.yml`), not
+on every PR; run `make test-mesh` locally when you touch the mesh code.
 
 See [`docs/required-checks.md`](./docs/required-checks.md) for how the gate is
 configured (and how a maintainer applies it to a fresh clone or fork).

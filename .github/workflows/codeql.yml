@@ -32,10 +32,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Whether this push/PR touches anything the Swift analysis compiles: the
-  # native project, the Capacitor plugins it builds from node_modules (pinned by
-  # package.json / package-lock.json), the Capacitor config, or this workflow.
-  # A manual dispatch always analyzes Swift; the weekly schedule never does.
+  # Whether this push/PR touches anything a native analysis compiles.
+  #   ios:     the native project, the Capacitor config, or this workflow.
+  #            package.json / package-lock.json are deliberately NOT here: every
+  #            Dependabot npm merge touches them, and each one would spend ~20
+  #            macOS minutes (ten times the Linux price). A Capacitor plugin
+  #            bump is analyzed by the next ios/ change or a manual dispatch.
+  #   android: the same inputs plus the lockfiles (the plugins it builds come
+  #            from node_modules); it is a Linux job, so the lockfiles are cheap.
+  # A manual dispatch analyzes both; the weekly schedule analyzes Android (it
+  # re-scans against new queries) but never Swift.
   changes:
     name: Detect changes
     if: github.event.pull_request.draft != true
@@ -46,6 +52,7 @@ jobs:
       pull-requests: read
     outputs:
       ios: ${{ steps.filter.outputs.ios || (github.event_name == 'schedule' && 'false' || 'true') }}
+      android: ${{ steps.filter.outputs.android || 'true' }}
     steps:
       - name: Checkout repository
         if: github.event_name == 'pull_request' || github.event_name == 'push'
@@ -59,6 +66,10 @@ jobs:
           filters: |
             ios:
               - 'ios/**'
+              - 'capacitor.config.json'
+              - '.github/workflows/codeql.yml'
+            android:
+              - 'android/**'
               - 'package.json'
               - 'package-lock.json'
               - 'capacitor.config.json'
@@ -85,6 +96,8 @@ jobs:
 
   analyze-android:
     name: Analyze (java-kotlin)
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
