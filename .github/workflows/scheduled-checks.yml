@@ -1,0 +1,168 @@
+name: Scheduled checks
+
+# Everything here is advisory or expensive, and none of it gates a merge, so it
+# runs weekly and on demand instead of on every push to `main` (where each
+# Dependabot merge used to re-run all of it):
+#   - Rust tests on macOS (ten times the Linux price),
+#   - the multi-peer WebRTC E2E suite (timing-sensitive, non-blocking),
+#   - the coverage report (reported, never gating).
+# The gating suite is tests.yml; `All tests green` does not depend on this file.
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The same `cargo test`, on macOS: the crate has `#[cfg(target_os = "macos")]`
+  # code that Linux never compiles. macOS minutes cost ten times Linux ones, so
+  # this runs weekly and on demand instead of on every push to `main`; the Linux
+  # run in tests.yml gates every merge.
+  rust-tests-macos:
+    name: Rust tests (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Run Rust tests
+        run: cd src-tauri && cargo test
+
+  # Multi-peer WebRTC tests (real PeerJS + a local broker). Inherently more
+  # timing-sensitive than the unit suite, so it runs as its own job and is
+  # non-blocking (continue-on-error) — a transient loopback-ICE hiccup must not
+  # block merges, but real regressions still show up here (with retries: 2).
+  mesh-e2e:
+    name: E2E (mesh, non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run mesh E2E (mesh project)
+        run: npm run test:mesh
+
+      - name: Run slow-GL scene preview E2E (gl project)
+        run: npm run test:gl
+
+  # Coverage: reported, never gating. It runs the same three suites the other
+  # jobs do, but only to measure them — a drop in coverage is information for
+  # the reviewer, not a reason to block a merge, so this is continue-on-error
+  # and it is deliberately absent from `all-tests-green`'s `needs:` in tests.yml.
+  #
+  # Everything lands in the run summary; the HTML reports are uploaded as
+  # artifacts. The job writes nothing back to the repository — it once pushed a
+  # README badge branch and opened a PR for it, which needed a token this
+  # workflow cannot have (see KNOWLEDGE/learning.md) and put a red X on an
+  # explicitly non-blocking check the one time it fired. The number is in the
+  # run summary of every run, which is where anyone asking the question already
+  # is.
+  coverage:
+    name: Coverage (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      # The unit project only: the mesh project needs real WebRTC between
+      # browser contexts and is allowed to be flaky, which is not a property
+      # you want in a number people read.
+      - name: Frontend coverage (E2E unit project)
+        continue-on-error: true
+        run: COVERAGE=1 NODE_OPTIONS=--disable-warning=DEP0205 npx playwright test --project=unit
+
+      - name: API handler coverage
+        continue-on-error: true
+        run: npm run test:api:coverage
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      # A prebuilt binary — `cargo install cargo-llvm-cov` would spend several
+      # minutes compiling it on every run.
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      # The same set release-linux.yml builds Tauri with — cargo llvm-cov has
+      # to compile the crate, so it needs them too.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev \
+            libssl-dev
+
+      # Dependencies only (rust-cache prunes the workspace's own artifacts), and
+      # saved from `main` alone: a raw `src-tauri/target` was ~1.9 GB per
+      # Cargo.lock change and ate the repository's cache quota.
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: src-tauri
+          shared-key: llvm-cov
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Rust coverage
+        continue-on-error: true
+        run: |
+          cd src-tauri
+          cargo llvm-cov --no-report
+          cargo llvm-cov report --html
+          cargo llvm-cov report --lcov --output-path target/llvm-cov/lcov.info
+
+      - name: Write the run summary
+        run: node scripts/coverage-report.mjs >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload HTML reports
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: coverage-reports
+          path: |
+            coverage/
+            coverage-api/
+            src-tauri/target/llvm-cov/html/
+          retention-days: 3
+          if-no-files-found: warn

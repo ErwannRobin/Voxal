@@ -2,9 +2,15 @@ version: 2
 updates:
   - package-ecosystem: "npm"
     directory: "/"
+    # Monthly: every merged bump is a push to `main` that re-runs the suites.
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
+      interval: "monthly"
+    open-pull-requests-limit: 5
+    ignore:
+      # Pinned exactly (package.json) and asserted equal to SEG_RUNTIME_VERSION
+      # by tests/e2e/unit-seg-runtime-version.spec.js, so every automated bump
+      # fails `E2E (unit)`. Upgrade it by hand, together with that constant.
+      - dependency-name: "@mediapipe/tasks-vision"
     groups:
       all-updates:
         patterns:

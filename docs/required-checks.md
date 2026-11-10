@@ -12,13 +12,13 @@ two places, because either one alone leaves a hole:
 ## 1. The aggregate check
 
 `.github/workflows/tests.yml` ends with a job named **`All tests green`**. It
-`needs:` every gating job (Lint, Rust tests on Linux, Rust tests on macOS, API tests,
+`needs:` every gating job (Lint, Rust tests on Linux, API tests,
 E2E unit) and runs with `if: always()`, so it reports even when a dependency
 failed, was skipped, or the run was cancelled — anything other than `success` on
 any dependency fails it, with one narrow exception: a job may be `skipped` when
 the `Detect changes` job (which must itself succeed) reported it had nothing to
-test. A docs-only change (`docs/`, `KNOWLEDGE/`, Markdown) skips the suites; a
-change outside `src-tauri/` skips the macOS Rust run.
+test. A docs-only change (`docs/`, `KNOWLEDGE/`, Markdown) skips the suites.
+The macOS Rust run is not gating: it runs weekly from `scheduled-checks.yml`.
 
 That is also why `tests.yml` has no workflow-level `paths-ignore`: a filtered-out
 workflow never reports `All tests green`, and a required check that never reports
@@ -30,7 +30,8 @@ be edited (and can never silently stop covering a job it does not know about).
 
 `E2E (mesh, non-blocking)` is deliberately *not* one of its dependencies: the
 multi-peer WebRTC suite runs against real loopback ICE and is timing-sensitive,
-so it stays advisory (`continue-on-error: true`).
+so it stays advisory (`continue-on-error: true`). It runs weekly and on demand
+from `scheduled-checks.yml`, not on pull requests or pushes.
 
 ## 2. Applying the ruleset
 
