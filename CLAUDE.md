@@ -40,7 +40,7 @@ make build-debug  # macOS debug bundle — registers voxal:// URL scheme
 make build        # Release build
 make seg-assets   # Stage the background-effects WASM runtime into src/assets/seg/
 make lab-assets   # Download + convert the matting candidates for the lab engine — measurement only (docs/matting-candidates.md)
-make matting-models-fetch # BGMv2 + the lab candidates as published (matting-models-v1 prerelease), no PyTorch needed
+make matting-models-fetch # BGMv2 + the lab candidates as published (matting-models-v1 prerelease), no PyTorch needed — a preview of a `preview-engines/*` branch (or PREVIEW_ENGINES=1) carries every engine
 make emoji-data   # Regenerate src/emoji-data.js (chat's emoji catalog) from Unicode
 make promo-assets # Re-embed the icon + fonts in docs/promo.html (the films page)
 make promo-voice  # Record the films' voice-over: ENGINE=say (drafts) | openai, FILMS=, LANGS=
