@@ -3,7 +3,7 @@
         coverage-api coverage-summary coverage-badge bench bench-app bench-audio bench-video \
         bench-report bench-publish bench-history \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
-        seg-assets rvm-assets rvm-clean p3m-assets p3m-fetch p3m-clean bgm-assets bgm-clean matting-footage matting-bench integration-footage integration-bench emoji-data promo-assets promo-voice scene-preview three-vendor
+        seg-assets rvm-assets rvm-clean p3m-assets p3m-fetch p3m-clean bgm-assets bgm-clean lab-assets lab-clean matting-footage matting-bench integration-footage integration-bench emoji-data promo-assets promo-voice scene-preview three-vendor
 
 # Default target
 help:
@@ -22,6 +22,7 @@ help:
 	@echo "  p3m-fetch    Download the EXPERIMENTAL P3M-Net engine (model + ONNX Runtime, sha256-pinned) into src/assets/p3m"
 	@echo "  p3m-assets   Convert P3M-Net from its official checkpoint yourself (needs PyTorch) into src/assets/p3m"
 	@echo "  bgm-assets   Convert the EXPERIMENTAL BackgroundMattingV2 engine (MIT; needs PyTorch) into src/assets/bgm"
+	@echo "  lab-assets   Download + convert the matting CANDIDATES (local measurement only, never deployed) into src/assets/lab"
 	@echo "  matting-footage Build the matting benchmark's footage (known alpha) into bench-results/matting"
 	@echo "  matting-bench Score MediaPipe / Longpipe / RVM on it through the real pipeline; ARGS=... passes options"
 	@echo "  integration-footage Fetch the real clips of tests/bench/integration/clips.csv (Pexels) as frames"
@@ -96,11 +97,11 @@ debug:
 	echo "→ Launching Voxal (debug)..."; \
 	open "$$APP"
 
-build: gen-build-info seg-assets rvm-clean p3m-clean bgm-clean
+build: gen-build-info seg-assets rvm-clean p3m-clean bgm-clean lab-clean
 	@echo "→ Building release (unsigned, no updater artifacts). Use 'make build-signed' to sign."
 	npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
-build-signed: gen-build-info seg-assets rvm-clean p3m-clean bgm-clean
+build-signed: gen-build-info seg-assets rvm-clean p3m-clean bgm-clean lab-clean
 	@export TAURI_SIGNING_PRIVATE_KEY="$${TAURI_SIGNING_PRIVATE_KEY:-$$(cat ~/.tauri/voxal.key 2>/dev/null)}"; \
 	if [ -z "$$TAURI_SIGNING_PRIVATE_KEY" ]; then \
 		echo "Error: No signing key found."; exit 1; \
@@ -112,7 +113,7 @@ build-signed: gen-build-info seg-assets rvm-clean p3m-clean bgm-clean
 	fi; \
 	npm run tauri build
 
-build-debug: gen-build-info seg-assets rvm-clean p3m-clean bgm-clean
+build-debug: gen-build-info seg-assets rvm-clean p3m-clean bgm-clean lab-clean
 	npm run tauri build -- --debug
 	@echo ""
 	@echo "Debug bundle: src-tauri/target/debug/bundle/macos/Voxal.app"
@@ -211,6 +212,18 @@ bgm-assets:
 bgm-clean:
 	@rm -rf src/assets/bgm
 
+# The matting candidates (docs/matting-candidates.md): MODNet, PP-HumanSeg,
+# PP-MattingV2, SGHM, BiRefNet lite, RMBG-1.4, MediaPipe multiclass, run by
+# src/lab-engine.js. Downloaded and converted locally for the matting bench
+# only — some carry licences Voxal cannot ship (RMBG-1.4) — so they are deleted
+# before every desktop build (lab-clean) and stripped from every other build
+# and deploy. Needs uv (Python venvs under .cache/lab).
+lab-assets:
+	@sh scripts/lab-assets.sh $(ARGS)
+
+lab-clean:
+	@rm -rf src/assets/lab
+
 # The matting evaluation: footage with a known alpha (public-domain clip and CC0
 # rooms, downloaded once into bench-results/), then every engine through the
 # real pipeline on it. ARGS=... passes options (see scripts/matting-bench.mjs).
@@ -242,7 +255,7 @@ run-web: gen-build-info seg-assets
 build-web: gen-build-info seg-assets
 	mkdir -p dist
 	cp -r src/* dist/
-	@rm -rf dist/assets/rvm dist/assets/p3m dist/assets/bgm
+	@rm -rf dist/assets/rvm dist/assets/p3m dist/assets/bgm dist/assets/lab
 	@echo "Web app copied to dist/"
 
 # ── Mobile (Capacitor) ────────────────────────────────────────────────────────
@@ -258,7 +271,7 @@ cap-sync: gen-build-info
 	      android/app/src/main/assets/public/assets/seg/vision_*
 	@rm -rf ios/App/App/public/assets/rvm android/app/src/main/assets/public/assets/rvm
 	@rm -rf ios/App/App/public/assets/p3m android/app/src/main/assets/public/assets/p3m
-	@rm -rf ios/App/App/public/assets/bgm android/app/src/main/assets/public/assets/bgm
+	@rm -rf ios/App/App/public/assets/bgm android/app/src/main/assets/public/assets/bgm ios/App/App/public/assets/lab android/app/src/main/assets/public/assets/lab
 
 cap-ios: cap-sync
 	npx cap open ios

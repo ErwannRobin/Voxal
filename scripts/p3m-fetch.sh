@@ -24,8 +24,9 @@
 
 set -e
 
-# The BackgroundMattingV2 evaluation runs on the same pinned ONNX Runtime and
-# stages it through here: scripts/bgm-assets.sh sets FETCH_DST.
+# The BackgroundMattingV2 evaluation and the matting lab run on the same pinned
+# ONNX Runtime and stage it through here: scripts/bgm-assets.sh and
+# scripts/lab-assets.sh set FETCH_DST.
 DST="${FETCH_DST:-src/assets/p3m}"
 ORT_VERSION="1.30.0"
 ORT_BASE="https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist"

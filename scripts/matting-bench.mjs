@@ -24,9 +24,12 @@
 // percent, uncorrected) | bgm-shift (the camera nudged 3x2 px at 1280 since the
 // plate) | bgm-nofg (its alpha without its foreground colour) | bgm-raw /
 // bgm-1280-s50-raw (without the stray-island cleanup).
+// pre:<name> — an offline model's mattes, precomputed (scripts/matting-offline.py).
+// lab:<model>[@<long side>][~<dilate>][!wasm] — a candidate of src/lab-engine.js
+// (docs/matting-candidates.md), e.g. lab:modnet, lab:sghm@768, lab:modnet~1.
 // RVM needs `make rvm-assets` (resnet: ARGS=--with-resnet), P3M-Net
-// `make p3m-assets` (fp16: ARGS=--fp16), BackgroundMattingV2 `make bgm-assets`;
-// Longpipe fetches its weights from
+// `make p3m-assets` (fp16: ARGS=--fp16), BackgroundMattingV2 `make bgm-assets`,
+// the lab `make lab-assets`; Longpipe fetches its weights from
 // cdn.longpipe.dev.
 //
 // Quality mode steps the Processor by hand, one frame at a time: each engine
@@ -159,6 +162,21 @@ function serve() {
 
 // --- runs --------------------------------------------------------------------
 
+function engineFor(name) {
+  // pre:<name>: an offline model's mattes, computed beforehand into
+  // footage/pre/<name>/<room>/NNNN.png (scripts/matting-offline.py), through
+  // the pipeline as a matte engine is (no cut, no dilate).
+  const pre = /^pre:([a-z0-9.-]+)$/.exec(name);
+  if (pre) return { engine: 'mediapipe', pre: pre[1], maskCut: 0, flags: { __voxalDilate: 0 } };
+  const m = /^lab:([a-z0-9.-]+)(?:@(\d+))?(?:~([\d.]+))?(!wasm)?$/.exec(name);
+  if (!m) return ENGINES[name];
+  const lab = { model: m[1] };
+  if (m[2]) lab.size = +m[2];
+  if (m[3]) lab.dilate = +m[3];
+  if (m[4]) lab.ep = 'wasm';
+  return { engine: 'lab', lab };
+}
+
 function rvmFor(e, w) {
   if (!e.rvm) return undefined;
   const r = { ...e.rvm };
@@ -204,7 +222,7 @@ async function main() {
   }
 
   for (const r of runs) {
-    const e = ENGINES[r.name];
+    const e = engineFor(r.name);
     if (!e) { console.error('unknown engine ' + r.name); continue; }
     const ctx = await browser.newContext({ viewport: { width: 1300, height: 800 } });
     const page = await ctx.newPage();
@@ -219,7 +237,7 @@ async function main() {
     try {
       if (r.kind === 'realtime') {
         const res = await page.evaluate((o) => window.H.realtime(o),
-          { engine: e.engine, rvm: rvmFor(e, r.w), p3m: e.p3m, bgm: e.bgm, plate: e.plate, w: r.w, h: r.h, seconds: opt.seconds,
+          { engine: e.engine, rvm: rvmFor(e, r.w), p3m: e.p3m, bgm: e.bgm, plate: e.plate, lab: e.lab, w: r.w, h: r.h, seconds: opt.seconds,
             flags: e.flags || {} });
         const cdp = await ctx.newCDPSession(page);
         await cdp.send('Performance.enable');
@@ -229,9 +247,9 @@ async function main() {
         console.log(`${res.engine} out ${res.outFps.toFixed(1)} fps, mask age p50 ${res.maskAgeMsP50 === null ? '–' : res.maskAgeMsP50.toFixed(0)} ms (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
       } else {
         const setup = await page.evaluate((o) => window.H.setup(o), {
-          engine: e.engine, rvm: rvmFor(e, r.w), p3m: e.p3m, bgm: e.bgm, plate: e.plate, room: r.room, w: r.w, h: r.h,
+          engine: e.engine, rvm: rvmFor(e, r.w), p3m: e.p3m, bgm: e.bgm, plate: e.plate, lab: e.lab, room: r.room, w: r.w, h: r.h,
           flags: { ...(e.flags || {}), ...(r.flags || {}) }, longpipeWaitMs: opt.longpipeWaitMs,
-          oracle: e.oracle, maskCut: e.maskCut
+          oracle: e.oracle, pre: e.pre, maskCut: e.maskCut
         });
         const stills = {};
         for (let f = 0; f < nFrames; f++) {
@@ -311,7 +329,7 @@ function report(results) {
     L.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
     for (const r of q) {
       const s = r.result.scores, g = (k, d) => fmt(s[k] && s[k].mean, d);
-      L.push(`| ${r.name}${r.result.engine !== ENGINES[r.name].engine ? ' (ran ' + r.result.engine + ')' : ''} | ${r.variant} | ${r.room} | ${r.w}x${r.h} | ${r.result.maskSize} | ${g('maskMAE')} | ${g('maskBandMAE', 0)} | ${fmt(s.iou && s.iou.mean, 4)} | ${g('dtSSD', 2)} | ${g('flicker', 2)} | ${g('compMAE', 2)} | ${g('compOuter', 1)} | ${g('compMixed', 1)} | ${g('compInner', 1)} | ${g('compDt', 2)} | ${g('leak', 1)} | ${g('hole', 2)} | ${g('drop', 2)} | ${fmt(r.result.inferMsP50, 1)} |`);
+      L.push(`| ${r.name}${r.result.engine !== engineFor(r.name).engine ? ' (ran ' + r.result.engine + ')' : ''} | ${r.variant} | ${r.room} | ${r.w}x${r.h} | ${r.result.maskSize} | ${g('maskMAE')} | ${g('maskBandMAE', 0)} | ${fmt(s.iou && s.iou.mean, 4)} | ${g('dtSSD', 2)} | ${g('flicker', 2)} | ${g('compMAE', 2)} | ${g('compOuter', 1)} | ${g('compMixed', 1)} | ${g('compInner', 1)} | ${g('compDt', 2)} | ${g('leak', 1)} | ${g('hole', 2)} | ${g('drop', 2)} | ${fmt(r.result.inferMsP50, 1)} |`);
     }
     L.push('');
   }
@@ -322,7 +340,7 @@ function report(results) {
     L.push('|---|---|---|---|---|---|---|---|---|---|---|---|');
     for (const r of rt) {
       const x = r.result, st = x.stats || {};
-      const inf = st.engine === 'rvm' || st.engine === 'p3m' || st.engine === 'bgm' ? `${fmt(st.inferMsP50)}/${fmt(st.inferMsP95)}` : (st.engine === 'longpipe' && st.pipeline ? `its model ${fmt(st.pipeline.modelMs)}` : '–');
+      const inf = st.engine === 'rvm' || st.engine === 'p3m' || st.engine === 'bgm' || st.engine === 'lab' ? `${fmt(st.inferMsP50)}/${fmt(st.inferMsP95)}` : (st.engine === 'longpipe' && st.pipeline ? `its model ${fmt(st.pipeline.modelMs)}` : '–');
       const hz = st.maskHz || (st.engine === 'mediapipe' ? x.segHz : null);
       L.push(`| ${r.name} | ${r.w}x${r.h} | ${x.engine} | ${fmt(x.startMs, 0)} | ${fmt(x.outFps)} | ${fmt(hz)} | ${inf} | ${fmt(x.runSegmentMsP50, 2)}/${fmt(x.runSegmentMsP95, 2)} | ${fmt(x.drawMsP50, 2)}/${fmt(x.drawMsP95, 2)} | ${fmt(x.maskAgeMsP50, 0)}/${fmt(x.maskAgeMsP95, 0)} | ${fmt(x.longTaskMsPerS, 0)} | ${fmt(x.jsHeapMB, 0)} |`);
     }

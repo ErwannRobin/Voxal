@@ -39,6 +39,7 @@ make integration-bench   # real clips into the scenes per compositing variant + 
 make build-debug  # macOS debug bundle — registers voxal:// URL scheme
 make build        # Release build
 make seg-assets   # Stage the background-effects WASM runtime into src/assets/seg/
+make lab-assets   # Download + convert the matting candidates for the lab engine — local measurement only (docs/matting-candidates.md)
 make emoji-data   # Regenerate src/emoji-data.js (chat's emoji catalog) from Unicode
 make promo-assets # Re-embed the icon + fonts in docs/promo.html (the films page)
 make promo-voice  # Record the films' voice-over: ENGINE=say (drafts) | openai, FILMS=, LANGS=
