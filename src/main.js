@@ -11916,7 +11916,7 @@ function videoStageTiles() {
       self: true,
       label: displayPseudoForSelf(),
       color: null,
-      stream: localVideoStream,
+      stream: selfCameraStream(),
       talking: isTalking || freeHandMode,
       iceType: null,
       topology: (_localVideoTopology.video && _localVideoTopology.video.mode) || 'p2p'
@@ -12163,6 +12163,15 @@ function _buildVideoTile(tile) {
     toggleStagePin(tile.key);
   });
   return el;
+}
+
+// What your own camera tile shows: the published picture, unless the
+// segmentation diagnostic's Engines tab is splitting it by engine — a picture
+// for this screen only, never sent (VideoEffects.selfView). Mirrored like the
+// tile, so the split can put its labels the right way round.
+function selfCameraStream() {
+  if (!localVideoStream || !keyedApi('selfView')) return localVideoStream;
+  return VideoEffects.selfView(localVideoStream, _cameraFacing === 'user');
 }
 
 // Reconcile one existing tile in place. Reassigning `srcObject` restarts
@@ -15002,6 +15011,8 @@ function initVideoBackgroundUI() {
   // The local pipeline is struggling: drawing other people's scenes is the
   // first thing to give up, before its own segmentation rate.
   if (keyedApi('onPressure')) VideoEffects.onPressure(shedKeyedReceiverForPressure);
+  // The diagnostic's split view came or went: the self tile follows.
+  if (keyedApi('onSelfViewChange')) VideoEffects.onSelfViewChange(function() { updateVideoStage(); });
 
   var captureBtn = document.getElementById('btn-video-bg-capture');
   if (captureBtn) {
