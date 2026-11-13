@@ -202,13 +202,20 @@ var VideoEffects = (function () {
   // MediaPipe cut, and they fall back to MediaPipe if they die mid-call.
   // BackgroundMattingV2 (bgm) is an image model too: blended like P3M-Net's.
   function isMatteEngine(engine) {
-    if (engine === 'lab') return labSpec().matte !== false;
+    if (engine === 'lab' || labModelOf(engine)) return labSpec(labModelOf(engine)).matte !== false;
     return engine === 'longpipe' || engine === 'rvm' || engine === 'p3m' || engine === 'bgm';
   }
-  // The matting lab's current candidate (lab-engine.js): whether its output is
-  // a matte or a segmentation, and its own edge dilate.
-  function labSpec() {
-    return typeof LabEngine !== 'undefined' ? LabEngine.config().spec : {};
+  // The matting lab's candidate (lab-engine.js): whether its output is a matte
+  // or a segmentation, and its own edge dilate. `id` names one (an Engines-tab
+  // row, 'lab:<id>'); without it, the one the lab engine is set to.
+  function labSpec(id) {
+    if (typeof LabEngine === 'undefined') return {};
+    return LabEngine.MODELS[id] || LabEngine.config().spec;
+  }
+  // 'lab:<id>' → '<id>' (one lab candidate compared on its own); else null.
+  function labModelOf(engine) {
+    var m = /^lab:(.+)$/.exec(String(engine || ''));
+    return m && typeof LabEngine !== 'undefined' && LabEngine.MODELS[m[1]] ? m[1] : null;
   }
 
   // The confidence cut. The model's mask is not 0/1: where it is unsure (a
@@ -1013,13 +1020,13 @@ var VideoEffects = (function () {
       // `bgm-dilate` (texels, 0-4) overrides it.
       var bo = dilateOverride('bgm-dilate');
       e.dilate = bo !== null ? bo : BGM_DILATE;
-    } else if (engine === 'lab') {
+    } else if (engine === 'lab' || labModelOf(engine)) {
       // A matting candidate is treated as P3M-Net is (its alpha already
       // reaches the outside), a segmentation candidate as MediaPipe is;
       // `lab-dilate` overrides either for the bench.
-      var lo = labDilateOverride();
+      var lo = labDilateOverride(), ls = labSpec(labModelOf(engine));
       if (lo !== null) e.dilate = lo;
-      else if (labSpec().matte !== false) e.dilate = labSpec().dilate || 0;
+      else if (ls.matte !== false) e.dilate = ls.dilate || 0;
     }
     if (engine === 'longpipe' || engine === 'rvm' || engine === 'bgm') e.feather *= MATTE_FEATHER_SCALE;
     // The matting bench's A/B switch: { feather, lo, hi } replace the profile's.
@@ -6983,6 +6990,19 @@ var VideoEffects = (function () {
       diagSyncEngineControls();
       return engine();
     }
+    // A lab candidate's row: store it as the lab's model, then run the lab
+    // (rebuilt in place when the lab already drives the call).
+    var lab = labModelOf(name);
+    if (lab) {
+      try { localStorage.setItem(LabEngine.MODEL_KEY, lab); } catch (e) { /* storage blocked */ }
+      if (_active && _active.engine === 'lab') {
+        return _active.swapSegmenter('lab', true).then(done, function (e) {
+          _engineFallback = (e && e.message) || String(e);
+          return done();
+        });
+      }
+      return setEngine('lab').then(done, done);
+    }
     return setEngine(name).then(done, done);
   }
 
@@ -7562,10 +7582,23 @@ var VideoEffects = (function () {
   //   * It costs nothing off: no engine is created, no frame is copied, and
   //     leaving the Engines tab closes every guest.
 
-  // The matting lab (lab-engine.js) is not here: it is one engine standing for
-  // many models, chosen in its own setting, and it is local measurement only.
   var CMP_ENGINES = ['mediapipe', 'longpipe', 'rvm', 'p3m', 'bgm'];
   var CMP_NAMES = { mediapipe: 'MediaPipe', longpipe: 'Longpipe', rvm: 'RVM', p3m: 'P3M-Net', bgm: 'BGMv2' };
+  // Every candidate of the matting lab (lab-engine.js) is a row of its own,
+  // 'lab:<id>', after the engines above. They start OFF — not loaded, not fed —
+  // because ten models at once is ~550 MB of weights on one GPU: ticking one
+  // loads it, unticking unloads it.
+  function cmpEngines() {
+    var labs = typeof LabEngine !== 'undefined'
+      ? Object.keys(LabEngine.MODELS).map(function (id) { return 'lab:' + id; }) : [];
+    return CMP_ENGINES.concat(labs);
+  }
+  function cmpName(name) {
+    if (CMP_NAMES[name]) return CMP_NAMES[name];
+    var id = name === 'lab' && typeof LabEngine !== 'undefined' ? LabEngine.config().model : labModelOf(name);
+    var spec = id && typeof LabEngine !== 'undefined' && LabEngine.MODELS[id];
+    return spec ? 'Lab: ' + spec.label : String(name);
+  }
   var CMP_GW = 96, CMP_GH = 54;   // the grid two masks are compared on
   var CMP_TABLE_MS = 250;         // the engine table repaints at most this often
   var CMP_POLL_MS = 1000;         // the engines' own stats, asked this often
@@ -7580,7 +7613,8 @@ var VideoEffects = (function () {
   // The engines this build can offer (a script that is not on the page is not
   // an engine). Whether one can START is learned by trying it.
   function cmpAvailable() {
-    return CMP_ENGINES.filter(function (n) {
+    return cmpEngines().filter(function (n) {
+      if (labModelOf(n)) return true;
       if (n === 'longpipe') return typeof LongpipeEngine !== 'undefined';
       if (n === 'rvm') return typeof RvmEngine !== 'undefined';
       if (n === 'p3m') return typeof P3mEngine !== 'undefined';
@@ -7595,8 +7629,9 @@ var VideoEffects = (function () {
   // createSegmenter(), without its kindness: an engine that cannot start is
   // REPORTED here, not swapped for MediaPipe.
   function cmpCreate(name, raw, video) {
-    var own = { longpipe: window.__voxalLongpipeStub, rvm: window.__voxalRvmStub, p3m: window.__voxalP3mStub,
-                bgm: window.__voxalBgmStub }[name];
+    var own = labModelOf(name) ? window.__voxalLabStub
+      : { longpipe: window.__voxalLongpipeStub, rvm: window.__voxalRvmStub, p3m: window.__voxalP3mStub,
+          bgm: window.__voxalBgmStub }[name];
     // Tests: a function that hands each engine its own stand-in.
     if (typeof window.__voxalCompareStub === 'function') {
       var made = window.__voxalCompareStub(name);
@@ -7604,11 +7639,12 @@ var VideoEffects = (function () {
     }
     if (name === 'mediapipe') return createMediaPipeSegmenter();
     if (window.__voxalSegStub && !own) return stubSegmenter();   // tests: a stand-in for every model
+    if (labModelOf(name)) return LabEngine.create(raw, video, labModelOf(name));
     if (name === 'p3m' && typeof P3mEngine !== 'undefined') return P3mEngine.create(raw, video);
     if (name === 'bgm' && typeof BgmEngine !== 'undefined') return BgmEngine.create(raw, video);
     if (name === 'rvm' && typeof RvmEngine !== 'undefined') return RvmEngine.create(raw, video);
     if (name === 'longpipe' && typeof LongpipeEngine !== 'undefined') return LongpipeEngine.create(raw, video);
-    return Promise.reject(new Error(CMP_NAMES[name] + ' is not part of this build'));
+    return Promise.reject(new Error(cmpName(name) + ' is not part of this build'));
   }
 
   function cmpNewEntry(name, primary) {
@@ -7635,6 +7671,10 @@ var VideoEffects = (function () {
     if (!_cmp.on || !p || p.stopped || !p.segmenter) return;
     var prim = p.engine || 'mediapipe';
     var want = cmpAvailable();
+    // The lab engine driving the call is its candidate's row: not twice.
+    if (prim === 'lab' && typeof LabEngine !== 'undefined') {
+      want = want.filter(function (n) { return n !== 'lab:' + LabEngine.config().model; });
+    }
     if (want.indexOf(prim) < 0) want.unshift(prim);
     Object.keys(_cmp.entries).forEach(function (name) {
       var e = _cmp.entries[name];
@@ -7644,20 +7684,29 @@ var VideoEffects = (function () {
     want.forEach(function (name) {
       if (_cmp.entries[name]) return;
       if (name === prim) { _cmp.entries[name] = cmpNewEntry(name, true); return; }
+      if (labModelOf(name)) { cmpOff(_cmp.entries[name] = cmpNewEntry(name, false)); return; }
       cmpAddGuest(p, name);
     });
     _cmp.order = want.slice().sort(function (a, b) {
       if (a === prim) return -1;
       if (b === prim) return 1;
-      return CMP_ENGINES.indexOf(a) - CMP_ENGINES.indexOf(b);
+      return cmpEngines().indexOf(a) - cmpEngines().indexOf(b);
     });
     if (_cmp.focus && !_cmp.entries[_cmp.focus]) _cmp.focus = null;
   }
 
   function cmpAddGuest(p, name) {
-    var e = _cmp.entries[name] = cmpNewEntry(name, false);
+    cmpLoadGuest(p, _cmp.entries[name] = cmpNewEntry(name, false));
+  }
+
+  function cmpLoadGuest(p, e) {
+    var name = e.name, load = e.load = (e.load || 0) + 1;
+    e.state = 'loading';
+    e.since = performance.now();
     cmpCreate(name, p.raw, p.video).then(function (seg) {
-      if (!_cmp.on || _cmp.entries[name] !== e || p.stopped) {
+      // Gone, or (a lab row) unticked — or re-ticked — while it loaded: only
+      // the latest load of a row still wanted is kept.
+      if (!_cmp.on || _cmp.entries[name] !== e || p.stopped || e.state !== 'loading' || e.load !== load) {
         try { seg.close(); } catch (x) { /* ignore */ }
         return;
       }
@@ -7666,7 +7715,7 @@ var VideoEffects = (function () {
       e.readyMs = performance.now() - e.since;
       // An engine that dies mid-comparison is marked, not replaced.
       seg.onFail = function (err) { cmpFail(e, err); };
-    }, function (err) { cmpFail(e, err); });
+    }, function (err) { if (e.state === 'loading' && e.load === load) cmpFail(e, err); });
   }
 
   function cmpFail(e, err) {
@@ -7711,9 +7760,28 @@ var VideoEffects = (function () {
     splitClose();
   }
 
+  // A lab candidate's row, unloaded: no model in memory, nothing fed.
+  function cmpOff(e) {
+    if (e.seg) { try { e.seg.onFail = null; e.seg.close(); } catch (x) { /* ignore */ } }
+    e.seg = null; e.state = 'off'; e.paused = true; e.error = '';
+    e.mask = null; e.fg = null; e.w = 0; e.h = 0; e.ms = null; e.msP95 = null; e.hz = 0;
+    e.n = 0; e.stamps = []; e.times = []; e.lastAt = 0; e.measured = -1; e.iou = null; e.note = '';
+  }
+
   function cmpPause(name, paused) {
     var e = _cmp.entries[name];
     if (!e || e.primary) return false;
+    // A lab candidate is loaded when ticked and unloaded when unticked.
+    if (labModelOf(name)) {
+      if (paused) cmpOff(e);
+      else if (e.state === 'off' || e.state === 'failed') {
+        if (!_active || _active.stopped) return false;
+        e.paused = false; e.error = '';
+        cmpLoadGuest(_active, e);
+      }
+      if (paused && _cmp.focus === name) _cmp.focus = null;
+      return true;
+    }
     e.paused = !!paused;
     if (e.paused && _cmp.focus === name) _cmp.focus = null;
     return true;
@@ -7786,7 +7854,7 @@ var VideoEffects = (function () {
         e.seg.segmentForVideo(self.segCanvas, ts, function (result) {
           var masks = result && result.confidenceMasks;
           var mask = masks && (masks.length > 1 ? masks[1] : masks[0]);
-          if (!mask) return;
+          if (!mask || e.state !== 'running') return;   // unloaded since it was fed
           cmpTake(e, mask.getAsUint8Array(), mask.width, mask.height,
             name === 'mediapipe' ? performance.now() - t0 : null);
           // RVM's own foreground colour, which its tile composites with.
@@ -7932,15 +8000,15 @@ var VideoEffects = (function () {
     var c0 = dEl('td'), cell = dEl('div', 'sd-eng');
     var cb = dEl('input');
     cb.type = 'checkbox'; cb.checked = true;
-    cb.setAttribute('aria-label', 'Run ' + CMP_NAMES[name]);
+    cb.setAttribute('aria-label', 'Run ' + cmpName(name));
     cb.addEventListener('change', function () { cmpPause(name, !cb.checked); cmpRenderTable(); });
     var dot = dEl('span', 'sd-dot');
-    var nm = dButton(CMP_NAMES[name], function () { cmpFocus(_cmp.focus === name ? null : name); },
-      'Show only ' + CMP_NAMES[name], 'sd-name');
+    var nm = dButton(cmpName(name), function () { cmpFocus(_cmp.focus === name ? null : name); },
+      'Show only ' + cmpName(name), 'sd-name');
     cell.appendChild(cb); cell.appendChild(dot); cell.appendChild(nm);
     c0.appendChild(cell);
     var ms = dEl('td', 'r sd-num'), hz = dEl('td', 'r sd-num'), iou = dEl('td', 'r sd-num'), act = dEl('td', 'r');
-    var use = dButton('Use', function () { diagUseEngine(name); }, 'Use ' + CMP_NAMES[name] + ' for the call', 'sd-use');
+    var use = dButton('Use', function () { diagUseEngine(name); }, 'Use ' + cmpName(name) + ' for the call', 'sd-use');
     act.appendChild(use);
     tr.appendChild(c0); tr.appendChild(ms); tr.appendChild(hz); tr.appendChild(iou); tr.appendChild(act);
     var sub = dEl('tr', 'sd-sub'), subTd = dEl('td');
@@ -7960,8 +8028,8 @@ var VideoEffects = (function () {
       _diag.cmpNote.textContent = !p || p.stopped
         ? 'Start the camera with a background effect to compare engines.'
         : 'Your own video is split by engine, with your background — only you see it. The call still gets ' +
-          (prim ? '★ ' + CMP_NAMES[prim.name] : 'the engine driving it') + '.' +
-          (st.focus ? ' Showing only ' + CMP_NAMES[st.focus] + ': tap its name again for all.' : '');
+          (prim ? '★ ' + cmpName(prim.name) : 'the engine driving it') + '.' +
+          (st.focus ? ' Showing only ' + cmpName(st.focus) + ': tap its name again for all.' : '');
     }
     var seen = {};
     st.entries.forEach(function (e) {
@@ -7969,12 +8037,12 @@ var VideoEffects = (function () {
       var r = cmpRow(e.name);
       var running = e.state === 'running';
       body.appendChild(r.tr);
-      r.nm.textContent = CMP_NAMES[e.name] + (e.primary ? ' ★' : '');
+      r.nm.textContent = cmpName(e.name) + (e.primary ? ' ★' : '');
       dPress(r.nm, st.focus === e.name);
-      r.cb.checked = e.state !== 'paused';
-      r.cb.disabled = e.primary || e.state === 'failed';
+      r.cb.checked = e.state !== 'paused' && e.state !== 'off';
+      r.cb.disabled = e.primary || (e.state === 'failed' && !labModelOf(e.name));
       r.cb.title = e.primary ? 'This engine drives the call' : '';
-      r.dot.style.background = DIAG_COLOR[e.state === 'failed' ? 'bad' : running ? 'ok' : e.state === 'paused' ? 'warn' : 'accent'];
+      r.dot.style.background = DIAG_COLOR[e.state === 'failed' ? 'bad' : running ? 'ok' : e.state === 'paused' ? 'warn' : e.state === 'off' ? 'muted' : 'accent'];
       r.dot.title = e.state;
       // An engine that is not running says so where its time would be.
       r.ms.textContent = !running ? (e.state === 'loading' ? 'loading…' : e.state)
@@ -7982,6 +8050,7 @@ var VideoEffects = (function () {
       r.ms.title = running && e.msP95 !== null && e.msP95 !== undefined ? 'p95 ' + e.msP95.toFixed(1) + ' ms' : '';
       r.ms.style.color = e.state === 'failed' ? DIAG_COLOR.bad
         : e.state === 'paused' ? DIAG_COLOR.warn
+        : e.state === 'off' ? DIAG_COLOR.muted
         : DIAG_COLOR[cmpLevel(running ? e.ms : null, 25, 60, false)];
       r.hz.textContent = running && e.hz ? e.hz.toFixed(1) + ' Hz' : '–';
       r.hz.style.color = DIAG_COLOR[cmpLevel(running ? e.hz : null, 12, 6, true)];
@@ -7992,6 +8061,7 @@ var VideoEffects = (function () {
       var sub = e.state === 'failed' ? e.error
         : e.state === 'loading' ? 'starting for ' + Math.round((performance.now() - ((_cmp.entries[e.name] || {}).since || 0)) / 1000) + ' s'
         : e.state === 'paused' ? 'not fed, not on your video'
+        : e.state === 'off' ? 'tick to load it' + (labModelOf(e.name) ? ' (' + LabEngine.MODELS[labModelOf(e.name)].licence + ')' : '')
         : e.note;
       r.subTd.textContent = sub || '';
       r.subTd.style.color = e.state === 'failed' ? DIAG_COLOR.bad : '';
@@ -8283,7 +8353,7 @@ var VideoEffects = (function () {
         ctx.lineWidth = Math.max(2, fs / 6);
         ctx.strokeRect(0, 0, tw, th);
       }
-      var bits = [CMP_NAMES[t.name] + (e.primary ? ' ★' : '')];
+      var bits = [cmpName(t.name) + (e.primary ? ' ★' : '')];
       if (e.state === 'running' && t.ready) {
         if (e.ms !== null && e.ms !== undefined) bits.push(e.ms.toFixed(0) + ' ms');
         if (e.hz) bits.push(e.hz.toFixed(0) + ' Hz');
@@ -8314,7 +8384,7 @@ var VideoEffects = (function () {
   // The header's two badges: the engine that drives the picture and its rate.
   function diagRefreshBadges(d) {
     if (_diag.engBadge && _active) {
-      _diag.engBadge.textContent = (CMP_NAMES[engine()] || engine()) + ' ★';
+      _diag.engBadge.textContent = cmpName(engine()) + ' ★';
       var c = _engineFallback ? DIAG_COLOR.warn : DIAG_COLOR.accent;
       _diag.engBadge.style.color = c;
       _diag.engBadge.title = _engineFallback ? 'fell back to MediaPipe: ' + _engineFallback : 'the engine driving the call';
