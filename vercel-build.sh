@@ -41,15 +41,21 @@ else
   rm -rf src/assets/p3m
 fi
 
-# BackgroundMattingV2 (MIT, docs/bgm-evaluation.md): not deployed yet. Its model
-# is converted locally (make bgm-assets) and has no published download, so a
-# deploy never carries it; the engine then falls back to MediaPipe.
-rm -rf src/assets/bgm
-
-# The matting candidates (src/lab-engine.js, docs/matting-candidates.md) are
-# local measurement only — some carry licences Voxal cannot ship — so no deploy
-# carries them, preview or production.
-rm -rf src/assets/lab
+# BackgroundMattingV2 (MIT, docs/bgm-evaluation.md) and the matting lab's
+# candidates (src/lab-engine.js, docs/matting-candidates.md): converted once and
+# published as the `matting-models-v1` prerelease, sha256-pinned in
+# scripts/matting-models-fetch.sh. PREVIEW deploys with PREVIEW_ENGINES=1 only
+# (~660 MB on top of RVM/P3M): never production, because one lab candidate
+# (RMBG-1.4) is non-commercial and the rest are measurement, not product.
+# Never fatal: without the files each engine falls back to MediaPipe.
+if [ "${VERCEL_ENV:-}" = "preview" ] && [ "${PREVIEW_ENGINES:-}" = "1" ]; then
+  if ! sh scripts/matting-models-fetch.sh; then
+    rm -rf src/assets/bgm src/assets/lab
+    echo "⚠ matting model files unavailable; deploying without them (BGMv2 / the lab fall back to MediaPipe)"
+  fi
+else
+  rm -rf src/assets/bgm src/assets/lab
+fi
 
 # Stamp the commit and build time for the about panel. Mirrors the Makefile's
 # gen-build-info target, but reads Vercel's env var — the deploy is built from a

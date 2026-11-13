@@ -3,7 +3,7 @@
         coverage-api coverage-summary coverage-badge bench bench-app bench-audio bench-video \
         bench-report bench-publish bench-history \
         cap-sync cap-ios cap-android build-android docs release release-official release-core sync-version \
-        seg-assets rvm-assets rvm-clean p3m-assets p3m-fetch p3m-clean bgm-assets bgm-clean lab-assets lab-clean matting-footage matting-bench integration-footage integration-bench emoji-data promo-assets promo-voice scene-preview three-vendor
+        seg-assets rvm-assets rvm-clean p3m-assets p3m-fetch p3m-clean bgm-assets bgm-clean lab-assets lab-clean matting-models-fetch matting-footage matting-bench integration-footage integration-bench emoji-data promo-assets promo-voice scene-preview three-vendor
 
 # Default target
 help:
@@ -23,6 +23,7 @@ help:
 	@echo "  p3m-assets   Convert P3M-Net from its official checkpoint yourself (needs PyTorch) into src/assets/p3m"
 	@echo "  bgm-assets   Convert the EXPERIMENTAL BackgroundMattingV2 engine (MIT; needs PyTorch) into src/assets/bgm"
 	@echo "  lab-assets   Download + convert the matting CANDIDATES (local measurement only, never deployed) into src/assets/lab"
+	@echo "  matting-models-fetch Download BackgroundMattingV2 + the lab candidates (published, sha256-pinned) into src/assets/bgm, src/assets/lab"
 	@echo "  matting-footage Build the matting benchmark's footage (known alpha) into bench-results/matting"
 	@echo "  matting-bench Score MediaPipe / Longpipe / RVM on it through the real pipeline; ARGS=... passes options"
 	@echo "  integration-footage Fetch the real clips of tests/bench/integration/clips.csv (Pexels) as frames"
@@ -223,6 +224,12 @@ lab-assets:
 
 lab-clean:
 	@rm -rf src/assets/lab
+
+# BackgroundMattingV2 and the lab candidates as published in the
+# `matting-models-v1` prerelease (what a PREVIEW_ENGINES=1 preview deploy
+# fetches): the same files bgm-assets / lab-assets build, without PyTorch or uv.
+matting-models-fetch:
+	@sh scripts/matting-models-fetch.sh
 
 # The matting evaluation: footage with a known alpha (public-domain clip and CC0
 # rooms, downloaded once into bench-results/), then every engine through the

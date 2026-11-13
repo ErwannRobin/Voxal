@@ -7,8 +7,9 @@
 // wins). No model file is in the repository: `make lab-assets` downloads and
 // converts every candidate into the gitignored src/assets/lab/
 // (scripts/lab-assets.sh). Some candidates carry licences Voxal could not ship
-// (RMBG-1.4: BRIA non-commercial) — they are measured, never deployed: every
-// build and deploy strips src/assets/lab, exactly as for RVM.
+// (RMBG-1.4: BRIA non-commercial) — they are measured, never shipped: every
+// build and production deploy strips src/assets/lab; only a PREVIEW_ENGINES=1
+// preview fetches it (scripts/matting-models-fetch.sh), exactly as for RVM.
 //
 // The point of one generic engine is that a new candidate costs one registry
 // entry, not a 400-line adapter: an ONNX model is described by its input

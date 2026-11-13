@@ -260,9 +260,10 @@ it beside the others once the picture is taken.
   pixels; on a phone it will rarely be in charge.
 * **Every number is from one machine** (Apple M5, Chromium). No Windows GPU,
   no Safari, no phone.
-* **Not deployed**: there is no published converted model, so preview deploys
-  do not carry it. Publishing one would be a `bgm-model-v1` prerelease asset
-  with a fetch script, exactly like P3M-Net's.
+* **Previews only**: the converted models are published in the
+  `matting-models-v1` prerelease and fetched (sha256-pinned,
+  `scripts/matting-models-fetch.sh`) by preview deploys built with
+  `PREVIEW_ENGINES=1`. Production and the apps never carry them.
 * The island clean-up's 15% and its no-border rule are judgment, checked on
   this footage only.
 

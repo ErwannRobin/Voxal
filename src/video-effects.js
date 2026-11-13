@@ -7563,7 +7563,7 @@ var VideoEffects = (function () {
   //     leaving the Engines tab closes every guest.
 
   // The matting lab (lab-engine.js) is not here: it is one engine standing for
-  // many models, chosen in its own setting, and it is local measurement only.
+  // many models, chosen in its own setting, and it is measurement only.
   var CMP_ENGINES = ['mediapipe', 'longpipe', 'rvm', 'p3m', 'bgm'];
   var CMP_NAMES = { mediapipe: 'MediaPipe', longpipe: 'Longpipe', rvm: 'RVM', p3m: 'P3M-Net', bgm: 'BGMv2' };
   var CMP_GW = 96, CMP_GH = 54;   // the grid two masks are compared on
