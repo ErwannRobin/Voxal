@@ -34,6 +34,8 @@ make bench-app    # only the app half: startup, time to connect, memory footprin
 make bench-report # re-render the newest benchmark run without re-measuring
 make bench-publish # put the newest run into docs/benchmarks.md + docs/benchmark.html
 make bench-history # how the app's numbers moved across published versions
+make integration-footage # fetch the real clips of tests/bench/integration/clips.csv (Pexels) as frames
+make integration-bench   # real clips into the scenes per compositing variant + blind A/B judging page (docs/integration-evaluation.md)
 make build-debug  # macOS debug bundle — registers voxal:// URL scheme
 make build        # Release build
 make seg-assets   # Stage the background-effects WASM runtime into src/assets/seg/

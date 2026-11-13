@@ -4951,8 +4951,12 @@ var VideoEffects = (function () {
     gl.uniform1f(uloc(gl, this.pComp, 'uBgMode'), useScene ? 2 : useImage ? 1 : 0);
     var sh = this.shadowPlan();
     gl.uniform2f(uloc(gl, this.pComp, 'uShadowOff'), sh.offX, sh.offY);
-    gl.uniform2f(uloc(gl, this.pComp, 'uShadow'), sh.cast, sh.contact);
-    gl.uniform1f(uloc(gl, this.pComp, 'uWrap'), useScene && this.scene ? this.scene.wrap : 0);
+    // __voxalShadowScale / __voxalWrapScale: bench switches (scripts/integration-bench.mjs)
+    // that scale the scene's shadow on you and its light on you, 0 = off.
+    var shS = typeof window.__voxalShadowScale === 'number' ? window.__voxalShadowScale : 1;
+    var wrS = typeof window.__voxalWrapScale === 'number' ? window.__voxalWrapScale : 1;
+    gl.uniform2f(uloc(gl, this.pComp, 'uShadow'), sh.cast * shS, sh.contact * shS);
+    gl.uniform1f(uloc(gl, this.pComp, 'uWrap'), useScene && this.scene ? this.scene.wrap * wrS : 0);
     gl.uniform2f(uloc(gl, this.pComp, 'uEdge'), this.edge.lo, this.edge.hi);
     gl.uniform1f(uloc(gl, this.pComp, 'uDecon'), typeof window.__voxalDecon === 'number' ? window.__voxalDecon : this.decon);
     gl.uniform1f(uloc(gl, this.pComp, 'uMotion'), window.__voxalNoEdgeMotion ? 0 : Math.min(1, Math.max(0, this.look.motion || 0)));

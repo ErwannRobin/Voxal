@@ -561,3 +561,11 @@ Design: `docs/video-effects.md`. Preview any scene/look headlessly with `make sc
 - **A test that compares two `draw()` reads must read both in ONE task**: the camera stream repaints every 40 ms, so a read after an `await` is a different frame and a byte-identity check fails for the wrong reason.
 - **`offsetParent` is not null inside a closed `<details>`**: use `el.checkVisibility()` to skip what is not shown (the phone "every control is tappable" test). Playwright's `selectOption` on such a control waits forever: open the `<summary>` first.
 - `unit-video-keyed` "withholds keying" tests can fail locally with reason `slow-copy` on a busy machine (other servers/tests running); the same on a clean `origin/main`, so check for load before chasing it.
+
+## Integration bench (real footage, `docs/integration-evaluation.md`)
+
+- **Pexels pages refuse scripted requests (403), but `https://www.pexels.com/download/video/<id>/` 302s to the HD file**, and ffmpeg seeks it with range requests (`-ss` before `-i`): a 4K source costs only the seconds cut. Never commit the clips (Pexels licence forbids redistributing them as a collection); `bench-results/` is gitignored.
+- **Stock clips are graded and denoised**: their flattest blocks are 4-20x quieter than the scene's grain, so `noise ×` against them says nothing about a webcam. Tune grain on your own webcam recordings, not on these.
+- **Step the Processor on a virtual clock** (`draw(now)` / `runSegment(now)` take `now`): stepped slower than real time with `performance.now()`, the look's easing, the scene's redraw rate and the segmentation cadence would all run fast per frame. The scene compiles off-thread: wait for `p.sceneId` before stepping.
+- The shipped shadow reads as a grey smudge around dark hair on a bright wall (first look, office scene). Judge `no-shadow` vs `shipped` before retuning `SHADOW_*`.
+- **Longpipe's settle check needs 3 of 4 frame corners on the key**, so a person filling both bottom corners (upright phone, close framing) gets no mask until the first-load fail-open (21.5 s): the scene shows with nobody in it. Found by the integration bench (pexels-8048443, pexels-8135646). Not fixed yet.

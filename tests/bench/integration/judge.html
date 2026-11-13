@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Integration judging</title>
+<!-- Written by scripts/integration-bench.mjs next to the run's videos/, with
+     the run's trials in JUDGE_DATA. Opens from disk. Each trial shows the same
+     clip in the same scene under two variants, sides randomised, names hidden
+     until the end. -->
+<style>
+  :root { --bg: #111317; --fg: #e8eaed; --dim: #9aa0a6; --line: #2a2e35; --accent: #6ea8fe; --win: #3ec27a; }
+  @media (prefers-color-scheme: light) { :root { --bg: #f7f7f8; --fg: #1d1f23; --dim: #5f6368; --line: #dadce0; --accent: #1a66d9; --win: #188a4c; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+  main { max-width: 1600px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .meta { color: var(--dim); font-size: 13px; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0; }
+  @media (max-width: 800px) { .pair { grid-template-columns: 1fr; } }
+  figure { margin: 0; }
+  figcaption { text-align: center; font-weight: 600; margin-top: 4px; }
+  video { width: 100%; max-height: 72vh; background: #000; border-radius: 6px; display: block; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; }
+  button { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; }
+  button.primary { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+  kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+  progress { width: 220px; }
+  table { border-collapse: collapse; margin: 8px 0 20px; }
+  td, th { border-bottom: 1px solid var(--line); padding: 4px 10px; text-align: left; }
+  .win { color: var(--win); font-weight: 600; }
+  .hidden { display: none; }
+  input[type=text] { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--fg); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Which one looks like the person is really there?</h1>
+  <div class="meta">Same clip, same scene, two versions. Judge how well the person sits in the scene (edges, light, colour, shadow, grain), not which scene you like. <span id="run"></span></div>
+
+  <section id="judging">
+    <div class="pair">
+      <figure><video id="va" muted loop playsinline preload="auto"></video><figcaption>1 · Left</figcaption></figure>
+      <figure><video id="vb" muted loop playsinline preload="auto"></video><figcaption>2 · Right</figcaption></figure>
+    </div>
+    <div class="bar">
+      <button class="primary" id="pick-left">Left is better <kbd>1</kbd> <kbd>←</kbd></button>
+      <button id="pick-tie">No real difference <kbd>0</kbd> <kbd>↓</kbd></button>
+      <button class="primary" id="pick-right">Right is better <kbd>2</kbd> <kbd>→</kbd></button>
+      <button id="pause">Pause <kbd>space</kbd></button>
+      <button id="undo">Undo <kbd>⌫</kbd></button>
+    </div>
+    <p class="bar meta"><progress id="prog" value="0" max="1"></progress> <span id="count"></span> · <span id="where"></span></p>
+  </section>
+
+  <section id="done" class="hidden">
+    <p>All trials judged. Your name (kept in the export): <input type="text" id="judge" placeholder="optional"></p>
+    <div class="bar" style="justify-content:flex-start">
+      <button class="primary" id="export">Export judgements (JSON)</button>
+      <button id="reveal">Reveal results</button>
+      <button id="restart">Start over</button>
+    </div>
+    <p class="meta">Tally several judges' exports with <code>node scripts/integration-bench.mjs --tally file.json</code>.</p>
+    <div id="results" class="hidden"></div>
+  </section>
+</main>
+<script>
+'use strict';
+var DATA = /*JUDGE_DATA*/null;
+var KEY = 'integration-judge:' + (DATA && DATA.runId);
+var state = { choices: [] };
+try { state = JSON.parse(localStorage.getItem(KEY)) || state; } catch (e) { /* file:// with storage blocked: in memory only */ }
+function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* see above */ } }
+
+var va = document.getElementById('va'), vb = document.getElementById('vb');
+document.getElementById('run').textContent = DATA ? 'Run ' + DATA.runId + ', ' + DATA.trials.length + ' trials.' : 'No data.';
+
+// The two videos play as one: same start, and the right one follows the left.
+function sync() {
+  if (Math.abs(vb.currentTime - va.currentTime) > 0.06) vb.currentTime = va.currentTime;
+}
+va.addEventListener('timeupdate', sync);
+va.addEventListener('seeked', sync);
+
+function current() { return state.choices.length; }
+
+function show() {
+  var i = current(), n = DATA.trials.length;
+  document.getElementById('prog').max = n;
+  document.getElementById('prog').value = i;
+  document.getElementById('count').textContent = Math.min(i + 1, n) + ' / ' + n;
+  if (i >= n) {
+    va.pause(); vb.pause();
+    document.getElementById('judging').classList.add('hidden');
+    document.getElementById('done').classList.remove('hidden');
+    return;
+  }
+  document.getElementById('judging').classList.remove('hidden');
+  document.getElementById('done').classList.add('hidden');
+  var t = DATA.trials[i];
+  document.getElementById('where').textContent = t.situation + ' · ' + t.scene;
+  va.src = t.a; vb.src = t.b;
+  Promise.all([va.play(), vb.play()]).catch(function () { /* autoplay blocked until a key press */ });
+}
+
+function pick(c) {
+  if (current() >= DATA.trials.length) return;
+  state.choices.push(c);
+  save();
+  show();
+}
+
+document.getElementById('pick-left').onclick = function () { pick('left'); };
+document.getElementById('pick-right').onclick = function () { pick('right'); };
+document.getElementById('pick-tie').onclick = function () { pick('tie'); };
+document.getElementById('undo').onclick = function () { state.choices.pop(); save(); show(); };
+document.getElementById('pause').onclick = function () {
+  if (va.paused) { va.play(); vb.play(); } else { va.pause(); vb.pause(); }
+};
+document.getElementById('restart').onclick = function () {
+  if (!confirm('Forget every judgement made on this page?')) return;
+  state = { choices: [] }; save(); show();
+};
+document.addEventListener('keydown', function (e) {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === '1' || e.key === 'ArrowLeft') pick('left');
+  else if (e.key === '2' || e.key === 'ArrowRight') pick('right');
+  else if (e.key === '0' || e.key === 'ArrowDown') pick('tie');
+  else if (e.key === 'Backspace') document.getElementById('undo').click();
+  else if (e.key === ' ') document.getElementById('pause').click();
+  else return;
+  e.preventDefault();
+});
+
+function judged() {
+  return DATA.trials.map(function (t, i) {
+    return { clip: t.clip, situation: t.situation, scene: t.scene, left: t.left, right: t.right, choice: state.choices[i] || null };
+  });
+}
+
+document.getElementById('export').onclick = function () {
+  var out = { runId: DATA.runId, judge: document.getElementById('judge').value || null, at: new Date().toISOString(), trials: judged() };
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' }));
+  a.download = 'judgements-' + DATA.runId + (out.judge ? '-' + out.judge.replace(/[^a-z0-9-]+/gi, '-') : '') + '.json';
+  a.click();
+};
+
+// Wilson score interval: what a win rate from a few dozen judgements can claim.
+function wilson(k, n) {
+  if (!n) return [0, 1];
+  var z = 1.96, p = k / n, d = 1 + z * z / n;
+  var c = (p + z * z / (2 * n)) / d, h = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d;
+  return [Math.max(0, c - h), Math.min(1, c + h)];
+}
+
+document.getElementById('reveal').onclick = function () {
+  var pairs = {};
+  judged().forEach(function (t) {
+    if (!t.choice) return;
+    var xy = [t.left, t.right].sort(), key = xy.join(' vs ');
+    var p = pairs[key] || (pairs[key] = { x: xy[0], y: xy[1], wx: 0, wy: 0, tie: 0, rows: {} });
+    var win = t.choice === 'tie' ? null : t.choice === 'left' ? t.left : t.right;
+    var row = p.rows[t.situation + ' · ' + t.scene] || (p.rows[t.situation + ' · ' + t.scene] = { wx: 0, wy: 0, tie: 0 });
+    [p, row].forEach(function (o) { if (win === null) o.tie++; else if (win === p.x) o.wx++; else o.wy++; });
+  });
+  var el = document.getElementById('results'), html = '';
+  Object.keys(pairs).forEach(function (k) {
+    var p = pairs[k], n = p.wx + p.wy, ci = wilson(p.wx, n);
+    html += '<h2>' + k + '</h2><p><b>' + p.x + '</b> preferred ' + p.wx + '×, <b>' + p.y + '</b> ' + p.wy + '×, no difference ' + p.tie +
+      '×. ' + p.x + ' win rate ' + (n ? Math.round(100 * p.wx / n) : '–') + '% (95% CI ' + Math.round(100 * ci[0]) + '–' + Math.round(100 * ci[1]) +
+      '%, ties excluded). An interval that contains 50% is not a preference.</p>';
+    html += '<table><tr><th>clip · scene</th><th>' + p.x + '</th><th>' + p.y + '</th><th>no diff</th></tr>';
+    Object.keys(p.rows).sort().forEach(function (r) {
+      var o = p.rows[r];
+      html += '<tr><td>' + r + '</td><td class="' + (o.wx > o.wy ? 'win' : '') + '">' + o.wx + '</td><td class="' + (o.wy > o.wx ? 'win' : '') + '">' + o.wy + '</td><td>' + o.tie + '</td></tr>';
+    });
+    html += '</table>';
+  });
+  el.innerHTML = html || '<p>Nothing judged.</p>';
+  el.classList.remove('hidden');
+};
+
+if (DATA && DATA.trials.length) show();
+</script>
+</body>
+</html>
