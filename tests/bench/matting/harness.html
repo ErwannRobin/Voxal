@@ -10,6 +10,7 @@
 <script src="/longpipe-engine.js"></script>
 <script src="/rvm-engine.js"></script>
 <script src="/p3m-engine.js"></script>
+<script src="/bgm-engine.js"></script>
 <script src="/video-effects.js"></script>
 </head>
 <body>
@@ -79,6 +80,28 @@ function bandOf(gt, w, h, r) {
   return band;
 }
 
+// BackgroundMattingV2's picture of the empty room, as the app would hold it:
+// `long` px on the long side (the app keeps it at 640), optionally off by a
+// per-channel `gain` (exposure / white balance the app did not correct) or
+// `shift`ed by [dx, dy] px at 1280 wide (a camera nudged since the picture).
+async function platePayload(room, w, h, pp) {
+  pp = pp || {};
+  var s = pp.long ? Math.min(1, pp.long / Math.max(w, h)) : 1;
+  var pw = Math.round(w * s), ph = Math.round(h * s);
+  var px = pixels(await loadImage('/__footage/' + room + '/plate.png'), pw, ph);
+  var g = pp.gain || [1, 1, 1];
+  var dx = pp.shift ? Math.round(pp.shift[0] * pw / 1280) : 0, dy = pp.shift ? Math.round(pp.shift[1] * pw / 1280) : 0;
+  var out = new Uint8ClampedArray(pw * ph * 4);
+  for (var y = 0; y < ph; y++) {
+    var sy = Math.min(ph - 1, Math.max(0, y - dy));
+    for (var x = 0; x < pw; x++) {
+      var sx = Math.min(pw - 1, Math.max(0, x - dx)), i = (y * pw + x) * 4, j = (sy * pw + sx) * 4;
+      out[i] = px[j] * g[0]; out[i + 1] = px[j + 1] * g[1]; out[i + 2] = px[j + 2] * g[2]; out[i + 3] = 255;
+    }
+  }
+  return { w: pw, h: ph, rgba: new Uint8Array(out.buffer), gain: [1, 1, 1] };
+}
+
 // --- the run -------------------------------------------------------------------
 
 var H = {};   // what the runner reads back
@@ -96,6 +119,9 @@ H.setup = async function (opt) {
     if (opt.rvm.ratio) localStorage.setItem('rvm-ratio', String(opt.rvm.ratio));
   }
   if (opt.p3m) Object.keys(opt.p3m).forEach(function (k) { localStorage.setItem('p3m-' + k, String(opt.p3m[k])); });
+  if (opt.bgm) Object.keys(opt.bgm).forEach(function (k) { localStorage.setItem('bgm-' + k, String(opt.bgm[k])); });
+  // The bench hands BackgroundMattingV2 its plate itself (no capture flow).
+  window.__voxalBgmManual = opt.engine === 'bgm';
   Object.keys(opt.flags || {}).forEach(function (k) { window[k] = opt.flags[k]; });
   H.opt = opt;
   H.manifest = await (await fetch('/__footage/manifest.json')).json();
@@ -126,6 +152,7 @@ H.setup = async function (opt) {
   H.real = p.segmenter;
   if (H.real && 'camVideo' in H.real) H.real.camVideo = H.cam;
   H.engineUsed = p.engine;
+  if (p.engine === 'bgm') H.real.setPlate(await platePayload(opt.room, w, h, opt.plate));
   if (typeof opt.maskCut === 'number') p.maskCut = opt.maskCut;
   // The exact target, not the stored JPEG re-encode.
   var gl = p.gl;
@@ -175,6 +202,11 @@ H.maskFor = async function () {
     var r3 = await real.inferFrame(H.cam);
     H.inferMs.push(r3.ms);
     got = { width: r3.width, height: r3.height, data: r3.data };
+  } else if (eng === 'bgm') {
+    // Its foreground colour rides along as RVM's does (uploadFg()).
+    var rb = await real.inferFrame(H.cam);
+    H.inferMs.push(rb.ms);
+    got = { width: rb.width, height: rb.height, data: rb.data, rvm: rb };
   } else if (eng === 'longpipe') {
     // Longpipe runs its own pipeline on the stream: give it time to see this
     // frame (it is held still meanwhile), then read its output.
@@ -344,6 +376,9 @@ H.realtime = async function (opt) {
   localStorage.setItem('bg-reference', 'off');
   if (opt.rvm) Object.keys(opt.rvm).forEach(function (k) { localStorage.setItem('rvm-' + k, String(opt.rvm[k])); });
   if (opt.p3m) Object.keys(opt.p3m).forEach(function (k) { localStorage.setItem('p3m-' + k, String(opt.p3m[k])); });
+  if (opt.bgm) Object.keys(opt.bgm).forEach(function (k) { localStorage.setItem('bgm-' + k, String(opt.bgm[k])); });
+  window.__voxalBgmManual = opt.engine === 'bgm';
+  Object.keys(opt.flags || {}).forEach(function (k) { window[k] = opt.flags[k]; });
   var w = opt.w, h = opt.h, room = opt.room || 'living';
   var frames = [];
   for (var f = 0; f < 60; f++) frames.push(await loadImage('/__footage/' + room + '/' + String(f * 5).padStart(4, '0') + '.jpg'));
@@ -358,6 +393,7 @@ H.realtime = async function (opt) {
   var out = await VideoEffects.wrap(stream, 'custom');
   var startMs = performance.now() - t0;
   var p = VideoEffects.active();
+  if (p.engine === 'bgm') p.segmenter.setPlate(await platePayload(room, w, h, opt.plate));
   // Count the frames the pipeline publishes, and the main thread's time in
   // each of its steps.
   var draws = 0, segMs = [], drawMs = [], ages = [];
@@ -371,7 +407,7 @@ H.realtime = async function (opt) {
         orig.call(seg, fr, ts, function (res) {
           // The frame this matte was computed from: RVM says when its
           // inference started; MediaPipe answers on this frame.
-          var at = res && (res.rvm || res.p3m);
+          var at = res && (res.rvm || res.p3m || res.bgm);
           lastMaskAt = at ? at.at : performance.now();
           cb(res);
         });

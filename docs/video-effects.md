@@ -386,7 +386,11 @@ measurement moved MediaPipe's dilate from 3 to 1.5 texels and Longpipe's from ab
 one to half a texel (RVM: none) — see *Findings* in docs/matting-evaluation.md.
 The experimental P3M-Net engine (`segmentation-engine=p3m`, an image matting
 model, so not recurrent) keeps the 0.6 blend and gets no dilate; measured the same
-way in docs/p3m-evaluation.md.
+way in docs/p3m-evaluation.md. So does the experimental BackgroundMattingV2
+(`segmentation-engine=bgm`), which compares the camera with the fixed-camera
+reference's picture of the empty room and therefore only drives the camera while
+that picture is loaded and current (`Processor.syncBgm()`; MediaPipe otherwise) —
+see docs/bgm-evaluation.md.
 
 ### Why the mask crosses the CPU
 

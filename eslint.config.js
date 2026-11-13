@@ -25,6 +25,7 @@ export default [
       'src/assets/seg/**',
       'src/assets/rvm/**',        // make rvm-assets: staged, gitignored (GPL-3.0 weights + ONNX Runtime)
       'src/assets/p3m/**',        // make p3m-assets: staged, gitignored (converted weights + ONNX Runtime)
+      'src/assets/bgm/**',        // make bgm-assets: staged, gitignored (converted weights + ONNX Runtime)
       '.cache/**',
       'src/assets/three/**',
       'src/emoji-data.js',
@@ -68,6 +69,7 @@ export default [
         LongpipeEngine: 'readonly', // src/longpipe-engine.js
         RvmEngine: 'readonly',      // src/rvm-engine.js
         P3mEngine: 'readonly',      // src/p3m-engine.js
+        BgmEngine: 'readonly',      // src/bgm-engine.js
         VideoEffects: 'readonly', // src/video-effects.js
         VideoScenes: 'readonly', // src/video-scenes.js
         DeviceTilt: 'readonly', // src/device-tilt.js
