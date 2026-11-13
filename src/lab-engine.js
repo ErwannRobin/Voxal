@@ -101,9 +101,11 @@ var LabEngine = (function () {
     } catch (e) { /* storage blocked */ }
   }
 
-  function config() {
-    var model = null;
-    try { var q = /[?&]labmodel=([a-z0-9.-]+)/.exec(location.search); if (q) model = q[1]; } catch (e) { /* none */ }
+  // `override`: a model id that wins over the URL and the stored choice (the
+  // diagnostic's Engines tab runs several candidates side by side).
+  function config(override) {
+    var model = MODELS[override] ? override : null;
+    if (!model) try { var q = /[?&]labmodel=([a-z0-9.-]+)/.exec(location.search); if (q) model = q[1]; } catch (e) { /* none */ }
     if (!MODELS[model]) model = store(MODEL_KEY);
     if (!MODELS[model]) model = DEFAULT_MODEL;
     var size = parseInt(store(SIZE_KEY), 10);
@@ -174,9 +176,9 @@ var LabEngine = (function () {
     return s[Math.min(s.length - 1, Math.floor(p * s.length))];
   }
 
-  function LabSegmenter(raw, camVideo) {
+  function LabSegmenter(raw, camVideo, model) {
     this.engine = 'lab';
-    this.cfg = config();
+    this.cfg = config(model);
     this.spec = this.cfg.spec;
     this.camVideo = camVideo || null;
     this.closed = false;
@@ -409,8 +411,8 @@ var LabEngine = (function () {
     });
   };
 
-  function create(raw, camVideo) {
-    var seg = new LabSegmenter(raw, camVideo);
+  function create(raw, camVideo, model) {
+    var seg = new LabSegmenter(raw, camVideo, model);
     return seg.openPromise.then(function () { return seg; });
   }
 
