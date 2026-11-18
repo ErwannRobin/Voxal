@@ -2498,6 +2498,37 @@ body.embed-tiny .screen.active {
   height: 100%; /* 100% of viewport for fixed elements */
 }
 
+/* The embed is a fixed-size window (56×56 in micro, clipped to a circle by the
+   parent): never a scrollbar. The viewport takes body's overflow, since html's
+   is `visible`. The background stays the card colour — the parent's clip-path
+   cuts the corners, so nothing square shows. */
+html.embed-tiny-boot body,
+body.embed-tiny {
+  overflow: hidden;
+}
+
+/* ── Tiny embed: boot ─────────────────────────────────────────────── */
+/* Between first paint and main.js tagging <body> (`embed-tiny`), the only
+   active screen is home: its topbar would paint off-centre in the circle.
+   The head script tags <html> with `embed-tiny-boot` from the URL alone, so
+   the frame shows one centred spinner until the real screen takes over. */
+html.embed-tiny-boot body:not(.embed-tiny) .screen {
+  display: none;
+}
+html.embed-tiny-boot body:not(.embed-tiny)::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: 22px;
+  height: 22px;
+  border: 2.5px solid var(--text-muted);
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: 0.8;
+  animation: spin 0.6s linear infinite;
+}
+
 /* ── Tiny embed: connect/home screen (418×128 iframe) ─────────────── */
 
 body.embed-tiny #screen-home {
@@ -2814,6 +2845,25 @@ body.embed-tiny.tiny-micro #screen-room .acquiring-mic-label {
   display: none !important;
 }
 
+/* Micro: the spinner that stands in for the 🎙️ while the mic is acquired must
+   sit where the emoji was — the middle of the circle. Its wrapper collapses to
+   0×0 once the icon is hidden, so anchor the spinner to the chip (inset: 0, the
+   whole frame) instead, and give it the boot/joining spinner's look so the
+   frame never shows two different loaders. */
+body.embed-tiny.tiny-micro #screen-room .peer-item-compact.peer-self .peer-mic-wrapper {
+  position: static;
+}
+body.embed-tiny.tiny-micro #screen-room .peer-item-compact.peer-self .peer-mic-spinner {
+  inset: 0;
+  margin: auto;
+  width: 22px;
+  height: 22px;
+  border: 2.5px solid var(--text-muted);
+  border-top-color: transparent;
+  opacity: 0.8;
+  animation-duration: 0.6s;
+}
+
 body.embed-tiny #screen-room .peer-item-compact.peer-self .peer-compact-label {
   max-width: 38px;
   white-space: normal;
@@ -2987,17 +3037,36 @@ body.embed-tiny.tiny-micro #screen-invite-loading #btn-cancel-invite-join {
   display: none;
 }
 
+/* The frame IS the circle: no padding or gap may push the spinner off its
+   centre (the screen is already a full-viewport fixed flex box, centred). */
+body.embed-tiny.tiny-micro #screen-invite-loading {
+  padding: 0;
+}
+
 body.embed-tiny.tiny-micro #screen-invite-loading .invite-loading-panel {
+  width: auto;
+  gap: 0;
   justify-content: center;
 }
 
 body.embed-tiny.tiny-micro #screen-invite-loading .invite-loading-status {
   display: inline-flex;
   flex: 0 0 auto;
+  gap: 0;
 }
 
-body.embed-tiny.tiny-micro #screen-invite-loading #invite-join-status {
+body.embed-tiny.tiny-micro #screen-invite-loading #invite-join-status,
+body.embed-tiny.tiny-micro #screen-invite-loading .invite-pseudo-field {
   display: none;
+}
+
+/* .btn-spinner carries a 6px margin-right for sitting before a button label —
+   alone in the circle that shifted it 3px left. */
+body.embed-tiny.tiny-micro #screen-invite-loading #invite-spinner {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  border-width: 2.5px;
 }
 
 body.embed-tiny #screen-room .ptt-area {
@@ -3090,6 +3159,30 @@ body.embed-tiny #screen-room .ptt-btn { display: none; }
 }
 .error-icon { font-size: 36px; }
 .error-message { color: var(--text-muted); font-size: 13px; max-width: 260px; }
+
+/* Micro (56px circle): no line of text fits, and padding pushed what did show
+   off-centre. Show the ⚠️ alone in the middle; the message stays readable to
+   assistive tech. */
+body.embed-tiny.tiny-micro #screen-error {
+  padding: 0;
+  gap: 0;
+}
+body.embed-tiny.tiny-micro #screen-error .error-icon {
+  font-size: 24px;
+  line-height: 1;
+}
+body.embed-tiny.tiny-micro #screen-error .error-message {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+body.embed-tiny.tiny-micro #screen-error .error-recovery-hint,
+body.embed-tiny.tiny-micro #screen-error .btn {
+  display: none;
+}
 .error-recovery-hint {
   font-size: 12px;
   color: var(--text-muted);

@@ -96,6 +96,19 @@
         // Handedness: which side the talk button sits on in the landscape layout.
         document.documentElement.setAttribute(
           'data-hand', localStorage.getItem('handedness') === 'left' ? 'left' : 'right');
+        // Tiny embed (same test as IS_TINY_EMBED in main.js): main.js tags
+        // <body> only once it has run, so until then the page would paint the
+        // home screen into a 56px circle. `embed-tiny-boot` shows a centred
+        // spinner instead (styles.css, "Tiny embed: boot").
+        try {
+          var q = new URLSearchParams(location.search || '');
+          var tq = (q.get('tiny') || '').toLowerCase();
+          var cq = (q.get('compact') || '').toLowerCase();
+          if (q.get('ui') === 'tiny' || q.get('embed') === 'tiny' ||
+              tq === '1' || tq === 'true' || cq === '1' || cq === 'true') {
+            document.documentElement.classList.add('embed-tiny-boot');
+          }
+        } catch (_) {}
       })();
     </script>
   </head>
