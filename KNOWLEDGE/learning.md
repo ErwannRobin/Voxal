@@ -247,7 +247,7 @@ Every change to `src/` must be mirrored to `ios/App/App/public/` and `android/ap
 
 ## Agent readiness (web.voxal.app)
 - `src/.well-known/agent-skills/index.json` carries a sha256 of each `SKILL.md`: edit a SKILL.md → `make agent-skills`, or agents see a digest mismatch (`make lint` / CI's Lint job fail until then). The index is generated, never hand-edited.
-- Markdown negotiation is a `vercel.json` rewrite on `has: accept ~ text/markdown` → `/index.md`; `/` must also send `Vary: Accept`, or the CDN hands the HTML to the next Markdown request (and vice versa).
+- Markdown negotiation needs Routing Middleware (`middleware.js`, matcher `/`): a `vercel.json` rewrite with `has: accept` on `/` never fires, because Vercel serves the matching static `/index.html` before looking at rewrites. `/` must send `Vary: Accept`, or the CDN hands the HTML to the next Markdown request.
 - WebMCP tools (`registerWebMcpTools()` in `main.js`) click the real buttons; never give them a direct `createRoom()`/`joinRoom()` path — that would skip the mic prompt handling and the home-CTA locks.
 - `www.voxal.app` (product site, other repo, Cloudflare) has its own robots/llms/skills; keep the Content-Signal policy the same on both.
 
