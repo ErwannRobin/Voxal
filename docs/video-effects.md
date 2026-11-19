@@ -1720,7 +1720,15 @@ this tab asks the question where it matters. It loads **MediaPipe, Longpipe, RVM
 and P3M-Net** at once (the ones this build has; an engine whose files are missing
 is shown as *failed* with its reason, never swapped for another model), hands
 every one the **same downscaled camera frame in the same task**, and **splits your
-own video** — the self tile in the room — into one tile per engine:
+own video** — the self tile in the room — into one tile per engine.
+
+BackgroundMattingV2 joins once the empty room is photographed, and **every
+candidate of the matting lab** (`src/lab-engine.js`, `docs/matting-candidates.md`)
+is a row of its own (`lab:<id>`, *Lab: MODNet (webcam)*…) that starts **off**:
+ten models at once would be ~550 MB of weights on one GPU, so ticking a lab row
+loads that model and puts it on your video, unticking unloads it, and *Use*
+stores it as the lab's model and moves the call to the lab engine.
+
 
 - Each tile is the **full picture with your background** (blur, image or animated
   scene), drawn with that engine's mask: one engine fills the picture, two stand

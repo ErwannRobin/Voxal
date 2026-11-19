@@ -3,10 +3,13 @@
 # Download and convert the matting CANDIDATES the lab engine runs
 # (src/lab-engine.js, docs/matting-candidates.md) into src/assets/lab/.
 #
-# Local measurement only: nothing here is committed, deployed or bundled.
+# Measurement only: nothing here is committed, shipped or bundled. The same
+# files are published in the `matting-models-v1` prerelease for preview deploys
+# (scripts/matting-models-fetch.sh, PREVIEW_ENGINES=1).
 # Some candidates carry licences Voxal could not ship (RMBG-1.4: BRIA
 # non-commercial); the Makefile deletes src/assets/lab before every desktop
-# build and strips it from every other build, and vercel-build.sh deletes it.
+# build and strips it from every other build; vercel-build.sh deletes it
+# outside a PREVIEW_ENGINES=1 preview.
 #
 #   * MODNet photographic (Apache-2.0): Xenova/modnet's ONNX export, as is.
 #   * MODNet webcam (Apache-2.0): the official checkpoint (Google Drive),
