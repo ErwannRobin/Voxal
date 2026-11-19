@@ -2625,6 +2625,100 @@ function roomDisplayCode() {
   return activeChannelRoomId || activeChannel || _publishedRoomId || roomCode || '';
 }
 
+// ── WebMCP (navigator.modelContext) ─────────────────────────────────────────
+// Lets a browser agent start, join and leave a room for the person it works
+// for. Every tool presses the SAME buttons a person would, so the mic prompt,
+// the home-screen locks and the join/cancel state machine all still apply —
+// an agent gets no path into a room that a click does not have. Described for
+// agents in src/.well-known/agent-skills/join-voice-room/SKILL.md; keep the
+// tool names in step with it and with src/llms.txt.
+var WEBMCP_JOIN_TIMEOUT_MS = 45000;
+
+function webMcpText(text) {
+  return { content: [{ type: 'text', text: text }] };
+}
+
+function webMcpRoomStatus() {
+  if (!inRoom) return { in_room: false };
+  var code = roomDisplayCode();
+  return { in_room: true, room: code, invite_url: roomInviteUrl(code) };
+}
+
+// Resolves once the page is in a room (or the attempt visibly ended: the home
+// CTAs unlocked again with no room), polling the same flag the UI renders from.
+function webMcpWaitForRoom() {
+  return new Promise(function(resolve) {
+    var started = Date.now();
+    (function tick() {
+      if (inRoom && roomDisplayCode()) { resolve(webMcpRoomStatus()); return; }
+      if (Date.now() - started > WEBMCP_JOIN_TIMEOUT_MS || (!homeActionInFlight && Date.now() - started > 1000)) {
+        resolve({ in_room: false, error: 'Not in a room yet. The person may need to allow microphone access, or the room could not be reached.' });
+        return;
+      }
+      setTimeout(tick, 250);
+    })();
+  });
+}
+
+function registerWebMcpTools() {
+  var mc = navigator.modelContext;
+  if (!mc || (typeof mc.registerTool !== 'function' && typeof mc.provideContext !== 'function')) return;
+  var tools = [
+    {
+      name: 'create_voice_room',
+      description: 'Create a new Voxal push-to-talk voice room in this tab and return its invite link. The person must allow microphone access when the browser asks.',
+      inputSchema: { type: 'object', properties: {} },
+      execute: function() {
+        if (inRoom) return Promise.resolve(webMcpText(JSON.stringify(Object.assign({ note: 'Already in a room.' }, webMcpRoomStatus()))));
+        $('btn-create').click();
+        return webMcpWaitForRoom().then(function(s) { return webMcpText(JSON.stringify(s)); });
+      },
+    },
+    {
+      name: 'join_voice_room',
+      description: 'Join a Voxal voice room by code or invite link (https://web.voxal.app/?room=<code>). A plain name creates the room if nobody is in it yet.',
+      inputSchema: {
+        type: 'object',
+        properties: { room: { type: 'string', description: 'Room code, room name, or invite link' } },
+        required: ['room'],
+      },
+      execute: function(input) {
+        var room = normalizeRoomCode((input && input.room) || '');
+        if (!room) return Promise.resolve(webMcpText(JSON.stringify({ in_room: inRoom, error: 'No room code given.' })));
+        if (inRoom) {
+          if (roomDisplayCode() === room) return Promise.resolve(webMcpText(JSON.stringify(webMcpRoomStatus())));
+          return Promise.resolve(webMcpText(JSON.stringify(Object.assign({ error: 'Already in another room; call leave_voice_room first.' }, webMcpRoomStatus()))));
+        }
+        $('input-code').value = room;
+        $('btn-join').click();
+        return webMcpWaitForRoom().then(function(s) { return webMcpText(JSON.stringify(s)); });
+      },
+    },
+    {
+      name: 'get_room_status',
+      description: 'Whether this tab is in a Voxal room, and if so the room code and its invite link.',
+      inputSchema: { type: 'object', properties: {} },
+      annotations: { readOnlyHint: true },
+      execute: function() { return Promise.resolve(webMcpText(JSON.stringify(webMcpRoomStatus()))); },
+    },
+    {
+      name: 'leave_voice_room',
+      description: 'Leave the current Voxal room.',
+      inputSchema: { type: 'object', properties: {} },
+      execute: function() {
+        if (inRoom) leaveRoom();
+        return Promise.resolve(webMcpText(JSON.stringify({ in_room: false })));
+      },
+    },
+  ];
+  try {
+    if (typeof mc.registerTool === 'function') tools.forEach(function(t) { mc.registerTool(t); });
+    else mc.provideContext({ tools: tools });
+  } catch (err) {
+    devLog('WebMCP registration failed: ' + (err && err.message));
+  }
+}
+
 // Full-window URL for the "pop out" action in a tiny embed: same room, same
 // display name, but without the embed params so it opens as a standalone app.
 function tinyPopoutUrl() {
@@ -21600,6 +21694,7 @@ window.addEventListener('DOMContentLoaded', function() {
   });
   $('btn-leave').addEventListener('click', leaveRoom);
   $('btn-leave-tiny').addEventListener('click', leaveRoom);
+  registerWebMcpTools();
 
   $('btn-publish-room').addEventListener('click', function() {
     var btn = $('btn-publish-room');

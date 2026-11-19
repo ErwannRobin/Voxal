@@ -245,6 +245,12 @@ Then `npx playwright test --config=.pw-local.config.js` (`/opt/pw-browsers/chrom
 
 Every change to `src/` must be mirrored to `ios/App/App/public/` and `android/app/src/main/assets/public/` (`make cap-sync`).
 
+## Agent readiness (web.voxal.app)
+- `src/.well-known/agent-skills/index.json` carries a sha256 of each `SKILL.md`: edit a SKILL.md → `make agent-skills`, or agents see a digest mismatch (`make lint` / CI's Lint job fail until then). The index is generated, never hand-edited.
+- Markdown negotiation needs Routing Middleware (`middleware.js`, matcher `/`): a `vercel.json` rewrite with `has: accept` on `/` never fires, because Vercel serves the matching static `/index.html` before looking at rewrites. `/` must send `Vary: Accept`, or the CDN hands the HTML to the next Markdown request.
+- WebMCP tools (`registerWebMcpTools()` in `main.js`) click the real buttons; never give them a direct `createRoom()`/`joinRoom()` path — that would skip the mic prompt handling and the home-CTA locks.
+- `www.voxal.app` (product site, other repo, Cloudflare) has its own robots/llms/skills; keep the Content-Signal policy the same on both.
+
 ## Workflow, release, signing
 
 - Suggest a commit message only when the turn changed repository files. Open a PR for every significant piece of work (fill `.github/PULL_REQUEST_TEMPLATE.md`); a merged PR is finished — restart the branch from latest `main` and open a new PR.

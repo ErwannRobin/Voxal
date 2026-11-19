@@ -1,0 +1,13 @@
+{
+  "linkset": [
+    {
+      "anchor": "https://web.voxal.app/api/ice-servers",
+      "service-desc": [
+        { "href": "https://web.voxal.app/openapi.json", "type": "application/vnd.oai.openapi+json" }
+      ],
+      "service-doc": [
+        { "href": "https://github.com/ErwannRobin/Voxal/blob/main/docs/turn-and-ice.md", "type": "text/html" }
+      ]
+    }
+  ]
+}

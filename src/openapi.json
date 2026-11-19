@@ -1,0 +1,66 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Voxal web API",
+    "version": "1.0.0",
+    "description": "The public HTTP surface of web.voxal.app. Voxal is a static app; this endpoint exists only so the relay secret never ships inside it. The SFU endpoints under /api/sfu-* are internal to the app (they need a room token) and are not listed.",
+    "license": { "name": "MIT", "url": "https://github.com/ErwannRobin/Voxal/blob/main/LICENSE" }
+  },
+  "servers": [{ "url": "https://web.voxal.app" }],
+  "paths": {
+    "/api/ice-servers": {
+      "get": {
+        "operationId": "getIceServers",
+        "summary": "Short-lived TURN credentials",
+        "description": "Returns RTCIceServer entries for an anonymous room, minted from Cloudflare TURN. The relay forwards encrypted DTLS-SRTP and cannot hear the audio. Rate limited per IP.",
+        "responses": {
+          "200": {
+            "description": "Credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["ice_servers", "ttl", "expires_at"],
+                  "properties": {
+                    "ice_servers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": ["urls"],
+                        "properties": {
+                          "urls": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
+                          "username": { "type": "string" },
+                          "credential": { "type": "string" }
+                        }
+                      }
+                    },
+                    "ttl": { "type": "integer", "description": "Credential lifetime in seconds" },
+                    "expires_at": { "type": "string", "format": "date-time" },
+                    "cached": { "type": "boolean" },
+                    "stale": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          },
+          "429": { "description": "Rate limited", "headers": { "Retry-After": { "schema": { "type": "integer" } } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "502": { "description": "TURN provider failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "503": { "description": "No TURN provider configured on this deployment", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": { "type": "string" },
+          "message": { "type": "string" },
+          "retry_after": { "type": "integer" }
+        }
+      }
+    }
+  }
+}
