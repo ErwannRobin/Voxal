@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schemas.agentskills.io/discovery/0.2.0/schema.json",
+  "skills": [
+    {
+      "name": "join-voice-room",
+      "type": "skill-md",
+      "description": "Start or join a Voxal push-to-talk voice room in the browser and share its link. Use when the user wants a quick voice call with no account, a walkie-talkie style room, or to join a Voxal room from a link or a code.",
+      "url": "/.well-known/agent-skills/join-voice-room/SKILL.md",
+      "digest": "sha256:461c6d783cbf4c10b605504f713f66e065af258c66bf79711aaa159b62607e97"
+    }
+  ]
+}

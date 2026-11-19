@@ -18,6 +18,7 @@ make check        # Rust type-check without building (fast feedback, no tests)
 make lint         # i18n-check + ESLint (all JS) + cargo fmt --check — what the pre-commit hook runs on staged files
 make i18n-check   # src/locales/*.json all carry en.json's keys + placeholders; en.json matches the tr() calls
 make i18n-write   # refresh en.json's js.* keys after adding/editing a tr() call
+make agent-skills # regenerate src/.well-known/agent-skills/index.json (sha256 digests) after editing a SKILL.md
 make hooks        # (Re)enable the git hooks in .githooks/ — npm install already does it
 make test         # Full suite: Rust type-check + Rust unit tests + Playwright E2E
 make test-rust    # Rust unit tests only

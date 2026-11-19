@@ -1,4 +1,4 @@
-.PHONY: help run run-web gen-build-info dev debug build build-debug build-signed build-web install clean lint i18n-check i18n-write hooks check test \
+.PHONY: help run run-web gen-build-info dev debug build build-debug build-signed build-web install clean lint i18n-check i18n-write agent-skills agent-skills-check hooks check test \
         test-rust test-api test-e2e test-e2e-changed test-mesh coverage coverage-rust coverage-e2e \
         coverage-api coverage-summary coverage-badge bench bench-app bench-audio bench-video \
         bench-report bench-publish bench-history \
@@ -475,7 +475,7 @@ sync-version:
 check:
 	cd src-tauri && cargo check
 
-lint: i18n-check
+lint: i18n-check agent-skills-check
 	npm run lint
 	cd src-tauri && cargo fmt --check
 
@@ -483,6 +483,14 @@ lint: i18n-check
 # en.json matches the tr('key', 'English') calls in the code.
 i18n-check:
 	@node scripts/i18n-check.mjs
+
+# src/.well-known/agent-skills/index.json carries a sha256 of each SKILL.md;
+# rewrite it after editing one (agent-skills-check fails until you do).
+agent-skills:
+	@node scripts/agent-skills-index.mjs --write
+
+agent-skills-check:
+	@node scripts/agent-skills-index.mjs
 
 # Refresh en.json's js.* keys from the tr() calls after adding or editing one.
 i18n-write:

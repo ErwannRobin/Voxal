@@ -1,0 +1,32 @@
+# Voxal web app — https://web.voxal.app
+#
+# Content Signals (https://contentsignals.org/): search indexing and AI answers
+# that cite Voxal are welcome; training models on the site's content is not.
+# Same policy as https://www.voxal.app/robots.txt.
+
+# AI assistants fetching a page because a person asked them to.
+User-agent: ChatGPT-User
+User-agent: Claude-User
+User-agent: Perplexity-User
+User-agent: OAI-SearchBot
+User-agent: Claude-SearchBot
+User-agent: PerplexityBot
+Allow: /
+Disallow: /api/
+
+# Crawlers that collect training data.
+User-agent: GPTBot
+User-agent: ClaudeBot
+User-agent: CCBot
+User-agent: Google-Extended
+User-agent: Applebot-Extended
+User-agent: meta-externalagent
+User-agent: Bytespider
+Disallow: /
+
+User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=no
+Allow: /
+Disallow: /api/
+
+Sitemap: https://web.voxal.app/sitemap.xml

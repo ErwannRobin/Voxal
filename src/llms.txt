@@ -1,0 +1,25 @@
+# Voxal (web app)
+
+> Voxal is an open-source, peer-to-peer push-to-talk voice chat app. This site, web.voxal.app, IS the app: it runs in the browser, needs no account, and connects people directly over WebRTC — voice never goes through a media server.
+
+A room is identified by a code. Anyone with the code (or the link) joins the same room. Camera, screen sharing and text chat are available inside a room. The same app ships for macOS (Tauri) and iOS/Android (Capacitor).
+
+## Use it
+
+- [Start a room](https://web.voxal.app/): open the page and press "Create Room". The room's invite link is shown in the room header.
+- Join a room by link: `https://web.voxal.app/?room=<code>`. A code that is not a UUID is a named room: the first person to arrive creates it, everyone else joins it. Add `&video=1` to arrive with the camera on.
+- Microphone permission is requested by the browser; a person has to grant it. Talking is push-to-talk (hold the button, or the keyboard shortcut on desktop).
+
+## For AI agents
+
+- [Agent skills](https://web.voxal.app/.well-known/agent-skills/index.json): how to start or join a Voxal room for a user.
+- In the browser, the page exposes WebMCP tools (`navigator.modelContext`): `create_voice_room`, `join_voice_room`, `get_room_status`, `leave_voice_room`.
+- [API catalog](https://web.voxal.app/.well-known/api-catalog) (RFC 9727): the one public HTTP endpoint, `GET /api/ice-servers` (short-lived TURN credentials), described by [openapi.json](https://web.voxal.app/openapi.json).
+- The home page is available as Markdown with `Accept: text/markdown`.
+
+## More
+
+- [About](https://web.voxal.app/about): version, licences, credits.
+- [Voxal website](https://www.voxal.app/llms.txt): product site, guides, presence portal (organisations and channels).
+- [Source code](https://github.com/ErwannRobin/Voxal): MIT licensed.
+- [How video is routed](https://github.com/ErwannRobin/Voxal/blob/main/docs/video-routing.md): mesh vs SFU, and why audio is always peer-to-peer.

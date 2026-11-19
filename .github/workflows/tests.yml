@@ -126,6 +126,9 @@ jobs:
       - name: ESLint
         run: npm run lint
 
+      - name: Agent skills index
+        run: node scripts/agent-skills-index.mjs
+
       - name: rustfmt
         run: cd src-tauri && cargo fmt --check
 
