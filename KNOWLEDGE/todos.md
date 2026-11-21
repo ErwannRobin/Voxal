@@ -22,6 +22,13 @@ Best shippable no-reference matte measured (Apache-2.0, 26 MB / 13 MB fp16, 32 m
 
 ---
 
+## 🍎 Apple Vision foreground mask on the Mac app (`docs/apple-vision-evaluation.md`)
+
+Measured offline only: `VNGenerateForegroundInstanceMaskRequest` (macOS 14+) scored composite error 0.66 at a 512 px input (MODNet 0.74, Longpipe 0.80), 12 ms/frame. Nothing is wired into the app.
+- [ ] Measure the IPC round trip in the real app (512x288 RGBA frame to Rust and the mask back, 15-30 Hz) before building anything.
+- [ ] Prototype the Tauri command (macOS-only, `window.__TAURI__` guard, Longpipe fallback) and run it on a live camera: auto-exposure, a moving subject, a held object (an "instance" is any salient foreground).
+- [ ] Check macOS 14 vs 15/26 and an Intel Mac; Vision's models change with the OS.
+
 ## 🧪 P3M-Net matting experiment (`docs/p3m-evaluation.md`)
 
 Experimental engine behind Settings → Advanced → Segmentation debug; live on the web deploy (model fetched at build), `make p3m-fetch` locally. Not a default candidate as is.

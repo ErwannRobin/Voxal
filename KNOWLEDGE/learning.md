@@ -595,3 +595,11 @@ Design: `docs/video-effects.md`. Preview any scene/look headlessly with `make sc
 - **MODNet's repository has a package named `onnx/`**: put the repo on `sys.path` AFTER importing the real `onnx`, and load `onnx/modnet_onnx.py` by path.
 - **MediaPipe's selfie multiclass confidences are not calibrated like the selfie segmenter's**: background never reaches ~1, so 1 − background veils the whole room and the 0.78 cut punches holes; its 6 masks also cost ~33 ms of main thread per inference.
 - **Salient-object models (RMBG, BiRefNet) are not person models**: on some frames they choose the sofa or a lamp. A good mean on stills hides it; look at per-room numbers.
+
+## Apple Vision evaluation (`scripts/apple-vision-offline.swift`, `docs/apple-vision-evaluation.md`)
+
+- **`VNGeneratePersonSegmentationRequest` is the wrong Vision request for video**: on the matting bench it drops regions of the person (`hole` 7-11, `drop` 3-4) in two of three rooms and flickers ~2x more than the foreground mask, at every quality level. `VNGenerateForegroundInstanceMaskRequest` (macOS 14+, `generateScaledMaskForImage(forInstances:from:)`) is the one that scored.
+- A Vision mask comes back in whatever pixel format the request chose (`OneComponent8` / `32Float` / `16Half`): read the buffer's format, never assume 8-bit. The person-segmentation request's output size depends on the quality level (256x192 / 512x384 / 2016x1512 for a 1280x720 frame); the foreground mask is the input's size.
+- The first Vision call of a run costs ~1.7 s (model load): time from the second frame on, or the mean is wrong.
+- `timeout` does not exist on macOS; run a long bench with `run_in_background` instead.
+
