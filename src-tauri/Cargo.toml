@@ -33,8 +33,14 @@ sysinfo = "0.40"
 starship-battery = "0.12"
 
 # The main window's own AppKit/WebKit settings (lib.rs: full screen, and the
-# diagnostic's `window.open`). Both crates are already in the tree through
-# tao/wry, at these versions; the features unify with theirs.
+# diagnostic's `window.open`), and the Apple Vision prototype (vision.rs). The
+# objc2 crates are already in the tree through tao/wry, at these versions; the
+# features unify with theirs.
 [target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSResponder", "NSWindow"] }
+objc2-core-foundation = "0.3.2"
+objc2-core-video = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-vision = "0.3.2"
 objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-app-kit", "WKWebView", "WKWebViewConfiguration", "WKPreferences"] }
