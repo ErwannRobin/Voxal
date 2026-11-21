@@ -207,12 +207,20 @@ handed back. Called from `toggleChatPanel()`, `updateVideoStage()` and
 position/scale permissions for the on-screen nudge) in
 `src-tauri/capabilities/default.json`.
 
-**Full screen** (green button, View → Toggle Full Screen, ⌃⌘F) is the user's
-shape: `lib.rs` makes the main window a full-screen primary window and adds
-the View/Window menus, and while `isFullscreen()` holds `applyDesktopWindowShape()`
-resizes nothing and `noteDesktopWindowResize()` records no voice size — nor
-during `DESKTOP_FULLSCREEN_SETTLE_MS` after leaving it, when the shape is
-re-applied. The main window is built in `lib.rs`'s `setup` (`"create": false`
+**Full screen and macOS window placement** are the user's shape. `lib.rs`
+makes the main window a full-screen primary window, adds View → Toggle Full
+Screen (⌃⌘F), and registers its Window menu as the app's
+(`set_as_windows_menu_for_nsapp`), which is what makes macOS 15 add Fill,
+Center, Move & Resize and Full Screen Tile to it. While the window is full
+screen, zoomed/filled (`isMaximized()`) or tiled (`desktopFramePlaced()`: the
+frame against `currentMonitor().workArea` — three edges, or one corner at half
+size each way, within `DESKTOP_TILE_SLACK` for Sequoia's tile margins),
+`desktopShapeStandsDown()` is true: `applyDesktopWindowShape()` resizes
+nothing, no voice size is recorded, and the chat takes its strip from the room
+only if a voice column is left (`chatBesideRoom()`), else it overlays. There is
+no tile event — every non-own resize re-reads it. Leaving full screen waits
+`DESKTOP_FULLSCREEN_SETTLE_MS` for macOS's restore animation; leaving a tile
+records the new frame as the voice column at once. The main window is built in `lib.rs`'s `setup` (`"create": false`
 in `tauri.conf.json`) because only a builder takes the `on_new_window` handler
 that lets the segmentation diagnostic pop out (`window.open('about:blank')`,
 see *Looking at the cutout* in `docs/video-effects.md`); every other URL is

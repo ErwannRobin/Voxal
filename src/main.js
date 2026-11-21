@@ -5164,7 +5164,12 @@ function chatDocked() {
 // the right shape, and this one would reserve the strip twice.
 function chatBesideRoom() {
   if (!IS_TAURI_DESKTOP || IS_TINY_EMBED || !inRoom) return false;
-  return !document.body.classList.contains('video-stage');
+  if (document.body.classList.contains('video-stage')) return false;
+  // A window macOS has placed (full screen, Fill, a tile) does not grow for the
+  // drawer, so the drawer's strip comes out of the room — only where that still
+  // leaves a voice column. Narrower, it lies over the room like anywhere else.
+  if (desktopShapeStandsDown()) return window.innerWidth - storedChatWidth() >= DESKTOP_VOICE_WIDTH;
+  return true;
 }
 
 // Whether the open drawer is sitting ON the room rather than beside it. Measured
@@ -6030,15 +6035,30 @@ const DESKTOP_VIDEO_HEIGHT = 760;
 
 var _desktopVoiceSize   = null;   // {width,height} of the plain column: no chat, no stage
 var _desktopAppliedSize = null;   // the last size WE set, to tell ours from theirs
-// Full screen (green button, View → Enter Full Screen, ⌃⌘F) is the user's
+// Full screen (green button, View → Toggle Full Screen, ⌃⌘F) is the user's
 // choice of shape, and the screen's: while it lasts the window is never resized
 // and no size it takes is remembered as the voice column. On the way out macOS
 // puts back the frame the window had going in, and once that has landed
 // (DESKTOP_FULLSCREEN_SETTLE_MS) the shape is re-applied, since the chat or the
 // stage may have come or gone meanwhile.
+//
+// A window macOS has PLACED is the same kind of choice: Window → Fill, Zoom,
+// Move & Resize (halves, quarters), a drag onto a screen edge, the green
+// button's tile menu. Growing it for the chat would pull it out of its tile, so
+// while it sits there the shape stands down too. There is no event for a tile,
+// so it is read from the frame (desktopFramePlaced): which edges of the screen's
+// work area it touches, and whether it is a half or a quarter of it.
 var _desktopFullscreen  = false;
+var _desktopPlaced      = false;
 var _desktopSettleUntil = 0;
 const DESKTOP_FULLSCREEN_SETTLE_MS = 800;
+// How far from an edge (logical px) still counts as on it: Sequoia's "Tiled
+// windows have margins" insets every tile a little.
+const DESKTOP_TILE_SLACK = 24;
+
+function desktopShapeStandsDown() {
+  return _desktopFullscreen || _desktopPlaced;
+}
 
 function desktopWindowShapeActive() {
   return IS_TAURI_DESKTOP && !IS_TINY_EMBED;
@@ -6089,7 +6109,7 @@ function desktopWindowTarget() {
 
 // Idempotent: safe to call from anywhere the room's configuration changes.
 function applyDesktopWindowShape() {
-  if (!desktopWindowShapeActive() || _desktopFullscreen) return;
+  if (!desktopWindowShapeActive() || desktopShapeStandsDown()) return;
   var win = tauriWindowHandle();
   var dpi = window.__TAURI__ && window.__TAURI__.dpi;
   if (!win || typeof win.setSize !== 'function' || !dpi || !dpi.LogicalSize) return;
@@ -6133,40 +6153,99 @@ function keepDesktopWindowOnScreen() {
 // alone: it would otherwise record 1180px as "the voice column".
 function noteDesktopWindowResize() {
   if (!desktopWindowShapeActive()) return;
-  // Entering and leaving full screen are resizes too, and the only way to tell
-  // them apart is to ask the window. Older bridges (and the E2E fakes) have no
-  // isFullscreen: there the resize is read as it always was.
+  // Our own setSize echoes back as a resize: it says nothing about full screen
+  // or a tile — the frame we asked for can touch the screen's edges (clamped to
+  // it, nudged back onto it) without macOS having placed anything.
+  if (desktopSizeIsOurs()) return;
+  // Entering and leaving full screen or a tile are resizes too, and the only
+  // way to tell them apart is to ask the window. Older bridges (and the E2E
+  // fakes) have no isFullscreen: there the resize is read as it always was.
   var win = tauriWindowHandle();
   if (win && typeof win.isFullscreen === 'function') {
     var asked;
-    try { asked = win.isFullscreen(); } catch (_) { asked = null; }
-    if (asked && asked.then) {
-      asked.then(function(fs) {
-        noteDesktopFullscreen(!!fs);
-        if (!fs) recordDesktopVoiceSize();
-      }, recordDesktopVoiceSize);
+    try { asked = Promise.all([win.isFullscreen(), desktopWindowPlaced(win)]); } catch (_) { asked = null; }
+    if (asked) {
+      asked.then(function(r) { noteDesktopPlacement(!!r[0], !!r[1]); }, recordDesktopVoiceSize);
       return;
     }
   }
   recordDesktopVoiceSize();
 }
 
-function noteDesktopFullscreen(fs) {
-  if (fs === _desktopFullscreen) return;
+function desktopSizeIsOurs() {
+  var now = currentDesktopSize();
+  var mine = _desktopAppliedSize;
+  return !!mine && Math.abs(now.width - mine.width) < 2 && Math.abs(now.height - mine.height) < 2;
+}
+
+// Whether the window's frame is one macOS gave it: zoomed (Fill, Zoom,
+// double-click on the title bar), or a half or a quarter of the work area.
+// Resolves false wherever the bridge cannot say.
+function desktopWindowPlaced(win) {
+  var api = window.__TAURI__ && window.__TAURI__.window;
+  var maximized = typeof win.isMaximized === 'function' ? win.isMaximized() : false;
+  return Promise.resolve(maximized).then(function(zoomed) {
+    if (zoomed) return true;
+    if (!api || typeof api.currentMonitor !== 'function' ||
+        typeof win.outerPosition !== 'function' || typeof win.outerSize !== 'function') return false;
+    return Promise.all([api.currentMonitor(), win.outerPosition(), win.outerSize()]).then(function(r) {
+      var mon = r[0];
+      if (!mon || !mon.workArea) return false;
+      var k = mon.scaleFactor || 1;
+      var wa = mon.workArea;
+      return desktopFramePlaced(
+        { x: r[1].x / k, y: r[1].y / k, width: r[2].width / k, height: r[2].height / k },
+        { x: wa.position.x / k, y: wa.position.y / k, width: wa.size.width / k, height: wa.size.height / k });
+    });
+  }).catch(function() { return false; });
+}
+
+// Pure: frame and work area in the same (logical) units. Three edges or more
+// is Fill, a half, or a window the user pinned to fill one side — all theirs to
+// keep. A quarter touches exactly one corner and is about half the area each
+// way.
+function desktopFramePlaced(frame, area) {
+  var slack = DESKTOP_TILE_SLACK;
+  var l = Math.abs(frame.x - area.x) <= slack;
+  var r = Math.abs((frame.x + frame.width) - (area.x + area.width)) <= slack;
+  var t = Math.abs(frame.y - area.y) <= slack;
+  var b = Math.abs((frame.y + frame.height) - (area.y + area.height)) <= slack;
+  var edges = (l ? 1 : 0) + (r ? 1 : 0) + (t ? 1 : 0) + (b ? 1 : 0);
+  if (edges >= 3) return true;
+  if (edges !== 2 || l === r || t === b) return false;
+  return Math.abs(frame.width - area.width / 2) <= 2 * slack &&
+         Math.abs(frame.height - area.height / 2) <= 2 * slack;
+}
+
+function noteDesktopPlacement(fs, placed) {
+  var was = desktopShapeStandsDown();
+  var wasFullscreen = _desktopFullscreen;
   _desktopFullscreen = fs;
-  if (fs) return;
-  _desktopSettleUntil = Date.now() + DESKTOP_FULLSCREEN_SETTLE_MS;
-  setTimeout(applyDesktopWindowShape, DESKTOP_FULLSCREEN_SETTLE_MS);
+  _desktopPlaced = placed && !fs;
+  var now = desktopShapeStandsDown();
+  if (now !== was && inRoom) applyChatDock();
+  if (now) return;
+  if (!was) { recordDesktopVoiceSize(); return; }
+  if (wasFullscreen) {
+    // macOS animates the frame back: wait for it before reading or resizing.
+    _desktopSettleUntil = Date.now() + DESKTOP_FULLSCREEN_SETTLE_MS;
+    setTimeout(applyDesktopWindowShape, DESKTOP_FULLSCREEN_SETTLE_MS);
+    return;
+  }
+  // Out of a tile: the frame it lands in (its size from before the tile, or
+  // one the user just dragged) is theirs, and the room's shape grows from it.
+  recordDesktopVoiceSize();
+  applyDesktopWindowShape();
 }
 
 function recordDesktopVoiceSize() {
-  // The frames of the way out of full screen are macOS's, not the user's.
-  if (_desktopFullscreen || Date.now() < _desktopSettleUntil) return;
-  var now = currentDesktopSize();
-  var mine = _desktopAppliedSize;
+  // A placed window's frame, and the frames of the way out of full screen, are
+  // macOS's, not the user's.
+  if (desktopShapeStandsDown() || Date.now() < _desktopSettleUntil) return;
   // Our own setSize echoes back as a resize; only a size we did not ask for
   // says anything about what the user wants.
-  if (mine && Math.abs(now.width - mine.width) < 2 && Math.abs(now.height - mine.height) < 2) return;
+  if (desktopSizeIsOurs()) return;
+  var now = currentDesktopSize();
   if (inRoom && document.body.classList.contains('video-stage')) return;
   var width = now.width - ((inRoom && chatPanelOpen()) ? storedChatWidth() : 0);
   _desktopVoiceSize = { width: Math.max(DESKTOP_MIN_WIDTH, width), height: now.height };

@@ -402,7 +402,11 @@ pub fn run() {
             // "Enter Full Screen" (⌃⌘F) lives in View and the window's own
             // commands in Window, where every Mac app keeps them. A custom
             // menu replaces the default one wholesale, so leaving these out
-            // took the keyboard way into full screen with them.
+            // took the keyboard way into full screen with them. Window is also
+            // registered as the app's Window menu (below): that is what makes
+            // macOS add its own placement items to it — Fill, Center, Move &
+            // Resize (halves, quarters, arrangements), Full Screen Tile — and
+            // the list of open windows.
             let view_submenu = SubmenuBuilder::new(app, "View").fullscreen().build()?;
             let window_submenu = SubmenuBuilder::new(app, "Window")
                 .minimize()
@@ -428,6 +432,8 @@ pub fn run() {
                 .build()?;
 
             app.set_menu(menu)?;
+            #[cfg(target_os = "macos")]
+            window_submenu.set_as_windows_menu_for_nsapp()?;
 
             let about_id = about.id().clone();
             let prefs_id = prefs.id().clone();
