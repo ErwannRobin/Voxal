@@ -8,6 +8,9 @@ use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_updater::UpdaterExt;
 
+#[cfg(target_os = "macos")]
+mod vision;
+
 const DEFAULT_SHORTCUT: &str = "Shift+Space";
 
 struct PttShortcut(Mutex<String>);
@@ -262,6 +265,64 @@ async fn check_for_updates(app: AppHandle) -> tauri_plugin_updater::Result<()> {
     Ok(())
 }
 
+/// PROTOTYPE (docs/apple-vision-evaluation.md): the camera cut-out through Apple
+/// Vision. Raw RGBA in (headers `x-width` / `x-height`), a 12-byte header plus an
+/// 8-bit mask out; see `vision.rs` for the wire format.
+#[tauri::command]
+async fn vision_foreground_mask(
+    request: tauri::ipc::Request<'_>,
+) -> Result<tauri::ipc::Response, String> {
+    let started = std::time::Instant::now();
+    let tauri::ipc::InvokeBody::Raw(body) = request.body() else {
+        return Err("expected a raw body".into());
+    };
+    let dim = |key: &str| -> Result<usize, String> {
+        request
+            .headers()
+            .get(key)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok())
+            .ok_or_else(|| format!("missing or bad header {key}"))
+    };
+    let (w, h) = (dim("x-width")?, dim("x-height")?);
+    let rgba = body.clone();
+    #[cfg(target_os = "macos")]
+    {
+        let mask =
+            tauri::async_runtime::spawn_blocking(move || vision::foreground_mask(w, h, &rgba))
+                .await
+                .map_err(|e| e.to_string())??;
+        let mut out = Vec::with_capacity(12 + mask.px.len());
+        out.extend_from_slice(&(mask.w as u16).to_le_bytes());
+        out.extend_from_slice(&(mask.h as u16).to_le_bytes());
+        out.extend_from_slice(&mask.vision_us.to_le_bytes());
+        out.extend_from_slice(&(started.elapsed().as_micros() as u32).to_le_bytes());
+        out.extend_from_slice(&mask.px);
+        Ok(tauri::ipc::Response::new(out))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (w, h, rgba, started);
+        Err("Apple Vision is only available on macOS".into())
+    }
+}
+
+/// Benchmark harness for the prototype, enabled by `VOXAL_VISION_BENCH=<path to a
+/// JPEG frame>`: hands the page that frame, so the probe has a real person to cut out.
+#[tauri::command]
+fn vision_bench_frame() -> Result<tauri::ipc::Response, String> {
+    let path = std::env::var("VOXAL_VISION_BENCH").map_err(|_| "off".to_string())?;
+    std::fs::read(path)
+        .map(tauri::ipc::Response::new)
+        .map_err(|e| e.to_string())
+}
+
+/// The probe's report goes to stderr, so a `make dev` run can be read back.
+#[tauri::command]
+fn vision_bench_report(text: String) {
+    eprintln!("[vision-bench] {text}");
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -363,7 +424,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             update_ptt_shortcut,
             presence_fetch,
-            get_device_stats
+            get_device_stats,
+            vision_foreground_mask,
+            vision_bench_frame,
+            vision_bench_report
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
