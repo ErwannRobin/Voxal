@@ -6533,6 +6533,11 @@ var VideoEffects = (function () {
   //     arrives, with the model's label list and the mask's shape.
 
   var DIAG_KEY = 'seg-diagnostic';
+  // '1' = the panel opens in a window of its own rather than over the room
+  // (see Its own window, below). Written by the panel's ⧉ button and by
+  // Settings → Advanced → Segmentation debug.
+  var DIAG_WINDOW_KEY = 'seg-diagnostic-window';
+  var DIAG_WINDOW_NAME = 'voxal-seg-diagnostic';
   // Silhouette prior (see SIL_*): absent = the default (on for phones, off
   // elsewhere), 'on' / 'off' force it; strength is how far the colour model may
   // take the matte away, 0-1. Diagnosis only, set from the diagnostic panel or
@@ -6632,7 +6637,7 @@ var VideoEffects = (function () {
     feathered: 'Feather', matte: 'Matte', final: 'Final', heat: 'Stability'
   };
   // Every DOM reference the panel keeps, dropped together when it closes.
-  var DIAG_UI = ['el', 'main', 'chip', 'canvas', 'ctx', 'info', 'freezeBtn', 'copyBtn', 'sizeBtn',
+  var DIAG_UI = ['el', 'main', 'chip', 'canvas', 'ctx', 'info', 'freezeBtn', 'copyBtn', 'sizeBtn', 'popBtn',
     'tabEngines', 'tabPipeline', 'pageEngines', 'pagePipeline', 'statsBox', 'cmpShow', 'cmpNote',
     'cmpBody', 'cmpRows', 'pipeBtns', 'stageSel', 'engBadge', 'hzBadge', 'engineSelect', 'lay'];
 
@@ -6702,15 +6707,27 @@ var VideoEffects = (function () {
     'font:11px/1.45 ui-monospace,Menlo,Consolas,monospace;color:#c4cad3}',
     '#seg-diagnostic .sd-foot{display:flex;gap:6px;padding:8px 12px;border-top:1px solid #22262d;background:#0f1115}',
     '#seg-diagnostic.sd-collapsed{width:auto!important;border-radius:999px}',
-    '#seg-diagnostic .sd-chip{border:0;border-radius:999px;padding:8px 14px;min-height:36px;background:#1c1f26}'
+    '#seg-diagnostic .sd-chip{border:0;border-radius:999px;padding:8px 14px;min-height:36px;background:#1c1f26}',
+    // In its own window the panel IS the page: no frame, no drag, no size or
+    // chip (the window has its own), and the picture may take the height.
+    'html.sd-window-doc,html.sd-window-doc body{margin:0;height:100%;background:#0f1115;color-scheme:dark}',
+    '#seg-diagnostic.sd-window{position:static;width:100%!important;height:100vh;height:100dvh;max-height:none!important;',
+    'border:0;border-radius:0;box-shadow:none}',
+    '#seg-diagnostic.sd-window .sd-head{cursor:default}',
+    '#seg-diagnostic.sd-window .sd-dockonly{display:none}',
+    '#seg-diagnostic.sd-window canvas{max-height:72vh;max-height:72dvh}',
+    // A phone has no second window to give, and its title bar no room for one
+    // more button.
+    '@media (max-width:480px),(hover:none) and (pointer:coarse){#seg-diagnostic:not(.sd-window) .sd-pop{display:none}}'
   ].join('');
 
-  function diagStyle() {
-    if (document.getElementById('seg-diag-style')) return;
-    var s = document.createElement('style');
+  function diagStyle(doc) {
+    doc = doc || document;
+    if (doc.getElementById('seg-diag-style')) return;
+    var s = doc.createElement('style');
     s.id = 'seg-diag-style';
     s.textContent = DIAG_CSS;
-    (document.head || document.documentElement).appendChild(s);
+    (doc.head || doc.documentElement).appendChild(s);
   }
 
   function dEl(tag, cls, text) {
@@ -6764,10 +6781,12 @@ var VideoEffects = (function () {
       _diag.size = (_diag.size + 1) % DIAG_SIZES.length;
       if (!_diag.collapsed) el.style.width = 'min(calc(100vw - 16px), ' + diagWidth() + 'px)';
       _diag.sizeBtn.title = 'Panel size: ' + DIAG_SIZES[_diag.size][0];
-    }, 'Panel size', 'sd-icon');
+    }, 'Panel size', 'sd-icon sd-dockonly');
     _diag.sizeBtn.title = 'Panel size: ' + DIAG_SIZES[_diag.size][0];
     head.appendChild(_diag.sizeBtn);
-    var hide = dButton('–', function () { diagCollapse(true); }, 'Hide', 'sd-icon');
+    _diag.popBtn = dButton('⧉', diagTogglePopOut, 'Open in its own window', 'sd-icon sd-pop');
+    head.appendChild(_diag.popBtn);
+    var hide = dButton('–', function () { diagCollapse(true); }, 'Hide', 'sd-icon sd-dockonly');
     hide.title = 'Shrink to a chip';
     head.appendChild(hide);
     head.appendChild(dButton('✕', diagClose, 'Close', 'sd-icon'));
@@ -6809,6 +6828,7 @@ var VideoEffects = (function () {
     _diag.lay = null;
     document.body.appendChild(el);
     diagCollapse(_diag.collapsed);
+    diagSyncPop();
     diagSyncView();
   }
 
@@ -6999,6 +7019,7 @@ var VideoEffects = (function () {
   function diagMakeDraggable(el, handle) {
     var drag = null;
     handle.addEventListener('pointerdown', function (ev) {
+      if (el.classList.contains('sd-window')) return;
       if (ev.target.closest && ev.target.closest('button, select, input')) return;
       var r = el.getBoundingClientRect();
       drag = { dx: ev.clientX - r.left, dy: ev.clientY - r.top };
@@ -7060,6 +7081,10 @@ var VideoEffects = (function () {
     _diag.error = '';
     if (_diag.view !== 'compare') _diag.lastPipe = _diag.view;
     diagBuildPanel();
+    // Without a click to open it, a browser would block the window and say
+    // so: there the panel stays over the room, and its ⧉ moves it. The Mac
+    // app lets this webview open windows on its own (lib.rs).
+    if (diagWantsWindow() && diagMayOpenWindow()) diagPopOut();
     if (_diag.view === 'compare') cmpStart();
     return diagState();
   }
@@ -7069,10 +7094,151 @@ var VideoEffects = (function () {
     _diag.on = false;
     cmpStop();
     if (_active) _active.diagRelease();
+    var win = _diag.win;
+    diagForgetWindow();
     if (_diag.el && _diag.el.parentNode) _diag.el.parentNode.removeChild(_diag.el);
     var style = document.getElementById('seg-diag-style');
     if (style && style.parentNode) style.parentNode.removeChild(style);
     DIAG_UI.forEach(function (k) { _diag[k] = null; });
+    try { if (win && !win.closed) win.close(); } catch (e) { /* already gone */ }
+  }
+
+  // --- its own window ----------------------------------------------------------
+  //
+  // The panel can leave the room for a window of its own: a second screen, or
+  // simply out from over the picture it is diagnosing. It is the SAME panel —
+  // this window still builds it, keeps its state and draws into its canvas on
+  // every inference; only its DOM moves, into a blank same-origin window
+  // opened with window.open. Nothing is posted between windows and nothing is
+  // duplicated, so the numbers cannot drift from the docked panel's.
+  //
+  // In the Mac app, window.open answers only because lib.rs gives the main
+  // webview a handler that creates the window from the opener's own WebKit
+  // configuration — otherwise it returns null, as it does for anything but
+  // this blank page.
+  //
+  // Closing the window closes the panel, exactly like its ✕; the ⇲ button
+  // puts it back over the room instead. Either way the window is watched by
+  // polling `closed`, not by its unload events: the blank page can be
+  // replaced once while it opens (a late load of about:blank), and that
+  // fires the same events as a close.
+  function diagWantsWindow() { return readDebug(DIAG_WINDOW_KEY) === '1'; }
+
+  function diagMayOpenWindow() {
+    if (typeof window === 'undefined' || typeof window.open !== 'function') return false;
+    if (window.__TAURI__) return true;
+    var ua = typeof navigator !== 'undefined' && navigator.userActivation;
+    return !ua || !!ua.isActive;
+  }
+
+  function diagWindowDoc(w) {
+    try { return w && !w.closed && w.document && w.document.body ? w.document : null; } catch (e) { return null; }
+  }
+
+  // Put the panel into `doc`, with its styles. Also the repair after the page
+  // under it was replaced, so it is safe to call again.
+  function diagMountIn(doc) {
+    if (!_diag.el) return;
+    diagStyle(doc);
+    doc.documentElement.classList.add('sd-window-doc');
+    try { doc.title = 'Segmentation diagnostic'; } catch (e) { /* ignore */ }
+    _diag.el.classList.add('sd-window');
+    doc.body.appendChild(_diag.el);
+  }
+
+  function diagPopOut() {
+    if (!_diag.el) return false;
+    if (diagWindowDoc(_diag.win)) {
+      try { _diag.win.focus(); } catch (e) { /* ignore */ }
+      return true;
+    }
+    var w;
+    try {
+      var h = Math.max(520, Math.min(900, ((window.screen && window.screen.availHeight) || 900) - 80));
+      w = window.open('about:blank', DIAG_WINDOW_NAME,
+        'popup=yes,width=' + (diagWidth() + 40) + ',height=' + h);
+    } catch (e) { w = null; }
+    var doc = diagWindowDoc(w);
+    if (!doc) {
+      try { if (w) w.close(); } catch (e) { /* ignore */ }
+      return false;
+    }
+    _diag.win = w;
+    // A drag left it pinned by top/left; in a window it is the whole page.
+    var st = _diag.el.style;
+    st.left = st.top = st.bottom = st.maxHeight = '';
+    diagCollapse(false);
+    diagMountIn(doc);
+    diagSyncPop();
+    _diag.winTimer = setInterval(diagWatchWindow, 250);
+    try { w.focus(); } catch (e) { /* ignore */ }
+    return true;
+  }
+
+  function diagWatchWindow() {
+    var w = _diag.win;
+    if (!w) return;
+    var gone = true;
+    try { gone = w.closed; } catch (e) { /* treat as closed */ }
+    if (gone) { diagForgetWindow(); diagClose(); return; }
+    var doc = diagWindowDoc(w);
+    if (doc && _diag.el && !doc.body.contains(_diag.el)) diagMountIn(doc);
+  }
+
+  function diagForgetWindow() {
+    if (_diag.winTimer) clearInterval(_diag.winTimer);
+    _diag.winTimer = 0;
+    _diag.win = null;
+  }
+
+  // Back over the room, where it was before it left.
+  function diagDock() {
+    var w = _diag.win;
+    diagForgetWindow();
+    if (_diag.el) {
+      _diag.el.classList.remove('sd-window');
+      diagStyle(document);
+      document.body.appendChild(_diag.el);
+      diagCollapse(_diag.collapsed);
+      diagSyncPop();
+    }
+    try { if (w && !w.closed) w.close(); } catch (e) { /* ignore */ }
+  }
+
+  // The ⧉ / ⇲ button. The choice is remembered for the next opening.
+  function diagTogglePopOut() {
+    if (_diag.win) {
+      writeDebug(DIAG_WINDOW_KEY, null);
+      diagDock();
+      return;
+    }
+    writeDebug(DIAG_WINDOW_KEY, '1');
+    if (!diagPopOut() && _diag.popBtn) {
+      _diag.popBtn.title = 'The window could not be opened (blocked?) — click to try again';
+    }
+  }
+
+  function diagSyncPop() {
+    var b = _diag.popBtn;
+    if (!b) return;
+    var out = !!_diag.win;
+    b.textContent = out ? '⇲' : '⧉';
+    b.title = out ? 'Put it back over the room' : 'Open in its own window';
+    b.setAttribute('aria-label', b.title);
+  }
+
+  // The settings toggle, applied here: move a panel that is open.
+  function diagApplyWindowPref() {
+    if (!_diag.on || !_diag.el) return;
+    if (diagWantsWindow()) { if (!_diag.win && diagMayOpenWindow()) diagPopOut(); }
+    else if (_diag.win) diagDock();
+  }
+
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    // A window left behind by the page that drew it would be a frozen panel.
+    window.addEventListener('pagehide', function () {
+      try { if (_diag.win && !_diag.win.closed) _diag.win.close(); } catch (e) { /* ignore */ }
+    });
   }
 
   function diagSetView(view) {
@@ -7133,6 +7299,10 @@ var VideoEffects = (function () {
   function diagCopy() {
     var text = diagReport();
     var btn = _diag.copyBtn;
+    // The document the panel is in — its own window's, once popped out: the
+    // clipboard answers only the document that has the focus.
+    var doc = (_diag.el && _diag.el.ownerDocument) || document;
+    var nav = (doc.defaultView && doc.defaultView.navigator) || navigator;
     function flash(msg) {
       if (!btn) return;
       btn.textContent = msg;
@@ -7143,16 +7313,16 @@ var VideoEffects = (function () {
         var ta = dEl('textarea');
         ta.style.cssText = 'position:fixed;left:-9999px;top:0';
         ta.value = text;
-        document.body.appendChild(ta);
+        doc.body.appendChild(ta);
         ta.select();
-        var ok = document.execCommand && document.execCommand('copy');
-        document.body.removeChild(ta);
+        var ok = doc.execCommand && doc.execCommand('copy');
+        doc.body.removeChild(ta);
         flash(ok ? 'Copied ✓' : 'Copy failed');
       } catch (e) { flash('Copy failed'); }
     }
     try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(function () { flash('Copied ✓'); }, fallback);
+      if (nav.clipboard && nav.clipboard.writeText) {
+        nav.clipboard.writeText(text).then(function () { flash('Copied ✓'); }, fallback);
       } else fallback();
     } catch (e) { fallback(); }
     return text;
@@ -7166,9 +7336,10 @@ var VideoEffects = (function () {
       c.toBlob(function (blob) {
         if (!blob) return;
         var url = URL.createObjectURL(blob);
-        var a = document.createElement('a');
+        var doc = (_diag.el && _diag.el.ownerDocument) || document;
+        var a = doc.createElement('a');
         a.href = url; a.download = 'voxal-seg-' + (_diag.view === 'compare' ? 'engines' : _diag.view) + '.png';
-        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        doc.body.appendChild(a); a.click(); doc.body.removeChild(a);
         setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
       }, 'image/png');
     } catch (e) { /* a long-press on the picture still saves it */ }
@@ -7189,6 +7360,7 @@ var VideoEffects = (function () {
     var p = _active && _active._dg;
     return {
       on: _diag.on, view: _diag.view, frozen: _diag.frozen, error: _diag.error,
+      inWindow: !!_diag.win,
       inference: p ? p.n : 0,
       stats: p && p.st ? {
         width: p.w, height: p.h, masks: _active._maskCount || 0,
@@ -8446,7 +8618,7 @@ var VideoEffects = (function () {
   // `storage` listener below applies it here. A URL parameter (?segengine=,
   // ?maskcut=, ?segdiag=1) still outranks the stored value for that visit.
   var DEBUG_KEYS = ['segmentation-engine', 'longpipe-blur', 'longpipe-preset',
-                    'longpipe-dilate', 'mask-cut', SIL_KEY, SIL_STRENGTH_KEY, DIAG_KEY,
+                    'longpipe-dilate', 'mask-cut', SIL_KEY, SIL_STRENGTH_KEY, DIAG_KEY, DIAG_WINDOW_KEY,
                     'p3m-size', 'p3m-model', 'p3m-dilate',
                     'bgm-size', 'bgm-model', 'bgm-scale', 'bgm-dilate'];
 
@@ -8465,6 +8637,7 @@ var VideoEffects = (function () {
       if (readDebug(DIAG_KEY) === '1') { if (_active) diagOpen(); } else diagClose();
       return;
     }
+    if (key === DIAG_WINDOW_KEY) { diagApplyWindowPref(); return; }
     var p = _active;
     if (!p) return;
     try {
@@ -8665,6 +8838,9 @@ var VideoEffects = (function () {
     toggle('Segmentation diagnostic panel',
       'Shows each stage of the cut-out (camera, raw mask, dilated, feathered, final) with the engine\'s own numbers. Opens when the camera is on.',
       'toggle-seg-diagnostic', DIAG_KEY);
+    toggle('Open the diagnostic in its own window',
+      'Instead of over the room. Same as the panel\'s ⧉ button; closing that window closes the panel.',
+      'toggle-seg-diagnostic-window', DIAG_WINDOW_KEY);
 
     var note = document.createElement('p');
     note.className = 'settings-hint';
@@ -10601,6 +10777,7 @@ var VideoEffects = (function () {
     onPressure: onPressure,
     // The segmentation diagnostic (see the section of that name above).
     DIAGNOSTIC_KEY: DIAG_KEY,
+    DIAGNOSTIC_WINDOW_KEY: DIAG_WINDOW_KEY,
     setEngine: setEngine,
     renderDebugOptions: renderDebugOptions,
     setDebug: setDebug,
@@ -10610,6 +10787,8 @@ var VideoEffects = (function () {
     DIAGNOSTIC_VIEWS: DIAG_VIEWS.map(function (v) { return v[0]; }),
     openDiagnostic: diagOpen,
     closeDiagnostic: diagClose,
+    popOutDiagnostic: diagPopOut,
+    dockDiagnostic: diagDock,
     collapseDiagnostic: diagCollapse,
     setDiagnosticView: diagSetView,
     diagnosticState: diagState,

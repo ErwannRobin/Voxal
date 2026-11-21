@@ -1,8 +1,8 @@
 use std::sync::Mutex;
 use tauri::menu::{MenuBuilder, MenuItem, SubmenuBuilder};
-use tauri::{AppHandle, Emitter, State};
 #[cfg(target_os = "macos")]
-use tauri::{Manager, WindowEvent};
+use tauri::WindowEvent;
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -262,6 +262,75 @@ async fn check_for_updates(app: AppHandle) -> tauri_plugin_updater::Result<()> {
     Ok(())
 }
 
+/// The one child window the frontend opens with `window.open`: the
+/// segmentation diagnostic, popped out of the main window
+/// (`VideoEffects` → `diagPopOut()`). The main window keeps driving it — it
+/// builds the panel, then moves its DOM into the new document and draws into
+/// its canvas every inference — so the new webview MUST share the opener's
+/// WebKit configuration (`window_features`): only then is `window.open`'s
+/// return value a live window of the same process rather than `null`.
+///
+/// Only a blank page is ever allowed, and only one at a time. Anything else
+/// keeps the old behaviour of a Tauri webview, where `window.open` does
+/// nothing and links go through the shell plugin.
+const DIAGNOSTIC_WINDOW: &str = "seg-diagnostic";
+
+fn open_child_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    url: tauri::Url,
+    features: tauri::webview::NewWindowFeatures,
+) -> tauri::webview::NewWindowResponse<R> {
+    use tauri::webview::NewWindowResponse;
+    if url.as_str() != "about:blank" || app.get_webview_window(DIAGNOSTIC_WINDOW).is_some() {
+        return NewWindowResponse::Deny;
+    }
+    match tauri::WebviewWindowBuilder::new(app, DIAGNOSTIC_WINDOW, tauri::WebviewUrl::External(url))
+        .window_features(features)
+        .title("Segmentation diagnostic")
+        .min_inner_size(340.0, 320.0)
+        .build()
+    {
+        Ok(window) => NewWindowResponse::Create { window },
+        Err(e) => {
+            eprintln!("[window] could not open the diagnostic window: {e}");
+            NewWindowResponse::Deny
+        }
+    }
+}
+
+/// Two AppKit/WebKit settings Tauri has no option for.
+///
+/// * Full screen: the window is a full-screen PRIMARY window, so the green
+///   button and View → Enter Full Screen take it to its own Space instead of
+///   zooming it. Explicit rather than left to AppKit's defaults.
+/// * `window.open` without a click: WKWebView refuses it unless
+///   `javaScriptCanOpenWindowsAutomatically` is on, and the diagnostic is
+///   opened from the Preferences window, i.e. by a `storage` event in this
+///   one — never by a gesture here. `open_child_window` still decides what
+///   may actually open.
+#[cfg(target_os = "macos")]
+fn prepare_main_window_macos<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+    if let Ok(ptr) = window.ns_window() {
+        // SAFETY: `ns_window()` is this window's live NSWindow, and setup runs
+        // on the main thread.
+        let ns_window: &NSWindow = unsafe { &*ptr.cast::<NSWindow>() };
+        ns_window.setCollectionBehavior(
+            ns_window.collectionBehavior() | NSWindowCollectionBehavior::FullScreenPrimary,
+        );
+    }
+    let _ = window.with_webview(|webview| {
+        // SAFETY: on macOS `inner()` is the webview's WKWebView, and the
+        // closure runs on the main thread.
+        unsafe {
+            let view: &objc2_web_kit::WKWebView = &*webview.inner().cast();
+            view.configuration()
+                .preferences()
+                .setJavaScriptCanOpenWindowsAutomatically(true);
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -277,8 +346,28 @@ pub fn run() {
         ))
         .manage(PttShortcut(Mutex::new(DEFAULT_SHORTCUT.to_string())))
         .setup(|app| {
+            // The main window is built here rather than by tauri.conf.json
+            // (`"create": false` there), because only a builder can take a
+            // `window.open` handler — see `open_child_window`.
+            let main_config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|w| w.label == "main")
+                .cloned()
+                .ok_or("tauri.conf.json has no window labelled \"main\"")?;
+            let opener = app.handle().clone();
+            #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+            let main_window = tauri::WebviewWindowBuilder::from_config(app.handle(), &main_config)?
+                .on_new_window(move |url, features| open_child_window(&opener, url, features))
+                .build()?;
+
             #[cfg(target_os = "macos")]
-            if let Some(main_window) = app.get_webview_window("main") {
+            prepare_main_window_macos(&main_window);
+
+            #[cfg(target_os = "macos")]
+            {
                 let window = main_window.clone();
                 main_window.on_window_event(move |event| {
                     if let WindowEvent::CloseRequested { api, .. } = event {
@@ -310,6 +399,20 @@ pub fn run() {
                 .quit()
                 .build()?;
 
+            // "Enter Full Screen" (⌃⌘F) lives in View and the window's own
+            // commands in Window, where every Mac app keeps them. A custom
+            // menu replaces the default one wholesale, so leaving these out
+            // took the keyboard way into full screen with them. Window is also
+            // registered as the app's Window menu (below): that is what makes
+            // macOS add its own placement items to it — Fill, Center, Move &
+            // Resize (halves, quarters, arrangements), Full Screen Tile — and
+            // the list of open windows.
+            let view_submenu = SubmenuBuilder::new(app, "View").fullscreen().build()?;
+            let window_submenu = SubmenuBuilder::new(app, "Window")
+                .minimize()
+                .maximize()
+                .build()?;
+
             let menu = MenuBuilder::new(app)
                 .item(&app_submenu)
                 .item(
@@ -324,9 +427,13 @@ pub fn run() {
                         .select_all()
                         .build()?,
                 )
+                .item(&view_submenu)
+                .item(&window_submenu)
                 .build()?;
 
             app.set_menu(menu)?;
+            #[cfg(target_os = "macos")]
+            window_submenu.set_as_windows_menu_for_nsapp()?;
 
             let about_id = about.id().clone();
             let prefs_id = prefs.id().clone();

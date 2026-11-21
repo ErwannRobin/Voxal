@@ -288,3 +288,226 @@ test.describe('what the desktop app does NOT do', () => {
     expect(opens).toBe(false);
   });
 });
+
+// Full screen is the user's shape (green button, View → Enter Full Screen):
+// nothing resizes the window while it lasts, and none of its sizes, nor the
+// frames of the way back out, are taken for the voice column.
+test.describe('full screen', () => {
+  test.beforeEach(async ({ page }) => {
+    await seedRoom(page, { selfId: 'me', isHost: true, roomCode: 'me' });
+    await asVoiceColumn(page);
+    await page.evaluate(() => {
+      window.__fs = false;
+      tauriWindowHandle().isFullscreen = () => Promise.resolve(window.__fs);
+    });
+  });
+
+  test('a full-screen window is never resized, and its size is not the column', async ({ page }) => {
+    const out = await page.evaluate(async () => {
+      window.__fs = true;
+      Object.defineProperty(window, 'innerWidth', { value: 2560, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: 1440, configurable: true });
+      noteDesktopWindowResize();
+      await new Promise((r) => setTimeout(r, 0));
+      window.__windowTest.sizes.length = 0;
+      localStorage.setItem('chat-width', '360');
+      toggleChatPanel(true, { focus: false });
+      return { sizes: window.__windowTest.sizes.slice(), voice: _desktopVoiceSize, fs: _desktopFullscreen };
+    });
+    expect(out.fs).toBe(true);
+    expect(out.sizes).toEqual([]);
+    expect(out.voice).toEqual({ width: 350, height: 680 });
+  });
+
+  test('leaving it re-applies the shape once macOS has put the frame back', async ({ page }) => {
+    const out = await page.evaluate(async () => {
+      window.__fs = true;
+      noteDesktopWindowResize();
+      await new Promise((r) => setTimeout(r, 0));
+      localStorage.setItem('chat-width', '360');
+      toggleChatPanel(true, { focus: false });     // opened while full screen
+      window.__windowTest.sizes.length = 0;
+      window.__fs = false;
+      Object.defineProperty(window, 'innerWidth', { value: 600, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: 500, configurable: true });
+      noteDesktopWindowResize();                   // a frame of the way out
+      await new Promise((r) => setTimeout(r, 0));
+      const during = { voice: { ..._desktopVoiceSize }, sizes: window.__windowTest.sizes.slice() };
+      await new Promise((r) => setTimeout(r, DESKTOP_FULLSCREEN_SETTLE_MS + 100));
+      return { during, after: window.__windowTest.sizes.slice() };
+    });
+    expect(out.during.voice).toEqual({ width: 350, height: 680 });
+    expect(out.during.sizes).toEqual([]);
+    expect(out.after).toEqual([{ width: 350 + 360, height: 680 }]);
+  });
+});
+
+// A window macOS has placed — Window → Fill, Zoom, Move & Resize, a drag onto a
+// screen edge — is the user's arrangement: growing it for the chat would pull
+// it out of its tile. There is no event for a tile, so it is read from the
+// frame against the screen's work area.
+test.describe('placed by macOS (Fill, tiles)', () => {
+  const AREA = { x: 0, y: 25, width: 1440, height: 875 };   // under the menu bar
+
+  test('desktopFramePlaced tells a tile from a window that merely sits somewhere', async ({ page }) => {
+    const r = await page.evaluate((a) => {
+      const f = (x, y, width, height) => desktopFramePlaced({ x, y, width, height }, a);
+      return {
+        fill:        f(0, 25, 1440, 875),
+        leftHalf:    f(0, 25, 720, 875),
+        rightHalf:   f(720, 25, 720, 875),
+        topHalf:     f(0, 25, 1440, 437),
+        quarter:     f(720, 462, 720, 438),
+        withMargins: f(8, 33, 708, 859),       // Sequoia's tiled-window margins
+        column:      f(545, 135, 350, 680),    // the app's own, wherever it is
+        cornered:    f(0, 25, 350, 680),       // pushed into a corner, not a quarter
+      };
+    }, AREA);
+    expect(r).toEqual({
+      fill: true, leftHalf: true, rightHalf: true, topHalf: true, quarter: true,
+      withMargins: true, column: false, cornered: false,
+    });
+  });
+
+  /** The fake window reports this frame, in physical px at 2x. */
+  async function frameIs(page, f, { zoomed = false } = {}) {
+    await page.evaluate(({ f, a, zoomed }) => {
+      const h = tauriWindowHandle();
+      h.isFullscreen = () => Promise.resolve(false);
+      h.isMaximized = () => Promise.resolve(zoomed);
+      h.outerPosition = () => Promise.resolve({ x: f.x * 2, y: f.y * 2, toLogical: () => ({ x: f.x, y: f.y }) });
+      h.outerSize = () => Promise.resolve({ width: f.width * 2, height: f.height * 2 });
+      window.__TAURI__.window.currentMonitor = () => Promise.resolve({
+        scaleFactor: 2,
+        workArea: { position: { x: a.x * 2, y: a.y * 2 }, size: { width: a.width * 2, height: a.height * 2 } },
+      });
+      Object.defineProperty(window, 'innerWidth', { value: f.width, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: f.height - 28, configurable: true });
+      noteDesktopWindowResize();
+    }, { f, a: AREA, zoomed });
+    await page.evaluate(() => new Promise((r) => setTimeout(r, 20)));
+  }
+
+  test.beforeEach(async ({ page }) => {
+    await seedRoom(page, { selfId: 'me', isHost: true, roomCode: 'me' });
+    await asVoiceColumn(page);
+  });
+
+  test('a tiled window is not resized for the chat, and its size is not the column', async ({ page }) => {
+    await frameIs(page, { x: 0, y: 25, width: 720, height: 875 });
+    const out = await page.evaluate(() => {
+      window.__windowTest.sizes.length = 0;
+      localStorage.setItem('chat-width', '360');
+      toggleChatPanel(true, { focus: false });
+      return { placed: _desktopPlaced, sizes: window.__windowTest.sizes.slice(), voice: _desktopVoiceSize,
+        beside: document.body.classList.contains('chat-side') };
+    });
+    expect(out.placed).toBe(true);
+    expect(out.sizes).toEqual([]);
+    expect(out.voice).toEqual({ width: 350, height: 680 });
+    // 720 - 360 still leaves a voice column, so the drawer takes its strip.
+    expect(out.beside).toBe(true);
+  });
+
+  test('in a quarter too narrow to share, the drawer lies over the room', async ({ page }) => {
+    await page.evaluate(() => localStorage.setItem('chat-width', '420'));
+    await frameIs(page, { x: 720, y: 462, width: 720, height: 438 });
+    const beside = await page.evaluate(() => {
+      toggleChatPanel(true, { focus: false });
+      return document.body.classList.contains('chat-side');
+    });
+    expect(beside).toBe(false);
+  });
+
+  test('Fill / Zoom reads as placed from isMaximized alone', async ({ page }) => {
+    await frameIs(page, { x: 200, y: 100, width: 900, height: 700 }, { zoomed: true });
+    expect(await page.evaluate(() => _desktopPlaced)).toBe(true);
+  });
+
+  test('dragged out of its tile, the window is theirs again', async ({ page }) => {
+    await frameIs(page, { x: 0, y: 25, width: 720, height: 875 });
+    await page.evaluate(() => {
+      localStorage.setItem('chat-width', '360');
+      toggleChatPanel(true, { focus: false });    // opened while tiled: no growth
+      window.__windowTest.sizes.length = 0;
+    });
+    await frameIs(page, { x: 300, y: 200, width: 800, height: 728 });
+    const out = await page.evaluate(() => ({
+      placed: _desktopPlaced, voice: _desktopVoiceSize, sizes: window.__windowTest.sizes.slice(),
+    }));
+    expect(out.placed).toBe(false);
+    // The frame it landed in, minus the open drawer, is the new voice column —
+    // so the shape it re-applies is the window it already is: no resize.
+    expect(out.voice).toEqual({ width: 800 - 360, height: 700 });
+    expect(out.sizes).toEqual([]);
+    // And from then on it follows the room again: closing the chat hands the
+    // column back.
+    const back = await page.evaluate(() => {
+      toggleChatPanel(false, { remember: true });
+      return window.__windowTest.sizes.slice();
+    });
+    expect(back).toEqual([{ width: 440, height: 700 }]);
+  });
+});
+
+// Every resize runs a layout pass (scheduleStageRelayout → updateVideoStage →
+// applyDesktopWindowShape). The shape must not be re-asserted there, or every
+// size the user or macOS gives the window snaps back on the next frame.
+test.describe('a resize is never undone by the layout pass that follows it', () => {
+  test.beforeEach(async ({ page }) => {
+    await seedRoom(page, { selfId: 'me', isHost: true, roomCode: 'me' });
+    await asVoiceColumn(page);
+    await page.evaluate(() => applyDesktopWindowShape());   // the room's shape, as on entry
+  });
+
+  async function userResizesTo(page, width, height, { isFullscreen } = {}) {
+    return page.evaluate(async ({ width, height, isFullscreen }) => {
+      if (isFullscreen) {
+        // A real bridge answers asynchronously: the layout pass runs first.
+        tauriWindowHandle().isFullscreen = () => new Promise((r) => setTimeout(() => r(false), 30));
+      }
+      window.__windowTest.sizes.length = 0;
+      Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: height, configurable: true });
+      window.dispatchEvent(new Event('resize'));
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      updateVideoStage();
+      await new Promise((r) => setTimeout(r, 60));
+      return { sizes: window.__windowTest.sizes.slice(), voice: _desktopVoiceSize };
+    }, { width, height, isFullscreen });
+  }
+
+  test('a voice room keeps the size it was dragged to', async ({ page }) => {
+    const out = await userResizesTo(page, 900, 820);
+    expect(out.sizes).toEqual([]);
+    expect(out.voice).toEqual({ width: 900, height: 820 });
+  });
+
+  test('…also while the bridge is still answering whether it is full screen', async ({ page }) => {
+    const out = await userResizesTo(page, 1440, 875, { isFullscreen: true });
+    expect(out.sizes).toEqual([]);
+    expect(out.voice).toEqual({ width: 1440, height: 875 });
+  });
+
+  test('a live stage keeps a size the user gave it', async ({ page }) => {
+    await page.evaluate(() => {
+      // No real tiles here, so the real layout pass would take the stage down;
+      // keep only the part of it under test.
+      window.updateVideoStage = function() { applyDesktopWindowShape(); };
+      document.body.classList.add('video-stage');
+      applyDesktopWindowShape();                  // the stage's landscape shape
+    });
+    const out = await userResizesTo(page, 1400, 900);
+    expect(out.sizes).toEqual([]);
+  });
+
+  test('a change of configuration still reshapes it', async ({ page }) => {
+    await userResizesTo(page, 900, 820);
+    const sizes = await page.evaluate(() => {
+      localStorage.setItem('chat-width', '360');
+      toggleChatPanel(true, { focus: false });
+      return window.__windowTest.sizes.slice();
+    });
+    expect(sizes).toEqual([{ width: 900 + 360, height: 820 }]);
+  });
+});

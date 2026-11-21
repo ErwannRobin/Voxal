@@ -203,9 +203,31 @@ screen gives it the landscape shape the desktop web app uses (stage left, roster
 + PTT railed right — the `html.is-web` grid at ≥861px). Both are reversible: the
 plain voice column is remembered, including a size the user chose themselves, and
 handed back. Called from `toggleChatPanel()`, `updateVideoStage()` and
-`showScreen()`; a no-op off Tauri. Needs `core:window:allow-set-size` (plus the
+`showScreen()`; a no-op off Tauri. It resizes only when the configuration
+(`desktopShapeKey()`: stage, chat, chat width) changes — `updateVideoStage()`
+runs it on every resize, and re-asserting the shape there snapped back every
+manual resize, title-bar double-click and tile. Needs `core:window:allow-set-size` (plus the
 position/scale permissions for the on-screen nudge) in
 `src-tauri/capabilities/default.json`.
+
+**Full screen and macOS window placement** are the user's shape. `lib.rs`
+makes the main window a full-screen primary window, adds View → Toggle Full
+Screen (⌃⌘F), and registers its Window menu as the app's
+(`set_as_windows_menu_for_nsapp`), which is what makes macOS 15 add Fill,
+Center, Move & Resize and Full Screen Tile to it. While the window is full
+screen, zoomed/filled (`isMaximized()`) or tiled (`desktopFramePlaced()`: the
+frame against `currentMonitor().workArea` — three edges, or one corner at half
+size each way, within `DESKTOP_TILE_SLACK` for Sequoia's tile margins),
+`desktopShapeStandsDown()` is true: `applyDesktopWindowShape()` resizes
+nothing, no voice size is recorded, and the chat takes its strip from the room
+only if a voice column is left (`chatBesideRoom()`), else it overlays. There is
+no tile event — every non-own resize re-reads it. Leaving full screen waits
+`DESKTOP_FULLSCREEN_SETTLE_MS` for macOS's restore animation; leaving a tile
+records the new frame as the voice column at once. The main window is built in `lib.rs`'s `setup` (`"create": false`
+in `tauri.conf.json`) because only a builder takes the `on_new_window` handler
+that lets the segmentation diagnostic pop out (`window.open('about:blank')`,
+see *Looking at the cutout* in `docs/video-effects.md`); every other URL is
+denied, so `window.open` still does nothing in the app.
 
 ### Phone video stage — the chrome is one thing
 
@@ -446,6 +468,7 @@ never on `conn`, which the host copy-replaces.
 | `self-video-corner` | `SELF_VIDEO_CORNER_KEY` | Where the minimized self-view badge was dragged. An edge of the stage and how far along it, as `<side>:<pos>` (`left` / `right` / `top` / `bottom`, `pos` `0`–`1`) — with `:tuck` appended when it was pushed off that border and left there, showing only `SELF_BADGE_PEEK` of itself. Or the band either side of the mic on a phone (`barl` / `barr`), which exists only while `selfBadgeBarSlots()` measures room for it; a badge parked in one is drawn at an edge meanwhile, without losing the choice (`effectiveSelfBadgePlacement()`). A corner written by an older build (`tl` / `tr` / `bl` / `br`) still reads as the same spot |
 | `scene-engine` | — (read in `video-scenes.js`) | Diagnosis only, never written by the app: `legacy` draws every animated scene with its old fragment shader instead of its Three.js module. Read at each renderer creation |
 | `seg-diagnostic` | `VideoEffects.DIAGNOSTIC_KEY` | Diagnosis only, never written by the app: `1` opens the segmentation diagnostic panel (raw mask / blend / dilate / feather / matte / final, one inference at a time) when the camera effect starts; so does `?segdiag=1` in the URL (`?segdiag=compare` opens it on the *Engines* tab: every engine live on the same camera, your self tile split into one tile per engine — local only, via `VideoEffects.selfView()`), or `VideoEffects.openDiagnostic()`. Off = one boolean test per frame. See *Looking at the cutout* in `docs/video-effects.md` |
+| `seg-diagnostic-window` | `VideoEffects.DIAGNOSTIC_WINDOW_KEY` | `1` = the segmentation diagnostic opens in its own window (`window.open` of a blank same-origin page this window keeps drawing into) instead of over the room. Written by the panel's ⧉/⇲ button and Settings → Advanced → Segmentation debug; on the web it only auto-opens from a click |
 | `room-active` | `ROOM_ACTIVE_KEY` | Transient. Main window → preferences window: a call is live, so `settings.html` must not run its `getUserMedia` device-label probe (it would kill the call). Cleared on leave and on load |
 | `echo-test-request` | `ECHO_BRIDGE_REQUEST_KEY` | Transient. Desktop preferences window → main window: `{action:'start'\|'stop', at}` (see below) |
 | `echo-test-state` | `ECHO_BRIDGE_STATE_KEY` | Transient. Main window → preferences window: `{running, text, kind, at}` |
