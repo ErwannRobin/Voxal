@@ -96,11 +96,46 @@ What the table says:
 * It must be set up like a matte engine (`maskCut: 0`, no dilate, half the
   feather), exactly as the `pre:` engines are in the bench.
 
+## IPC prototype (partial)
+
+`src-tauri/src/vision.rs` + the `vision_foreground_mask` command, and a probe
+(`src/vision-bench.js`, inert unless the app starts with
+`VOXAL_VISION_BENCH=<path to a JPEG frame>`), measure the real round trip in
+`make dev`: webview frame (`drawImage` + `getImageData`) -> raw bytes over Tauri
+IPC -> Vision (`objc2-vision`) -> raw mask bytes -> webview. Not used by the
+pipeline.
+
+Back to back, 256x144 RGBA input (147 KB), ms, over 150 frames, three runs:
+
+| | mean |
+|---|---|
+| Capture (`drawImage` + `getImageData`) | 1.1-1.3 |
+| Vision (`performRequests` + mask) | 16.4-17.6 |
+| IPC both ways + copies | 5-10 (p95 5 in one run, 58-104 in the others) |
+| **Total** | **27-30** |
+
+* **Vision's own mask is always 512x512 (262 KB)**, whatever the input: its
+  analysis resolution is fixed, so a smaller input only shrinks the IPC
+  upload, not the model work. The request needs a CVPixelBuffer, and macOS
+  refuses `32RGBA` (`CVPixelBufferCreate` -6680), so the Rust side swaps R/B
+  into BGRA while copying.
+* The IPC itself is cheap (a few ms for ~150 KB up and 262 KB down). The long
+  tail (p95 58-117 ms in three of four runs) was measured with the window
+  hidden, where WebKit throttles the page; it is not a number to quote.
+* ~28 ms per frame fits one mask per frame at 30 fps with no overlap only
+  barely, so the pipeline would run it at its usual inference rate (10-15 Hz,
+  `detection-quality`), off the main thread, with the one-interval mask lag it
+  already has.
+
+**Not measured:** 512x288 and 640x360 input, and the paced 30 Hz run with main-thread stall
+monitoring. Both need the window on screen: the screen was locked partway through,
+the page was suspended, and the probe never got past its first size. Re-run on an
+unlocked Mac with the Voxal window in front.
+
 ## What this does not tell us
 
-* **The IPC round trip is not in these numbers.** A 512x288 RGBA frame is
-  590 KB each way at 15-30 Hz; it has to be measured in the real app before
-  the 12 ms means anything.
+* **The IPC round trip is only partly measured** (see the prototype above:
+  256x144 input only, window hidden).
 * **Real-time Vision on a live stream.** The foreground request is documented
   for stills. Run per frame here (no temporal state), it was steady (`dtSSD`
   2.1), but it has not been run on a live camera, with auto-exposure and a
