@@ -202,9 +202,14 @@ opening the chat grows the window to the right by exactly the drawer's width
 screen gives it the landscape shape the desktop web app uses (stage left, roster
 + PTT railed right — the `html.is-web` grid at ≥861px). Both are reversible: the
 plain voice column is remembered, including a size the user chose themselves, and
-handed back. Called from `toggleChatPanel()`, `updateVideoStage()` and
+handed back. The chat's share is a **delta** on the window as it is
+(`applyDesktopChatGrowth()`, pinned chat only): grow right if the screen has room,
+else shift left and grow, else (already full width) open inside; closing gives
+back exactly the recorded `{width, shift}`. Called from `toggleChatPanel()`,
+`setChatMode()` and the separator's release; it is not part of the shape.
+`applyDesktopWindowShape()` is called from `updateVideoStage()` and
 `showScreen()`; a no-op off Tauri. It resizes only when the configuration
-(`desktopShapeKey()`: stage, chat, chat width) changes — `updateVideoStage()`
+(`desktopShapeKey()`: stage or voice) changes — `updateVideoStage()`
 runs it on every resize, and re-asserting the shape there snapped back every
 manual resize, title-bar double-click and tile. Needs `core:window:allow-set-size` (plus the
 position/scale permissions for the on-screen nudge) in
@@ -464,6 +469,9 @@ never on `conn`, which the host copy-replaces.
 | `chat-log` | `CHAT_LOG_KEY` | The room's chat transcript: `{roomCode, savedAt, messages}` (a message carries `replyTo`), capped at `CHAT_LOG_MAX` (200) and sharing the rejoin snapshot's `REJOIN_TTL_MS`. Restored by `loadChatLog(code)` only when `roomCode` matches the room being joined, and cleared wherever `clearRejoinSnapshot()` is |
 | `chat-width` | `CHAT_WIDTH_KEY` | Width of the chat drawer in px, set by dragging its separator (`#chat-resizer`). Clamped to `CHAT_WIDTH_MIN`–`CHAT_WIDTH_MAX` and to 90% of the window on read, so a narrower window never leaves the drawer hanging off |
 | `chat-open` | `CHAT_OPEN_KEY` | Present (`1`) only when the drawer was left open. Absent means shut, the default. Restored on entry by `chatOpensOnEntry()` → `applyChatAutoOpen()` (called from `showScreen('room')`) when the window is wide enough to dock it, never on a phone's immersive stage. Written by the collapse icon, the edge handle, the palette and the shortcut — never by leaving a room. A close that did not go through those still suppresses the restore for the rest of that room, via `_chatCollapsedHere` |
+| `chat-panel-mode` | `CHAT_MODE_KEY` | How the chat is shown on a desktop-sized device (never offered on a phone — `chatModesOffered()`): absent = `pinned` (a column: docked beside a stage, `chat-side` in the Mac voice room, the Mac window grows for it), `overlay` (a drawer/card over the room, no reflow, no scrim, never resizes the window), `window` (the panel's own nodes moved into an `about:blank` window, `openChatWindow()`; every lookup inside the panel goes through **`chatEl(id)`**, never `document.getElementById`). Picked from the chat header (`setChatMode()`); `chatLayoutMode()` is what applies (a `window` chat that could not pop out is laid out as pinned) |
+| `roster-panel-mode` | `ROSTER_MODE_KEY` | Desktop video stage only: absent = `pinned` (the rail column) / `overlay` (the stage takes the rail's column and the roster floats on it). Published as `body.roster-overlay` by `applyRosterPanel()` only while `body.video-stage-desktop` |
+| `roster-panel-hidden` | `ROSTER_HIDDEN_KEY` | `1` = the participants rail is put away on the desktop stage (`body.roster-hidden`); the talk bar stays on the picture and `#stage-handle-roster` (a click button there, a drag only on the phone stage) brings it back |
 | `emoji-recent` | `EMOJI_RECENT_KEY` | The emoji picker's Recent row, most recent first, capped at `EMOJI_RECENT_MAX`. Seeded from `CHAT_REACTIONS` rather than starting empty |
 | `self-video-corner` | `SELF_VIDEO_CORNER_KEY` | Where the minimized self-view badge was dragged. An edge of the stage and how far along it, as `<side>:<pos>` (`left` / `right` / `top` / `bottom`, `pos` `0`–`1`) — with `:tuck` appended when it was pushed off that border and left there, showing only `SELF_BADGE_PEEK` of itself. Or the band either side of the mic on a phone (`barl` / `barr`), which exists only while `selfBadgeBarSlots()` measures room for it; a badge parked in one is drawn at an edge meanwhile, without losing the choice (`effectiveSelfBadgePlacement()`). A corner written by an older build (`tl` / `tr` / `bl` / `br`) still reads as the same spot |
 | `scene-engine` | — (read in `video-scenes.js`) | Diagnosis only, never written by the app: `legacy` draws every animated scene with its old fragment shader instead of its Three.js module. Read at each renderer creation |
