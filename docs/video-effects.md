@@ -1677,6 +1677,21 @@ reachable on a phone):
   phone it is otherwise over the room's own mic and camera buttons; it takes no
   pictures while hidden) and ✕ closes it and frees what it made
   (`VideoEffects.closeDiagnostic()` does the same).
+- **Its own window** (⧉ in the title bar; desktop only — hidden on a phone):
+  the same panel moves into a separate window, off the picture it is
+  diagnosing or onto a second screen. ⇲ there puts it back over the room;
+  closing the window closes the panel, like ✕. The choice is remembered
+  (`localStorage['seg-diagnostic-window'] = '1'`, also Settings → Advanced →
+  Segmentation debug), so the next opening goes straight to a window — on the
+  web only when the opening came from a click, otherwise the popup blocker
+  would fire and the panel stays docked. Nothing is copied between windows:
+  this page still builds the panel and draws into its canvas, only the DOM is
+  moved into a blank same-origin `window.open` page
+  (`VideoEffects.popOutDiagnostic()` / `dockDiagnostic()`). In the Mac app
+  `window.open` works only because `lib.rs` builds the main window with an
+  `on_new_window` handler that creates that one blank window from the opener's
+  WebKit configuration, and lets the main webview open it without a click
+  (the Preferences window toggles it through a `storage` event).
 - **Two tabs**: **Engines** (every engine at once, on your own video — below) and
   **Pipeline** (each stage of one inference of the engine driving the call).
 - At the bottom, always: *Copy report* (the device, the engines and every number

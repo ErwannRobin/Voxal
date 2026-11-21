@@ -240,6 +240,7 @@ Then `npx playwright test --config=.pw-local.config.js` (`/opt/pw-browsers/chrom
 - **`gl.finish()` is not a timing fence in Chromium/SwiftShader**: a 720p draw "took" 0.09 ms. Force completion with a 1-pixel `readPixels`, and expect it to be slow enough that a 120-iteration loop times out; keep software-GL micro-benchmarks to ~25 iterations.
 - **The selfie model's unsure pixels are 20–70%, not 0/1** (phone selfie: lamp over the head median 48%, shoulder rim 62%, hair edge 41%). The composite's 12–78% window kept those partly visible; the raw mask is now cut at `MASK_CUT` (78%) in `FRAG_MASK_MIX`. Thresholding cannot separate a lamp from hair (same confidence), so the cut costs fine hair — that is the user's accepted trade. `?maskcut=` compares on a device.
 - Don't `pkill -f "<pattern>"` with the pattern in your own command line — it kills the shell running it.
+- **`window.open` in the Tauri app returns `null` unless the webview was built with `on_new_window`** — impossible for a `tauri.conf.json` window, hence `"create": false` + `WebviewWindowBuilder::from_config` in `setup`. The child must be built with `.window_features(features)` (macOS: the opener's `WKWebViewConfiguration`), or the returned WindowProxy is not a live same-process window. Without a click WKWebView still refuses unless `javaScriptCanOpenWindowsAutomatically` is set natively. Watch a popped-out window by polling `closed`, never its `pagehide`: the blank page can be replaced once while it opens.
 
 ## Sync rule
 

@@ -6030,6 +6030,15 @@ const DESKTOP_VIDEO_HEIGHT = 760;
 
 var _desktopVoiceSize   = null;   // {width,height} of the plain column: no chat, no stage
 var _desktopAppliedSize = null;   // the last size WE set, to tell ours from theirs
+// Full screen (green button, View → Enter Full Screen, ⌃⌘F) is the user's
+// choice of shape, and the screen's: while it lasts the window is never resized
+// and no size it takes is remembered as the voice column. On the way out macOS
+// puts back the frame the window had going in, and once that has landed
+// (DESKTOP_FULLSCREEN_SETTLE_MS) the shape is re-applied, since the chat or the
+// stage may have come or gone meanwhile.
+var _desktopFullscreen  = false;
+var _desktopSettleUntil = 0;
+const DESKTOP_FULLSCREEN_SETTLE_MS = 800;
 
 function desktopWindowShapeActive() {
   return IS_TAURI_DESKTOP && !IS_TINY_EMBED;
@@ -6080,7 +6089,7 @@ function desktopWindowTarget() {
 
 // Idempotent: safe to call from anywhere the room's configuration changes.
 function applyDesktopWindowShape() {
-  if (!desktopWindowShapeActive()) return;
+  if (!desktopWindowShapeActive() || _desktopFullscreen) return;
   var win = tauriWindowHandle();
   var dpi = window.__TAURI__ && window.__TAURI__.dpi;
   if (!win || typeof win.setSize !== 'function' || !dpi || !dpi.LogicalSize) return;
@@ -6124,6 +6133,35 @@ function keepDesktopWindowOnScreen() {
 // alone: it would otherwise record 1180px as "the voice column".
 function noteDesktopWindowResize() {
   if (!desktopWindowShapeActive()) return;
+  // Entering and leaving full screen are resizes too, and the only way to tell
+  // them apart is to ask the window. Older bridges (and the E2E fakes) have no
+  // isFullscreen: there the resize is read as it always was.
+  var win = tauriWindowHandle();
+  if (win && typeof win.isFullscreen === 'function') {
+    var asked;
+    try { asked = win.isFullscreen(); } catch (_) { asked = null; }
+    if (asked && asked.then) {
+      asked.then(function(fs) {
+        noteDesktopFullscreen(!!fs);
+        if (!fs) recordDesktopVoiceSize();
+      }, recordDesktopVoiceSize);
+      return;
+    }
+  }
+  recordDesktopVoiceSize();
+}
+
+function noteDesktopFullscreen(fs) {
+  if (fs === _desktopFullscreen) return;
+  _desktopFullscreen = fs;
+  if (fs) return;
+  _desktopSettleUntil = Date.now() + DESKTOP_FULLSCREEN_SETTLE_MS;
+  setTimeout(applyDesktopWindowShape, DESKTOP_FULLSCREEN_SETTLE_MS);
+}
+
+function recordDesktopVoiceSize() {
+  // The frames of the way out of full screen are macOS's, not the user's.
+  if (_desktopFullscreen || Date.now() < _desktopSettleUntil) return;
   var now = currentDesktopSize();
   var mine = _desktopAppliedSize;
   // Our own setSize echoes back as a resize; only a size we did not ask for

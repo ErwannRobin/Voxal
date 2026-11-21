@@ -207,6 +207,17 @@ handed back. Called from `toggleChatPanel()`, `updateVideoStage()` and
 position/scale permissions for the on-screen nudge) in
 `src-tauri/capabilities/default.json`.
 
+**Full screen** (green button, View → Toggle Full Screen, ⌃⌘F) is the user's
+shape: `lib.rs` makes the main window a full-screen primary window and adds
+the View/Window menus, and while `isFullscreen()` holds `applyDesktopWindowShape()`
+resizes nothing and `noteDesktopWindowResize()` records no voice size — nor
+during `DESKTOP_FULLSCREEN_SETTLE_MS` after leaving it, when the shape is
+re-applied. The main window is built in `lib.rs`'s `setup` (`"create": false`
+in `tauri.conf.json`) because only a builder takes the `on_new_window` handler
+that lets the segmentation diagnostic pop out (`window.open('about:blank')`,
+see *Looking at the cutout* in `docs/video-effects.md`); every other URL is
+denied, so `window.open` still does nothing in the app.
+
 ### Phone video stage — the chrome is one thing
 
 On the immersive (phone) stage the room's chrome is a single state, published as
@@ -446,6 +457,7 @@ never on `conn`, which the host copy-replaces.
 | `self-video-corner` | `SELF_VIDEO_CORNER_KEY` | Where the minimized self-view badge was dragged. An edge of the stage and how far along it, as `<side>:<pos>` (`left` / `right` / `top` / `bottom`, `pos` `0`–`1`) — with `:tuck` appended when it was pushed off that border and left there, showing only `SELF_BADGE_PEEK` of itself. Or the band either side of the mic on a phone (`barl` / `barr`), which exists only while `selfBadgeBarSlots()` measures room for it; a badge parked in one is drawn at an edge meanwhile, without losing the choice (`effectiveSelfBadgePlacement()`). A corner written by an older build (`tl` / `tr` / `bl` / `br`) still reads as the same spot |
 | `scene-engine` | — (read in `video-scenes.js`) | Diagnosis only, never written by the app: `legacy` draws every animated scene with its old fragment shader instead of its Three.js module. Read at each renderer creation |
 | `seg-diagnostic` | `VideoEffects.DIAGNOSTIC_KEY` | Diagnosis only, never written by the app: `1` opens the segmentation diagnostic panel (raw mask / blend / dilate / feather / matte / final, one inference at a time) when the camera effect starts; so does `?segdiag=1` in the URL (`?segdiag=compare` opens it on the *Engines* tab: every engine live on the same camera, your self tile split into one tile per engine — local only, via `VideoEffects.selfView()`), or `VideoEffects.openDiagnostic()`. Off = one boolean test per frame. See *Looking at the cutout* in `docs/video-effects.md` |
+| `seg-diagnostic-window` | `VideoEffects.DIAGNOSTIC_WINDOW_KEY` | `1` = the segmentation diagnostic opens in its own window (`window.open` of a blank same-origin page this window keeps drawing into) instead of over the room. Written by the panel's ⧉/⇲ button and Settings → Advanced → Segmentation debug; on the web it only auto-opens from a click |
 | `room-active` | `ROOM_ACTIVE_KEY` | Transient. Main window → preferences window: a call is live, so `settings.html` must not run its `getUserMedia` device-label probe (it would kill the call). Cleared on leave and on load |
 | `echo-test-request` | `ECHO_BRIDGE_REQUEST_KEY` | Transient. Desktop preferences window → main window: `{action:'start'\|'stop', at}` (see below) |
 | `echo-test-state` | `ECHO_BRIDGE_STATE_KEY` | Transient. Main window → preferences window: `{running, text, kind, at}` |

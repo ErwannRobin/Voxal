@@ -4805,6 +4805,8 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "voxal"
 version = "0.9.8"
 dependencies = [
+ "objc2-app-kit",
+ "objc2-web-kit",
  "reqwest 0.13.5",
  "serde",
  "serde_json",

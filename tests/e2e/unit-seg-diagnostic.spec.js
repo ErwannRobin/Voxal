@@ -413,3 +413,92 @@ test('the silhouette prior is switched and tuned from the panel, and reported in
   expect(await page.evaluate(() => [VideoEffects.active().silhouette, localStorage.getItem('silhouette-prior')]))
     .toEqual([false, null]);
 });
+
+// Its own window: the SAME panel, moved into a blank same-origin window. This
+// page keeps drawing into its canvas, so the pictures there are the real ones.
+test.describe('in its own window', () => {
+  const popBtn = '#seg-diagnostic button[aria-label="Open in its own window"]';
+
+  test('⧉ moves the panel into a window that keeps receiving the stages', async ({ page }) => {
+    await start(page);
+    await page.evaluate(() => VideoEffects.openDiagnostic('raw'));
+    expect(await page.evaluate(() => window.__untilInferences(2))).toBe(true);
+    const [popup] = await Promise.all([page.waitForEvent('popup'), page.locator(popBtn).click()]);
+
+    await expect(popup.locator('#seg-diagnostic')).toBeVisible();
+    expect(await page.locator('#seg-diagnostic').count()).toBe(0);
+    const s = await page.evaluate(() => ({
+      state: VideoEffects.diagnosticState(),
+      pref: localStorage.getItem(VideoEffects.DIAGNOSTIC_WINDOW_KEY),
+    }));
+    expect(s.state.inWindow).toBe(true);
+    expect(s.pref).toBe('1');
+
+    // The panel's canvas, now in the popup, is still painted per inference: the
+    // stub's oval is white at its centre.
+    const n = await page.evaluate(() => VideoEffects.diagnosticState().inference);
+    expect(await page.evaluate((k) => window.__untilInferences(k + 3), n)).toBe(true);
+    const mid = await popup.evaluate(() => {
+      const cv = document.querySelector('#seg-diagnostic canvas');
+      return Array.from(cv.getContext('2d').getImageData(cv.width >> 1, Math.floor(cv.height * 0.6), 1, 1).data);
+    });
+    expect(mid[0]).toBeGreaterThan(240);
+
+    // Its controls still drive this page's panel.
+    await popup.getByRole('button', { name: 'Pipeline' }).click();
+    await popup.getByRole('button', { name: 'Overview' }).click();
+    expect(await page.evaluate(() => VideoEffects.diagnosticState().view)).toBe('grid');
+  });
+
+  test('⇲ puts it back over the room and forgets the choice', async ({ page }) => {
+    await start(page);
+    await page.evaluate(() => VideoEffects.openDiagnostic('grid'));
+    const [popup] = await Promise.all([page.waitForEvent('popup'), page.locator(popBtn).click()]);
+    await popup.locator('#seg-diagnostic button[aria-label="Put it back over the room"]').click();
+
+    await expect(page.locator('#seg-diagnostic')).toBeVisible();
+    await expect.poll(() => popup.isClosed()).toBe(true);
+    const s = await page.evaluate(() => ({
+      state: VideoEffects.diagnosticState(),
+      pref: localStorage.getItem(VideoEffects.DIAGNOSTIC_WINDOW_KEY),
+      framed: document.getElementById('seg-diagnostic').classList.contains('sd-window'),
+    }));
+    expect(s.state).toMatchObject({ on: true, inWindow: false });
+    expect(s.pref).toBeNull();
+    expect(s.framed).toBe(false);
+  });
+
+  test('closing the window closes the panel, like its ✕', async ({ page }) => {
+    await start(page);
+    await page.evaluate(() => VideoEffects.openDiagnostic('grid'));
+    const [popup] = await Promise.all([page.waitForEvent('popup'), page.locator(popBtn).click()]);
+    await popup.close();
+    await expect.poll(() => page.evaluate(() => VideoEffects.diagnosticState().on)).toBe(false);
+    expect(await page.locator('#seg-diagnostic').count()).toBe(0);
+    expect(await page.evaluate(() => VideoEffects.active()._dg == null)).toBe(true);
+  });
+
+  test('closing the panel closes its window', async ({ page }) => {
+    await start(page);
+    await page.evaluate(() => VideoEffects.openDiagnostic('grid'));
+    const [popup] = await Promise.all([page.waitForEvent('popup'), page.locator(popBtn).click()]);
+    await page.evaluate(() => VideoEffects.closeDiagnostic());
+    await expect.poll(() => popup.isClosed()).toBe(true);
+  });
+
+  test('the remembered choice opens it straight in a window when allowed', async ({ page }) => {
+    await start(page);
+    await page.evaluate(() => localStorage.setItem(VideoEffects.DIAGNOSTIC_WINDOW_KEY, '1'));
+    // A click is what lets a browser open a window; without one the panel
+    // stays over the room rather than tripping the popup blocker.
+    await page.evaluate(() => {
+      const b = document.createElement('button');
+      b.id = '__open-diag';
+      b.onclick = () => VideoEffects.openDiagnostic('grid');
+      document.body.appendChild(b);
+    });
+    const [popup] = await Promise.all([page.waitForEvent('popup'), page.click('#__open-diag')]);
+    await expect(popup.locator('#seg-diagnostic')).toBeVisible();
+    expect(await page.evaluate(() => VideoEffects.diagnosticState().inWindow)).toBe(true);
+  });
+});

@@ -288,3 +288,56 @@ test.describe('what the desktop app does NOT do', () => {
     expect(opens).toBe(false);
   });
 });
+
+// Full screen is the user's shape (green button, View → Enter Full Screen):
+// nothing resizes the window while it lasts, and none of its sizes, nor the
+// frames of the way back out, are taken for the voice column.
+test.describe('full screen', () => {
+  test.beforeEach(async ({ page }) => {
+    await seedRoom(page, { selfId: 'me', isHost: true, roomCode: 'me' });
+    await asVoiceColumn(page);
+    await page.evaluate(() => {
+      window.__fs = false;
+      tauriWindowHandle().isFullscreen = () => Promise.resolve(window.__fs);
+    });
+  });
+
+  test('a full-screen window is never resized, and its size is not the column', async ({ page }) => {
+    const out = await page.evaluate(async () => {
+      window.__fs = true;
+      Object.defineProperty(window, 'innerWidth', { value: 2560, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: 1440, configurable: true });
+      noteDesktopWindowResize();
+      await new Promise((r) => setTimeout(r, 0));
+      window.__windowTest.sizes.length = 0;
+      localStorage.setItem('chat-width', '360');
+      toggleChatPanel(true, { focus: false });
+      return { sizes: window.__windowTest.sizes.slice(), voice: _desktopVoiceSize, fs: _desktopFullscreen };
+    });
+    expect(out.fs).toBe(true);
+    expect(out.sizes).toEqual([]);
+    expect(out.voice).toEqual({ width: 350, height: 680 });
+  });
+
+  test('leaving it re-applies the shape once macOS has put the frame back', async ({ page }) => {
+    const out = await page.evaluate(async () => {
+      window.__fs = true;
+      noteDesktopWindowResize();
+      await new Promise((r) => setTimeout(r, 0));
+      localStorage.setItem('chat-width', '360');
+      toggleChatPanel(true, { focus: false });     // opened while full screen
+      window.__windowTest.sizes.length = 0;
+      window.__fs = false;
+      Object.defineProperty(window, 'innerWidth', { value: 600, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: 500, configurable: true });
+      noteDesktopWindowResize();                   // a frame of the way out
+      await new Promise((r) => setTimeout(r, 0));
+      const during = { voice: { ..._desktopVoiceSize }, sizes: window.__windowTest.sizes.slice() };
+      await new Promise((r) => setTimeout(r, DESKTOP_FULLSCREEN_SETTLE_MS + 100));
+      return { during, after: window.__windowTest.sizes.slice() };
+    });
+    expect(out.during.voice).toEqual({ width: 350, height: 680 });
+    expect(out.during.sizes).toEqual([]);
+    expect(out.after).toEqual([{ width: 350 + 360, height: 680 }]);
+  });
+});
