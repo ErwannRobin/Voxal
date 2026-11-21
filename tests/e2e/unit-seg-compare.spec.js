@@ -32,6 +32,9 @@ async function installHelpers(page) {
       stream.getVideoTracks()[0].addEventListener('ended', () => clearInterval(timer));
       return stream;
     };
+    // The engines that run from the start: every row but the lab's candidates,
+    // which are off until ticked.
+    window.__core = (st) => st.entries.filter((e) => !e.name.startsWith('lab:'));
     window.__until = async function (fn, ms = 10000) {
       for (let i = 0; i < ms / 50; i++) {
         if (fn()) return true;
@@ -98,16 +101,20 @@ test('the Engines tab runs every engine this build has, the driving one first', 
   await start(page);
   await page.evaluate(() => VideoEffects.openDiagnostic('compare'));
   expect(await page.evaluate(() => window.__until(() =>
-    VideoEffects.compareState().entries.length >= 4 &&
-    VideoEffects.compareState().entries.every((e) => e.masks > 0)))).toBe(true);
+    window.__core(VideoEffects.compareState()).length >= 4 &&
+    window.__core(VideoEffects.compareState()).every((e) => e.masks > 0)))).toBe(true);
   const s = await state(page);
   expect(s.on).toBe(true);
-  expect(s.entries.map((e) => e.name)).toEqual(['mediapipe', 'longpipe', 'rvm', 'p3m']);
+  const labs = await page.evaluate(() => Object.keys(LabEngine.MODELS).map((id) => 'lab:' + id));
+  expect(s.entries.map((e) => e.name)).toEqual(['mediapipe', 'longpipe', 'rvm', 'p3m', ...labs]);
   expect(s.entries[0].primary).toBe(true);
-  expect(s.entries.slice(1).every((e) => !e.primary && e.state === 'running')).toBe(true);
+  const core = s.entries.filter((e) => !e.name.startsWith('lab:'));
+  expect(core.slice(1).every((e) => !e.primary && e.state === 'running')).toBe(true);
+  // Every lab candidate is a row, but none is loaded until it is ticked.
+  expect(s.entries.filter((e) => e.name.startsWith('lab:')).every((e) => e.state === 'off' && e.masks === 0)).toBe(true);
   expect(s.reference).toBe('mediapipe');
   // The stand-ins all draw the same oval: every guest agrees with the reference.
-  for (const e of s.entries.slice(1)) expect(e.iou).toBeGreaterThan(0.98);
+  for (const e of core.slice(1)) expect(e.iou).toBeGreaterThan(0.98);
   await expect(page.locator('#seg-diagnostic [aria-pressed="true"]').first()).toHaveText('Engines');
   await expect(page.locator('#seg-diagnostic table tr[data-engine="p3m"]')).toBeVisible();
 });
@@ -183,7 +190,7 @@ test('your own video is split by engine, the driving one first; nobody else gets
     VideoEffects.onSelfViewChange(() => changes++);
     const before = VideoEffects.selfView(window.__out);
     VideoEffects.openDiagnostic('compare');
-    await window.__until(() => VideoEffects.compareState().entries.every((e) => e.masks > 0));
+    await window.__until(() => window.__core(VideoEffects.compareState()).every((e) => e.masks > 0));
     await window.__splitFrames(3);
     const during = VideoEffects.selfView(window.__out);
     const st = VideoEffects.compareState().split;
@@ -224,7 +231,7 @@ test("each tile is drawn from that engine's own mask, through the whole pipeline
       : null);
     VideoEffects.compareSetView('matte');
     VideoEffects.openDiagnostic('compare');
-    await window.__until(() => VideoEffects.compareState().entries.every((e) => e.masks > 3));
+    await window.__until(() => window.__core(VideoEffects.compareState()).every((e) => e.masks > 3));
     await window.__splitFrames(4);
   });
   const px = (n, x, y) => page.evaluate(([a, b, c]) => window.__tilePx(a, b, c), [n, x, y]);
@@ -256,7 +263,7 @@ test('two engines stand side by side, each showing the middle of the picture', a
   await page.evaluate(async () => {
     VideoEffects.compareSetView('matte');
     VideoEffects.openDiagnostic('compare');
-    await window.__until(() => VideoEffects.compareState().entries.every((e) => e.state === 'running'));
+    await window.__until(() => window.__core(VideoEffects.compareState()).every((e) => e.state === 'running'));
     VideoEffects.comparePause('rvm', true);
     VideoEffects.comparePause('p3m', true);
     await window.__splitFrames(4);
@@ -291,7 +298,7 @@ test('a name shows that engine alone on your video; again, all of them', async (
   await start(page);
   await page.evaluate(() => VideoEffects.openDiagnostic('compare'));
   expect(await page.evaluate(() => window.__until(() =>
-    VideoEffects.compareState().entries.every((e) => e.state === 'running')))).toBe(true);
+    window.__core(VideoEffects.compareState()).every((e) => e.state === 'running')))).toBe(true);
   await page.getByRole('button', { name: 'Show only Longpipe' }).click();
   await page.evaluate(() => window.__splitFrames(2));
   let st = await state(page);
@@ -308,7 +315,7 @@ test('Use moves the call to that engine', async ({ page }) => {
   await start(page);
   await page.evaluate(() => VideoEffects.openDiagnostic('compare'));
   expect(await page.evaluate(() => window.__until(() =>
-    VideoEffects.compareState().entries.every((e) => e.state === 'running')))).toBe(true);
+    window.__core(VideoEffects.compareState()).every((e) => e.state === 'running')))).toBe(true);
   await expect(page.locator('#seg-diagnostic tr[data-engine="mediapipe"] button.sd-use')).toHaveText('In call');
   await expect(page.locator('#seg-diagnostic tr[data-engine="mediapipe"] button.sd-use')).toBeDisabled();
   await page.getByRole('button', { name: 'Use Longpipe for the call' }).click();
@@ -332,7 +339,7 @@ test("with Longpipe's own blur published, its tile is that picture and the call 
     old.close();
     p.adoptSegmenter(seg);
     VideoEffects.openDiagnostic('compare');
-    await window.__until(() => VideoEffects.compareState().entries.length === 4 &&
+    await window.__until(() => window.__core(VideoEffects.compareState()).length === 4 &&
       VideoEffects.compareState().split.tiles.every((t) => t.ready));
     await window.__splitFrames(3);
     const gl = p.gl, w = p.canvas.width, h = p.canvas.height;
@@ -351,10 +358,46 @@ test("with Longpipe's own blur published, its tile is that picture and the call 
   expect(r.guest[1]).toBeGreaterThan(120);       // a guest's tile: our composite of the green camera
 });
 
+test('each lab candidate is its own row: off until ticked, loaded when ticked, unloaded when unticked; Use stores it', async ({ page }) => {
+  await start(page);
+  await page.evaluate(() => VideoEffects.openDiagnostic('compare'));
+  expect(await page.evaluate(() => window.__until(() =>
+    window.__core(VideoEffects.compareState()).every((e) => e.state === 'running')))).toBe(true);
+  const row = page.locator('#seg-diagnostic tr[data-engine="lab:modnet-webcam"]');
+  await expect(row).toContainText('Lab: MODNet (webcam)');
+  await expect(row.locator('input[type=checkbox]')).not.toBeChecked();
+  await page.evaluate(() => window.__splitFrames(2));
+  expect((await state(page)).split.tiles.length).toBe(4);
+
+  await row.locator('input[type=checkbox]').check();
+  expect(await page.evaluate(() => window.__until(() => {
+    const e = VideoEffects.compareState().entries.find((x) => x.name === 'lab:modnet-webcam');
+    return e && e.state === 'running' && e.masks > 0;
+  }))).toBe(true);
+  await page.evaluate(() => window.__splitFrames(2));
+  let st = await state(page);
+  expect(st.split.tiles.map((t) => t.name)).toContain('lab:modnet-webcam');
+  expect(st.split.tiles.length).toBe(5);
+
+  await row.locator('input[type=checkbox]').uncheck();
+  st = await state(page);
+  expect(st.entries.find((x) => x.name === 'lab:modnet-webcam')).toMatchObject({ state: 'off', masks: 0 });
+  await page.evaluate(() => window.__splitFrames(2));
+  expect((await state(page)).split.tiles.length).toBe(4);
+
+  // Use: the candidate becomes the lab's model and the lab engine is asked for.
+  await row.locator('input[type=checkbox]').check();
+  expect(await page.evaluate(() => window.__until(() =>
+    VideoEffects.compareState().entries.find((x) => x.name === 'lab:modnet-webcam').state === 'running'))).toBe(true);
+  await page.getByRole('button', { name: 'Use Lab: MODNet (webcam) for the call' }).click();
+  expect(await page.evaluate(() => window.__until(() =>
+    localStorage.getItem(LabEngine.MODEL_KEY) === 'modnet-webcam' && LabEngine.selected()))).toBe(true);
+});
+
 test('a new engine driving the picture becomes the reference; the old one a guest', async ({ page }) => {
   await start(page);
   await page.evaluate(() => VideoEffects.openDiagnostic('compare'));
-  expect(await page.evaluate(() => window.__until(() => VideoEffects.compareState().entries.length === 4))).toBe(true);
+  expect(await page.evaluate(() => window.__until(() => window.__core(VideoEffects.compareState()).length === 4))).toBe(true);
   await page.evaluate(() => {
     const p = VideoEffects.active();
     const log = { closed: 0, calls: 0 };
@@ -368,7 +411,7 @@ test('a new engine driving the picture becomes the reference; the old one a gues
   const s = await state(page);
   expect(s.entries[0]).toMatchObject({ name: 'rvm', primary: true });
   expect(s.entries.find((e) => e.name === 'mediapipe').primary).toBe(false);
-  expect(s.entries.length).toBe(4);
+  expect(s.entries.filter((e) => !e.name.startsWith('lab:')).length).toBe(4);
   expect(s.reference === 'rvm' || s.reference === null).toBe(true);
 });
 
@@ -386,7 +429,7 @@ test('a click on a pane of the pipeline overview opens that stage', async ({ pag
 test('the report names the device, the engine and every compared engine', async ({ page }) => {
   await start(page);
   await page.evaluate(() => VideoEffects.openDiagnostic('compare'));
-  expect(await page.evaluate(() => window.__until(() => VideoEffects.compareState().entries.every((e) => e.masks > 0)))).toBe(true);
+  expect(await page.evaluate(() => window.__until(() => window.__core(VideoEffects.compareState()).every((e) => e.masks > 0)))).toBe(true);
   await page.waitForFunction(() => VideoEffects.diagnosticState().inference >= 2);
   const text = await page.evaluate(() => VideoEffects.diagnosticReport());
   expect(text).toContain('Voxal segmentation report');
@@ -404,7 +447,7 @@ test('the published frame is byte-identical with the split view running', async 
     const gl = p.gl, w = p.canvas.width, h = p.canvas.height;
     const read = () => { const b = new Uint8Array(w * h * 4); gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, b); return b; };
     VideoEffects.openDiagnostic('compare');
-    await window.__until(() => VideoEffects.compareState().entries.every((e) => e.masks > 0) &&
+    await window.__until(() => window.__core(VideoEffects.compareState()).every((e) => e.masks > 0) &&
       VideoEffects.compareState().split.tiles.every((t) => t.ready));
     // One task, so the camera frame is the same for both draws: only the
     // comparison (and the split it draws first) differs between them.
@@ -450,14 +493,14 @@ test('without a camera the compare view says so and costs nothing', async ({ pag
   await expect(page.locator('#seg-diagnostic')).toContainText('Start the camera with a background effect');
   // Starting the camera afterwards picks the comparison up.
   await start(page);
-  expect(await page.evaluate(() => window.__until(() => VideoEffects.compareState().entries.length === 4))).toBe(true);
+  expect(await page.evaluate(() => window.__until(() => window.__core(VideoEffects.compareState()).length === 4))).toBe(true);
 });
 
 test('?segdiag=compare opens the comparison when the camera starts', async ({ page }) => {
   await page.goto('/?segdiag=compare');
   await installHelpers(page);
   await start(page);
-  expect(await page.evaluate(() => window.__until(() => VideoEffects.compareState().entries.length === 4))).toBe(true);
+  expect(await page.evaluate(() => window.__until(() => window.__core(VideoEffects.compareState()).length === 4))).toBe(true);
   expect(await page.evaluate(() => VideoEffects.diagnosticState().view)).toBe('compare');
 });
 

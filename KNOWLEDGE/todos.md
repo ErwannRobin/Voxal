@@ -6,10 +6,11 @@ Things to implement or investigate, ordered roughly by priority.
 
 ## 🧪 BackgroundMattingV2 experiment (`docs/bgm-evaluation.md`)
 
-Experimental engine (MIT, 10 MB) behind Settings → Advanced → Segmentation debug, `make bgm-assets` locally; runs only while the fixed-camera picture of the empty room is current. Best mask and edges of every engine on the bench footage, at 15 mattes/s. Not deployed, not a default.
+Experimental engine (MIT, 10 MB) behind Settings → Advanced → Segmentation debug, `make bgm-assets` locally; runs only while the fixed-camera picture of the empty room is current. Best mask and edges of every engine on the bench footage, at 15 mattes/s. Previews with `PREVIEW_ENGINES=1` only, not a default.
 - **Try it on a real webcam**: shadows and light the person throws on the wall, webcam noise vs the averaged plate, a laptop lid touched (a 3 px nudge already costs it up to +65% mask error).
 - **Feed it the learned room** (`texLearnA`) instead of requiring a capture, and shift the plate by the reference's motion estimate (`shift`).
-- If it holds up: publish the converted model as a `bgm-model-v1` prerelease + fetch script (like P3M-Net) so preview deploys carry it; measure on Windows / Safari / a phone.
+- [x] Published in the `matting-models-v1` prerelease; `PREVIEW_ENGINES=1` previews carry it (with the lab candidates).
+- Measure on Windows / Safari / a phone (now possible from a preview).
 
 ## 🧪 MODNet (webcam checkpoint) as an engine (`docs/matting-candidates.md`)
 
