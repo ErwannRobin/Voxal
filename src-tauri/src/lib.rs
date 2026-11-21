@@ -262,18 +262,22 @@ async fn check_for_updates(app: AppHandle) -> tauri_plugin_updater::Result<()> {
     Ok(())
 }
 
-/// The one child window the frontend opens with `window.open`: the
-/// segmentation diagnostic, popped out of the main window
-/// (`VideoEffects` → `diagPopOut()`). The main window keeps driving it — it
-/// builds the panel, then moves its DOM into the new document and draws into
-/// its canvas every inference — so the new webview MUST share the opener's
-/// WebKit configuration (`window_features`): only then is `window.open`'s
-/// return value a live window of the same process rather than `null`.
+/// The child windows the frontend opens with `window.open`: the segmentation
+/// diagnostic, popped out of the main window (`VideoEffects` → `diagPopOut()`),
+/// and the room's chat in its own window (`main.js` → `openChatWindow()`). The
+/// main window keeps driving both — it builds the panel, then moves its DOM
+/// into the new document — so the new webview MUST share the opener's WebKit
+/// configuration (`window_features`): only then is `window.open`'s return value
+/// a live window of the same process rather than `null`.
 ///
-/// Only a blank page is ever allowed, and only one at a time. Anything else
-/// keeps the old behaviour of a Tauri webview, where `window.open` does
-/// nothing and links go through the shell plugin.
-const DIAGNOSTIC_WINDOW: &str = "seg-diagnostic";
+/// Only a blank page is ever allowed, and at most one of each at a time (the
+/// frontend reuses a window it already has, so a third request is a bug, not a
+/// third panel). Anything else keeps the old behaviour of a Tauri webview, where
+/// `window.open` does nothing and links go through the shell plugin. The
+/// request does not say which panel it is for, so the title is the app's.
+const CHILD_WINDOW_PREFIX: &str = "child-";
+const CHILD_WINDOW_MAX: usize = 2;
+static CHILD_WINDOW_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 fn open_child_window<R: tauri::Runtime>(
     app: &AppHandle<R>,
@@ -281,18 +285,25 @@ fn open_child_window<R: tauri::Runtime>(
     features: tauri::webview::NewWindowFeatures,
 ) -> tauri::webview::NewWindowResponse<R> {
     use tauri::webview::NewWindowResponse;
-    if url.as_str() != "about:blank" || app.get_webview_window(DIAGNOSTIC_WINDOW).is_some() {
+    let open = app
+        .webview_windows()
+        .keys()
+        .filter(|label| label.starts_with(CHILD_WINDOW_PREFIX))
+        .count();
+    if url.as_str() != "about:blank" || open >= CHILD_WINDOW_MAX {
         return NewWindowResponse::Deny;
     }
-    match tauri::WebviewWindowBuilder::new(app, DIAGNOSTIC_WINDOW, tauri::WebviewUrl::External(url))
+    let seq = CHILD_WINDOW_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let label = format!("{CHILD_WINDOW_PREFIX}{seq}");
+    match tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::External(url))
         .window_features(features)
-        .title("Segmentation diagnostic")
-        .min_inner_size(340.0, 320.0)
+        .title("Voxal")
+        .min_inner_size(300.0, 320.0)
         .build()
     {
         Ok(window) => NewWindowResponse::Create { window },
         Err(e) => {
-            eprintln!("[window] could not open the diagnostic window: {e}");
+            eprintln!("[window] could not open a child window: {e}");
             NewWindowResponse::Deny
         }
     }

@@ -2,9 +2,10 @@ import { test, expect } from './fixtures.js';
 import { seedRoom } from './_helpers.js';
 
 // The Mac app's window is part of its layout: it ships as a narrow voice column
-// and grows for the two configurations that need more room — the chat drawer
-// (to the right, by exactly the drawer's width) and a live camera (to the
-// landscape shape the desktop web app uses). Both hand the column back.
+// and grows for the two configurations that need more room — the pinned chat
+// drawer (by exactly the drawer's width, as a delta on the window as it is:
+// to the right, else shifted left, else not at all) and a live camera (to the
+// landscape shape the desktop web app uses). Both hand back what they took.
 //
 // The sizing decisions are pure (desktopWindowTarget) and the applying leg is
 // one Tauri call, so both halves are testable against a fake bridge: a window
@@ -104,10 +105,9 @@ test.describe('desktopWindowTarget — what the window should be', () => {
     expect(t.height).toBe(680);
   });
 
-  test('an open chat adds exactly the drawer width, to the right', async ({ page }) => {
+  test('what the open chat added stays added to the shape', async ({ page }) => {
     const t = await page.evaluate(() => {
-      localStorage.setItem('chat-width', '420');
-      document.body.classList.add('chat-open');
+      _desktopChatGrowth = { width: 420, shift: 0 };
       return desktopWindowTarget();
     });
     expect(t.width).toBe(350 + 420);
@@ -115,16 +115,17 @@ test.describe('desktopWindowTarget — what the window should be', () => {
   });
 
   // readChatWidth() clamps to 90% of the CURRENT window — the one we are about
-  // to grow. Reserving that number would leave a strip narrower than the drawer.
-  test('the strip is the stored width, not the width the narrow window allows', async ({ page }) => {
+  // to grow. Asking for that number would leave a strip narrower than the drawer.
+  test('the growth asked for is the stored width, not the width the narrow window allows', async ({ page }) => {
     const out = await page.evaluate(() => {
       localStorage.setItem('chat-width', '400');
-      document.body.classList.add('chat-open');
-      _desktopVoiceSize = { width: 350, height: 680 };
-      return { stored: storedChatWidth(), target: desktopWindowTarget().width };
+      Object.defineProperty(window, 'innerWidth', { value: 350, configurable: true });
+      window.__windowTest.sizes.length = 0;
+      toggleChatPanel(true, { focus: false });
+      return { stored: storedChatWidth(), sizes: window.__windowTest.sizes.slice() };
     });
     expect(out.stored).toBe(400);
-    expect(out.target).toBe(750);
+    expect(out.sizes[0].width).toBe(750);
   });
 
   test('a live stage takes the landscape shape, wide enough to dock the chat', async ({ page }) => {
@@ -138,10 +139,10 @@ test.describe('desktopWindowTarget — what the window should be', () => {
 
   test('the stage plus the chat is the landscape width plus the drawer', async ({ page }) => {
     const out = await page.evaluate(() => {
-      localStorage.setItem('chat-width', '360');
-      document.body.classList.add('video-stage', 'chat-open');
+      document.body.classList.add('video-stage');
+      _desktopChatGrowth = { width: 360, shift: 0 };
       const withBoth = desktopWindowTarget().width;
-      document.body.classList.remove('chat-open');
+      _desktopChatGrowth = null;
       return { withBoth, stageOnly: desktopWindowTarget().width };
     });
     expect(out.withBoth).toBe(out.stageOnly + 360);
@@ -170,7 +171,8 @@ test.describe('desktopWindowTarget — what the window should be', () => {
     const t = await page.evaluate(() => {
       Object.defineProperty(window.screen, 'availWidth', { value: 900, configurable: true });
       _desktopVoiceSize = { width: 350, height: 680 };
-      document.body.classList.add('video-stage', 'chat-open');
+      _desktopChatGrowth = { width: 360, shift: 0 };
+      document.body.classList.add('video-stage');
       return desktopWindowTarget().width;
     });
     expect(t).toBe(900);
@@ -186,6 +188,8 @@ test.describe('applyDesktopWindowShape — the window actually resizes', () => {
   test('opening the chat resizes the window and marks the drawer as beside', async ({ page }) => {
     const out = await page.evaluate(() => {
       localStorage.setItem('chat-width', '360');
+      Object.defineProperty(window, 'innerWidth', { value: 350, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: 680, configurable: true });
       window.__windowTest.sizes.length = 0;
       toggleChatPanel(true, { focus: false });
       return {
@@ -203,12 +207,102 @@ test.describe('applyDesktopWindowShape — the window actually resizes', () => {
   test('closing it asks for the column back', async ({ page }) => {
     const sizes = await page.evaluate(() => {
       localStorage.setItem('chat-width', '360');
+      Object.defineProperty(window, 'innerWidth', { value: 350, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: 680, configurable: true });
       toggleChatPanel(true, { focus: false });
+      Object.defineProperty(window, 'innerWidth', { value: 710, configurable: true });   // it grew
       window.__windowTest.sizes.length = 0;
       toggleChatPanel(false, { remember: true });
       return window.__windowTest.sizes;
     });
     expect(sizes).toEqual([{ width: 350, height: 680 }]);
+  });
+
+  // The bug this replaced: the chat recomputed the WHOLE window from a
+  // remembered column, so a window the user had made 1000x900 snapped to
+  // 350+360 x 680 the moment the chat opened.
+  test('only the width changes, by the drawer, from the window as it is', async ({ page }) => {
+    const sizes = await page.evaluate(() => {
+      localStorage.setItem('chat-width', '360');
+      _desktopAppliedSize = null;
+      Object.defineProperty(window, 'innerWidth', { value: 1000, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: 900, configurable: true });
+      window.__windowTest.sizes.length = 0;
+      toggleChatPanel(true, { focus: false });
+      return window.__windowTest.sizes.slice();
+    });
+    expect(sizes).toEqual([{ width: 1360, height: 900 }]);
+  });
+
+  test('no room on the right: it shifts left by just enough, and moves back on close', async ({ page }) => {
+    const out = await page.evaluate(async () => {
+      localStorage.setItem('chat-width', '360');
+      Object.defineProperty(window, 'screenX', { value: 2000, configurable: true });
+      Object.defineProperty(window, 'screenY', { value: 40, configurable: true });
+      Object.defineProperty(window, 'innerWidth', { value: 400, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: 700, configurable: true });
+      window.__windowTest.sizes.length = 0;
+      window.__windowTest.positions.length = 0;
+      toggleChatPanel(true, { focus: false });
+      await new Promise((r) => setTimeout(r, 0));
+      const opened = { sizes: window.__windowTest.sizes.slice(), positions: window.__windowTest.positions.slice() };
+      // The window is where it was put: 2560 - 760 = 1800, and 760 wide.
+      Object.defineProperty(window, 'screenX', { value: 1800, configurable: true });
+      Object.defineProperty(window, 'innerWidth', { value: 760, configurable: true });
+      window.__windowTest.sizes.length = 0;
+      window.__windowTest.positions.length = 0;
+      toggleChatPanel(false, { remember: true });
+      await new Promise((r) => setTimeout(r, 0));
+      return { opened, closed: { sizes: window.__windowTest.sizes.slice(), positions: window.__windowTest.positions.slice() } };
+    });
+    expect(out.opened.positions).toEqual([{ x: 1800, y: 40 }]);
+    expect(out.opened.sizes).toEqual([{ width: 760, height: 700 }]);
+    expect(out.closed.sizes).toEqual([{ width: 400, height: 700 }]);
+    expect(out.closed.positions).toEqual([{ x: 2000, y: 40 }]);
+  });
+
+  test('already as wide as the screen: nothing resizes, the drawer opens inside', async ({ page }) => {
+    const out = await page.evaluate(() => {
+      localStorage.setItem('chat-width', '360');
+      Object.defineProperty(window, 'innerWidth', { value: 2560, configurable: true });
+      window.__windowTest.sizes.length = 0;
+      window.__windowTest.positions.length = 0;
+      toggleChatPanel(true, { focus: false });
+      const opened = { sizes: window.__windowTest.sizes.slice(), beside: document.body.classList.contains('chat-side') };
+      toggleChatPanel(false, { remember: true });
+      return { opened, closed: window.__windowTest.sizes.slice(), positions: window.__windowTest.positions.slice() };
+    });
+    expect(out.opened.sizes).toEqual([]);
+    expect(out.opened.beside).toBe(true);    // the strip comes out of a 2560px room
+    expect(out.closed).toEqual([]);
+    expect(out.positions).toEqual([]);
+  });
+
+  test('desktopChatPlacement: right, else shifted, else partly, else inside', async ({ page }) => {
+    const out = await page.evaluate(() => {
+      const area = { x: 0, width: 1440 };
+      return {
+        right:   desktopChatPlacement({ x: 100, width: 400 }, 360, area),
+        shifted: desktopChatPlacement({ x: 1000, width: 400 }, 360, area),
+        partly:  desktopChatPlacement({ x: 0, width: 1240 }, 360, area),
+        inside:  desktopChatPlacement({ x: 0, width: 1420 }, 360, area),
+      };
+    });
+    expect(out.right).toEqual({ grown: 360, x: 100, shift: 0 });
+    expect(out.shifted).toEqual({ grown: 360, x: 680, shift: 320 });
+    expect(out.partly).toEqual({ grown: 200, x: 0, shift: 0 });
+    expect(out.inside).toBeNull();
+  });
+
+  test('an overlay chat never touches the window', async ({ page }) => {
+    const sizes = await page.evaluate(() => {
+      localStorage.setItem('chat-panel-mode', 'overlay');
+      window.__windowTest.sizes.length = 0;
+      toggleChatPanel(true, { focus: false });
+      toggleChatPanel(false, { remember: true });
+      return window.__windowTest.sizes.slice();
+    });
+    expect(sizes).toEqual([]);
   });
 
   // The room is not asked to shrink for the drawer — the window grew instead —
@@ -436,17 +530,18 @@ test.describe('placed by macOS (Fill, tiles)', () => {
       placed: _desktopPlaced, voice: _desktopVoiceSize, sizes: window.__windowTest.sizes.slice(),
     }));
     expect(out.placed).toBe(false);
-    // The frame it landed in, minus the open drawer, is the new voice column —
-    // so the shape it re-applies is the window it already is: no resize.
-    expect(out.voice).toEqual({ width: 800 - 360, height: 700 });
+    // The frame it landed in is the new voice column (the drawer was opened
+    // inside the tile, so none of it is the chat's) — so the shape it
+    // re-applies is the window it already is: no resize.
+    expect(out.voice).toEqual({ width: 800, height: 700 });
     expect(out.sizes).toEqual([]);
-    // And from then on it follows the room again: closing the chat hands the
-    // column back.
+    // A chat that opened inside gave the window nothing, so closing it takes
+    // nothing back.
     const back = await page.evaluate(() => {
       toggleChatPanel(false, { remember: true });
       return window.__windowTest.sizes.slice();
     });
-    expect(back).toEqual([{ width: 440, height: 700 }]);
+    expect(back).toEqual([]);
   });
 });
 

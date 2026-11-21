@@ -1435,13 +1435,13 @@ kbd {
      `chatOverlaysRoom()` measures the room's right edge against the drawer's,
      so this rule is also what stops a scrim being published here: with the
      strip reserved there is nothing behind the drawer to tap away. */
-  html.is-web body:not(.embed-tiny):not(.video-stage-desktop).chat-open {
+  html.is-web body:not(.embed-tiny):not(.video-stage-desktop):not(.chat-mode-overlay).chat-open {
     padding-right: min(var(--chat-width, 360px), 42vw);
   }
-  html.is-web body:not(.embed-tiny):not(.video-stage-desktop).chat-open .room-chat-panel {
+  html.is-web body:not(.embed-tiny):not(.video-stage-desktop):not(.chat-mode-overlay).chat-open .room-chat-panel {
     width: min(var(--chat-width, 360px), 42vw);
   }
-  html.is-web body:not(.embed-tiny):not(.video-stage-desktop).chat-open .stage-handle-right {
+  html.is-web body:not(.embed-tiny):not(.video-stage-desktop):not(.chat-mode-overlay).chat-open .stage-handle-right {
     right: min(var(--chat-width, 360px), 42vw);
   }
 }
@@ -1546,6 +1546,91 @@ kbd {
     min-height: 0;
   }
   html.is-web body.video-stage-desktop:not(.embed-tiny) #screen-room .room-bottom-bar .room-controls { margin-top: 0; }
+}
+
+/* ── Panel display controls ───────────────────────────────────────
+   The small segmented controls in the chat's header (pinned / over the room /
+   own window) and on the desktop stage's rail (pinned / over the video / hide).
+   The pressed one carries the accent; state lives in aria-pressed, written by
+   syncChatModeButtons() and applyRosterPanel(). */
+.room-panel-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.room-panel-tools[hidden],
+.panel-tool[hidden] { display: none; }
+.panel-tool {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0;
+  padding: 4px;
+  border-radius: 6px;
+  color: var(--text-muted);
+}
+.panel-tool:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
+.panel-tool[aria-pressed="true"] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.chat-mode-group { margin-left: auto; }
+/* The phone stage's chat is the drawer, whatever was chosen on a desktop. */
+body.video-stage-immersive .chat-mode-group { display: none; }
+/* The rail's controls belong to the desktop stage only. */
+.room-peers-tools { display: none; }
+
+/* ── Desktop stage: the participants rail, pinned / over the video / away ──
+   `body.roster-overlay` and `body.roster-hidden` are published by
+   applyRosterPanel() only while `body.video-stage-desktop` is. Pinned is the
+   grid above, untouched. Over the video or away, the stage takes the rail's
+   column too (a grid item may share cells), and what is left in the rail —
+   the roster when overlaid, the talk button always — stands on the picture
+   as glass. The talk button is never hidden with the roster. */
+@media (min-width: 861px) {
+  html.is-web body.video-stage-desktop:not(.embed-tiny) #screen-room .room-peers-tools {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 4px;
+  }
+  html.is-web body.video-stage-desktop.roster-overlay:not(.embed-tiny) #screen-room #video-stage,
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room #video-stage {
+    grid-area: stage / rail / stage / stage;
+  }
+  html.is-web body.video-stage-desktop.roster-overlay:not(.embed-tiny) #screen-room .room-peers-panel,
+  html.is-web body.video-stage-desktop.roster-overlay:not(.embed-tiny) #screen-room .room-bottom-bar,
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .room-bottom-bar {
+    position: relative;
+    z-index: 6;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--bg-surface) 84%, transparent);
+    -webkit-backdrop-filter: blur(14px);
+    backdrop-filter: blur(14px);
+  }
+  html.is-web body.video-stage-desktop.roster-overlay:not(.embed-tiny) #screen-room .room-peers-panel {
+    margin: 10px 0 0 10px;
+    max-height: calc(100% - 20px);
+  }
+  html.is-web body.video-stage-desktop.roster-overlay:not(.embed-tiny) #screen-room .room-bottom-bar,
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .room-bottom-bar {
+    margin: 0 0 10px 10px;
+  }
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .room-peers-panel { display: none; }
+  /* Away, the left edge handle is how it comes back. A button here, not a
+     drag: app chrome in the app's own colours, like the chat's. */
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) .stage-handle-left {
+    display: flex;
+    cursor: pointer;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-left: none;
+    color: var(--text-muted);
+  }
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) .stage-handle-left::before { background: currentColor; }
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) .stage-handle-left:hover { color: var(--text); }
 }
 
 /* ── Floating controls (phones) ───────────────────────────────────
@@ -5758,6 +5843,55 @@ body.video-stage-immersive .chat-resizer { display: none; }
 html.is-desktop-app body.chat-side.chat-open:not(.embed-tiny) {
   padding-right: min(var(--chat-width, 360px), 92vw);
 }
+
+/* ── Chat: over the room, by choice ───────────────────────────────
+   `body.chat-mode-overlay` (applyChatDock()) — nothing reserves a strip for it
+   and no scrim is published. On the desktop stage it is a floating card below
+   the room header (`--room-header-bottom`, measured by
+   scheduleChatOverlayTop()), so the header's own buttons stay reachable, and it
+   is glass, so the picture shows through. */
+@media (min-width: 861px) {
+  html.is-web body.video-stage-desktop.chat-mode-overlay:not(.embed-tiny) .room-chat-panel {
+    top: calc(var(--room-header-bottom, 64px) + 8px);
+    right: 12px;
+    bottom: 12px;
+    width: min(var(--chat-width, 360px), 46vw);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--bg-surface) 86%, transparent);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+  }
+  html.is-web body.video-stage-desktop.chat-mode-overlay:not(.embed-tiny):not(.chat-open) .room-chat-panel {
+    transform: translateX(calc(100% + 24px));
+  }
+  html.is-web body.video-stage-desktop.chat-mode-overlay.chat-open:not(.embed-tiny) .stage-handle-right {
+    right: calc(min(var(--chat-width, 360px), 46vw) + 12px);
+  }
+}
+
+/* ── Chat: in its own window ──────────────────────────────────────
+   The panel's own nodes, moved into a blank window (openChatWindow()). That
+   document carries this sheet and the room's root classes plus
+   `chat-window-doc`, and the panel simply fills it. */
+html.chat-window-doc,
+html.chat-window-doc body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+html.chat-window-doc .room-chat-panel {
+  position: fixed;
+  inset: 0;
+  width: auto;
+  transform: none;
+  transition: none;
+  border: none;
+  padding: 14px;
+}
+html.chat-window-doc .chat-resizer { display: none; }
 
 /* A mention is a name, resolved on the reader's own roster — so "you" is
    highlighted differently on every screen, which is the point. */

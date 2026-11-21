@@ -313,7 +313,15 @@ const CHAT_WIDTH_MAX     = 720;
 // Whether the chat drawer was left open. Stored as a presence (`1`), so
 // "never chosen" is an absence and the default is shut — see chatOpensOnEntry().
 const CHAT_OPEN_KEY      = 'chat-open';
-var   _rejoinDismissed          = false;
+// How the chat is shown on a desktop-sized screen: `pinned` (absent — a column
+// of its own, the window growing for it on the Mac), `overlay` (a drawer over
+// the room) or `window` (its own window). See chatMode().
+const CHAT_MODE_KEY      = 'chat-panel-mode';
+// The participants rail on the desktop video stage: `pinned` (absent) or
+// `overlay` (floating on the picture), and whether it is put away (`1`).
+const ROSTER_MODE_KEY    = 'roster-panel-mode';
+const ROSTER_HIDDEN_KEY  = 'roster-panel-hidden';
+var   _rejoinDismissed         = false;
 const RECENT_ROOMS_KEY          = 'recent-rooms';
 const RECENT_ROOMS_MAX          = 5;
 
@@ -4254,7 +4262,7 @@ function renderChatQuote(replyTo) {
 // the viewport: in a column of near-identical rows a silent jump leaves the
 // reader hunting for which line they were sent to.
 function jumpToChatMessage(msgId) {
-  var list = document.getElementById('chat-messages');
+  var list = chatEl('chat-messages');
   if (!list) return false;
   var row = chatRowFor(list, msgId);
   if (!row) return false;
@@ -4320,7 +4328,7 @@ function chatStuckToBottom(list) {
 }
 
 function renderChat() {
-  var list = document.getElementById('chat-messages');
+  var list = chatEl('chat-messages');
   if (!list) return;
   var stick = chatStuckToBottom(list);
   closeEmojiPicker();          // its anchor row is about to be replaced
@@ -4370,7 +4378,7 @@ function setChatReplyTo(msgId) {
   _chatReplyTo = next;
   renderChatReplyBar();
   if (next) {
-    var input = document.getElementById('chat-input');
+    var input = chatEl('chat-input');
     if (input) { try { input.focus(); } catch (_) {} }
   }
 }
@@ -4395,7 +4403,7 @@ function setChatEditing(msgId) {
   // transcript; the composer can only be doing one of them.
   _chatReplyTo = null;
   _chatEditing = m.id;
-  var input = document.getElementById('chat-input');
+  var input = chatEl('chat-input');
   if (input) {
     input.value = m.text;
     autoGrowChatInput(input);
@@ -4417,7 +4425,7 @@ function clearChatEdit(opts) {
   var was = _chatEditing;
   _chatEditing = null;
   if (was && opts && opts.clearInput) {
-    var input = document.getElementById('chat-input');
+    var input = chatEl('chat-input');
     if (input) { input.value = ''; autoGrowChatInput(input); }
   }
   renderChatEditBar();
@@ -4436,7 +4444,7 @@ function armChatEditExpiry(m) {
 }
 
 function renderChatEditBar() {
-  var bar = document.getElementById('chat-edit-bar');
+  var bar = chatEl('chat-edit-bar');
   if (!bar) return;
   var src = _chatEditing ? chatMessageById(_chatEditing) : null;
   if (!src) {
@@ -4466,7 +4474,7 @@ function renderChatEditBar() {
 }
 
 function renderChatReplyBar() {
-  var bar = document.getElementById('chat-reply-bar');
+  var bar = chatEl('chat-reply-bar');
   if (!bar) return;
   var src = _chatReplyTo ? chatMessageById(_chatReplyTo) : null;
   // The message being answered can be trimmed out from under the composer
@@ -4505,7 +4513,7 @@ function renderChatReplyBar() {
 }
 
 function renderChatTyping() {
-  var el = document.getElementById('chat-typing');
+  var el = chatEl('chat-typing');
   if (!el) return;
   var names = activeChatTypists().map(chatAuthorName);
   if (!names.length) { el.textContent = ''; el.classList.add('hidden'); return; }
@@ -5048,7 +5056,7 @@ function chatReactFlyTarget(msgId, reactorId) {
     });
   }
   if (chatPanelOpen()) {
-    var row = chatRowFor(document.getElementById('chat-messages'), msgId);
+    var row = chatRowFor(chatEl('chat-messages'), msgId);
     if (row && row.offsetParent) {
       var rect = row.getBoundingClientRect();
       if (rect.width && rect.height) {
@@ -5141,7 +5149,23 @@ function watchChatPeekLayout(on) {
 // exclusion — on a phone the roster and the chat cannot share the screen.
 
 function chatPanelOpen() {
-  return document.body.classList.contains('chat-open');
+  return document.body.classList.contains('chat-open') || chatPoppedOut();
+}
+
+// Every element inside the chat panel is looked up through here, never through
+// `document`: in the `window` mode (see openChatWindow()) the panel — the very
+// same nodes, listeners and all — lives in another document, and main.js keeps
+// driving it from this one.
+var _chatPanelNode = null;
+function chatPanelNode() {
+  if (!_chatPanelNode) _chatPanelNode = document.getElementById('room-chat-panel');
+  return _chatPanelNode;
+}
+
+function chatEl(id) {
+  var panel = chatPanelNode();
+  var doc = (panel && panel.ownerDocument) || document;
+  return doc.getElementById(id);
 }
 
 // Wide enough, and a stage to sit beside: the chat stops being a drawer over
@@ -5151,6 +5175,7 @@ function chatPanelOpen() {
 // then disagree with the JS that decides whether a peek is a duplicate.
 function chatDocked() {
   if (IS_TINY_EMBED || !inRoom) return false;
+  if (chatLayoutMode() !== 'pinned') return false;
   if (!document.body.classList.contains('video-stage')) return false;
   if (document.body.classList.contains('video-stage-immersive')) return false;
   return window.innerWidth >= CHAT_DOCK_MIN_WIDTH;
@@ -5164,12 +5189,15 @@ function chatDocked() {
 // the right shape, and this one would reserve the strip twice.
 function chatBesideRoom() {
   if (!IS_TAURI_DESKTOP || IS_TINY_EMBED || !inRoom) return false;
+  if (chatLayoutMode() !== 'pinned') return false;
   if (document.body.classList.contains('video-stage')) return false;
-  // A window macOS has placed (full screen, Fill, a tile) does not grow for the
-  // drawer, so the drawer's strip comes out of the room — only where that still
-  // leaves a voice column. Narrower, it lies over the room like anywhere else.
-  if (desktopShapeStandsDown()) return window.innerWidth - storedChatWidth() >= DESKTOP_VOICE_WIDTH;
-  return true;
+  // Grown for it: the strip is the window's new right-hand side.
+  if (_desktopChatGrowth && !desktopShapeStandsDown()) return true;
+  // A window that could not grow — already as wide as the screen, full screen,
+  // Fill, a tile — opens the drawer INSIDE: its strip comes out of the room, but
+  // only where that still leaves a voice column. Narrower, it lies over the
+  // room like anywhere else.
+  return window.innerWidth - storedChatWidth() >= DESKTOP_VOICE_WIDTH;
 }
 
 // Whether the open drawer is sitting ON the room rather than beside it. Measured
@@ -5185,6 +5213,10 @@ function chatBesideRoom() {
 // that could only be closed from the handle.
 function chatOverlaysRoom() {
   if (!chatPanelOpen()) return false;
+  // Over the room by CHOICE is not a drawer waiting to be dismissed: floating on
+  // the picture is the point, so there is no scrim to tap it away with. And a
+  // chat in its own window covers nothing here at all.
+  if (chatLayoutMode() !== 'pinned') return false;
   if (document.body.classList.contains('chat-docked')) return false;
   if (document.body.classList.contains('chat-side')) return false;
   var panel = document.querySelector('#screen-room .room-chat-panel');
@@ -5201,14 +5233,35 @@ function chatOverlaysRoom() {
   return (window.innerWidth - width) < (r.right - 1);
 }
 
+// Where the room header ends, for the chat floating over the desktop stage — it
+// starts below it, so Leave and Settings are never under the card. Measured a
+// frame later, never inside applyChatDock(): a layout read there flushes the
+// class changes it just made and starts their transitions early.
+var _chatOverlayTopRaf = 0;
+function scheduleChatOverlayTop() {
+  if (_chatOverlayTopRaf || typeof requestAnimationFrame !== 'function') return;
+  _chatOverlayTopRaf = requestAnimationFrame(function() {
+    _chatOverlayTopRaf = 0;
+    var header = document.querySelector('#screen-room .room-header');
+    if (!header) return;
+    var bottom = Math.max(0, Math.round(header.getBoundingClientRect().bottom));
+    document.documentElement.style.setProperty('--room-header-bottom', bottom + 'px');
+  });
+}
+
 // Docking decides WHERE an open chat goes, never whether it is open — that is
 // chatOpensOnEntry()'s call.
 function applyChatDock() {
+  document.body.classList.toggle('chat-mode-overlay', chatLayoutMode() === 'overlay');
+  document.body.classList.toggle('chat-popped', chatPoppedOut());
   document.body.classList.toggle('chat-docked', chatDocked());
   document.body.classList.toggle('chat-side', chatBesideRoom());
   // Read after the two above: both change where the drawer lands, and this is
   // a measurement of where it landed.
   document.body.classList.toggle('chat-overlay', chatOverlaysRoom());
+  if (chatLayoutMode() === 'overlay' && document.body.classList.contains('video-stage-desktop')) {
+    scheduleChatOverlayTop();
+  }
   // There used to be a `--room-bar-inset` measured here, so the scrim behind an
   // overlaying chat drawer could stop above the talk button. The scrim stops
   // nowhere now — it covers the window and the bar is lifted OVER it — so the
@@ -5271,19 +5324,27 @@ function toggleChatPanel(open, opts) {
   _chatCollapsedHere = !next;
   if (opts && opts.remember) rememberChatOpen(next);
   if (next) closeStagePanels();
-  document.body.classList.toggle('chat-open', next);
-  // Where the drawer goes, and — on the Mac — how much window there is for it
-  // to go into. Both read `chat-open`, so both run after the toggle.
+  // In the `window` mode opening the chat IS opening its window; a window that
+  // could not be opened (a pop-up blocker, no gesture) leaves the panel in the
+  // room instead, laid out as if pinned (chatLayoutMode()).
+  var popped = false;
+  if (next && chatMode() === 'window') popped = chatPoppedOut() || openChatWindow();
+  else if (chatPoppedOut()) closeChatWindow();
+  document.body.classList.toggle('chat-open', next && !popped);
+  // How much window there is for the drawer (the Mac grows it), then where the
+  // drawer goes — chatBesideRoom() reads the growth. All read `chat-open`, so
+  // all run after the toggle.
+  applyDesktopChatGrowth();
   applyChatDock();
-  applyDesktopWindowShape();
+  syncChatModeButtons();
   var handle = document.getElementById('stage-handle-chat');
   if (handle) handle.setAttribute('aria-expanded', String(next));
   if (next) {
     _chatUnread = 0;
     clearChatPeek();
-    var list = document.getElementById('chat-messages');
+    var list = chatEl('chat-messages');
     if (list) list.scrollTop = list.scrollHeight;
-    var input = document.getElementById('chat-input');
+    var input = chatEl('chat-input');
     if (input && !(opts && opts.focus === false)) {
       setTimeout(function() { try { input.focus(); } catch (_) {} }, 60);
     }
@@ -5299,8 +5360,277 @@ function toggleChatPanel(open, opts) {
   updateChatUnreadBadge();
 }
 
+// --- Chat: how it is shown ----------------------------------------------------
+//
+// Three ways, picked from the chat's own header and remembered (CHAT_MODE_KEY):
+//
+//   pinned  — a column of its own: docked beside a live stage, beside the room in
+//             a voice call; on the Mac the window grows to the right for it, or
+//             shifts left and grows, or — already as wide as the screen —
+//             gives up the strip from inside (applyDesktopChatGrowth()).
+//   overlay — a drawer over the room. Nothing reflows, the window never changes
+//             size, and there is no scrim: floating on the picture is the point.
+//   window  — the panel moves into a window of its own (openChatWindow()). The
+//             same nodes and listeners: main.js keeps driving it, which is why
+//             every lookup inside the panel goes through chatEl().
+//
+// Only on a desktop-sized device. A phone has one column to give, so its chat is
+// the drawer it always was (`pinned` keeps every legacy rule), and the control is
+// not offered there.
+
+var CHAT_MODES = ['pinned', 'overlay', 'window'];
+
+function chatModesOffered() {
+  return !IS_TINY_EMBED && !IS_MOBILE_DEVICE;
+}
+
+function chatWindowSupported() {
+  return chatModesOffered() && typeof window.open === 'function';
+}
+
+// The stored preference.
+function readChatMode() {
+  var v = null;
+  try { v = localStorage.getItem(CHAT_MODE_KEY); } catch (_) { /* private mode */ }
+  if (v === 'overlay') return 'overlay';
+  if (v === 'window' && chatWindowSupported()) return 'window';
+  return 'pinned';
+}
+
+// The preference, where it applies. The phone stage is always the drawer.
+function chatMode() {
+  if (!chatModesOffered()) return 'pinned';
+  if (document.body.classList.contains('video-stage-immersive')) return 'pinned';
+  return readChatMode();
+}
+
+// How the panel is actually laid out: a `window` chat that is not (or not yet)
+// in its window is in the room, and is laid out as pinned.
+function chatLayoutMode() {
+  if (chatPoppedOut()) return 'window';
+  var mode = chatMode();
+  return mode === 'window' ? 'pinned' : mode;
+}
+
+function setChatMode(mode) {
+  if (CHAT_MODES.indexOf(mode) < 0) return;
+  if (mode === 'window' && !chatWindowSupported()) return;
+  try {
+    if (mode === 'pinned') localStorage.removeItem(CHAT_MODE_KEY);
+    else localStorage.setItem(CHAT_MODE_KEY, mode);
+  } catch (_) { /* private mode: the choice lasts this page */ }
+  if (chatPanelOpen()) {
+    if (mode === 'window') {
+      if (!chatPoppedOut() && openChatWindow()) document.body.classList.remove('chat-open');
+    } else if (chatPoppedOut()) {
+      // Back into the room, still open.
+      closeChatWindow();
+      document.body.classList.add('chat-open');
+      try { window.focus(); } catch (_) { /* not ours to raise */ }
+    }
+  }
+  applyDesktopChatGrowth();
+  applyChatDock();
+  syncChatModeButtons();
+  layoutChatPeeks();
+  setTimeout(function() { applyChatDock(); layoutChatPeeks(); }, 300);
+}
+
+function syncChatModeButtons() {
+  var group = chatEl('chat-mode-group');
+  if (!group) return;
+  group.hidden = !chatModesOffered();
+  var current = chatMode();
+  CHAT_MODES.forEach(function(mode) {
+    var b = chatEl('btn-chat-mode-' + mode);
+    if (!b) return;
+    if (mode === 'window') b.hidden = !chatWindowSupported();
+    b.setAttribute('aria-pressed', String(current === mode));
+  });
+}
+
+// --- Chat: in a window of its own ---------------------------------------------
+//
+// The panel's own nodes are MOVED into a blank same-origin window, exactly the
+// way the segmentation diagnostic pops out (video-effects.js, diagPopOut): its
+// listeners travel with it and every render keeps landing in it, so the chat
+// has one implementation, not two. The window gets copies of this document's
+// stylesheets and follows its theme, language and classes.
+//
+// Watched by polling `closed`, never by its `pagehide` alone: the blank page can
+// be replaced once while it opens (Tauri), and then the panel is put back in.
+// Its `pagehide` still brings the panel home at once, so nodes are never left
+// in a document that is going away.
+
+var _chatWin = null;   // { win, home: { parent, next }, timer, observer }
+
+function chatPoppedOut() {
+  return !!_chatWin;
+}
+
+function chatWindowDoc(w) {
+  try { return w && !w.closed && w.document && w.document.body ? w.document : null; } catch (_) { return null; }
+}
+
+// Beside the room window when the screen has space on its right, else on its
+// left; the drawer's own width, the room's height.
+function chatWindowFeatures() {
+  var width  = storedChatWidth();
+  var height = Math.max(420, window.outerHeight || window.innerHeight);
+  var scr    = window.screen || {};
+  var left   = scr.availLeft || 0;
+  var right  = left + (scr.availWidth || 0);
+  var sx = window.screenX || 0;
+  var x  = sx + (window.outerWidth || window.innerWidth);
+  if (right && x + width > right) x = Math.max(left, sx - width);
+  return 'popup=yes,width=' + width + ',height=' + Math.round(height) +
+    ',left=' + Math.round(x) + ',top=' + Math.round(window.screenY || 0);
+}
+
+function openChatWindow() {
+  var panel = chatPanelNode();
+  if (!panel || !chatWindowSupported()) return false;
+  if (_chatWin) {
+    try { _chatWin.win.focus(); } catch (_) { /* ignore */ }
+    return true;
+  }
+  // A browser only lets a click open a window. An open nobody clicked for (the
+  // remembered chat, on entering a room) stays in the room rather than being
+  // counted as a blocked pop-up. The Mac app is allowed to (lib.rs).
+  if (!IS_TAURI_DESKTOP) {
+    var ua = navigator.userActivation;
+    if (ua && !ua.isActive) return false;
+  }
+  var w;
+  try { w = window.open('about:blank', 'voxal-chat', chatWindowFeatures()); } catch (_) { w = null; }
+  var doc = chatWindowDoc(w);
+  if (!doc) {
+    try { if (w) w.close(); } catch (_) { /* ignore */ }
+    devLog('[Chat] its own window could not be opened (pop-ups blocked?) — kept in the room', 'warn');
+    return false;
+  }
+  _chatWin = { win: w, home: { parent: panel.parentNode, next: panel.nextSibling }, timer: 0, observer: null };
+  if (_chatResizeDrag) _onChatResizePointerUp();
+  mountChatWindow(doc);
+  _chatWin.timer = setInterval(watchChatWindow, 250);
+  if (typeof MutationObserver === 'function') {
+    _chatWin.observer = new MutationObserver(syncChatWindowChrome);
+    _chatWin.observer.observe(document.documentElement, { attributes: true });
+  }
+  try { w.focus(); } catch (_) { /* ignore */ }
+  return true;
+}
+
+function mountChatWindow(doc) {
+  var panel = chatPanelNode();
+  if (!panel || !doc.body) return;
+  if (!doc.getElementById('voxal-chat-window')) {
+    // The app's own stylesheets, by absolute URL: about:blank has no base to
+    // resolve a relative one against.
+    document.querySelectorAll('link[rel="stylesheet"], style').forEach(function(node) {
+      var copy;
+      if (node.tagName === 'LINK') {
+        copy = doc.createElement('link');
+        copy.rel = 'stylesheet';
+        copy.href = node.href;
+      } else {
+        copy = doc.createElement('style');
+        copy.textContent = node.textContent;
+      }
+      (doc.head || doc.documentElement).appendChild(copy);
+    });
+    var marker = doc.createElement('meta');
+    marker.id = 'voxal-chat-window';
+    (doc.head || doc.documentElement).appendChild(marker);
+    doc.addEventListener('pointerdown', _onChatOutsidePointerDown);
+    doc.addEventListener('keydown', forwardChatWindowKey);
+    doc.addEventListener('keyup', forwardChatWindowKey);
+    try {
+      doc.defaultView.addEventListener('pagehide', function() { chatPanelHome(); });
+    } catch (_) { /* the poll covers it */ }
+  }
+  syncChatWindowChrome();
+  doc.body.appendChild(panel);
+  var list = chatEl('chat-messages');
+  if (list) list.scrollTop = list.scrollHeight;
+}
+
+// Theme, language, platform classes and the root's custom properties.
+function syncChatWindowChrome() {
+  var doc = _chatWin && chatWindowDoc(_chatWin.win);
+  if (!doc) return;
+  var src = document.documentElement;
+  var dst = doc.documentElement;
+  dst.className = src.className + ' chat-window-doc';
+  ['data-theme', 'data-text-dir', 'data-hand', 'lang', 'dir', 'style'].forEach(function(attr) {
+    var v = src.getAttribute(attr);
+    if (v === null) dst.removeAttribute(attr); else dst.setAttribute(attr, v);
+  });
+  try { doc.title = tr('js.chat_window_title', 'Chat — Voxal'); } catch (_) { /* ignore */ }
+}
+
+// Push-to-talk and the room's shortcuts listen on THIS document. A key pressed
+// while the chat window has focus — and not typed into one of its fields — is
+// handed on, so the window never takes the talk key away.
+function forwardChatWindowKey(e) {
+  var t = e.target;
+  if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.isContentEditable)) return;
+  var copy;
+  try {
+    copy = new KeyboardEvent(e.type, {
+      key: e.key, code: e.code, location: e.location, repeat: e.repeat,
+      shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey,
+      bubbles: true, cancelable: true,
+    });
+  } catch (_) { return; }
+  document.dispatchEvent(copy);
+  if (copy.defaultPrevented) e.preventDefault();
+}
+
+function watchChatWindow() {
+  var cw = _chatWin;
+  if (!cw) return;
+  var gone = true;
+  try { gone = cw.win.closed; } catch (_) { /* treat as closed */ }
+  if (gone) {
+    // Closed from its own title bar: that is the chat put away.
+    closeChatWindow();
+    toggleChatPanel(false, { remember: true });
+    return;
+  }
+  var doc = chatWindowDoc(cw.win);
+  var panel = chatPanelNode();
+  if (doc && panel && !doc.body.contains(panel)) mountChatWindow(doc);
+}
+
+// Back where it came from in the room's markup.
+function chatPanelHome(home) {
+  home = home || (_chatWin && _chatWin.home);
+  var panel = chatPanelNode();
+  if (!panel || !home || !home.parent) return;
+  if (panel.parentNode === home.parent) return;
+  var next = (home.next && home.next.parentNode === home.parent) ? home.next : null;
+  home.parent.insertBefore(panel, next);
+}
+
+function closeChatWindow() {
+  var cw = _chatWin;
+  if (!cw) return;
+  _chatWin = null;
+  if (cw.timer) clearInterval(cw.timer);
+  if (cw.observer) cw.observer.disconnect();
+  closeEmojiPicker();
+  chatPanelHome(cw.home);
+  try { if (!cw.win.closed) cw.win.close(); } catch (_) { /* ignore */ }
+}
+
+// A window left behind by the page that drove it would be a frozen chat.
+window.addEventListener('pagehide', function() {
+  try { if (_chatWin && !_chatWin.win.closed) _chatWin.win.close(); } catch (_) { /* ignore */ }
+});
+
 function submitChatInput() {
-  var input = document.getElementById('chat-input');
+  var input = chatEl('chat-input');
   if (!input) return;
   // Correcting a line replaces it; it never adds one, so none of what follows
   // applies — a `+:tada` typed into an edit is the message becoming that text.
@@ -5586,12 +5916,12 @@ function noteRecentEmoji(ch) {
 }
 
 function emojiPickerOpen() {
-  var el = document.getElementById('emoji-picker');
+  var el = chatEl('emoji-picker');
   return !!el && !el.classList.contains('hidden');
 }
 
 function openEmojiPicker(target) {
-  var el = document.getElementById('emoji-picker');
+  var el = chatEl('emoji-picker');
   if (!el) return;
   // The picker floats over the composer; the shortcode menu docks above it.
   // Two ways to pick an emoji, on top of each other, is one too many.
@@ -5599,26 +5929,26 @@ function openEmojiPicker(target) {
   _emojiTarget = target;
   el.classList.remove('hidden');
   el.dataset.mode = target.mode;
-  var search = document.getElementById('emoji-search');
+  var search = chatEl('emoji-search');
   if (search) { search.value = ''; }
   renderEmojiTabs();
   renderEmojiGrid('');
-  var btn = document.getElementById('btn-emoji');
+  var btn = chatEl('btn-emoji');
   if (btn) btn.setAttribute('aria-expanded', String(target.mode === 'compose'));
   if (search) setTimeout(function() { try { search.focus(); } catch (_) {} }, 40);
 }
 
 function closeEmojiPicker() {
-  var el = document.getElementById('emoji-picker');
+  var el = chatEl('emoji-picker');
   if (!el || el.classList.contains('hidden')) return;
   el.classList.add('hidden');
   _emojiTarget = null;
-  var btn = document.getElementById('btn-emoji');
+  var btn = chatEl('btn-emoji');
   if (btn) btn.setAttribute('aria-expanded', 'false');
 }
 
 function renderEmojiTabs() {
-  var tabs = document.getElementById('emoji-tabs');
+  var tabs = chatEl('emoji-tabs');
   if (!tabs) return;
   tabs.innerHTML = '';
   var entries = [{ key: 'recent', icon: '\u{1F553}', name: 'Recent' }].concat(
@@ -5660,7 +5990,7 @@ function emojiMatches(query) {
 }
 
 function renderEmojiGrid(query) {
-  var grid = document.getElementById('emoji-grid');
+  var grid = chatEl('emoji-grid');
   if (!grid) return;
   var items = emojiMatches(query);
   grid.innerHTML = '';
@@ -5701,7 +6031,7 @@ function chooseEmoji(ch) {
 // Insert at the caret, not at the end: an emoji picked mid-sentence belongs
 // where the sentence was.
 function insertIntoComposer(text) {
-  var input = document.getElementById('chat-input');
+  var input = chatEl('chat-input');
   if (!input) return;
   var start = input.selectionStart;
   var end = input.selectionEnd;
@@ -5830,7 +6160,7 @@ function chatSuggestItemsFor(hit) {
 }
 
 function updateChatSuggest() {
-  var input = document.getElementById('chat-input');
+  var input = chatEl('chat-input');
   if (!input) return;
   var caret = typeof input.selectionStart === 'number' ? input.selectionStart : input.value.length;
   // Only with the caret at one end of the selection: a menu that rewrites a
@@ -5846,9 +6176,9 @@ function updateChatSuggest() {
 
 function closeChatSuggest() {
   _chatSuggest = null;
-  var el = document.getElementById('chat-suggest');
+  var el = chatEl('chat-suggest');
   if (el) { el.classList.add('hidden'); el.innerHTML = ''; }
-  var input = document.getElementById('chat-input');
+  var input = chatEl('chat-input');
   if (input) {
     input.removeAttribute('aria-activedescendant');
     input.setAttribute('aria-expanded', 'false');
@@ -5856,7 +6186,7 @@ function closeChatSuggest() {
 }
 
 function renderChatSuggest() {
-  var el = document.getElementById('chat-suggest');
+  var el = chatEl('chat-suggest');
   if (!el || !_chatSuggest) return;
   el.innerHTML = '';
   el.dataset.kind = _chatSuggest.kind;
@@ -5885,7 +6215,7 @@ function renderChatSuggest() {
     el.appendChild(b);
   });
   el.classList.remove('hidden');
-  var input = document.getElementById('chat-input');
+  var input = chatEl('chat-input');
   if (input) {
     input.setAttribute('aria-activedescendant', 'chat-suggest-' + _chatSuggest.index);
     input.setAttribute('aria-expanded', 'true');
@@ -5902,7 +6232,7 @@ function moveChatSuggest(delta) {
 }
 
 function acceptChatSuggest(index) {
-  var input = document.getElementById('chat-input');
+  var input = chatEl('chat-input');
   if (!_chatSuggest || !input) return false;
   var item = _chatSuggest.items[typeof index === 'number' ? index : _chatSuggest.index];
   if (!item) return false;
@@ -5958,7 +6288,7 @@ function saveChatWidth(px) {
 
 function _chatResizePointerDown(e) {
   if (_chatResizeDrag || (e.button !== undefined && e.button !== 0)) return;
-  var panel = document.getElementById('room-chat-panel');
+  var panel = chatEl('room-chat-panel');
   if (!panel) return;
   _chatResizeDrag = { pointerId: e.pointerId, width: panel.getBoundingClientRect().width };
   // On the window: the pointer routinely leaves a 6px grip mid-drag, and a lost
@@ -5989,15 +6319,17 @@ function _onChatResizePointerUp(e) {
   // On the Mac the window follows the separator — but only on release. Resizing
   // it mid-drag would move the very edge the width is measured from
   // (`innerWidth - clientX`), and the drawer would chase its own growth.
-  applyDesktopWindowShape();
+  applyDesktopChatGrowth();
+  applyChatDock();
 }
 
 function nudgeChatWidth(delta) {
-  var panel = document.getElementById('room-chat-panel');
+  var panel = chatEl('room-chat-panel');
   var width = clampChatWidth((panel ? panel.getBoundingClientRect().width : readChatWidth()) + delta);
   applyChatWidth(width);
   saveChatWidth(width);
-  applyDesktopWindowShape();
+  applyDesktopChatGrowth();
+  applyChatDock();
 }
 
 // --- The desktop window's own shape (Tauri) ----------------------------------
@@ -6007,9 +6339,12 @@ function nudgeChatWidth(delta) {
 // anything that has to sit beside it — so the two configurations that need more
 // room take it from the window rather than from the room:
 //
-//   chat open   → the window grows to the RIGHT by exactly the drawer's width,
-//                 so the conversation lands beside the room, not over it
-//                 (`body.chat-side`, see chatBesideRoom()).
+//   chat open   → the window grows by the drawer's width, so the conversation
+//                 lands beside the room, not over it (`body.chat-side`, see
+//                 chatBesideRoom()). It is a DELTA on the window as it is now —
+//                 never a size recomputed from scratch, which threw away every
+//                 size the user had given it — and only for the pinned chat:
+//                 see applyDesktopChatGrowth().
 //   stage live  → the window takes the landscape shape the desktop web app uses
 //                 (tiles left, roster and PTT railed right), which is what
 //                 videoStageMode() reports as soon as the width crosses its
@@ -6097,9 +6432,9 @@ function desktopWindowTarget() {
     // Height is only ever raised: a taller window the user chose is theirs.
     target.height = Math.max(voice.height, DESKTOP_VIDEO_HEIGHT);
   }
-  // The drawer's own width, not the window-clamped one — this is the growth
-  // that MAKES the window wide enough for it.
-  if (inRoom && chatPanelOpen()) target.width += storedChatWidth();
+  // Whatever the open chat added to the window stays added across a change of
+  // stage (applyDesktopChatGrowth() recorded it).
+  if (inRoom && _desktopChatGrowth) target.width += _desktopChatGrowth.width;
   var limit = desktopScreenLimits();
   return {
     width:  Math.max(DESKTOP_MIN_WIDTH, Math.min(target.width,  limit.width)),
@@ -6115,10 +6450,11 @@ function desktopWindowTarget() {
 // double-click on the title bar (Zoom / Fill), a tile — each snapped back on the
 // next frame, before the resize could even be read as theirs.
 var _desktopShapeKey = null;
+// The chat is not part of it: opening and closing it is a delta of its own
+// (applyDesktopChatGrowth()), applied to whatever frame the window has.
 function desktopShapeKey() {
   var stage = inRoom && document.body.classList.contains('video-stage');
-  var chat  = inRoom && chatPanelOpen();
-  return (stage ? 'stage' : 'voice') + '|' + (chat ? 'chat:' + storedChatWidth() : 'nochat');
+  return stage ? 'stage' : 'voice';
 }
 
 // Idempotent: safe to call from anywhere the room's configuration changes.
@@ -6248,7 +6584,16 @@ function noteDesktopPlacement(fs, placed) {
   if (wasFullscreen) {
     // macOS animates the frame back: wait for it before reading or resizing.
     _desktopSettleUntil = Date.now() + DESKTOP_FULLSCREEN_SETTLE_MS;
-    setTimeout(function() { applyDesktopWindowShape({ force: true }); }, DESKTOP_FULLSCREEN_SETTLE_MS);
+    setTimeout(function() {
+      // macOS hands back the frame from before full screen — the room's, with
+      // no strip for a chat opened inside the full-screen window since. The
+      // shape grows it by the drawer then, as opening it would have.
+      if (!_desktopChatGrowth && desktopChatWantsGrowth()) {
+        _desktopChatGrowth = { width: storedChatWidth(), shift: 0 };
+      }
+      applyDesktopWindowShape({ force: true });
+      applyChatDock();
+    }, DESKTOP_FULLSCREEN_SETTLE_MS);
     return;
   }
   // Out of a tile: the frame it lands in (its size from before the tile, or
@@ -6266,8 +6611,109 @@ function recordDesktopVoiceSize() {
   if (desktopSizeIsOurs()) return;
   var now = currentDesktopSize();
   if (inRoom && document.body.classList.contains('video-stage')) return;
-  var width = now.width - ((inRoom && chatPanelOpen()) ? storedChatWidth() : 0);
+  var width = now.width - ((inRoom && _desktopChatGrowth) ? _desktopChatGrowth.width : 0);
   _desktopVoiceSize = { width: Math.max(DESKTOP_MIN_WIDTH, width), height: now.height };
+}
+
+// --- The pinned chat's share of the window (Tauri) ----------------------------
+//
+// Opening the pinned chat asks the screen for the drawer's width, in this order:
+//
+//   1. room on the right  → the window grows to the right; it does not move.
+//   2. room on the screen → it shifts left by just enough, and grows.
+//   3. no room            → nothing changes size: the window is already as wide
+//                           as the screen, and the drawer opens inside it
+//                           (chatBesideRoom() decides beside vs over).
+//
+// Only the width changes; height and position are the user's. What was added
+// (and how far it moved) is remembered, and closing gives back exactly that —
+// so open → close returns the window to the frame it had, wherever that was.
+// Overlay and window chats never touch the window.
+
+var _desktopChatGrowth = null;   // { width, shift } — what opening the chat added
+const DESKTOP_CHAT_MIN_GROWTH = 40;   // less than this is "already full width"
+
+function desktopChatWantsGrowth() {
+  return inRoom && chatPanelOpen() && chatLayoutMode() === 'pinned';
+}
+
+// The window's frame and its screen's usable band, synchronously and in CSS
+// (= logical) pixels, so the decision lands in the same frame as the class
+// change that depends on it.
+function desktopWindowFrame() {
+  return {
+    x: window.screenX || 0,
+    y: window.screenY || 0,
+    width: window.innerWidth,
+    height: window.innerHeight,
+  };
+}
+
+function desktopWorkArea() {
+  var scr = window.screen || {};
+  var limit = desktopScreenLimits();
+  return { x: scr.availLeft || 0, width: limit.width };
+}
+
+// Pure. Where a window `frame` ({x, width}) goes to make `extra` px of room on
+// its right inside the screen band `area` ({x, width}); null when it is already
+// (nearly) as wide as the screen allows.
+function desktopChatPlacement(frame, extra, area) {
+  var grown = Math.min(extra, area.width - frame.width);
+  if (grown < DESKTOP_CHAT_MIN_GROWTH) return null;
+  var right = area.x + area.width;
+  var x = Math.max(area.x, Math.min(frame.x, right - (frame.width + grown)));
+  return { grown: Math.round(grown), x: Math.round(x), shift: Math.round(frame.x - x) };
+}
+
+function applyDesktopChatGrowth() {
+  if (!desktopWindowShapeActive()) return;
+  var want = desktopChatWantsGrowth();
+  var g = _desktopChatGrowth;
+  if (!want && !g) return;
+  // A window macOS has placed keeps its frame: the drawer opens inside it, and
+  // whatever was added before it was placed is part of that frame now.
+  if (desktopShapeStandsDown()) {
+    if (!want) _desktopChatGrowth = null;
+    return;
+  }
+  var win = tauriWindowHandle();
+  var dpi = window.__TAURI__ && window.__TAURI__.dpi;
+  if (!win || typeof win.setSize !== 'function' || !dpi || !dpi.LogicalSize) return;
+  var frame = desktopWindowFrame();
+  // The window as it was before the chat: the base every decision starts from.
+  var base = {
+    x: frame.x + (g ? g.shift : 0),
+    width: Math.max(DESKTOP_MIN_WIDTH, frame.width - (g ? g.width : 0)),
+  };
+  var place = want ? desktopChatPlacement(base, storedChatWidth(), desktopWorkArea()) : null;
+  var next = place ? { width: place.grown, shift: place.shift } : null;
+  if ((!next && !g) || (next && g && next.width === g.width && next.shift === g.shift)) return;
+  _desktopChatGrowth = next;
+  var width = base.width + (next ? next.width : 0);
+  var x = next ? place.x : base.x;
+  resizeDesktopWindow(win, dpi, width, frame.height, x !== frame.x ? { x: x, y: frame.y } : null);
+}
+
+// Growing: move first, so the window never hangs past the screen's edge.
+// Shrinking: size first, for the same reason the other way round. Both
+// best-effort — a refused move costs a window that did not shift, nothing more.
+function resizeDesktopWindow(win, dpi, width, height, pos) {
+  var growing = width > window.innerWidth;
+  _desktopAppliedSize = { width: width, height: height };
+  function size() {
+    return win.setSize(new dpi.LogicalSize(width, height));
+  }
+  function move() {
+    if (!pos || !dpi.LogicalPosition || typeof win.setPosition !== 'function') return null;
+    return win.setPosition(new dpi.LogicalPosition(pos.x, pos.y));
+  }
+  function warn(e) { console.warn('[window] chat resize refused:', e && e.message ? e.message : e); }
+  try {
+    if (!pos) { Promise.resolve(size()).catch(warn); return; }
+    var first = growing ? move() : size();
+    Promise.resolve(first).then(function() { return growing ? size() : move(); }).catch(warn);
+  } catch (e) { warn(e); }
 }
 
 function initDesktopWindowShape() {
@@ -6276,9 +6722,18 @@ function initDesktopWindowShape() {
   window.addEventListener('resize', noteDesktopWindowResize);
 }
 
+function _onChatOutsidePointerDown(e) {
+  if (!emojiPickerOpen()) return;
+  var picker = chatEl('emoji-picker');
+  var t = e.target;
+  if (picker && picker.contains(t)) return;
+  if (t && t.closest && t.closest('#btn-emoji, .chat-react-open')) return;
+  closeEmojiPicker();
+}
+
 function initChatUI() {
-  var input = document.getElementById('chat-input');
-  var list  = document.getElementById('chat-messages');
+  var input = chatEl('chat-input');
+  var list  = chatEl('chat-messages');
   if (!input || !list || input._voxalChatWired) return;
   input._voxalChatWired = true;
 
@@ -6290,9 +6745,14 @@ function initChatUI() {
 
   initCommandPalette();
 
-  var close = document.getElementById('btn-chat-close');
+  var close = chatEl('btn-chat-close');
   if (close) close.addEventListener('click', function() { toggleChatPanel(false, { remember: true }); });
-  var send = document.getElementById('btn-chat-send');
+  CHAT_MODES.forEach(function(mode) {
+    var b = chatEl('btn-chat-mode-' + mode);
+    if (b) b.addEventListener('click', function() { setChatMode(mode); });
+  });
+  syncChatModeButtons();
+  var send = chatEl('btn-chat-send');
   if (send) send.addEventListener('click', submitChatInput);
 
   input.addEventListener('keydown', function(e) {
@@ -6350,7 +6810,7 @@ function initChatUI() {
   });
   autoGrowChatInput(input);
 
-  var suggest = document.getElementById('chat-suggest');
+  var suggest = chatEl('chat-suggest');
   if (suggest) {
     // mousedown, not click: the composer must not lose the caret before the
     // insertion is made against it.
@@ -6362,12 +6822,12 @@ function initChatUI() {
     });
   }
 
-  var replyBar = document.getElementById('chat-reply-bar');
+  var replyBar = chatEl('chat-reply-bar');
   if (replyBar) replyBar.addEventListener('click', function(e) {
     if (e.target.closest('.chat-reply-bar-cancel')) clearChatReply();
   });
 
-  var editBar = document.getElementById('chat-edit-bar');
+  var editBar = chatEl('chat-edit-bar');
   if (editBar) editBar.addEventListener('click', function(e) {
     if (e.target.closest('.chat-edit-bar-cancel')) clearChatEdit({ clearInput: true });
   });
@@ -6414,7 +6874,7 @@ function initChatUI() {
     }
   });
 
-  var emojiBtn = document.getElementById('btn-emoji');
+  var emojiBtn = chatEl('btn-emoji');
   if (emojiBtn) {
     emojiBtn.addEventListener('click', function() {
       if (emojiPickerOpen() && _emojiTarget && _emojiTarget.mode === 'compose') closeEmojiPicker();
@@ -6422,10 +6882,9 @@ function initChatUI() {
     });
   }
 
-  var picker = document.getElementById('emoji-picker');
-  var search = document.getElementById('emoji-search');
-  var tabs   = document.getElementById('emoji-tabs');
-  var grid   = document.getElementById('emoji-grid');
+  var search = chatEl('emoji-search');
+  var tabs   = chatEl('emoji-tabs');
+  var grid   = chatEl('emoji-grid');
   if (search) {
     search.addEventListener('input', function() { renderEmojiGrid(search.value); });
     search.addEventListener('keydown', function(e) {
@@ -6448,15 +6907,11 @@ function initChatUI() {
       if (cell) chooseEmoji(cell.dataset.emoji);
     });
   }
-  // A click anywhere else dismisses it — but not the click that opened it.
-  document.addEventListener('pointerdown', function(e) {
-    if (!emojiPickerOpen()) return;
-    if (picker && picker.contains(e.target)) return;
-    if (e.target.closest('#btn-emoji, .chat-react-open')) return;
-    closeEmojiPicker();
-  });
+  // A click anywhere else dismisses it — but not the click that opened it. The
+  // chat's own window registers the same listener on its document.
+  document.addEventListener('pointerdown', _onChatOutsidePointerDown);
 
-  var resizer = document.getElementById('chat-resizer');
+  var resizer = chatEl('chat-resizer');
   if (resizer) {
     resizer.addEventListener('pointerdown', _chatResizePointerDown);
     resizer.addEventListener('dblclick', function() {
@@ -13064,6 +13519,7 @@ function updateVideoStage() {
   // would have had anyway, and the stylesheet says so by excluding this class
   // rather than by excluding "has video at all".
   document.body.classList.toggle('video-stage-desktop', active && mode === 'desktop');
+  applyRosterPanel();
   applyChatDock();
   // On the Mac a live stage is also a window size. The resize lands async, so
   // the mode above may still say 'immersive' for one tick — the resize event
@@ -13279,14 +13735,94 @@ function panelSpec(which) {
 }
 
 function panelIsOpen(which) {
-  return which === 'chat' ? chatPanelOpen() : stagePanelOpen(which);
+  if (which === 'chat') return chatPanelOpen();
+  if (which === 'roster' && rosterModesOffered()) return !rosterHidden();
+  return stagePanelOpen(which);
 }
 
 function setPanelOpen(which, open) {
   // Reaching for the handle is as deliberate as reaching for the collapse
   // icon, so it settles the drawer's default the same way.
   if (which === 'chat') toggleChatPanel(open, { remember: true });
+  else if (which === 'roster' && rosterModesOffered()) setRosterHidden(!open);
   else setStagePanel(which, open);
+}
+
+// --- The participants rail on the desktop stage -------------------------------
+//
+// On the phone stage the roster is a drawer behind its edge handle. On the
+// desktop stage it is the left rail, and it can be shown two ways, picked from
+// the rail itself and remembered (ROSTER_MODE_KEY):
+//
+//   pinned  — a column of its own beside the picture (the stage grid's `rail`).
+//   overlay — floating on the picture: the stage takes the full width under it.
+//
+// …and put away altogether (ROSTER_HIDDEN_KEY) from the rail's own button, then
+// brought back from the left edge handle. The talk button is never put away
+// with it: hidden, the rail's bottom bar stays on the picture, as in overlay.
+// Published as `body.roster-overlay` / `body.roster-hidden`, only while the
+// desktop stage is up, so no other layout ever sees them.
+
+var ROSTER_MODES = ['pinned', 'overlay'];
+
+function rosterModesOffered() {
+  return !IS_TINY_EMBED && document.body.classList.contains('video-stage-desktop');
+}
+
+function readRosterMode() {
+  try { return localStorage.getItem(ROSTER_MODE_KEY) === 'overlay' ? 'overlay' : 'pinned'; } catch (_) { return 'pinned'; }
+}
+
+function rosterHidden() {
+  try { return localStorage.getItem(ROSTER_HIDDEN_KEY) === '1'; } catch (_) { return false; }
+}
+
+function applyRosterPanel() {
+  var offered = rosterModesOffered();
+  var hidden  = offered && rosterHidden();
+  var body = document.body.classList;
+  body.toggle('roster-hidden', hidden);
+  body.toggle('roster-overlay', offered && !hidden && readRosterMode() === 'overlay');
+  var mode = readRosterMode();
+  ROSTER_MODES.forEach(function(m) {
+    var b = document.getElementById('btn-roster-mode-' + m);
+    if (b) b.setAttribute('aria-pressed', String(mode === m));
+  });
+  if (offered) {
+    var handle = document.getElementById('stage-handle-roster');
+    if (handle) handle.setAttribute('aria-expanded', String(!hidden));
+  }
+}
+
+function setRosterMode(mode) {
+  if (ROSTER_MODES.indexOf(mode) < 0) return;
+  try {
+    if (mode === 'pinned') localStorage.removeItem(ROSTER_MODE_KEY);
+    else localStorage.setItem(ROSTER_MODE_KEY, mode);
+  } catch (_) { /* private mode */ }
+  rosterPanelChanged();
+}
+
+function setRosterHidden(hidden) {
+  try {
+    if (hidden) localStorage.setItem(ROSTER_HIDDEN_KEY, '1');
+    else localStorage.removeItem(ROSTER_HIDDEN_KEY);
+  } catch (_) { /* private mode */ }
+  rosterPanelChanged();
+  // Keyboard users land where the control they used went: on the handle that
+  // brings the rail back, or on the rail's own hide button.
+  var target = document.getElementById(hidden ? 'stage-handle-roster' : 'btn-roster-hide');
+  if (target && document.activeElement && document.activeElement !== document.body) {
+    try { target.focus({ preventScroll: true }); } catch (_) { /* ignore */ }
+  }
+}
+
+// The stage changes width under an overlay or a hidden rail, so the tiles are
+// re-measured; the anchored chat bubbles point at names that moved or went.
+function rosterPanelChanged() {
+  applyRosterPanel();
+  scheduleStageRelayout();
+  layoutChatPeeks();
 }
 
 // A drag has to travel this fraction of the panel before release counts as a
@@ -13337,6 +13873,9 @@ function relayoutVideoStage() {
 var _stagePanelDrag = null;
 
 function _stagePanelPointerDown(which, e) {
+  // Dragged only on the phone stage. Everywhere else the handle is a button,
+  // and its click toggles (initStagePanelHandles()).
+  if (!document.body.classList.contains('video-stage-immersive')) return;
   var spec = panelSpec(which);
   if (!spec || _stagePanelDrag || (e.button !== undefined && e.button !== 0)) return;
   var panel = document.querySelector('#screen-room ' + spec.panel);
@@ -13521,6 +14060,10 @@ function initStagePanelHandles() {
     if (!el || el._voxalHandleWired) return;
     el._voxalHandleWired = true;
     el.addEventListener('pointerdown', function(e) { _stagePanelPointerDown(which, e); });
+    el.addEventListener('click', function() {
+      if (document.body.classList.contains('video-stage-immersive')) return;   // the drag owns it
+      setPanelOpen(which, !panelIsOpen(which));
+    });
     // Keyboard parity: the handle is a real button, so Enter/Space must work.
     el.addEventListener('keydown', function(e) {
       if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -13528,6 +14071,17 @@ function initStagePanelHandles() {
       setPanelOpen(which, !panelIsOpen(which));
     });
   });
+  ROSTER_MODES.forEach(function(mode) {
+    var b = document.getElementById('btn-roster-mode-' + mode);
+    if (!b || b._voxalWired) return;
+    b._voxalWired = true;
+    b.addEventListener('click', function() { setRosterMode(mode); });
+  });
+  var hide = document.getElementById('btn-roster-hide');
+  if (hide && !hide._voxalWired) {
+    hide._voxalWired = true;
+    hide.addEventListener('click', function() { setRosterHidden(true); });
+  }
   var stage = document.getElementById('video-stage');
   if (stage && !stage._voxalTapWired) {
     stage._voxalTapWired = true;

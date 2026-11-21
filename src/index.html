@@ -879,6 +879,23 @@
       </div>
 
       <div id="room-peers-panel" class="room-peers-panel">
+        <!-- The desktop stage's rail: beside the picture or floating on it, and
+             put away (the left edge handle brings it back). Shown only on
+             body.video-stage-desktop — see applyRosterPanel(). -->
+        <div data-i18n-aria-label="ui.participants_display" class="room-panel-tools room-peers-tools" role="group" aria-label="Participants display">
+          <button data-i18n-aria-label="ui.pinned_beside_the_video" data-i18n-title="ui.pinned_beside_the_video" id="btn-roster-mode-pinned" class="btn-icon panel-tool" type="button"
+                  title="Pinned beside the video" aria-label="Pinned beside the video" aria-pressed="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="9" y1="4" x2="9" y2="20"/></svg>
+          </button>
+          <button data-i18n-aria-label="ui.over_the_video" data-i18n-title="ui.over_the_video" id="btn-roster-mode-overlay" class="btn-icon panel-tool" type="button"
+                  title="Over the video" aria-label="Over the video" aria-pressed="false">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="6" y="7" width="6" height="10" rx="1"/></svg>
+          </button>
+          <button data-i18n-aria-label="ui.hide_participants" data-i18n-title="ui.hide_participants" id="btn-roster-hide" class="btn-icon panel-tool" type="button"
+                  title="Hide participants" aria-label="Hide participants" aria-controls="room-peers-panel">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 19l-7-7 7-7"/><path d="M19 19l-7-7 7-7"/></svg>
+          </button>
+        </div>
         <button data-i18n="ui.peers" id="btn-toggle-peers" class="btn btn-secondary btn-sm room-peers-toggle hidden" aria-expanded="false">Peers</button>
         <div id="peers-list" class="peers-list"></div>
       </div>
@@ -905,6 +922,23 @@
              title="Drag to resize · double-click to reset"></div>
         <div class="room-chat-header">
           <span data-i18n="ui.chat" class="room-chat-title">Chat</span>
+          <!-- Pinned (a column, the Mac window grows for it), over the room, or
+               in its own window. Remembered; not offered on a phone — see
+               chatMode() / syncChatModeButtons(). -->
+          <div data-i18n-aria-label="ui.chat_display" id="chat-mode-group" class="room-panel-tools chat-mode-group" role="group" aria-label="Chat display">
+            <button data-i18n-aria-label="ui.pinned_beside_the_room" data-i18n-title="ui.pinned_beside_the_room" id="btn-chat-mode-pinned" class="btn-icon panel-tool" type="button"
+                    title="Pinned beside the room" aria-label="Pinned beside the room" aria-pressed="true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="15" y1="4" x2="15" y2="20"/></svg>
+            </button>
+            <button data-i18n-aria-label="ui.over_the_room" data-i18n-title="ui.over_the_room" id="btn-chat-mode-overlay" class="btn-icon panel-tool" type="button"
+                    title="Over the room" aria-label="Over the room" aria-pressed="false">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="12" y="7" width="6" height="10" rx="1"/></svg>
+            </button>
+            <button data-i18n-aria-label="ui.in_its_own_window" data-i18n-title="ui.in_its_own_window" id="btn-chat-mode-window" class="btn-icon panel-tool" type="button"
+                    title="In its own window" aria-label="In its own window" aria-pressed="false">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </button>
+          </div>
           <!-- Collapse, not close: the drawer folds back into the bubble on the
                right edge, which is what re-opens it. -->
           <button data-i18n-aria-label="ui.collapse_chat" data-i18n-title="ui.collapse_chat" id="btn-chat-close" class="btn-icon chat-collapse" type="button"
