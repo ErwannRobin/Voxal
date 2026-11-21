@@ -203,7 +203,10 @@ screen gives it the landscape shape the desktop web app uses (stage left, roster
 + PTT railed right — the `html.is-web` grid at ≥861px). Both are reversible: the
 plain voice column is remembered, including a size the user chose themselves, and
 handed back. Called from `toggleChatPanel()`, `updateVideoStage()` and
-`showScreen()`; a no-op off Tauri. Needs `core:window:allow-set-size` (plus the
+`showScreen()`; a no-op off Tauri. It resizes only when the configuration
+(`desktopShapeKey()`: stage, chat, chat width) changes — `updateVideoStage()`
+runs it on every resize, and re-asserting the shape there snapped back every
+manual resize, title-bar double-click and tile. Needs `core:window:allow-set-size` (plus the
 position/scale permissions for the on-screen nudge) in
 `src-tauri/capabilities/default.json`.
 

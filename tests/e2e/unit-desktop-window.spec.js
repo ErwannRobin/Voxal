@@ -449,3 +449,65 @@ test.describe('placed by macOS (Fill, tiles)', () => {
     expect(back).toEqual([{ width: 440, height: 700 }]);
   });
 });
+
+// Every resize runs a layout pass (scheduleStageRelayout → updateVideoStage →
+// applyDesktopWindowShape). The shape must not be re-asserted there, or every
+// size the user or macOS gives the window snaps back on the next frame.
+test.describe('a resize is never undone by the layout pass that follows it', () => {
+  test.beforeEach(async ({ page }) => {
+    await seedRoom(page, { selfId: 'me', isHost: true, roomCode: 'me' });
+    await asVoiceColumn(page);
+    await page.evaluate(() => applyDesktopWindowShape());   // the room's shape, as on entry
+  });
+
+  async function userResizesTo(page, width, height, { isFullscreen } = {}) {
+    return page.evaluate(async ({ width, height, isFullscreen }) => {
+      if (isFullscreen) {
+        // A real bridge answers asynchronously: the layout pass runs first.
+        tauriWindowHandle().isFullscreen = () => new Promise((r) => setTimeout(() => r(false), 30));
+      }
+      window.__windowTest.sizes.length = 0;
+      Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: height, configurable: true });
+      window.dispatchEvent(new Event('resize'));
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      updateVideoStage();
+      await new Promise((r) => setTimeout(r, 60));
+      return { sizes: window.__windowTest.sizes.slice(), voice: _desktopVoiceSize };
+    }, { width, height, isFullscreen });
+  }
+
+  test('a voice room keeps the size it was dragged to', async ({ page }) => {
+    const out = await userResizesTo(page, 900, 820);
+    expect(out.sizes).toEqual([]);
+    expect(out.voice).toEqual({ width: 900, height: 820 });
+  });
+
+  test('…also while the bridge is still answering whether it is full screen', async ({ page }) => {
+    const out = await userResizesTo(page, 1440, 875, { isFullscreen: true });
+    expect(out.sizes).toEqual([]);
+    expect(out.voice).toEqual({ width: 1440, height: 875 });
+  });
+
+  test('a live stage keeps a size the user gave it', async ({ page }) => {
+    await page.evaluate(() => {
+      // No real tiles here, so the real layout pass would take the stage down;
+      // keep only the part of it under test.
+      window.updateVideoStage = function() { applyDesktopWindowShape(); };
+      document.body.classList.add('video-stage');
+      applyDesktopWindowShape();                  // the stage's landscape shape
+    });
+    const out = await userResizesTo(page, 1400, 900);
+    expect(out.sizes).toEqual([]);
+  });
+
+  test('a change of configuration still reshapes it', async ({ page }) => {
+    await userResizesTo(page, 900, 820);
+    const sizes = await page.evaluate(() => {
+      localStorage.setItem('chat-width', '360');
+      toggleChatPanel(true, { focus: false });
+      return window.__windowTest.sizes.slice();
+    });
+    expect(sizes).toEqual([{ width: 900 + 360, height: 820 }]);
+  });
+});

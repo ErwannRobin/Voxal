@@ -6107,9 +6107,28 @@ function desktopWindowTarget() {
   };
 }
 
+// What the shape depends on, besides the voice column: whether the stage is up,
+// whether the chat is open, and how wide. The window is resized only when THIS
+// changes — never because a layout pass ran. updateVideoStage() calls in here
+// on every resize (scheduleStageRelayout), so a shape re-asserted on each call
+// threw back every size the user or macOS gave the window: a manual resize, a
+// double-click on the title bar (Zoom / Fill), a tile — each snapped back on the
+// next frame, before the resize could even be read as theirs.
+var _desktopShapeKey = null;
+function desktopShapeKey() {
+  var stage = inRoom && document.body.classList.contains('video-stage');
+  var chat  = inRoom && chatPanelOpen();
+  return (stage ? 'stage' : 'voice') + '|' + (chat ? 'chat:' + storedChatWidth() : 'nochat');
+}
+
 // Idempotent: safe to call from anywhere the room's configuration changes.
-function applyDesktopWindowShape() {
+// `force` re-applies an unchanged configuration — on the way out of full screen
+// or a tile, where the frame macOS hands back may not be the room's shape.
+function applyDesktopWindowShape(opts) {
   if (!desktopWindowShapeActive() || desktopShapeStandsDown()) return;
+  var key = desktopShapeKey();
+  if (key === _desktopShapeKey && !(opts && opts.force)) return;
+  _desktopShapeKey = key;
   var win = tauriWindowHandle();
   var dpi = window.__TAURI__ && window.__TAURI__.dpi;
   if (!win || typeof win.setSize !== 'function' || !dpi || !dpi.LogicalSize) return;
@@ -6229,13 +6248,13 @@ function noteDesktopPlacement(fs, placed) {
   if (wasFullscreen) {
     // macOS animates the frame back: wait for it before reading or resizing.
     _desktopSettleUntil = Date.now() + DESKTOP_FULLSCREEN_SETTLE_MS;
-    setTimeout(applyDesktopWindowShape, DESKTOP_FULLSCREEN_SETTLE_MS);
+    setTimeout(function() { applyDesktopWindowShape({ force: true }); }, DESKTOP_FULLSCREEN_SETTLE_MS);
     return;
   }
   // Out of a tile: the frame it lands in (its size from before the tile, or
   // one the user just dragged) is theirs, and the room's shape grows from it.
   recordDesktopVoiceSize();
-  applyDesktopWindowShape();
+  applyDesktopWindowShape({ force: true });
 }
 
 function recordDesktopVoiceSize() {
