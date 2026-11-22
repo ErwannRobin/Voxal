@@ -391,6 +391,11 @@ way in docs/p3m-evaluation.md. So does the experimental BackgroundMattingV2
 reference's picture of the empty room and therefore only drives the camera while
 that picture is loaded and current (`Processor.syncBgm()`; MediaPipe otherwise) —
 see docs/bgm-evaluation.md.
+In the Mac app, the default engine is Apple Vision (`segmentation-engine=vision`,
+`src/vision-engine.js`). It sends a downscaled frame to the system's
+`VNGenerateForegroundInstanceMaskRequest` over Tauri IPC and is set up the same
+way (no dilate, half the feather, the 0.6 blend). When it cannot run, Longpipe
+takes over. See docs/apple-vision-evaluation.md.
 
 ### Why the mask crosses the CPU
 
