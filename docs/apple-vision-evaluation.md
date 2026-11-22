@@ -96,14 +96,49 @@ What the table says:
 * It must be set up like a matte engine (`maskCut: 0`, no dilate, half the
   feather), exactly as the `pre:` engines are in the bench.
 
+## In the app (experimental)
+
+The `vision` segmentation engine (`src/vision-engine.js`) runs this live in the
+Mac app. It is opt-in, like P3M-Net: Settings → Advanced → *Segmentation
+engine* → *Apple Vision*, or `localStorage['segmentation-engine'] = 'vision'`,
+or `?segengine=vision`. It is offered only in the Tauri app on a Mac
+(`VisionEngine.available()`), and never on the web or on mobile.
+
+* Each inference draws the current frame at `vision-size` on the long side
+  (default 512, the size that scored 0.66 above; 256 / 384 / 640 in the same
+  settings card), sends the raw RGBA to `vision_foreground_mask`, and hands
+  the returned mask to the Processor. It runs at the pipeline's usual inference
+  rate (`detection-quality`) with one request in flight, so the mask trails the
+  picture by one round trip, as P3M-Net's does.
+* The mask is set up as the bench ran it (`maskCut: 0`, no dilate, half the
+  feather, the usual 0.6 blend). `vision-dilate` (Advanced) overrides the
+  dilate.
+* `create()` sends a 64x36 probe frame first. That proves the command exists
+  and that this macOS has the request, and it absorbs Vision's ~1.7 s model
+  load. Any error there (not a Mac, macOS 13), or five failed frames in a row
+  later, puts the camera back on MediaPipe, and the diagnostic shows why.
+* The Rust side answers the **scaled** mask
+  (`generateScaledMaskForImageForInstances`) at the input's own size, not the
+  prototype's analysis mask. That one is a fixed 512x512 square whatever the
+  frame's shape, and it is not what the bench measured. At 512x288 the scaled
+  mask is also the smaller answer (147 KB against 262 KB). Each frame runs in
+  its own autorelease pool, because a Tokio blocking thread has none and every
+  request autoreleases its results.
+* The segmentation diagnostic reports the round trip, the Vision call alone,
+  the IPC share and the mask rate. The *Engines* tab (`?segdiag=compare`) puts
+  Vision beside the others on the same camera.
+
+Not yet measured: the live round trip at 512x288 with the window in front, the
+CPU cost of a whole call, and how the mask behaves on a live camera (see below).
+
 ## IPC prototype (partial)
 
 `src-tauri/src/vision.rs` + the `vision_foreground_mask` command, and a probe
 (`src/vision-bench.js`, inert unless the app starts with
 `VOXAL_VISION_BENCH=<path to a JPEG frame>`), measure the real round trip in
 `make dev`: webview frame (`drawImage` + `getImageData`) -> raw bytes over Tauri
-IPC -> Vision (`objc2-vision`) -> raw mask bytes -> webview. Not used by the
-pipeline.
+IPC -> Vision (`objc2-vision`) -> raw mask bytes -> webview. These numbers were
+taken with the analysis mask, before the engine switched to the scaled one.
 
 Back to back, 256x144 RGBA input (147 KB), ms, over 150 frames, three runs:
 
@@ -114,9 +149,10 @@ Back to back, 256x144 RGBA input (147 KB), ms, over 150 frames, three runs:
 | IPC both ways + copies | 5-10 (p95 5 in one run, 58-104 in the others) |
 | **Total** | **27-30** |
 
-* **Vision's own mask is always 512x512 (262 KB)**, whatever the input: its
-  analysis resolution is fixed, so a smaller input only shrinks the IPC
-  upload, not the model work. The request needs a CVPixelBuffer, and macOS
+* **Vision's analysis mask is always 512x512 (262 KB)**, whatever the input:
+  its analysis resolution is fixed, so a smaller input only shrinks the IPC
+  upload, not the model work. (The engine now asks for the scaled mask at the
+  input's size instead; see *In the app*.) The request needs a CVPixelBuffer, and macOS
   refuses `32RGBA` (`CVPixelBufferCreate` -6680), so the Rust side swaps R/B
   into BGRA while copying.
 * The IPC itself is cheap (a few ms for ~150 KB up and 262 KB down). The long

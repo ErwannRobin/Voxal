@@ -345,9 +345,11 @@ fn prepare_main_window_macos<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>
     });
 }
 
-/// PROTOTYPE (docs/apple-vision-evaluation.md): the camera cut-out through Apple
-/// Vision. Raw RGBA in (headers `x-width` / `x-height`), a 12-byte header plus an
-/// 8-bit mask out; see `vision.rs` for the wire format.
+/// The `vision` segmentation engine (`src/vision-engine.js`,
+/// docs/apple-vision-evaluation.md): the camera cut-out through Apple Vision.
+/// Raw RGBA in (headers `x-width` / `x-height`), a 12-byte header plus an 8-bit
+/// mask at the input's size out; see `vision.rs` for the wire format. Errors off
+/// macOS and before macOS 14, which sends the engine back to MediaPipe.
 #[tauri::command]
 async fn vision_foreground_mask(
     request: tauri::ipc::Request<'_>,

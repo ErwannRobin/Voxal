@@ -70,6 +70,7 @@ export default [
         LongpipeEngine: 'readonly', // src/longpipe-engine.js
         RvmEngine: 'readonly',      // src/rvm-engine.js
         P3mEngine: 'readonly',      // src/p3m-engine.js
+        VisionEngine: 'readonly',   // src/vision-engine.js
         BgmEngine: 'readonly',      // src/bgm-engine.js
         LabEngine: 'readonly',      // src/lab-engine.js
         VideoEffects: 'readonly', // src/video-effects.js
