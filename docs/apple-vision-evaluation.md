@@ -152,8 +152,27 @@ therefore slower than Vision would be alone.
   crossed 50% between inferences, and only 0.6% of the mask was mid-confidence
   (12-78%). Every soft edge comes from the pipeline's feather, not from Vision.
 
-Not yet measured: Vision alone (comparison off), the CPU cost of a whole call,
-and the mask under motion and auto-exposure (see below).
+**Vision alone** (comparison off, same Mac, a few minutes later):
+
+| | p50 | p95 |
+|---|---|---|
+| Round trip | 37 ms | 46 ms |
+| Vision call | 26.1 ms | |
+| IPC (round trip minus Rust, frame copy included) | 7.1 ms | |
+| Rust's own work (pixel buffer, R/B swap, mask read) | ~4 ms | |
+| Masks per second | 15.1 (the pipeline's own rate, 15.2 Hz) | |
+
+* **IPC returns to the prototype's 5-10 ms once nothing competes**, so the 19.6
+  ms above was main-thread contention, not the bridge. The p95 tail is tight
+  (46 ms) with the window in front.
+* **Vision is about two thirds of the round trip, and a smaller input would not
+  shrink it**: the request analyses at a fixed 512x512, so a 384 or 256 input
+  saves only IPC. 512 stays the default.
+* Still steady: 0.1% of pixels crossed 50% between inferences, 0.6%
+  mid-confidence.
+
+Not yet measured: the CPU cost of a whole call, and the mask under fast motion
+and auto-exposure changes (see below).
 
 ## IPC prototype (partial)
 
