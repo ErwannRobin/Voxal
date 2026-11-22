@@ -6695,25 +6695,45 @@ function applyDesktopChatGrowth() {
   resizeDesktopWindow(win, dpi, width, frame.height, x !== frame.x ? { x: x, y: frame.y } : null);
 }
 
+// The height `applyDesktopChatGrowth()` has is `window.innerHeight`, which is the PAGE's viewport —
+// not always the window's inner box `setSize` sets: a docked Web Inspector (or
+// anything else taking a strip off the bottom of the webview) makes it shorter,
+// and handing it back to `setSize` shrank the window by that strip on every chat
+// toggle. So the height is re-read from the window itself (`innerSize()`, the
+// same box `setSize` writes) and the page's value is only the fallback.
+function desktopRealInnerHeight(win, fallback) {
+  if (typeof win.innerSize !== 'function' || typeof win.scaleFactor !== 'function') return null;
+  try {
+    return Promise.all([win.innerSize(), win.scaleFactor()]).then(function(r) {
+      var h = r[0] && r[1] ? r[0].height / r[1] : 0;
+      return h > 0 ? Math.round(h) : fallback;
+    }, function() { return fallback; });
+  } catch (_) { return null; }
+}
+
 // Growing: move first, so the window never hangs past the screen's edge.
 // Shrinking: size first, for the same reason the other way round. Both
 // best-effort — a refused move costs a window that did not shift, nothing more.
-function resizeDesktopWindow(win, dpi, width, height, pos) {
-  var growing = width > window.innerWidth;
-  _desktopAppliedSize = { width: width, height: height };
-  function size() {
-    return win.setSize(new dpi.LogicalSize(width, height));
-  }
-  function move() {
-    if (!pos || !dpi.LogicalPosition || typeof win.setPosition !== 'function') return null;
-    return win.setPosition(new dpi.LogicalPosition(pos.x, pos.y));
-  }
+function resizeDesktopWindow(win, dpi, width, pageHeight, pos) {
   function warn(e) { console.warn('[window] chat resize refused:', e && e.message ? e.message : e); }
-  try {
-    if (!pos) { Promise.resolve(size()).catch(warn); return; }
-    var first = growing ? move() : size();
-    Promise.resolve(first).then(function() { return growing ? size() : move(); }).catch(warn);
-  } catch (e) { warn(e); }
+  function apply(height) {
+    var growing = width > window.innerWidth;
+    _desktopAppliedSize = { width: width, height: height };
+    function size() {
+      return win.setSize(new dpi.LogicalSize(width, height));
+    }
+    function move() {
+      if (!pos || !dpi.LogicalPosition || typeof win.setPosition !== 'function') return null;
+      return win.setPosition(new dpi.LogicalPosition(pos.x, pos.y));
+    }
+    try {
+      if (!pos) { Promise.resolve(size()).catch(warn); return; }
+      var first = growing ? move() : size();
+      Promise.resolve(first).then(function() { return growing ? size() : move(); }).catch(warn);
+    } catch (e) { warn(e); }
+  }
+  var real = desktopRealInnerHeight(win, pageHeight);
+  if (real) real.then(apply); else apply(pageHeight);
 }
 
 function initDesktopWindowShape() {
