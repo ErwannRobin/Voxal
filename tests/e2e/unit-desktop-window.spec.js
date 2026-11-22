@@ -234,6 +234,27 @@ test.describe('applyDesktopWindowShape — the window actually resizes', () => {
     expect(sizes).toEqual([{ width: 1360, height: 900 }]);
   });
 
+  // `window.innerHeight` is the page's viewport: a docked Web Inspector makes it
+  // shorter than the window's inner box. Echoing it back to setSize shrank the
+  // window by the inspector's height on every toggle; the height comes from the
+  // window's own innerSize() instead.
+  test('the height is the window\'s own, not a shorter page viewport', async ({ page }) => {
+    const sizes = await page.evaluate(async () => {
+      localStorage.setItem('chat-width', '360');
+      _desktopAppliedSize = null;
+      Object.defineProperty(window, 'innerWidth', { value: 1000, configurable: true });
+      Object.defineProperty(window, 'innerHeight', { value: 500, configurable: true });   // inspector takes 300
+      const h = window.__TAURI__.window.getCurrentWindow();
+      h.innerSize = () => Promise.resolve({ width: 2000, height: 1600 });   // physical px
+      h.scaleFactor = () => Promise.resolve(2);                              // → 800 logical
+      window.__windowTest.sizes.length = 0;
+      toggleChatPanel(true, { focus: false });
+      await new Promise((r) => setTimeout(r, 0));
+      return window.__windowTest.sizes.slice();
+    });
+    expect(sizes).toEqual([{ width: 1360, height: 800 }]);
+  });
+
   test('no room on the right: it shifts left by just enough, and moves back on close', async ({ page }) => {
     const out = await page.evaluate(async () => {
       localStorage.setItem('chat-width', '360');
