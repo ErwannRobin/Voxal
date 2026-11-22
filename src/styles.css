@@ -1578,50 +1578,136 @@ kbd {
 .chat-mode-group { margin-left: auto; }
 /* The phone stage's chat is the drawer, whatever was chosen on a desktop. */
 body.video-stage-immersive .chat-mode-group { display: none; }
-/* The rail's controls belong to the desktop stage only. */
-.room-peers-tools { display: none; }
+/* The rail's header belongs to the desktop stage only. */
+.room-peers-header { display: none; }
 
 /* ── Desktop stage: the participants rail, pinned / over the video / away ──
+   Managed exactly like the chat on the other side, minus the window of its
+   own: a header (title, pinned / over the video, collapse), an edge handle
+   wearing an icon that is on screen in every state and rides the rail's edge
+   while it is open, and an overlay that is ONE card the height of the room.
+
    `body.roster-overlay` and `body.roster-hidden` are published by
    applyRosterPanel() only while `body.video-stage-desktop` is. Pinned is the
    grid above, untouched. Over the video or away, the stage takes the rail's
-   column too (a grid item may share cells), and what is left in the rail —
-   the roster when overlaid, the talk button always — stands on the picture
-   as glass. The talk button is never hidden with the roster. */
+   column too (a grid item may share cells).
+
+   Over the video, the rail's two grid items (roster on top, talk button at the
+   bottom) are drawn as one card by the room's `::before`, a third item in the
+   same cell under both of them.
+
+   Away, the talk button is what the phone stage shows: the mic alone at the
+   bottom centre of the picture, no card behind it, each control wearing the
+   same glass as on a phone. The talk button is never hidden with the roster. */
 @media (min-width: 861px) {
-  html.is-web body.video-stage-desktop:not(.embed-tiny) #screen-room .room-peers-tools {
+  html.is-web body.video-stage-desktop:not(.embed-tiny) #screen-room .room-peers-header {
     display: flex;
-    justify-content: flex-end;
-    margin-bottom: 4px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-shrink: 0;
+    margin-bottom: 6px;
   }
+  html.is-web body.video-stage-desktop:not(.embed-tiny) #screen-room .room-peers-tools { margin-left: auto; }
   html.is-web body.video-stage-desktop.roster-overlay:not(.embed-tiny) #screen-room #video-stage,
   html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room #video-stage {
     grid-area: stage / rail / stage / stage;
   }
-  html.is-web body.video-stage-desktop.roster-overlay:not(.embed-tiny) #screen-room .room-peers-panel,
-  html.is-web body.video-stage-desktop.roster-overlay:not(.embed-tiny) #screen-room .room-bottom-bar,
-  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .room-bottom-bar {
+
+  /* Over the video: one card, like the chat's. */
+  html.is-web body.video-stage-desktop.roster-overlay:not(.embed-tiny) #screen-room.active::before {
+    content: '';
+    grid-area: rail;
     position: relative;
     z-index: 6;
-    padding: 10px;
+    margin: 10px 0 10px 10px;
     border: 1px solid var(--border);
     border-radius: 14px;
-    background: color-mix(in srgb, var(--bg-surface) 84%, transparent);
-    -webkit-backdrop-filter: blur(14px);
-    backdrop-filter: blur(14px);
+    background: color-mix(in srgb, var(--bg-surface) 86%, transparent);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+    pointer-events: none;
+  }
+  html.is-web body.video-stage-desktop.roster-overlay:not(.embed-tiny) #screen-room .room-peers-panel,
+  html.is-web body.video-stage-desktop.roster-overlay:not(.embed-tiny) #screen-room .room-bottom-bar {
+    position: relative;
+    z-index: 7;
+    margin-left: 10px;
+    padding: 10px 12px;
   }
   html.is-web body.video-stage-desktop.roster-overlay:not(.embed-tiny) #screen-room .room-peers-panel {
-    margin: 10px 0 0 10px;
+    margin-top: 10px;
     max-height: calc(100% - 20px);
   }
-  html.is-web body.video-stage-desktop.roster-overlay:not(.embed-tiny) #screen-room .room-bottom-bar,
-  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .room-bottom-bar {
-    margin: 0 0 10px 10px;
+  html.is-web body.video-stage-desktop.roster-overlay:not(.embed-tiny) #screen-room .room-bottom-bar {
+    margin-bottom: 10px;
   }
+
+  /* Away: the mic alone, centred on the picture, as on a phone. */
   html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .room-peers-panel { display: none; }
-  /* Away, the left edge handle is how it comes back. A button here, not a
-     drag: app chrome in the app's own colours, like the chat's. */
-  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) .stage-handle-left {
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .room-bottom-bar {
+    grid-area: stage / rail / stage / stage;
+    justify-self: center;
+    position: relative;
+    z-index: 6;
+    margin-bottom: 14px;
+    background: none;
+    border: none;
+    --glass-tint:  rgba(16, 16, 20, 0.38);
+    --glass-sheen: linear-gradient(to bottom,
+                   rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0) 62%);
+    --glass-blur:  blur(18px) saturate(180%);
+    color: rgba(255, 255, 255, 0.92);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
+  }
+  /* The hint goes, as on a phone: the mic is what is left on the picture. */
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .ptt-hint { display: none; }
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .room-bottom-bar .shortcut-focused-note,
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .room-bottom-bar .recording-hint {
+    color: rgba(255, 255, 255, 0.74);
+  }
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .room-bottom-bar kbd {
+    background: rgba(255, 255, 255, 0.16);
+    border-color: rgba(255, 255, 255, 0.24);
+    color: rgba(255, 255, 255, 0.92);
+  }
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .room-bottom-bar .btn-icon { color: rgba(255, 255, 255, 0.74); }
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .room-bottom-bar .btn-icon:hover { color: #fff; }
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .room-bottom-bar .room-controls {
+    border-top-color: transparent;
+  }
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .ptt-btn,
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .room-bottom-bar .room-action-btn {
+    background-color: var(--glass-tint);
+    background-image: var(--glass-sheen);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+  }
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .ptt-btn {
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  }
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .room-bottom-bar .room-action-btn {
+    border-color: rgba(255, 255, 255, 0.28);
+    color: rgba(255, 255, 255, 0.92);
+  }
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .room-bottom-bar .room-action-btn:hover {
+    background-color: rgba(16, 16, 20, 0.58);
+    border-color: rgba(255, 255, 255, 0.45);
+    color: #fff;
+  }
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .ptt-btn.active,
+  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) #screen-room .room-bottom-bar .room-action-btn.active {
+    background-color: var(--accent);
+    background-image: none;
+    border-color: var(--accent);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  /* The edge handle: a button here, not a drag, in the app's own colours like
+     the chat's — on screen in every state, riding the rail's edge while it is
+     open (pinned: the column's right edge; over the video: the card's). */
+  html.is-web body.video-stage-desktop:not(.embed-tiny) .stage-handle-left {
     display: flex;
     cursor: pointer;
     background: var(--bg-surface);
@@ -1629,8 +1715,10 @@ body.video-stage-immersive .chat-mode-group { display: none; }
     border-left: none;
     color: var(--text-muted);
   }
-  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) .stage-handle-left::before { background: currentColor; }
-  html.is-web body.video-stage-desktop.roster-hidden:not(.embed-tiny) .stage-handle-left:hover { color: var(--text); }
+  html.is-web body.video-stage-desktop:not(.embed-tiny) .stage-handle-left:hover { color: var(--text); }
+  html.is-web body.video-stage-desktop:not(.embed-tiny):not(.roster-hidden) .stage-handle-left {
+    left: calc(max(calc(env(safe-area-inset-left) + 18px), 18px) + 320px);
+  }
 }
 
 /* ── Floating controls (phones) ───────────────────────────────────
@@ -1969,7 +2057,7 @@ body.video-stage-immersive.chat-open .stage-handle-left { display: none; }
   left: max(env(safe-area-inset-left), 0px);
   top: 50%;
   transform: translateY(-50%);
-  width: 22px;
+  width: 30px;
   height: 72px;
   border-radius: 0 12px 12px 0;
   transition: left 0.25s ease;

@@ -84,6 +84,84 @@ test.describe('participants rail on the desktop stage', () => {
     expect(await page.evaluate(() => localStorage.getItem('roster-panel-hidden'))).toBeNull();
   });
 
+  test('headed like the chat: a title, the modes, a collapse control — and no window of its own', async ({ page }) => {
+    await enterVideoRoom(page);
+    const header = page.locator('#room-peers-panel .room-peers-header');
+    await expect(header).toBeVisible();
+    await expect(header.locator('.room-chat-title')).toHaveText('Participants');
+    await expect(header.locator('#btn-roster-hide')).toBeVisible();
+    expect(await page.locator('[id^="btn-roster-mode-window"]').count()).toBe(0);
+  });
+
+  test('the edge handle wears an icon and rides the open rail, like the chat handle', async ({ page }) => {
+    await enterVideoRoom(page);
+    const handle = page.locator('#stage-handle-roster');
+    await expect(handle).toBeVisible();
+    await expect(handle.locator('svg')).toHaveCount(1);
+    await expect(handle).toHaveAttribute('aria-expanded', 'true');
+    const rail = await rect(page, '#room-peers-panel');
+    const h = await rect(page, '#stage-handle-roster');
+    expect(Math.abs(h.left - rail.right)).toBeLessThan(3);
+    // A click on it while open puts the rail away, as the chat's does.
+    await handle.click();
+    await expect(page.locator('body')).toHaveClass(/roster-hidden/);
+  });
+
+  test('over the video it is one card the height of the room, roster and talk button in it', async ({ page }) => {
+    await enterVideoRoom(page);
+    await page.click('#btn-roster-mode-overlay');
+    await expect(page.locator('body')).toHaveClass(/roster-overlay/);
+    const geo = await page.evaluate(() => {
+      const room = document.getElementById('screen-room');
+      const card = getComputedStyle(room, '::before');
+      const r = (s) => document.querySelector(s).getBoundingClientRect();
+      return {
+        content: card.content, bg: card.backgroundColor,
+        panelBg: getComputedStyle(document.getElementById('room-peers-panel')).backgroundColor,
+        barBg: getComputedStyle(document.querySelector('#screen-room .room-bottom-bar')).backgroundColor,
+        panelTop: r('#room-peers-panel').top, barBottom: r('#screen-room .room-bottom-bar').bottom,
+        stageTop: r('#video-stage').top, stageBottom: r('#video-stage').bottom,
+      };
+    });
+    expect(geo.content).not.toBe('none');
+    expect(geo.bg).not.toBe('rgba(0, 0, 0, 0)');
+    // The pieces paint nothing of their own: the card is behind both.
+    expect(geo.panelBg).toBe('rgba(0, 0, 0, 0)');
+    expect(geo.barBg).toBe('rgba(0, 0, 0, 0)');
+    expect(geo.panelTop - geo.stageTop).toBeLessThan(20);
+    expect(geo.stageBottom - geo.barBottom).toBeLessThan(20);
+  });
+
+  test('hidden: the mic stands alone at the bottom centre of the picture, nothing behind it', async ({ page }) => {
+    await enterVideoRoom(page);
+    await page.click('#btn-roster-hide');
+    await expect(page.locator('body')).toHaveClass(/roster-hidden/);
+    const geo = await page.evaluate(() => {
+      const r = (s) => document.querySelector(s).getBoundingClientRect();
+      const bar = document.querySelector('#screen-room .room-bottom-bar');
+      const cs = getComputedStyle(bar);
+      const ptt = r('#ptt-btn'), stage = r('#video-stage');
+      return {
+        pttMid: ptt.left + ptt.width / 2, stageMid: stage.left + stage.width / 2,
+        pttBottom: ptt.bottom, stageBottom: stage.bottom,
+        bg: cs.backgroundColor, border: cs.borderTopStyle,
+        hint: getComputedStyle(document.getElementById('ptt-hint')).display,
+      };
+    });
+    expect(Math.abs(geo.pttMid - geo.stageMid)).toBeLessThan(2);
+    expect(geo.pttBottom).toBeLessThan(geo.stageBottom);
+    expect(geo.bg).toBe('rgba(0, 0, 0, 0)');
+    expect(geo.border).toBe('none');
+    expect(geo.hint).toBe('none');
+    // Still the thing you press: nothing is on top of it.
+    const onTop = await page.evaluate(() => {
+      const r = document.getElementById('ptt-btn').getBoundingClientRect();
+      const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return !!el && !!el.closest('#ptt-btn');
+    });
+    expect(onTop).toBe(true);
+  });
+
   test('the choice is remembered and survives a relayout', async ({ page }) => {
     await page.evaluate(() => {
       localStorage.setItem('roster-panel-mode', 'overlay');

@@ -13852,7 +13852,7 @@ function setStagePanel(which, open) {
   document.body.classList.toggle(spec.cls, !!open);
   Object.keys(STAGE_PANELS).forEach(function(key) {
     var el = document.getElementById(STAGE_PANELS[key].handle);
-    if (el) el.setAttribute('aria-expanded', String(stagePanelOpen(key)));
+    if (el) el.setAttribute('aria-expanded', String(panelIsOpen(key)));
   });
 }
 
@@ -13860,7 +13860,9 @@ function closeStagePanels() {
   Object.keys(STAGE_PANELS).forEach(function(key) {
     document.body.classList.remove(STAGE_PANELS[key].cls);
     var el = document.getElementById(STAGE_PANELS[key].handle);
-    if (el) el.setAttribute('aria-expanded', 'false');
+    // On the desktop stage the roster's handle reports the rail, which is not
+    // a drawer and is not closed by this.
+    if (el) el.setAttribute('aria-expanded', String(panelIsOpen(key)));
   });
 }
 
