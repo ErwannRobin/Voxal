@@ -833,8 +833,10 @@
            and the panel agree. The roster's belongs to the immersive phone
            stage; the chat's is the only way into the chat, so it is on screen in
            every room — voice-only ones included. -->
-      <button data-i18n-aria-label="ui.show_the_participant_list" id="stage-handle-roster" class="stage-handle stage-handle-left" type="button"
-              aria-label="Show the participant list" aria-expanded="false"></button>
+      <button data-i18n-aria-label="ui.show_the_participant_list" id="stage-handle-roster" class="stage-handle stage-handle-left stage-handle-icon" type="button"
+              aria-label="Show the participant list" aria-expanded="false">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      </button>
       <button data-i18n-aria-label="ui.show_the_chat" id="stage-handle-chat" class="stage-handle stage-handle-right stage-handle-icon" type="button"
               aria-label="Show the chat" aria-expanded="false">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
@@ -879,21 +881,28 @@
       </div>
 
       <div id="room-peers-panel" class="room-peers-panel">
-        <!-- The desktop stage's rail: beside the picture or floating on it, and
-             put away (the left edge handle brings it back). Shown only on
+        <!-- The desktop stage's rail, headed exactly like the chat: a title,
+             pinned beside the picture or floating on it, and a collapse
+             control (the left edge handle brings it back). No window of its
+             own — that is the chat's alone. Shown only on
              body.video-stage-desktop — see applyRosterPanel(). -->
-        <div data-i18n-aria-label="ui.participants_display" class="room-panel-tools room-peers-tools" role="group" aria-label="Participants display">
-          <button data-i18n-aria-label="ui.pinned_beside_the_video" data-i18n-title="ui.pinned_beside_the_video" id="btn-roster-mode-pinned" class="btn-icon panel-tool" type="button"
-                  title="Pinned beside the video" aria-label="Pinned beside the video" aria-pressed="true">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="9" y1="4" x2="9" y2="20"/></svg>
-          </button>
-          <button data-i18n-aria-label="ui.over_the_video" data-i18n-title="ui.over_the_video" id="btn-roster-mode-overlay" class="btn-icon panel-tool" type="button"
-                  title="Over the video" aria-label="Over the video" aria-pressed="false">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="6" y="7" width="6" height="10" rx="1"/></svg>
-          </button>
-          <button data-i18n-aria-label="ui.hide_participants" data-i18n-title="ui.hide_participants" id="btn-roster-hide" class="btn-icon panel-tool" type="button"
+        <div class="room-peers-header">
+          <span data-i18n="ui.participants" class="room-chat-title">Participants</span>
+          <div data-i18n-aria-label="ui.participants_display" class="room-panel-tools room-peers-tools" role="group" aria-label="Participants display">
+            <button data-i18n-aria-label="ui.pinned_beside_the_video" data-i18n-title="ui.pinned_beside_the_video" id="btn-roster-mode-pinned" class="btn-icon panel-tool" type="button"
+                    title="Pinned beside the video" aria-label="Pinned beside the video" aria-pressed="true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="9" y1="4" x2="9" y2="20"/></svg>
+            </button>
+            <button data-i18n-aria-label="ui.over_the_video" data-i18n-title="ui.over_the_video" id="btn-roster-mode-overlay" class="btn-icon panel-tool" type="button"
+                    title="Over the video" aria-label="Over the video" aria-pressed="false">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="6" y="7" width="6" height="10" rx="1"/></svg>
+            </button>
+          </div>
+          <!-- Collapse, not close: the rail folds back into the handle on the
+               left edge, which is what re-opens it. -->
+          <button data-i18n-aria-label="ui.hide_participants" data-i18n-title="ui.hide_participants" id="btn-roster-hide" class="btn-icon chat-collapse roster-collapse" type="button"
                   title="Hide participants" aria-label="Hide participants" aria-controls="room-peers-panel">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 19l-7-7 7-7"/><path d="M19 19l-7-7 7-7"/></svg>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5l-7 7 7 7"/><path d="M19 5l-7 7 7 7"/></svg>
           </button>
         </div>
         <button data-i18n="ui.peers" id="btn-toggle-peers" class="btn btn-secondary btn-sm room-peers-toggle hidden" aria-expanded="false">Peers</button>
