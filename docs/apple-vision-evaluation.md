@@ -96,13 +96,16 @@ What the table says:
 * It must be set up like a matte engine (`maskCut: 0`, no dilate, half the
   feather), exactly as the `pre:` engines are in the bench.
 
-## In the app (experimental)
+## In the app (the Mac default)
 
-The `vision` segmentation engine (`src/vision-engine.js`) runs this live in the
-Mac app. It is opt-in, like P3M-Net: Settings → Advanced → *Segmentation
-engine* → *Apple Vision*, or `localStorage['segmentation-engine'] = 'vision'`,
-or `?segengine=vision`. It is offered only in the Tauri app on a Mac
-(`VisionEngine.available()`), and never on the web or on mobile.
+The `vision` segmentation engine (`src/vision-engine.js`) runs this live, and
+it is **the default engine in the Mac app**, chosen after the two live runs
+below. It is offered only in the Tauri app on a Mac
+(`VisionEngine.available()`), and never on the web or on mobile, where Longpipe
+stays the default. Another engine can be picked in Settings → Advanced →
+*Segmentation engine*, or for one visit with `?segengine=`. On a Mac an absent
+`segmentation-engine` key means Vision, so an explicit Longpipe choice is
+stored as `longpipe` there.
 
 * Each inference draws the current frame at `vision-size` on the long side
   (default 512, the size that scored 0.66 above; 256 / 384 / 640 in the same
@@ -115,8 +118,10 @@ or `?segengine=vision`. It is offered only in the Tauri app on a Mac
   dilate.
 * `create()` sends a 64x36 probe frame first. That proves the command exists
   and that this macOS has the request, and it absorbs Vision's ~1.7 s model
-  load. Any error there (not a Mac, macOS 13), or five failed frames in a row
-  later, puts the camera back on MediaPipe, and the diagnostic shows why.
+  load. Any error there (macOS 13), or five failed frames in a row later,
+  hands the camera to Longpipe, the Mac app's previous default (and MediaPipe
+  if Longpipe cannot start either). The diagnostic shows Vision's reason
+  first.
 * The Rust side answers the **scaled** mask
   (`generateScaledMaskForImageForInstances`) at the input's own size, not the
   prototype's analysis mask. That one is a fixed 512x512 square whatever the

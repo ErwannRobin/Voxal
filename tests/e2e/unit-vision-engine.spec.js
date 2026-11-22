@@ -6,7 +6,7 @@ import { test, expect } from './fixtures.js';
 // IPC call answers with the command's real wire format (12-byte header, then an
 // 8-bit mask at the size sent). What is real: the input sizing, the request's
 // bytes and headers, the parsing, the engine choice and where it is offered,
-// the fallback, the swap under a running camera and the mask going through the
+// the Mac-app default and the fallback to Longpipe, the swap under a running camera and the mask going through the
 // real Processor. The Rust side is covered by `cargo test` (vision.rs), and how
 // good Vision's mask is by docs/apple-vision-evaluation.md.
 
@@ -136,24 +136,69 @@ test.describe('where it is offered', () => {
     expect(r).toEqual({ available: true, offered: true, text: true });
   });
 
-  test('chosen by name only, and set back by choosing another', async ({ page }) => {
+  test('the default in the Mac app; any other choice is stored, Longpipe included', async ({ page }) => {
     const r = await page.evaluate(async () => {
       window.__voxalVisionStub = window.__mkVisionStub();
       localStorage.removeItem('segmentation-engine');
-      const res = { dflt: VideoEffects.engine(), v0: VisionEngine.selected() };
-      await VideoEffects.setEngine('vision');
-      res.chosen = [VideoEffects.engine(), localStorage.getItem('segmentation-engine'), P3mEngine.selected()];
-      await VideoEffects.setEngine('p3m');
-      res.p3m = [VideoEffects.engine(), VisionEngine.selected()];
+      const res = { dflt: [VideoEffects.engine(), VisionEngine.selected()] };
       await VideoEffects.setEngine('longpipe');
-      res.back = [VideoEffects.engine(), localStorage.getItem('segmentation-engine'), VisionEngine.selected()];
+      res.longpipe = [VideoEffects.engine(), localStorage.getItem('segmentation-engine'), VisionEngine.selected()];
+      await VideoEffects.setEngine('p3m');
+      res.p3m = [VideoEffects.engine(), localStorage.getItem('segmentation-engine'), VisionEngine.selected()];
+      await VideoEffects.setEngine('mediapipe');
+      res.mp = [VideoEffects.engine(), localStorage.getItem('segmentation-engine')];
+      await VideoEffects.setEngine('vision');
+      res.back = [VideoEffects.engine(), localStorage.getItem('segmentation-engine'), P3mEngine.selected()];
       return res;
     });
-    expect(r.dflt).toBe('longpipe');
-    expect(r.v0).toBe(false);
-    expect(r.chosen).toEqual(['vision', 'vision', false]);
-    expect(r.p3m).toEqual(['p3m', false]);
-    expect(r.back).toEqual(['longpipe', null, false]);
+    expect(r.dflt).toEqual(['vision', true]);
+    // An absent key now means Vision, so Longpipe has to be written out.
+    expect(r.longpipe).toEqual(['longpipe', 'longpipe', false]);
+    expect(r.p3m).toEqual(['p3m', 'p3m', false]);
+    expect(r.mp).toEqual(['mediapipe', 'mediapipe']);
+    expect(r.back).toEqual(['vision', 'vision', false]);
+  });
+
+  test('a visit\'s ?segengine= outranks the default either way', async ({ page }) => {
+    await page.addInitScript(() => { window.__voxalVisionStub = () => Promise.reject(new Error('unused')); });
+    await page.goto('/?segengine=longpipe');
+    const a = await page.evaluate(() => { localStorage.removeItem('segmentation-engine'); return [VisionEngine.selected(), VideoEffects.engine()]; });
+    await page.goto('/?segengine=vision');
+    const b = await page.evaluate(() => { localStorage.setItem('segmentation-engine', 'mediapipe'); return [VisionEngine.selected(), VideoEffects.engine()]; });
+    expect(a).toEqual([false, 'longpipe']);
+    expect(b).toEqual([true, 'vision']);
+  });
+
+  test('a stored Longpipe choice keeps Longpipe on a Mac, and the web is untouched', async ({ page }) => {
+    const web = await page.evaluate(() => {
+      localStorage.removeItem('segmentation-engine');
+      VisionEngine.setSelected(false);   // what setEngine() does last, off the Mac app
+      return [localStorage.getItem('segmentation-engine'), VideoEffects.engine()];
+    });
+    expect(web).toEqual([null, 'longpipe']);   // absent stays absent: still Longpipe's default
+    const mac = await page.evaluate(() => {
+      window.__voxalVisionStub = window.__mkVisionStub();
+      localStorage.setItem('segmentation-engine', 'longpipe');
+      return [VisionEngine.selected(), VideoEffects.engine(), LongpipeEngine.selected()];
+    });
+    expect(mac).toEqual([false, 'longpipe', 'longpipe']);
+  });
+
+  test('a Vision that cannot start tries Longpipe first, and keeps its own reason', async ({ page }) => {
+    const r = await page.evaluate(async () => {
+      window.__voxalVisionStub = window.__mkVisionStub({ failAll: true });
+      // A Longpipe that cannot start either: proves it was tried.
+      window.__voxalLongpipeStub = { EffectsPipeline: class { constructor() { throw new Error('no WebGL2'); } } };
+      localStorage.removeItem('segmentation-engine');
+      const out = await VideoEffects.wrap(window.__camStream(), 'blur');
+      const s = await VideoEffects.engineStats();
+      const res = { engine: VideoEffects.engine(), fallback: s.fallback, live: out.getVideoTracks()[0].readyState };
+      VideoEffects.stop(out);
+      return res;
+    });
+    expect(r.engine).toBe('mediapipe');
+    expect(r.fallback).toMatch(/macOS 14.*; .*no WebGL2/);
+    expect(r.live).toBe('live');
   });
 
   test('a command that errors (macOS 13, not a Mac) leaves the camera on MediaPipe and says why', async ({ page }) => {
@@ -292,5 +337,21 @@ test.describe('through the real Processor', () => {
     expect(r.engine).toBe('mediapipe');
     expect(r.fallback).toContain('macOS 14');
     expect(r.live).toBe('live');
+  });
+
+  test('mid-call, a dead Vision hands over to Longpipe, not straight to MediaPipe', async ({ page }) => {
+    const r = await page.evaluate(async () => {
+      window.__voxalVisionStub = window.__mkVisionStub({ failAfter: 3 });
+      window.__voxalLongpipeStub = { EffectsPipeline: class { constructor() { throw new Error('no WebGL2'); } } };
+      localStorage.setItem('segmentation-engine', 'vision');
+      const out = await VideoEffects.wrap(window.__camStream(), 'blur');
+      for (let i = 0; i < 100 && VideoEffects.engine() === 'vision'; i++) await new Promise((res) => setTimeout(res, 50));
+      const s = await VideoEffects.engineStats();
+      const res = { engine: VideoEffects.engine(), fallback: s.fallback };
+      VideoEffects.stop(out);
+      return res;
+    });
+    expect(r.engine).toBe('mediapipe');
+    expect(r.fallback).toContain('no WebGL2');   // Longpipe was asked, and could not start
   });
 });

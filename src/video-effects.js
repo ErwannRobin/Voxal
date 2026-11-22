@@ -1890,7 +1890,9 @@ var VideoEffects = (function () {
   // missing — that case is MediaPipe, silently. The experimental RVM only when
   // chosen by name (see rvm-engine.js), and the same for the experimental
   // P3M-Net (p3m-engine.js), and BackgroundMattingV2 (bgm-engine.js), which
-  // also needs a picture of the empty room (Processor.syncBgm()).
+  // also needs a picture of the empty room (Processor.syncBgm()). In the Mac
+  // app, Apple Vision comes before Longpipe: it is the default there unless
+  // another engine was chosen (vision-engine.js).
   function selectedEngine() {
     if (typeof LabEngine !== 'undefined' && LabEngine.selected()) return 'lab';
     if (typeof VisionEngine !== 'undefined' && VisionEngine.selected()) return 'vision';
@@ -1921,9 +1923,16 @@ var VideoEffects = (function () {
         _engineFallback = null;
         return seg;
       }, function (e) {
-        _engineFallback = (e && e.message) || String(e);
-        console.warn('[VideoEffects] Apple Vision unavailable, using MediaPipe: ' + _engineFallback);
-        return createMediaPipeSegmenter();
+        // Vision is the Mac app's default, so it falls back to the engine
+        // that default used to be (which itself falls back to MediaPipe),
+        // keeping Vision's reason in front of anything Longpipe adds.
+        var why = (e && e.message) || String(e);
+        console.warn('[VideoEffects] Apple Vision unavailable, using Longpipe: ' + why);
+        _engineFallback = null;
+        return createSegmenter(raw, 'longpipe', video).then(function (seg) {
+          _engineFallback = _engineFallback ? why + '; ' + _engineFallback : why;
+          return seg;
+        });
       });
     }
     if (want === 'bgm' && (!window.__voxalSegStub || window.__voxalBgmStub) && typeof BgmEngine !== 'undefined') {
@@ -3207,9 +3216,11 @@ var VideoEffects = (function () {
       seg.onFail = function (e) {
         if (self.segmenter !== seg || self.stopped) return;
         _engineFallback = (e && e.message) || String(e);
-        console.warn('[VideoEffects] ' + name + ' failed, back to MediaPipe: ' + _engineFallback);
+        console.warn('[VideoEffects] ' + name + ' failed, back to ' + (self.engine === 'vision' ? 'Longpipe' : 'MediaPipe') + ': ' + _engineFallback);
         if (self.engine === 'bgm') self.bgmGaveUp = true;
-        self.swapSegmenter('mediapipe');
+        // Apple Vision is a default, not an experiment: it hands over to
+        // Longpipe, the engine the Mac app had before it.
+        self.swapSegmenter(self.engine === 'vision' ? 'longpipe' : 'mediapipe');
       };
       if (this.engine === 'longpipe') this.syncDirect();
       if (this.engine === 'bgm') { this.bgmCoverSince = 0; this.feedBgmPlate(); }
@@ -6964,10 +6975,12 @@ var VideoEffects = (function () {
       var eng = dEl('select');
       eng.style.flex = '1 1 100%';
       eng.setAttribute('aria-label', 'Segmentation engine');
-      var engs = [['longpipe', 'Engine: Longpipe (default)'], ['mediapipe', 'Engine: MediaPipe']];
+      var visionHere = typeof VisionEngine !== 'undefined' && VisionEngine.available();
+      var engs = visionHere
+        ? [['vision', 'Engine: Apple Vision (default on this Mac)'], ['longpipe', 'Engine: Longpipe'], ['mediapipe', 'Engine: MediaPipe']]
+        : [['longpipe', 'Engine: Longpipe (default)'], ['mediapipe', 'Engine: MediaPipe']];
       if (typeof RvmEngine !== 'undefined') engs.push(['rvm', 'Engine: RVM (experimental, GPL weights: previews and make rvm-assets)']);
       if (typeof P3mEngine !== 'undefined') engs.push(['p3m', 'Engine: P3M-Net (experimental, 78 MB download)']);
-      if (typeof VisionEngine !== 'undefined' && VisionEngine.available()) engs.push(['vision', 'Engine: Apple Vision (experimental, macOS 14+)']);
       if (typeof BgmEngine !== 'undefined') engs.push(['bgm', 'Engine: BackgroundMattingV2 (experimental, needs a picture of the empty room)']);
       if (typeof LabEngine !== 'undefined') engs.push(['lab', 'Engine: matting lab (candidates; make lab-assets)']);
       engs.forEach(function (v) {
@@ -8782,14 +8795,18 @@ var VideoEffects = (function () {
     }
 
     if (typeof LongpipeEngine !== 'undefined') {
+      var visionDefault = typeof VisionEngine !== 'undefined' && VisionEngine.available();
       select('Segmentation engine',
-        'Longpipe is the default: it runs its own model on the GPU and its output is turned into a mask (see the diagnostic). MediaPipe is the fallback, and what a Longpipe that cannot start ends up on.',
+        visionDefault
+          ? 'Apple Vision is the default on this Mac: the system\'s own model, sent a small copy of each frame (macOS 14+). Without it, Longpipe takes over, and MediaPipe if Longpipe cannot start.'
+          : 'Longpipe is the default: it runs its own model on the GPU and its output is turned into a mask (see the diagnostic). MediaPipe is the fallback, and what a Longpipe that cannot start ends up on.',
         'segmentation-engine',
-        [['longpipe', 'Longpipe (default)'], ['mediapipe', 'MediaPipe']].concat(
+        (visionDefault
+          ? [['vision', 'Apple Vision (default on this Mac)'], ['longpipe', 'Longpipe'], ['mediapipe', 'MediaPipe']]
+          : [['longpipe', 'Longpipe (default)'], ['mediapipe', 'MediaPipe']]).concat(
           typeof RvmEngine !== 'undefined' ? [['rvm', 'RVM (experimental; needs make rvm-assets or a preview deploy with PREVIEW_ENGINES=1)']] : [],
           typeof P3mEngine !== 'undefined' ? [['p3m', 'P3M-Net (experimental; 78 MB download, needs WebGPU)']] : [],
           typeof BgmEngine !== 'undefined' ? [['bgm', 'BackgroundMattingV2 (experimental; needs WebGPU and a picture of the empty room)']] : [],
-          typeof VisionEngine !== 'undefined' && VisionEngine.available() ? [['vision', 'Apple Vision (experimental; the Mac app, macOS 14+)']] : [],
           typeof LabEngine !== 'undefined' ? [['lab', 'Matting lab (candidate models; make lab-assets, needs WebGPU)']] : []),
         function () { return engine(); },
         function (v) { setEngine(v); });

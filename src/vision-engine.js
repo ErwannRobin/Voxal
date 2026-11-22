@@ -1,20 +1,22 @@
-// Apple Vision as a segmentation engine — EXPERIMENTAL, macOS desktop app only
+// Apple Vision as a segmentation engine — the DEFAULT in the macOS desktop app
 // (docs/apple-vision-evaluation.md).
 //
-// Off unless localStorage['segmentation-engine'] is 'vision' (or
-// ?segengine=vision), and never offered outside the Tauri app on a Mac: the
-// model is the system's own (VNGenerateForegroundInstanceMaskRequest, macOS
-// 14+), so there is nothing to download and nothing to bundle. Anywhere else
-// selected() is false and nothing here runs.
+// In the Tauri app on a Mac it is the engine unless another one was chosen
+// (localStorage['segmentation-engine'] absent or 'vision'; ?segengine=vision
+// for a visit). There, an explicit Longpipe choice is stored as 'longpipe',
+// because an absent key now means Vision. It is never offered anywhere else:
+// the model is the system's own (VNGenerateForegroundInstanceMaskRequest,
+// macOS 14+), so there is nothing to download and nothing to bundle, and off
+// the Mac app selected() is false and nothing here runs.
 //
 // The camera pipeline lives in the webview, so Vision cannot see its frames.
 // Each inference draws a downscaled copy of the current frame (long side
 // `vision-size`, default 512 — as good as full size on the matting bench),
 // reads its RGBA and sends the raw bytes to Rust over Tauri IPC
 // (`vision_foreground_mask`, src-tauri/src/vision.rs); the mask comes back as
-// raw bytes at the same size. A command that errors (not macOS, macOS 13, a
-// Vision failure) rejects create() and video-effects.js falls back to
-// MediaPipe, exactly as for an RVM or a P3M-Net that cannot start.
+// raw bytes at the same size. A command that errors (macOS 13, a Vision
+// failure) rejects create() and video-effects.js falls back to Longpipe, the
+// engine the Mac app had before (and MediaPipe if Longpipe cannot start).
 //
 // The adapter is shaped like MediaPipe's ImageSegmenter (segmentForVideo /
 // close / getLabels), like p3m-engine.js, so the Processor treats it like the
@@ -52,19 +54,26 @@ var VisionEngine = (function () {
     return /mac/i.test(p);
   }
 
+  // The default where it is available: absent (never chosen) selects it.
   function selected() {
     if (!available()) return false;
     try {
       var q = /[?&]segengine=([a-z0-9]+)/.exec(location.search);
       if (q) return q[1] === 'vision';
     } catch (e) { /* no location */ }
-    return store(ENGINE_KEY) === 'vision';
+    var v = store(ENGINE_KEY);
+    return v === null || v === 'vision';
   }
 
+  // Called last by VideoEffects.setEngine(), after the other engines have
+  // written their choice. Longpipe stores itself as an ABSENT key, which on
+  // the Mac now reads as Vision: there, write it out as 'longpipe' (which
+  // LongpipeEngine.selected() reads as itself, like any non-'mediapipe' value).
   function setSelected(on) {
     try {
-      if (on) localStorage.setItem(ENGINE_KEY, 'vision');
-      else if (localStorage.getItem(ENGINE_KEY) === 'vision') localStorage.removeItem(ENGINE_KEY);
+      if (on) { localStorage.setItem(ENGINE_KEY, 'vision'); return; }
+      if (localStorage.getItem(ENGINE_KEY) === 'vision') localStorage.removeItem(ENGINE_KEY);
+      if (available() && localStorage.getItem(ENGINE_KEY) === null) localStorage.setItem(ENGINE_KEY, 'longpipe');
     } catch (e) { /* storage blocked */ }
   }
 
