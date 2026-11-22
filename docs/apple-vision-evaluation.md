@@ -128,8 +128,32 @@ or `?segengine=vision`. It is offered only in the Tauri app on a Mac
   the IPC share and the mask rate. The *Engines* tab (`?segdiag=compare`) puts
   Vision beside the others on the same camera.
 
-Not yet measured: the live round trip at 512x288 with the window in front, the
-CPU cost of a whole call, and how the mask behaves on a live camera (see below).
+### First live run (2026-11-22, Apple Silicon, `make dev`)
+
+Vision drove the picture on a live camera at 512x288 input, with the *Engines*
+tab running all five engines on the same frames. Every figure below is
+therefore slower than Vision would be alone.
+
+| | Vision | Longpipe | MediaPipe | RVM | P3M-Net |
+|---|---|---|---|---|---|
+| Time per mask (p50) | 43-44 ms (p95 74) | 11.5 ms | 7 ms | 188 ms | 207 ms |
+| Masks per second | 15-17 | 16.5 | 16.5 | 3.7 | 3.8 |
+| Agreement with Vision's mask | 1.000 | 0.969 | 0.900 | 0.958 | 0.920 |
+| Init | 72 ms | 554 ms | – | 98 ms | 466 ms |
+
+* **The rate keeps up with the pipeline**: 17 masks per second against its
+  ~16.5 Hz inference rate, so the engine is not the bottleneck even when shared.
+* **The round trip split was Vision 20.5 ms and IPC 19.6 ms.** Vision is close
+  to the bench's figure. The IPC share is twice the prototype's 5-10 ms: it is
+  measured as the round trip minus Rust's time, so it includes the frame copy
+  and the wait for a main thread busy with four other engines. Re-measure with
+  the comparison off before quoting it.
+* **The mask is steady and nearly binary**: sitting still, 0.0% of pixels
+  crossed 50% between inferences, and only 0.6% of the mask was mid-confidence
+  (12-78%). Every soft edge comes from the pipeline's feather, not from Vision.
+
+Not yet measured: Vision alone (comparison off), the CPU cost of a whole call,
+and the mask under motion and auto-exposure (see below).
 
 ## IPC prototype (partial)
 
