@@ -11104,6 +11104,11 @@ function nativeAudioRoutePlugin() {
   return (plugin && typeof plugin.setRoute === 'function') ? plugin : null;
 }
 
+function isNativeIOS() {
+  return !!(window.Capacitor && typeof window.Capacitor.getPlatform === 'function' &&
+    window.Capacitor.getPlatform() === 'ios');
+}
+
 function webAudioSessionSupported() {
   try {
     return !!(navigator.audioSession && 'type' in navigator.audioSession);
@@ -11120,6 +11125,15 @@ function probeAudioRouteBackend() {
   if (_audioRouteBackend !== undefined) return Promise.resolve(_audioRouteBackend);
   if (_audioRouteProbe) return _audioRouteProbe;
   _audioRouteProbe = (async function() {
+    // The iOS app has no working backend, so no button. WKWebView plays the
+    // call's WebRTC audio in WebKit's own audio session: the app's
+    // AVAudioSession can change its category but not that audio's route, and
+    // activating it interrupts the call's audio for good (measured on a
+    // device). navigator.audioSession has no earpiece choice either.
+    if (IS_NATIVE_MOBILE && isNativeIOS()) {
+      _audioRouteBackend = null;
+      return _audioRouteBackend;
+    }
     // Capgo ships this JS over the air, so a native binary older than the bundle
     // exposes `Capacitor.Plugins` without these methods. Only the method actually
     // answering proves the native side is there — a presence check would not.
