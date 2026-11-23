@@ -355,3 +355,101 @@ test.describe('through the real Processor', () => {
     expect(r.fallback).toContain('no WebGL2');   // Longpipe was asked, and could not start
   });
 });
+
+// The iOS app: the same engine behind the Capacitor `VisionMask` plugin
+// (ios/App/App/VisionMaskPlugin.swift). The bridge is JSON, so the frame goes
+// as a base64 JPEG and the mask comes back base64. `window.Capacitor` is set
+// after load: VisionEngine reads it at call time, and main.js's load-time
+// consts stay those of the web.
+test.describe('in the iOS app', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.evaluate(() => {
+      window.__mkCap = function (opts) {
+        opts = opts || {};
+        const calls = [];
+        const plugin = {
+          foregroundMask(arg) {
+            calls.push(arg);
+            if (opts.failAll) return Promise.reject(new Error('Apple Vision\'s foreground mask needs iOS 17 or later'));
+            const w = arg.width, h = arg.height;
+            const m = new Uint8Array(opts.short ? 5 : w * h);
+            for (let i = 0; i < m.length; i++) m[i] = (i % w) < w / 2 ? 255 : 0;
+            let bin = '';
+            for (let i = 0; i < m.length; i++) bin += String.fromCharCode(m[i]);
+            return Promise.resolve({ width: w, height: h, mask: btoa(bin), visionUs: 9000, totalUs: 11000 });
+          }
+        };
+        window.Capacitor = {
+          isNativePlatform: () => true,
+          getPlatform: () => opts.platform || 'ios',
+          Plugins: opts.noPlugin ? {} : { VisionMask: plugin }
+        };
+        return calls;
+      };
+    });
+  });
+
+  test('available and the default; never on Android or on a binary without the plugin', async ({ page }) => {
+    const r = await page.evaluate(() => {
+      localStorage.removeItem('segmentation-engine');
+      const out = {};
+      window.__mkCap();
+      const box = document.createElement('div');
+      VideoEffects.renderDebugOptions(box);
+      out.ios = { available: VisionEngine.available(), platform: VisionEngine.platform(), selected: VisionEngine.selected(),
+        engine: VideoEffects.engine(), offered: !!box.querySelector('option[value="vision"]'),
+        label: (box.querySelector('option[value="vision"]') || {}).textContent };
+      window.__mkCap({ platform: 'android' });
+      out.android = VisionEngine.available();
+      window.__mkCap({ noPlugin: true });
+      out.oldBinary = VisionEngine.available();
+      delete window.Capacitor;
+      return out;
+    });
+    expect(r.ios).toEqual({ available: true, platform: 'ios', selected: true, engine: 'vision', offered: true,
+      label: 'Apple Vision (default on this iPhone)' });
+    expect(r.android).toBe(false);
+    expect(r.oldBinary).toBe(false);
+  });
+
+  test('open probes; each inference sends a JPEG at the input size and decodes the mask', async ({ page }) => {
+    const r = await page.evaluate(async () => {
+      const calls = window.__mkCap();
+      const seg = await VisionEngine.create(null, null);
+      const c = document.createElement('canvas');
+      c.width = 1280; c.height = 720;
+      c.getContext('2d').fillRect(0, 0, 1280, 720);
+      const m = await seg.inferFrame(c);
+      const st = await seg.stats();
+      seg.close();
+      delete window.Capacitor;
+      const jpeg = atob(calls[1].image);
+      return {
+        n: calls.length, probe: [calls[0].width, calls[0].height], sent: [calls[1].width, calls[1].height],
+        soi: jpeg.charCodeAt(0) === 0xff && jpeg.charCodeAt(1) === 0xd8,
+        mask: [m.width, m.height, m.data.length, m.data[0], m.data[511]],
+        visionMs: st.visionMsP50
+      };
+    });
+    expect(r.n).toBe(2);
+    expect(r.probe).toEqual([64, 36]);
+    expect(r.sent).toEqual([512, 288]);
+    expect(r.soi).toBe(true);                   // a JPEG, not raw pixels
+    expect(r.mask).toEqual([512, 288, 512 * 288, 255, 0]);
+    expect(r.visionMs).toBe(9);
+  });
+
+  test('an old iOS rejects create (so the camera falls back); a short mask is an error', async ({ page }) => {
+    const r = await page.evaluate(async () => {
+      const out = {};
+      window.__mkCap({ failAll: true });
+      try { await VisionEngine.create(null, null); out.created = true; } catch (e) { out.rejected = e.message; }
+      window.__mkCap({ short: true });
+      try { await VisionEngine.create(null, null); out.shortCreated = true; } catch (e) { out.short = e.message; }
+      delete window.Capacitor;
+      return out;
+    });
+    expect(r.rejected).toContain('iOS 17');
+    expect(r.short).toMatch(/Vision mask 64x36 in 5 bytes/);
+  });
+});

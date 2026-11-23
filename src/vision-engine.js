@@ -1,22 +1,29 @@
 // Apple Vision as a segmentation engine — the DEFAULT in the macOS desktop app
-// (docs/apple-vision-evaluation.md).
+// and in the iOS app (docs/apple-vision-evaluation.md).
 //
-// In the Tauri app on a Mac it is the engine unless another one was chosen
-// (localStorage['segmentation-engine'] absent or 'vision'; ?segengine=vision
-// for a visit). There, an explicit Longpipe choice is stored as 'longpipe',
-// because an absent key now means Vision. It is never offered anywhere else:
-// the model is the system's own (VNGenerateForegroundInstanceMaskRequest,
-// macOS 14+), so there is nothing to download and nothing to bundle, and off
-// the Mac app selected() is false and nothing here runs.
+// In the Tauri app on a Mac, and in the Capacitor app on iOS, it is the engine
+// unless another one was chosen (localStorage['segmentation-engine'] absent or
+// 'vision'; ?segengine=vision for a visit). There, an explicit Longpipe choice
+// is stored as 'longpipe', because an absent key now means Vision. It is never
+// offered anywhere else: the model is the system's own
+// (VNGenerateForegroundInstanceMaskRequest, macOS 14+ / iOS 17+), so there is
+// nothing to download and nothing to bundle, and elsewhere selected() is false
+// and nothing here runs.
 //
 // The camera pipeline lives in the webview, so Vision cannot see its frames.
 // Each inference draws a downscaled copy of the current frame (long side
-// `vision-size`, default 512 — as good as full size on the matting bench),
-// reads its RGBA and sends the raw bytes to Rust over Tauri IPC
-// (`vision_foreground_mask`, src-tauri/src/vision.rs); the mask comes back as
-// raw bytes at the same size. A command that errors (macOS 13, a Vision
-// failure) rejects create() and video-effects.js falls back to Longpipe, the
-// engine the Mac app had before (and MediaPipe if Longpipe cannot start).
+// `vision-size`, default 512 — as good as full size on the matting bench) and
+// sends it to native code; the mask comes back at the same size.
+//   - Mac: the raw RGBA over Tauri IPC (`vision_foreground_mask`,
+//     src-tauri/src/vision.rs), mask back as raw bytes.
+//   - iOS: the Capacitor bridge is JSON, so the frame goes as a base64 JPEG
+//     (the canvas's own encoder; ~25 KB against 590 KB of RGBA) to the app's
+//     `VisionMask` plugin (ios/App/App/VisionMaskPlugin.swift), mask back as
+//     base64. An OTA bundle on a binary without the plugin is simply not
+//     `available()`.
+// A call that errors (macOS 13, iOS 16, a Vision failure) rejects create() and
+// video-effects.js falls back to Longpipe (and MediaPipe if Longpipe cannot
+// start).
 //
 // The adapter is shaped like MediaPipe's ImageSegmenter (segmentForVideo /
 // close / getLabels), like p3m-engine.js, so the Processor treats it like the
@@ -33,6 +40,7 @@ var VisionEngine = (function () {
   var SIZES = [256, 384, 512, 640];
   var HEADER = 12;                         // u16 mw, u16 mh, u32 vision_us, u32 total_us
   var SAMPLES = 120;
+  var JPEG_QUALITY = 0.9;                  // iOS transport: invisible to the mask at 512 px
 
   function store(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
 
@@ -45,13 +53,39 @@ var VisionEngine = (function () {
     return core && typeof core.invoke === 'function' ? core.invoke : null;
   }
 
-  // Whether this build can offer it at all: the desktop app, on a Mac. The
-  // macOS version is the command's to judge (it answers an error before 14).
-  function available() {
-    if (typeof window !== 'undefined' && typeof window.__voxalVisionStub === 'function') return true;
-    if (!invoker()) return false;
-    var p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || '';
-    return /mac/i.test(p);
+  // The iOS app's plugin, read at call time (never at load: an OTA bundle can
+  // run on a binary that predates it, and then there is none).
+  function nativePlugin() {
+    if (typeof window === 'undefined') return null;
+    var C = window.Capacitor;
+    if (!C || typeof C.isNativePlatform !== 'function' || !C.isNativePlatform()) return null;
+    if (typeof C.getPlatform === 'function' && C.getPlatform() !== 'ios') return null;
+    var p = C.Plugins && C.Plugins.VisionMask;
+    return p && typeof p.foregroundMask === 'function' ? p : null;
+  }
+
+  // Which native side answers: 'tauri' (the Mac app, or a test's stand-in for
+  // its command), 'ios', or null.
+  function platform() {
+    if (typeof window === 'undefined') return null;
+    if (typeof window.__voxalVisionStub === 'function') return 'tauri';
+    if (invoker()) {
+      var p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || '';
+      return /mac/i.test(p) ? 'tauri' : null;
+    }
+    return nativePlugin() ? 'ios' : null;
+  }
+
+  // Whether this build can offer it at all: the desktop app on a Mac, or the
+  // iOS app. The OS version is the native side's to judge (it answers an
+  // error before macOS 14 / iOS 17).
+  function available() { return platform() !== null; }
+
+  // Where the default applies, for labels: 'this Mac' / 'this iPhone'.
+  function deviceName() {
+    if (platform() !== 'ios') return 'this Mac';
+    var ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+    return /iPad/.test(ua) ? 'this iPad' : 'this iPhone';
   }
 
   // The default where it is available: absent (never chosen) selects it.
@@ -91,6 +125,22 @@ var VisionEngine = (function () {
     return { width: snap(w), height: snap(h) };
   }
 
+  // base64 -> bytes (the iOS plugin's mask).
+  function fromBase64(b64) {
+    var bin = atob(b64), n = bin.length, out = new Uint8Array(n);
+    for (var i = 0; i < n; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  // The iOS plugin's answer, in parseMask()'s shape (rustMs = native's total).
+  function parseNative(r) {
+    if (!r || typeof r.mask !== 'string') throw new Error('Vision answered no mask');
+    var w = r.width | 0, h = r.height | 0;
+    var data = fromBase64(r.mask);
+    if (!(w > 0 && h > 0) || data.length !== w * h) throw new Error('Vision mask ' + w + 'x' + h + ' in ' + data.length + ' bytes');
+    return { width: w, height: h, data: data, visionMs: (+r.visionUs || 0) / 1000, rustMs: (+r.totalUs || 0) / 1000 };
+  }
+
   // The command's answer: { width, height, data, visionMs, rustMs }.
   function parseMask(buf) {
     if (!(buf instanceof ArrayBuffer)) {
@@ -118,7 +168,9 @@ var VisionEngine = (function () {
     this.engine = 'vision';
     this.cfg = config();
     this.camVideo = camVideo || null;
-    this.invoke = invoker();
+    this.platform = platform();
+    this.invoke = this.platform === 'tauri' ? invoker() : null;
+    this.plugin = this.platform === 'ios' ? nativePlugin() : null;
     this.closed = false;
     this.failed = null;
     this.onFail = null;
@@ -145,8 +197,8 @@ var VisionEngine = (function () {
   // Vision's model, so the first real frame is not the slow one.
   VisionSegmenter.prototype.open = function () {
     var self = this;
-    if (!this.invoke) {
-      var e0 = new Error('Apple Vision needs the Voxal desktop app on macOS');
+    if (!this.invoke && !this.plugin) {
+      var e0 = new Error('Apple Vision needs the Voxal desktop app on macOS, or the iOS app');
       this.fail(e0);
       return Promise.reject(e0);
     }
@@ -177,6 +229,11 @@ var VisionEngine = (function () {
   VisionSegmenter.prototype.send = function (source, w, h) {
     if (this.cvs.width !== w || this.cvs.height !== h) { this.cvs.width = w; this.cvs.height = h; }
     this.ctx.drawImage(source, 0, 0, w, h);
+    if (this.plugin) {
+      var url = this.cvs.toDataURL('image/jpeg', JPEG_QUALITY);
+      return Promise.resolve(this.plugin.foregroundMask({ image: url.slice(url.indexOf(',') + 1), width: w, height: h }))
+        .then(parseNative);
+    }
     var px = this.ctx.getImageData(0, 0, w, h).data;
     return Promise.resolve(this.invoke(COMMAND, new Uint8Array(px.buffer, px.byteOffset, px.byteLength),
       { headers: { 'x-width': String(w), 'x-height': String(h) } })).then(parseMask);
@@ -268,6 +325,8 @@ var VisionEngine = (function () {
     SIZES: SIZES,
     DEFAULT_SIZE: DEFAULT_SIZE,
     available: available,
+    platform: platform,
+    deviceName: deviceName,
     selected: selected,
     setSelected: setSelected,
     config: config,
@@ -275,6 +334,7 @@ var VisionEngine = (function () {
     // exposed for tests
     _inputSize: inputSize,
     _parseMask: parseMask,
+    _parseNative: parseNative,
     _Segmenter: VisionSegmenter
   };
 })();
