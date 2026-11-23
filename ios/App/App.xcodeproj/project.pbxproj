@@ -18,6 +18,8 @@
 		B43478372F957079008A7C3D /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B43478362F957079008A7C3D /* SceneDelegate.swift */; };
 		A1A1A1A10000000000000002 /* PTTPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A1A1A10000000000000001 /* PTTPlugin.swift */; };
 		A1A1A1A10000000000000004 /* AudioRoutePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A1A1A10000000000000003 /* AudioRoutePlugin.swift */; };
+		A1A1A1A10000000000000006 /* VisionMaskPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A1A1A10000000000000005 /* VisionMaskPlugin.swift */; };
+		A1A1A1A10000000000000008 /* MainViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A1A1A10000000000000007 /* MainViewController.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,6 +36,8 @@
 		B43478362F957079008A7C3D /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		A1A1A1A10000000000000001 /* PTTPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PTTPlugin.swift; sourceTree = "<group>"; };
 		A1A1A1A10000000000000003 /* AudioRoutePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRoutePlugin.swift; sourceTree = "<group>"; };
+		A1A1A1A10000000000000005 /* VisionMaskPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionMaskPlugin.swift; sourceTree = "<group>"; };
+		A1A1A1A10000000000000007 /* MainViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViewController.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -73,6 +77,8 @@
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				A1A1A1A10000000000000001 /* PTTPlugin.swift */,
 				A1A1A1A10000000000000003 /* AudioRoutePlugin.swift */,
+				A1A1A1A10000000000000005 /* VisionMaskPlugin.swift */,
+				A1A1A1A10000000000000007 /* MainViewController.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -168,6 +174,8 @@
 				B43478372F957079008A7C3D /* SceneDelegate.swift in Sources */,
 				A1A1A1A10000000000000002 /* PTTPlugin.swift in Sources */,
 				A1A1A1A10000000000000004 /* AudioRoutePlugin.swift in Sources */,
+				A1A1A1A10000000000000006 /* VisionMaskPlugin.swift in Sources */,
+				A1A1A1A10000000000000008 /* MainViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

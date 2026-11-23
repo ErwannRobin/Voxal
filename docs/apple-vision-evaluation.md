@@ -179,6 +179,27 @@ therefore slower than Vision would be alone.
 Not yet measured: the CPU cost of a whole call, and the mask under fast motion
 and auto-exposure changes (see below).
 
+## On iOS (the iOS app's default)
+
+The same engine runs in the Capacitor iOS app, behind the app's own
+`VisionMask` plugin (`ios/App/App/VisionMaskPlugin.swift`) — same request
+(`VNGenerateForegroundInstanceMaskRequest`, scaled mask), same default and
+fallback rules as on the Mac. What differs is the transport: the Capacitor
+bridge is JSON, so the frame goes as a base64 **JPEG** from the canvas's own
+encoder (quality 0.9, ~25 KB at 512x288, where RGBA would be 590 KB before
+base64) and the mask comes back as base64 8-bit alpha. Vision decodes the JPEG
+itself (`VNImageRequestHandler(data:)`).
+
+- Needs iOS 17 (the request); older answers an error and the camera stays on
+  Longpipe. A Capgo OTA bundle on a binary without the plugin is not
+  `available()`, so it never tries.
+- The plugin, and the app's other local plugins (`PTTPlugin`, `AudioRoute`),
+  are registered in `MainViewController.capacitorDidLoad()`: Capacitor 8 only
+  auto-registers the npm plugins in `packageClassList`.
+- **Not yet measured on a device**: latency, mask rate, thermals and the mask
+  itself on an iPhone camera are open. Only the simulator build and the
+  JS adapter (`tests/e2e/unit-vision-engine.spec.js`) are verified.
+
 ## IPC prototype (partial)
 
 `src-tauri/src/vision.rs` + the `vision_foreground_mask` command, and a probe

@@ -6977,7 +6977,7 @@ var VideoEffects = (function () {
       eng.setAttribute('aria-label', 'Segmentation engine');
       var visionHere = typeof VisionEngine !== 'undefined' && VisionEngine.available();
       var engs = visionHere
-        ? [['vision', 'Engine: Apple Vision (default on this Mac)'], ['longpipe', 'Engine: Longpipe'], ['mediapipe', 'Engine: MediaPipe']]
+        ? [['vision', 'Engine: Apple Vision (default on ' + VisionEngine.deviceName() + ')'], ['longpipe', 'Engine: Longpipe'], ['mediapipe', 'Engine: MediaPipe']]
         : [['longpipe', 'Engine: Longpipe (default)'], ['mediapipe', 'Engine: MediaPipe']];
       if (typeof RvmEngine !== 'undefined') engs.push(['rvm', 'Engine: RVM (experimental, GPL weights: previews and make rvm-assets)']);
       if (typeof P3mEngine !== 'undefined') engs.push(['p3m', 'Engine: P3M-Net (experimental, 78 MB download)']);
@@ -8798,11 +8798,11 @@ var VideoEffects = (function () {
       var visionDefault = typeof VisionEngine !== 'undefined' && VisionEngine.available();
       select('Segmentation engine',
         visionDefault
-          ? 'Apple Vision is the default on this Mac: the system\'s own model, sent a small copy of each frame (macOS 14+). Without it, Longpipe takes over, and MediaPipe if Longpipe cannot start.'
+          ? 'Apple Vision is the default on ' + VisionEngine.deviceName() + ': the system\'s own model, sent a small copy of each frame (macOS 14+ / iOS 17+). Without it, Longpipe takes over, and MediaPipe if Longpipe cannot start.'
           : 'Longpipe is the default: it runs its own model on the GPU and its output is turned into a mask (see the diagnostic). MediaPipe is the fallback, and what a Longpipe that cannot start ends up on.',
         'segmentation-engine',
         (visionDefault
-          ? [['vision', 'Apple Vision (default on this Mac)'], ['longpipe', 'Longpipe'], ['mediapipe', 'MediaPipe']]
+          ? [['vision', 'Apple Vision (default on ' + VisionEngine.deviceName() + ')'], ['longpipe', 'Longpipe'], ['mediapipe', 'MediaPipe']]
           : [['longpipe', 'Longpipe (default)'], ['mediapipe', 'MediaPipe']]).concat(
           typeof RvmEngine !== 'undefined' ? [['rvm', 'RVM (experimental; needs make rvm-assets or a preview deploy with PREVIEW_ENGINES=1)']] : [],
           typeof P3mEngine !== 'undefined' ? [['p3m', 'P3M-Net (experimental; 78 MB download, needs WebGPU)']] : [],
