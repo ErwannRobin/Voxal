@@ -12,7 +12,7 @@ import { test, expect } from './fixtures.js';
 // IS_NATIVE_MOBILE / IS_MOBILE_DEVICE are `const`s evaluated while main.js
 // loads, so every stub has to be installed with addInitScript, before goto.
 
-// A Capacitor native platform. Also makes IS_MOBILE_DEVICE true, which is what
+// A Capacitor native platform (Android unless `platform` says otherwise). Also makes IS_MOBILE_DEVICE true, which is what
 // gates the web backend (desktop Safari exposes navigator.audioSession too, and
 // an "Earpiece" button on a Mac would be nonsense).
 const stubNative = (page, plugins = {}) =>
@@ -39,7 +39,7 @@ const stubNative = (page, plugins = {}) =>
         setRoute: () => Promise.reject(new Error('not implemented')),
       };
     }
-    window.Capacitor = { isNativePlatform: () => true, getPlatform: () => 'ios', Plugins: built };
+    window.Capacitor = { isNativePlatform: () => true, getPlatform: () => p.platform || 'android', Plugins: built };
   }, plugins);
 
 const stubAudioSession = (page) =>
@@ -77,6 +77,16 @@ test.describe('audio output route', () => {
     expect(await backend(page)).toBeNull();
     await page.evaluate(() => window.updateAudioRouteUI());
     expect((await btnState(page)).hidden).toBe(true);
+  });
+
+  test('the iOS app offers no switch: WebKit owns the call audio\'s route', async ({ page }) => {
+    await stubAudioSession(page);
+    await stubNative(page, { audioRoute: 'ok', platform: 'ios' });
+    await page.goto('/');
+    expect(await backend(page)).toBeNull();
+    await page.evaluate(() => window.initAudioRouteForRoom());
+    expect((await btnState(page)).hidden).toBe(true);
+    expect(await page.evaluate(() => window.__routeCalls)).toEqual([]);
   });
 
   test('the native plugin wins over navigator.audioSession', async ({ page }) => {
